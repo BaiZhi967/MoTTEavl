@@ -47,6 +47,33 @@
 
 阶段 A 的纵向链路已推进到 API → SQLite → Worker → RunService → replay Trace/Score；Provider 已增加可离线测试的 HTTP transport（`ce465fa`），尚未执行真实网络调用。
 
+## 阶段 0：可复现开发基线（2026-09-15，`54761f9`）
+
+- [x] pnpm-lock.yaml 入库；apps/web 依赖从 `latest` 固定为具体版本范围；vite 增加 `/api` 代理
+- [x] 版本钉住：`.python-version`(3.12)、`.nvmrc`/`.node-version`(24)、`[tool.uv] required-version`；补齐 uvicorn 依赖
+- [x] Makefile：`make install/test/lint/replay/worker/web-build/web-test/check/dev/clean`；删除占位 `scripts/*.ps1`
+- [x] README/install.md/upgrade.md 补齐三进程启动说明；`.env.example` 标注各变量消费状态
+- [x] CI 与本地命令对齐：全量 pytest + ruff + compileall + compose config + pnpm frozen install + web build
+- [x] 六条验收门（uv sync / frozen pnpm / pytest / ruff / web build / compose config）全过；uvicorn 冒烟通过
+
+## 阶段 1：Run 执行内核（2026-09-15）
+
+状态机：`queued → preparing → running → collecting → scoring → completed`，终态含 `failed/cancelled/unsupported/profile_stale`；retry 创建 `parent_run_id` 子 Run。
+
+| Task | Commit | 内容 |
+|---|---|---|
+| P1-1 | `83b4d29` | `build_run_service()` 工厂统一 API/CLI/Worker 构造；完整状态机与迁移校验；cancel 记录 reason 并阻断后续 case；retry 暴露 API；rescore 改为真实重算；`expected_for` 协议替代 `__self__.fixture` 反射 |
+| P1-2 | `c12157f` | 实体存储 `run_store.py`：runs/case_runs/trace_events/scores 四表，`(run_id, seq)` 与 `(run_id, case_id)` 唯一约束；SQLite + InMemory 双实现；KV blob 不再承载 Run 实体 |
+| P1-3 | `6e49edc` | Worker 入口 `python -m apps.worker.motte_worker`（`--once`）；`claim_next_queued` 原子抢占 + `requeue_interrupted` 重启恢复；Celery app 真实化（eager 可测）；compose worker 补 command/env；Makefile 增加 `make worker` |
+| P1-4 | `a3a94ba` | replay 端点去掉共享 service mutation，provider 显式注入；SSE 支持 `?after=`/`Last-Event-ID` 断线恢复 + 心跳 + 终态关闭；CLI 新增 `replay` 子命令；API/CLI/SDK 三入口 Trace+Score 一致性 golden 测试 |
+| P1-5 | `c4fe6ab` | 真实子进程 Worker 重启恢复测试；API rescore 不触发新模型调用测试 |
+
+验收门核对：同 Run 重复执行无重复 CaseRun ✓；Worker 重启续跑 queued Run（子进程级）✓；cancel 阻断并记录原因 ✓；retry 创建子 Run ✓；rescore 不调模型 ✓；replay 三入口一致 ✓。
+
+本轮验证：`uv run pytest -q`（92 passed）、`uv run ruff check .`、compileall、`pnpm --dir apps/web build`、`docker compose config`。另修复基线缺陷：pytest 此前未声明依赖、靠系统 Python 兜底，现入 dev 依赖组（`a44bb8f`）。
+
+未完成（留给阶段 2+）：真实 Provider 调用（openai_compatible 真适配器、canonical 落盘、价格版本、live smoke）；Redis broker 上的 Celery 实测（当前 eager）；PostgreSQL repository。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。
