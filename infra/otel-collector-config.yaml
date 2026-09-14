@@ -1,0 +1,11 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+exporters:
+  debug: {}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]

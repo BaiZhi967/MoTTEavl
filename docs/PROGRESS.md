@@ -6,7 +6,7 @@
 
 | Task | 内容 | 状态 | Commit | 验证 |
 |---|---|---|---|---|
-| 1 | 工作区、依赖、Compose、CI | ⏳ | — | — |
+| 1 | 工作区、依赖、Compose、CI | ✅ | 待主干汇总 | `uv run pytest tests/test_workspace_health.py -q`; `docker compose ... config` |
 | 2 | Canonical contracts 与 schema | ⏳ | — | — |
 | 3 | Storage、migration、artifact | ⏳ | — | — |
 | 4 | Provider runtime 与 model catalog | ⏳ | — | — |

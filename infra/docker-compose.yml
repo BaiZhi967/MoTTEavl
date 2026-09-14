@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: motteavl
+      POSTGRES_PASSWORD: motteavl
+      POSTGRES_DB: motteavl
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+  otel-collector:
+    image: otel/opentelemetry-collector:0.109.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"]
+    ports: ["127.0.0.1:4317:4317"]
+  worker:
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes: ["..:/workspace", "../var/artifacts:/workspace/var/artifacts"]
+    environment:
+      ARTIFACT_ROOT: /workspace/var/artifacts
+    depends_on: [postgres, redis]
+volumes:
+  postgres-data:

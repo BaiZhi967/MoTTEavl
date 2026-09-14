@@ -1,0 +1,42 @@
+[project]
+name = "motteavl"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "motte-contracts",
+  "motte-sdk",
+  "motte-provider",
+  "motte-agent",
+  "motte-harness",
+  "motte-skill",
+  "motte-sandbox",
+  "motte-eval",
+  "motte-trace",
+  "motte-storage",
+]
+
+[tool.uv.sources]
+motte-contracts = {workspace = true}
+motte-sdk = {workspace = true}
+motte-provider = {workspace = true}
+motte-agent = {workspace = true}
+motte-harness = {workspace = true}
+motte-skill = {workspace = true}
+motte-sandbox = {workspace = true}
+motte-eval = {workspace = true}
+motte-trace = {workspace = true}
+motte-storage = {workspace = true}
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.pytest.ini_options]
+markers = ["replay: deterministic replay tests", "live: external provider tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
