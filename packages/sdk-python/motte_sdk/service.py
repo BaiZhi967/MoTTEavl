@@ -147,11 +147,14 @@ class RunService:
         self._emit(run_id, "rescored", {"status": run["status"], "scores": deepcopy(scores)})
         return self._view(run_id)
 
-    def mark_unsupported(self, run_id: str, code: str) -> dict[str, Any]:
+    def mark_unsupported(self, run_id: str, code: str, message: str | None = None) -> dict[str, Any]:
         run = self._load(run_id)
         if run["status"] in self.TERMINAL:
             return self._view(run_id)
-        run.update({"status": "unsupported", "error": {"code": code}})
+        error: dict[str, Any] = {"code": code}
+        if message is not None:
+            error["message"] = message
+        run.update({"status": "unsupported", "error": error})
         self.store.runs.save(run)
         self._emit(run_id, "unsupported", {"status": "unsupported", "error": run["error"]})
         return self._view(run_id)
@@ -206,17 +209,31 @@ class RunService:
         scores: list[dict[str, Any]] = []
         for entry in results:
             if "expected" in entry:
-                passed = entry["result"] == entry["expected"]
+                passed = self._comparable(entry["result"]) == entry["expected"]
                 scores.append({"case_id": entry["case_id"], "passed": passed})
                 if emit_events:
                     self._emit(run_id, "score", {"case_id": entry["case_id"], "passed": passed})
         return scores
 
+    @staticmethod
+    def _comparable(result: Any) -> Any:
+        """envelope 形状的结果取 content 参与比较；其余按原值。"""
+        if isinstance(result, dict) and "content" in result:
+            return result["content"]
+        return result
+
     def _fail(self, run_id: str, error: Exception) -> dict[str, Any]:
         run = self._load(run_id)
-        run.update({"status": "failed", "error": {"type": type(error).__name__, "message": str(error)}})
+        error_payload: dict[str, Any] = {"type": type(error).__name__, "message": str(error)}
+        error_class = getattr(error, "error_class", None)
+        if error_class is not None:
+            error_payload["class"] = error_class
+        evidence = getattr(error, "evidence", None)
+        if evidence is not None:
+            error_payload["evidence"] = evidence
+        run.update({"status": "failed", "error": error_payload})
         self.store.runs.save(run)
-        self._emit(run_id, "failed", {"status": "failed", "error": run["error"]})
+        self._emit(run_id, "failed", {"status": "failed", "error": error_payload})
         return self._view(run_id)
 
     def _transition(self, run_id: str, status: str) -> dict[str, Any]:

@@ -72,3 +72,46 @@ def test_rescore_endpoint_recomputes_scores_without_new_model_calls(tmp_path):
         if event["type"] == "model_response"
     ]
     assert len(model_responses) == 1
+
+
+def test_create_run_rejects_invalid_provider_config_before_any_paid_call():
+    store = InMemoryRunStore()
+    client = TestClient(create_app(store))
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scenario_version": "direct-llm@1",
+            "manifest": {
+                "provider": {
+                    "kind": "openai_compatible",
+                    "base_url": "https://api.example.test/v1",
+                    "model": "m",
+                    "parameters": {"logit_bias": 0},
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "UNSUPPORTED_PARAMETER"
+    assert store.runs.list() == []
+
+
+def test_create_run_accepts_valid_openai_compatible_provider_config():
+    client = TestClient(create_app(InMemoryRunStore()))
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scenario_version": "direct-llm@1",
+            "manifest": {
+                "provider": {
+                    "kind": "openai_compatible",
+                    "base_url": "https://api.example.test/v1",
+                    "model": "m",
+                    "parameters": {"temperature": 0.3},
+                }
+            },
+            "case_ids": ["case-1"],
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"

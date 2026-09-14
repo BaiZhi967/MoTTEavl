@@ -11,6 +11,26 @@ from motte_sdk.service import RunService, build_run_service
 SSE_POLL_INTERVAL_SECONDS = 1.0
 
 
+def _validate_provider(provider_config: dict):
+    """strict 预检：不合法的 provider 配置在创建阶段就拒绝，不产生任何付费调用。"""
+    from motte_provider.capabilities import UnsupportedParameterError
+    from motte_provider.config import validate_provider_config
+
+    try:
+        validate_provider_config(provider_config)
+    except UnsupportedParameterError as error:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "UNSUPPORTED_PARAMETER", "message": str(error)}},
+        )
+    except ValueError as error:
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": str(error)}},
+        )
+    return None
+
+
 def create_app(store=None) -> FastAPI:
     service = build_run_service() if store is None else RunService(store)
     application = FastAPI(title="MoTTEavl API", version="0.1.0")
@@ -25,6 +45,11 @@ def create_app(store=None) -> FastAPI:
         scenario = body.get("scenario_version", "")
         if scenario.startswith("vision@"):
             return JSONResponse(status_code=422, content={"error": {"code": "MODEL_CAPABILITY_UNSUPPORTED", "message": "vision capability is unsupported"}})
+        provider_config = (body.get("manifest") or {}).get("provider")
+        if provider_config:
+            invalid = _validate_provider(provider_config)
+            if invalid is not None:
+                return invalid
         return service.create_run(scenario, body.get("manifest", {}), body.get("case_ids", []))
 
     @application.get("/api/v1/runs/{run_id}")
