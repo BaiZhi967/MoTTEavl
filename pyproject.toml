@@ -13,6 +13,9 @@ dependencies = [
   "motte-eval",
   "motte-trace",
   "motte-storage",
+  "motte-cli",
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
 ]
 
 [tool.uv.sources]
@@ -26,6 +29,7 @@ motte-sandbox = {workspace = true}
 motte-eval = {workspace = true}
 motte-trace = {workspace = true}
 motte-storage = {workspace = true}
+motte-cli = {workspace = true}
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -33,6 +37,8 @@ members = ["packages/*"]
 [tool.pytest.ini_options]
 markers = ["replay: deterministic replay tests", "live: external provider tests"]
 pythonpath = [
+  ".",
+  "packages/cli",
   "packages/contracts",
   "packages/sdk-python",
   "packages/provider-runtime",
