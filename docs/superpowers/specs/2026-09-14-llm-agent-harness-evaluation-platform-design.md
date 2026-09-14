@@ -32,7 +32,8 @@ MoTTEavl 用于统一评测以下对象：
 | 默认元数据存储 | PostgreSQL |
 | 默认工件存储 | 本地 artifact 目录 |
 | 可选对象存储 | MinIO |
-| 沙箱 | 本机 Docker，优先 rootless |
+| 宿主平台 | Linux/WSL2 一等公民；Windows 原生通过 Docker Desktop 支持并标注能力降级 |
+| 沙箱 | Docker；Linux/WSL2 使用 rootless/非 root 能力，Windows 使用 Docker Desktop 等价安全配置 |
 | 可观测性 | 平台事件协议 + OpenTelemetry |
 | 模型适配实现 | 自有协议；LiteLLM 作为可替换的传输、重试和计量实现 |
 | 首个外部基础 Agent | Pi Agent |
@@ -91,7 +92,7 @@ Skill 可以注入 Agent 执行，也可以通过 fixture 进行独立验证；�
 
 ### 5.1 协议
 
-首批支持三种协议族，并为兼容厂商提供配置入口：
+首批支持三种协议族，并提供一个 OpenAI-compatible 兼容入口：
 
 - `openai_chat`：OpenAI Chat Completions。
 - `openai_responses`：OpenAI Responses API。
@@ -119,6 +120,14 @@ ProviderConnection 描述协议、base URL、认证引用和连接状态。Model
 | 来源 | 官方 API、官方文档、探针、手工覆盖、更新时间 |
 
 视觉支持由输入模态中的 image 推导；Web 仍提供直观的视觉能力开关。上下文窗口、最大输入和最大输出分别记录，不能假定三者具有相同的厂商语义。
+
+### 5.2.1 价格与成本
+
+成本评测需要独立的、版本化的 PriceTable。ModelProfile 只引用当前生效的 price table，不把价格永久写死在模型能力字段中。
+
+PriceTable 至少包含输入 token、输出 token、缓存命中输入、缓存写入输入、推理 token、托管工具调用和批量折扣等计价项；每项包含币种、单位、阶梯、有效期、来源 URL、来源类型和观察时间。无法确认的价格不用于预算硬门禁，只显示为未知。
+
+每次 ModelResponse 保存 `price_table_version`、计费 token 分解和计算后的成本。成本计算使用请求发生时的价格版本，价格更新不改变历史 Run。
 
 ### 5.3 推理配置
 
@@ -186,8 +195,9 @@ Pi 使用 TypeScript Node bridge，不移植其源码到 Python。Pi 的 agent-c
 
 ```text
 Python Eval SDK → PiAgentRuntime → Node bridge → Pi Agent
-                              ← JSONL events ←
-                        ToolRegistry / Docker Sandbox
+       ▲                                  │
+       │       tool_result                │ tool_call / events
+       └── ToolRegistry ← Docker Sandbox ──┘
 ```
 
 Bridge 注入模型、prompt、工具和 Skill，将 Pi 事件转换为平台事件。工具执行经 ToolRegistry 和 SandboxPolicy；bridge 不直接写数据库。
@@ -221,6 +231,8 @@ Skill 支持：
 
 Harness 生命周期：prepare、start、send、events、interrupt、collect、cleanup。
 
+Harness 的双向交互使用 `HarnessChannel`。本地 CLI 模式通过受控 stdin/stdout 管道传递消息；Codex app-server 使用 stdio JSON-RPC；Web 端通过 `POST /runs/{id}/messages` 写入命令队列，并通过 SSE 接收回执。Worker 是唯一的转发方，负责把用户消息送到活动会话，并记录 `user_message`、`harness_request` 和 `harness_response` 事件。已结束或不支持交互的 Run 拒绝发送消息。
+
 适配器负责进程、事件解析、取消和工件收集，不负责评分。CLI 的具体参数以固定版本的帮助和协议 schema 为准，不能依赖长期不变的命令行示例。
 
 每次运行记录 executable/package 版本、parser 版本、启动参数、受控环境、工作目录、沙箱镜像和退出原因。
@@ -230,6 +242,21 @@ Claude/Codex 保留自己的 Agent 行为和工具策略。平台依据可观察
 ## 9. Scenario 与执行生命周期
 
 Scenario 使用 YAML/JSON，载入后形成不可变的 ScenarioSpec。字段包括 id/version、mode、dataset、model、agent、skills、harness、sandbox、evaluators 和 limits。
+
+DatasetVersion 使用 JSONL 作为规范磁盘格式；每行是一个 Case：
+
+```json
+{
+  "case_id": "case-001",
+  "input": {
+    "messages": [{"role": "user", "content": "..."}]
+  },
+  "expected": {"json_schema": "schemas/result.json"},
+  "metadata": {"split": "test", "tags": ["extraction"]}
+}
+```
+
+`case_id` 在一个 DatasetVersion 内唯一；`input` 必须匹配 Scenario mode 所要求的输入联合类型；`expected` 是评测器可消费的声明，不直接注入模型上下文；`metadata` 不参与模型输入，除非 Scenario 显式引用。DatasetVersion 记录文件 hash、行数、编码、schema 版本和来源。CLI 的 create/validate/version 都针对该 JSONL 格式，并拒绝重复 id、无效 JSON、缺少 input 或无法解析的 expected。
 
 mode 提供 llm、agent、agent_skill、llm_harness 等使用入口。具体执行器、模型、Skill 和沙箱通过引用组合，不把所有模式的无关字段变成必填项。
 
@@ -246,7 +273,15 @@ ResolvedManifest 包含模型配置、数据集版本、Agent/Skill/Harness 版�
 
 ## 10. 沙箱与评分
 
-沙箱采用 Docker，独立工作目录，限制 CPU、内存、PID、磁盘和 TTL，优先非 root 与只读 rootfs。默认禁止任务工具任意出网，模型 API 等必要通信通过显式策略配置。
+沙箱采用 Docker，独立工作目录，限制 CPU、内存、PID、磁盘和 TTL。Linux/WSL2 使用 rootless 或非 root 与只读 rootfs；Windows Docker Desktop 使用等价的非特权、只读和资源限制能力，并在 capability matrix 中标注差异。默认禁止任务工具任意出网，模型 API 等必要通信通过显式策略配置。
+
+SandboxPolicy 分成三层：
+
+1. `network_policy`：none、allowlist 或 unrestricted（仅显式开发配置）；决定网络命名空间和出口。
+2. `command_policy`：按可执行文件和参数模式 allow/deny；只约束可执行命令，不替代网络控制。
+3. `resource_policy`：CPU、内存、PID、磁盘、输出字节和 TTL。
+
+命令允许不代表网络允许；网络拒绝也不等同于命令拒绝。平台分别记录三层策略和实际结果。
 
 Sandbox 接口提供 create、exec、collect、destroy。Worker 管理生命周期，API 不运行任务命令。
 
@@ -259,11 +294,24 @@ Sandbox 接口提供 create、exec、collect、destroy。Worker 管理生命周�
 
 Score 包含指标、值、通过状态、评分器版本、证据引用和适用的 judge metadata。模型评审校准、重复运行、pass@k、置信区间和回归门禁进入完整开发路线。
 
+证据策略由 `EvidencePolicy` 控制：
+
+```yaml
+retention:
+  trace_days: 90
+  raw_provider_days: 30
+  artifact_days: 90
+  keep_failed: true
+  keep_pinned: true
+```
+
+默认保留 90 天的标准 Trace 和工件、30 天的原始 Provider payload；失败 Run 保留，用户标记的 Run 不自动清理。清理由 Worker 执行并记录删除事件，删除前保留 hash、大小和元数据审计记录。以下字段无论出现在 header、环境变量、JSON key 还是嵌套 provider raw 中都必须脱敏：`authorization`、`x-api-key`、`api-key`、`api_key`、`access-token`、`refresh-token`、`cookie`、`set-cookie`、`proxy-authorization`、`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`MOONSHOT_API_KEY`、`ZHIPUAI_API_KEY`、`DEEPSEEK_API_KEY`、以及配置的自定义 secret key。脱敏值统一替换为 `[REDACTED]`；原始 secret 不进入数据库、artifact、SSE 或 CLI 输出。
+
 ## 11. 数据与状态
 
 核心实体：
 
-- ProviderConnection、ModelProfile 与来源记录。
+- ProviderConnection、ModelProfile、PriceTable 与来源记录。
 - Dataset、DatasetVersion、Case。
 - Scenario、ScenarioVersion。
 - AgentDefinition、AgentVersion。
@@ -273,7 +321,7 @@ Score 包含指标、值、通过状态、评分器版本、证据引用和适�
 - TraceEvent、Observation、Artifact。
 - Score、EvaluationReport。
 
-默认 PostgreSQL 保存元数据与查询所需 JSON；本地 artifact 目录保存大型工件，MinIO 为可选实现。Redis 负责任务队列和实时传输。SQLite 与本地队列用于开发配置。
+默认 PostgreSQL 保存元数据与查询所需 JSON；本地 artifact 目录保存大型工件，MinIO 为可选实现。Redis 负责任务队列和实时传输。SQLite 与内存/本地队列用于开发配置，但不作为并发运行的默认配置。
 
 Run 主流程状态：
 
@@ -283,6 +331,10 @@ created → validating → queued → preparing → running
 ```
 
 其他结束或阻止执行状态包括 failed、cancelled、unsupported、profile_stale。
+
+`profile_stale` 只表示排队或准备阶段发现当前 ModelProfile 已过期、被撤销或与 Provider 探测结果冲突。它不会自动标记已完成的历史 Run；历史 Run 永远引用原 profile 版本。处于 `profile_stale` 的 Run 不得调用模型，用户刷新或选择新 profile 后创建新的 retry Run。`rescore_run` 不受 profile_stale 影响，因为它不重新调用模型。
+
+Run 内 Case 默认按受控并发执行。Scenario limits 包含 `case_concurrency`、Provider `requests_per_minute`、`max_in_flight`、重试次数、退避初始值、退避上限和抖动。默认值为 `case_concurrency=4`、`max_in_flight=4`、`max_retries=2`、`backoff_initial_ms=500`、`backoff_max_ms=30000`、`jitter_ratio=0.2`；`requests_per_minute` 优先使用 Provider 声明值，未知时采用 60。Worker 以 Provider 连接为粒度实施令牌桶和并发信号量；429、显式 retry-after、网络暂态错误按策略指数退避，参数错误、认证错误和能力不支持不重试。每次等待、重试和最终限流都写入事件。
 
 - cancel_run：请求取消，记录实际停止结果。
 - retry_run：创建新的运行尝试，保留来源关系。
@@ -297,7 +349,9 @@ created → validating → queued → preparing → running
 
 主要操作包括 Provider 测试与模型同步，资源版本管理，Run 创建/取消/重试/重评分/回放，以及事件、工件和分数读取。
 
-实时单向事件使用 SSE；确实需要双向交互的 Harness 请求采用适合的双向通道。
+创建 Run 时同步完成 Scenario、Dataset、ModelProfile、参数和执行器能力校验；校验通过后以 HTTP 202 返回并持久化为 `queued`，再由 Worker 执行 `preparing` 及后续状态。校验失败返回 HTTP 422 和结构化错误，不创建可执行 Run。
+
+实时单向事件使用 SSE。运行中的 Harness 消息通过 `POST /runs/{id}/messages` 进入 Worker 命令队列；需要持续双向 RPC 的 Codex app-server 仍由 Worker 维护 stdio 通道，Web 只通过 API 收发平台消息和 approval 决策。
 
 ### CLI
 
@@ -320,7 +374,7 @@ motte doctor
 
 页面包括 Providers、Models、Datasets、Scenarios、Agents、Skills、Harnesses、Runs、Trace、Compare、Reports。
 
-模型页面分为能力、限制、推理与采样三部分，显示字段来源与更新时间。Scenario 编辑器提供 schema 和能力预校验。Trace 页面展示模型调用、工具调用、沙箱命令、文件差异与证据。
+模型页面分为能力、限制、推理与采样三部分，显示字段来源与更新时间。Scenario 编辑器提供 schema 和能力预校验。Trace 页面展示模型调用、工具调用、沙箱命令、文件差异与证据。首版 UI 语言为简体中文，协议字段、CLI JSON 和错误码保持英文稳定标识。
 
 不设计用户登录与 RBAC。认证秘密使用环境变量或本机 keyring，Web 仅显示 credential reference。单机网络暴露与本地访问保护在专门的安全设计中定义。
 
@@ -353,7 +407,13 @@ MoTTEavl/
 │  ├─ contract/
 │  ├─ provider/
 │  ├─ runtime/
+│  ├─ storage/
+│  ├─ trace/
 │  ├─ sandbox/
+│  ├─ harness/
+│  ├─ evaluators/
+│  ├─ api/
+│  ├─ cli/
 │  ├─ integration/
 │  └─ fixtures/
 ├─ docs/
@@ -388,13 +448,25 @@ contracts 不依赖 Provider SDK、Agent 框架或数据库。具体存储、追
 | 6 高级评测 | Inspect、确定性/轨迹/judge、校准、重复运行、统计、门禁、离线重评分 | 已保存的运行可更换评分器重新评估 |
 | 7 稳定发布 | 完整 Web/CLI、文档、性能/并发/恢复、依赖安全、发布/回退 | 单机产品具有可验证的安装、升级、运行和恢复流程 |
 
-该路线描述整体交付顺序。阶段内部的任务依赖、测试策略、安全机制、性能目标和发布验收将分别形成详细文档，不以本表代替可执行开发计划。
+阶段与实施任务采用“先水平底座、后垂直交付”的混合顺序：
+
+| 可发布边界 | 对应实施任务 | 交付内容 |
+| --- | --- | --- |
+| 基础运行切片 | 1–5 | 契约、存储、Trace、直接 Run Executor、最小 API/CLI、录制 Provider |
+| Provider 评测版本 | 6 | Chat/Responses/Anthropic/兼容入口和真实 Provider smoke test |
+| Agent 评测版本 | 7–8 | BuiltinReAct、Pi bridge、Skill、Docker 工具闭环 |
+| Harness 评测版本 | 9 | Claude/Codex 双向 Harness 与 Inspect 适配 |
+| 评测与报告版本 | 10–11 | Evaluator、统计、回归门禁、完整 API/CLI/Web |
+| 稳定发布版本 | 12 | 安装、升级、备份、恢复、性能、依赖安全和发布产物 |
+
+基础运行切片在 Task 5 结束时必须能通过两个入口创建并追踪一个录制 Provider 的完整 Run；后续任务在该切片上垂直扩展，不等到全计划末尾才出现第一条端到端路径。
 
 ## 16. 文档维护约定
 
 - 本文是已经讨论确认的设计基线，后续确认的设计同步更新文档。
 - 每次变更记录日期、决策内容和影响，不依靠聊天历史推断当前方案。
 - 跨模块的重要取舍另存 ADR，并由本文引用。
+- `docs/superpowers/specs/` 和 `docs/superpowers/plans/` 保存流程产物；`docs/README.md` 作为长期文档入口，链接到当前 spec、plan 和 ADR，避免复制正文产生漂移。
 - 尚未详细讨论的安全、测试、可观测性和发布机制另行成文，完成设计后再编写可执行实现计划。
 - 设计文档只记录决定和约束；实现状态通过开发计划和验证报告管理。
 
@@ -435,3 +507,9 @@ contracts 不依赖 Provider SDK、Agent 框架或数据库。具体存储、追
 | 2026-09-14 | Claude CLI、Codex CLI 为首批 Harness；Inspect 后续接入 |
 | 2026-09-14 | 模型级配置工具、模态、token 限制、推理与参数约束 |
 | 2026-09-14 | 按长期稳定产品完整规划；后续确认内容持续文档化 |
+| 2026-09-14 | Linux/WSL2 一等公民；Windows Docker Desktop 支持并记录能力降级 |
+| 2026-09-14 | DatasetVersion 规范磁盘格式为 JSONL，每行一个带唯一 case_id 的 Case |
+| 2026-09-14 | PriceTable 独立版本化并作为成本计算来源 |
+| 2026-09-14 | Run 创建同步校验，成功后 HTTP 202 持久化为 queued |
+| 2026-09-14 | Harness 双向消息经 Worker 命令队列和 `/runs/{id}/messages`，SSE 负责回传 |
+| 2026-09-14 | 运行并发、限流、重试、证据保留和脱敏规则写入 ADR |
