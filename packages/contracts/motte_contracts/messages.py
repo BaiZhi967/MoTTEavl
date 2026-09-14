@@ -1,12 +1,15 @@
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
+
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
 
 class Message(Contract):
     role: str
     content: str | list[dict[str, Any]]
+
 
 class ModelRequest(Contract):
     model: str
@@ -20,11 +23,13 @@ class ModelRequest(Contract):
     tools: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+
 class ModelResponse(Contract):
     model: str
     content: str = ""
     finish_reason: str | None = None
     usage: dict[str, int] = Field(default_factory=dict)
+
 
 class StreamEvent(Contract):
     type: str

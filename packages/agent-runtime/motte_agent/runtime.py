@@ -1,2 +1,3 @@
 class AgentRuntime:
- def run(self, prompt): raise NotImplementedError
+    def run(self, prompt):
+        raise NotImplementedError

@@ -1,8 +1,11 @@
 import json
 
+
 def parse_jsonl(text):
-    out=[]
+    out = []
     for line in text.splitlines():
-        try: out.append(json.loads(line))
-        except Exception: out.append({"error":"malformed_line","raw":line})
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            out.append({"error": "malformed_line", "raw": line})
     return out

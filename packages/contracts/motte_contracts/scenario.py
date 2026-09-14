@@ -1,6 +1,7 @@
 from typing import Any
 from .messages import Contract
 
+
 class ScenarioSpec(Contract):
     id: str
     version: int | str
@@ -14,6 +15,7 @@ class ScenarioSpec(Contract):
     evaluators: list[str] = []
     limits: dict[str, Any] = {}
     parameter_policy: str = "strict"
+
 
 class Case(Contract):
     case_id: str

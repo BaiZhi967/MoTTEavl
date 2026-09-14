@@ -6,6 +6,25 @@ from .events import TraceEvent
 from .evidence import Artifact, Observation, Score
 from .dataset import DatasetVersion
 
-_PUBLIC = [ModelRequest, ModelResponse, StreamEvent, ModelProfile, ReasoningProfile, ParameterProfile, ScenarioSpec, Case, Run, CaseRun, ResolvedManifest, TraceEvent, Artifact, Observation, Score, DatasetVersion]
+_PUBLIC = [
+    ModelRequest,
+    ModelResponse,
+    StreamEvent,
+    ModelProfile,
+    ReasoningProfile,
+    ParameterProfile,
+    ScenarioSpec,
+    Case,
+    Run,
+    CaseRun,
+    ResolvedManifest,
+    TraceEvent,
+    Artifact,
+    Observation,
+    Score,
+    DatasetVersion,
+]
+
+
 def dump_json_schema() -> dict:
     return {c.__name__: c.model_json_schema() for c in _PUBLIC}

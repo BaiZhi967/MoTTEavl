@@ -6,9 +6,16 @@ from motte_contracts.model import ModelProfile
 
 
 def test_trace_event_round_trips_with_version_and_parent():
-    event = TraceEvent(protocol="motte.trace", schema_version=1, run_id="run-1", seq=2,
-                       span_id="span-2", parent_span_id="span-1", type="tool_call",
-                       payload={"name": "read_file", "arguments": {"path": "README.md"}})
+    event = TraceEvent(
+        protocol="motte.trace",
+        schema_version=1,
+        run_id="run-1",
+        seq=2,
+        span_id="span-2",
+        parent_span_id="span-1",
+        type="tool_call",
+        payload={"name": "read_file", "arguments": {"path": "README.md"}},
+    )
     assert TraceEvent.model_validate_json(event.model_dump_json()) == event
 
 

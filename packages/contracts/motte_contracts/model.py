@@ -2,21 +2,26 @@ from typing import Any
 from pydantic import Field, field_validator
 from .messages import Contract
 
+
 class ReasoningProfile(Contract):
     supported: bool = False
     levels: list[str] = Field(default_factory=list)
     control: str | None = None
+
 
 class ParameterProfile(Contract):
     temperature: float | None = None
     top_p: float | None = None
     max_output_tokens: int | None = None
     seed: int | None = None
+
     @field_validator("temperature", "top_p")
     @classmethod
     def probability_range(cls, v):
-        if v is not None and not 0 <= v <= 1: raise ValueError("must be between 0 and 1")
+        if v is not None and not 0 <= v <= 1:
+            raise ValueError("must be between 0 and 1")
         return v
+
 
 class ModelProfile(Contract):
     id: str
@@ -36,5 +41,6 @@ class ModelProfile(Contract):
     @field_validator("capabilities")
     @classmethod
     def require_modalities(cls, v):
-        if "input_modalities" in v and not v["input_modalities"]: raise ValueError("input_modalities cannot be empty")
+        if "input_modalities" in v and not v["input_modalities"]:
+            raise ValueError("input_modalities cannot be empty")
         return v

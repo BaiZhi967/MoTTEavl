@@ -1,1 +1,1 @@
-celery_app=object()
+celery_app = object()

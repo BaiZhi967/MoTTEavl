@@ -1,6 +1,7 @@
 from typing import Any
 from .messages import Contract
 
+
 class TraceEvent(Contract):
     protocol: str = "motte.trace"
     schema_version: int = 1
