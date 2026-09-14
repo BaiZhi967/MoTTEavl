@@ -14,7 +14,9 @@ class RunService:
         self.repository = repository
         self.provider = provider
         self._events: dict[str, list[dict[str, Any]]] = {}
-        self._next_id = 1
+        existing = repository.list()
+        ids = [int(item["id"].split("-")[-1]) for item in existing if str(item.get("id", "")).startswith("run-")]
+        self._next_id = max(ids, default=0) + 1
 
     def create_run(self, scenario_version: str, manifest: dict[str, Any]) -> dict[str, Any]:
         run_id = f"run-{self._next_id}"

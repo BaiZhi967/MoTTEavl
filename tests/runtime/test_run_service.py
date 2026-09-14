@@ -36,3 +36,15 @@ def test_rescore_does_not_call_provider():
     assert calls == ["case-1"]
     assert service.rescore(run["id"])["status"] == "completed"
     assert calls == ["case-1"]
+
+
+def test_service_uses_persistent_repository_for_new_instance(tmp_path):
+    from motte_storage.repositories import SQLiteRepository
+
+    path = tmp_path / "runs.db"
+    first = RunService(SQLiteRepository(path))
+    created = first.create_run("scenario@1", {"seed": 3})
+    second = RunService(SQLiteRepository(path))
+    assert second.get_run(created["id"])["manifest"]["seed"] == 3
+    next_run = second.create_run("scenario@1", {})
+    assert next_run["id"] != created["id"]
