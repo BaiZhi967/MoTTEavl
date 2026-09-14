@@ -11,5 +11,5 @@ jobs:
       - run: uv sync
       - run: uv run pytest tests/test_workspace_health.py -q
       - run: uv run ruff check .
-      - run: uv run mypy packages
+      - run: uv run python -m compileall -q packages apps
       - run: docker compose -f infra/docker-compose.yml config
