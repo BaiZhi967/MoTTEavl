@@ -13,7 +13,7 @@
 | 5 | Trace、replay、executor、foundation slice | ✅ | `5599e6c` | `uv run pytest tests/trace tests/runtime -q`（3 passed）；trace/redaction/replay/idempotent executor/scheduler 已验证 |
 | 6 | Docker sandbox、Skill、ToolRegistry | ✅ | `1faeaa3` | `uv run pytest tests/sandbox -q`（4 passed）；默认 deny network、策略分离、tool modes |
 | 7 | BuiltinReAct、Pi bridge | ✅ | `ff9fcb0` | `uv run pytest tests/runtime -q`（4 passed）；BuiltinReAct、Pi JSONL protocol |
-| 8 | Claude/Codex Harness | ⏳ | — | — |
+| 8 | Claude/Codex Harness | ✅ | `1d67798` | `uv run pytest tests/harness -q`（3 passed）；JSONL parser、进程生命周期、terminal channel、probe |
 | 9 | Evaluators、aggregation、gates、Inspect | ⏳ | — | — |
 | 10 | API、Celery worker、CLI | ⏳ | — | — |
 | 11 | React Web console | ⏳ | — | — |
