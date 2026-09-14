@@ -32,6 +32,18 @@ members = ["packages/*"]
 
 [tool.pytest.ini_options]
 markers = ["replay: deterministic replay tests", "live: external provider tests"]
+pythonpath = [
+  "packages/contracts",
+  "packages/sdk-python",
+  "packages/provider-runtime",
+  "packages/agent-runtime",
+  "packages/harness-runtime",
+  "packages/skill-runtime",
+  "packages/sandbox",
+  "packages/evaluators",
+  "packages/trace",
+  "packages/storage",
+]
 
 [tool.ruff]
 line-length = 100
