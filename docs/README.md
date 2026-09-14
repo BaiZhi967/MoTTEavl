@@ -6,3 +6,9 @@
 - [开发进度记录](PROGRESS.md)
 
 流程生成的 spec 和 plan 保留在 `docs/superpowers/`，本文件作为长期维护入口。新的架构决策使用 ADR 记录，并在设计基线中登记影响。
+
+## 实现文档
+
+- [安装](operations/install.md)
+- [升级](operations/upgrade.md)
+- [Provider compatibility](protocols/provider-compatibility.md)
