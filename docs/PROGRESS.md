@@ -6,8 +6,8 @@
 
 | Task | 内容 | 状态 | Commit | 验证 |
 |---|---|---|---|---|
-| 1 | 工作区、依赖、Compose、CI | ✅ | 待主干汇总 | `uv run pytest tests/test_workspace_health.py -q`; `docker compose ... config` |
-| 2 | Canonical contracts 与 schema | ⏳ | — | — |
+| 1 | 工作区、依赖、Compose、CI | ✅ | `2f8e15c`（含基础提交） | `uv run pytest tests/test_workspace_health.py -q`（1 passed）；Compose config 通过 |
+| 2 | Canonical contracts 与 schema | ✅ | `02f698c` | `uv run pytest tests/contract -q`（8 passed）；schema 导出 16 个 contract |
 | 3 | Storage、migration、artifact | ⏳ | — | — |
 | 4 | Provider runtime 与 model catalog | ⏳ | — | — |
 | 5 | Trace、replay、executor、foundation slice | ⏳ | — | — |
