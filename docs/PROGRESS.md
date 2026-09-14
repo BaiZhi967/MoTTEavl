@@ -10,7 +10,7 @@
 | 2 | Canonical contracts 与 schema | ✅ | `02f698c` | `uv run pytest tests/contract -q`（8 passed）；schema 导出 16 个 contract |
 | 3 | Storage、migration、artifact | ✅ | `96d92ee` | `uv run pytest tests/storage -q`（4 passed）；ArtifactStore SHA-256/path safety |
 | 4 | Provider runtime 与 model catalog | ✅ | `4aacb84` | `uv run pytest tests/provider -q`（4 passed）；四协议归一化、strict 校验、pricing |
-| 5 | Trace、replay、executor、foundation slice | ⏳ | — | — |
+| 5 | Trace、replay、executor、foundation slice | ✅ | `5599e6c` | `uv run pytest tests/trace tests/runtime -q`（3 passed）；trace/redaction/replay/idempotent executor/scheduler 已验证 |
 | 6 | Docker sandbox、Skill、ToolRegistry | ⏳ | — | — |
 | 7 | BuiltinReAct、Pi bridge | ⏳ | — | — |
 | 8 | Claude/Codex Harness | ⏳ | — | — |
