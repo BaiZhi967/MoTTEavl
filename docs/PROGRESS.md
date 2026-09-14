@@ -35,3 +35,5 @@
 - [x] 接入 replay Provider 的确定性 Trace/Score 产物；RunService 持久化 model_response/score/completed 事件
 - [x] 在不触发付费调用的前提下完成 Direct LLM E2E 基础路径
 - [ ] 由操作者执行一次显式 live smoke 并记录 Provider 证据
+
+阶段 A 的纵向链路已推进到 API → SQLite → Worker → RunService → replay Trace/Score；Provider 已增加可离线测试的 HTTP transport（`ce465fa`），尚未执行真实网络调用。
