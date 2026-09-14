@@ -56,3 +56,19 @@ def test_retry_endpoint_rejects_completed_run(tmp_path):
     client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": {"case-1": {"output": 1, "expected": 1}}})
     conflict = client.post(f"/api/v1/runs/{run['id']}/retry")
     assert conflict.status_code == 409
+
+
+def test_rescore_endpoint_recomputes_scores_without_new_model_calls(tmp_path):
+    client = TestClient(create_app(SQLiteRunStore(tmp_path / "api.db")))
+    run = client.post("/api/v1/runs", json={"scenario_version": "replay@1", "case_ids": ["case-1"]}).json()
+    fixture = {"case-1": {"output": {"n": 1}, "expected": {"n": 1}}}
+    client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": fixture})
+    rescored = client.post(f"/api/v1/runs/{run['id']}/rescore").json()
+    assert rescored["rescored"] is True
+    assert rescored["scores"] == [{"case_id": "case-1", "passed": True}]
+    model_responses = [
+        event
+        for event in client.app.state.run_service.events(run["id"])
+        if event["type"] == "model_response"
+    ]
+    assert len(model_responses) == 1
