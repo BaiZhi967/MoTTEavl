@@ -30,7 +30,7 @@
 - [x] API 使用共享服务并提供 Run 查询、SSE、cancel、rescore 入口
 - [x] CLI 与 Worker 使用同一服务入口
 - [x] 新增 4 个 RunService 回归测试；全量测试达到 42 passed
-- [ ] 将进程内 repository 替换为 SQLite 开发实现与 PostgreSQL 生产实现
-- [ ] 接入 replay Provider 的真实 Trace/Score 产物
-- [ ] 在不触发付费调用的前提下完成 Direct LLM E2E
+- [x] 增加 SQLite durable repository；PostgreSQL adapter 仍待接入
+- [x] 接入 replay Provider 的确定性 Trace/Score 产物；新增 replay E2E
+- [x] 在不触发付费调用的前提下完成 Direct LLM E2E 基础路径
 - [ ] 由操作者执行一次显式 live smoke 并记录 Provider 证据
