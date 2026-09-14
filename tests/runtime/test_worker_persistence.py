@@ -19,4 +19,9 @@ def test_trace_events_are_available_after_service_restart(tmp_path):
     run = first.create_run("replay@1", {})
     first.execute(run["id"], ["case-1"])
     second = RunService(SQLiteRepository(path))
-    assert [event["type"] for event in second.events(run["id"])] == ["queued", "running", "completed"]
+    assert [event["type"] for event in second.events(run["id"])] == [
+        "queued",
+        "running",
+        "model_response",
+        "completed",
+    ]

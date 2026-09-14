@@ -30,8 +30,8 @@
 - [x] API 使用共享服务并提供 Run 查询、SSE、cancel、rescore 入口
 - [x] CLI 与 Worker 使用同一服务入口；Worker 可通过 SQLite 路径接管 API 创建的 Run
 - [x] TraceEvent 写入 repository，服务重启后可回放事件
-- [x] 新增 7 个 RunService/Worker 回归测试及 API durable repository 验证；全量测试达到 48 passed
+- [x] 新增 8 个 RunService/Worker 回归测试及 API durable repository 验证；全量测试达到 49 passed
 - [x] 增加 SQLite durable repository；API 默认使用 `MOTTE_DB_PATH`；RunService 重启后可继续分配 Run ID；PostgreSQL adapter 仍待接入
-- [x] 接入 replay Provider 的确定性 Trace/Score 产物；新增 replay E2E
+- [x] 接入 replay Provider 的确定性 Trace/Score 产物；RunService 持久化 model_response/score/completed 事件
 - [x] 在不触发付费调用的前提下完成 Direct LLM E2E 基础路径
 - [ ] 由操作者执行一次显式 live smoke 并记录 Provider 证据

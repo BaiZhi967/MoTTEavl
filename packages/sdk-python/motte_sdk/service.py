@@ -47,10 +47,18 @@ class RunService:
         self.repository.put(run_id, run)
         self._emit(run_id, "running", {"status": "running"})
         results = []
+        scores = []
         for case in cases:
             result = self.provider(case) if self.provider is not None else {"case_id": case}
+            self._emit(run_id, "model_response", {"case_id": case, "result": result})
             results.append({"case_id": case, "result": result})
-        run.update({"status": "completed", "cases": results})
+            fixture = getattr(self.provider, "__self__", None)
+            expected = getattr(fixture, "fixture", {}).get(case, {}).get("expected")
+            if expected is not None:
+                passed = result == expected
+                scores.append({"case_id": case, "passed": passed})
+                self._emit(run_id, "score", {"case_id": case, "passed": passed})
+        run.update({"status": "completed", "cases": results, "scores": scores})
         self.repository.put(run_id, run)
         self._emit(run_id, "completed", {"status": "completed"})
         return deepcopy(run)
