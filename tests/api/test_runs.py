@@ -23,3 +23,15 @@ def test_api_reopens_durable_repository(tmp_path):
     created = first.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
     second = TestClient(create_app(SQLiteRepository(path)))
     assert second.get(f"/api/v1/runs/{created['id']}").json()["status"] == "queued"
+
+
+def test_replay_run_completes_through_api(tmp_path):
+    from motte_sdk.replay_run import ReplayProvider
+
+    app = create_app(SQLiteRepository(tmp_path / "api.db"))
+    client = TestClient(app)
+    run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
+    fixture = {"case-1": {"output": {"name": "Ada"}, "expected": {"name": "Ada"}}}
+    response = client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": fixture})
+    assert response.status_code == 200
+    assert response.json()["scores"] == [{"case_id": "case-1", "passed": True}]

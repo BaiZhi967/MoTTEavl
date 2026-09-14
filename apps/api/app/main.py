@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from motte_sdk.service import RunService
+from motte_sdk.replay_run import ReplayProvider
 from motte_storage.repositories import SQLiteRepository
 
 
@@ -44,6 +45,12 @@ def create_app(repository=None) -> FastAPI:
     @application.post("/api/v1/runs/{run_id}/rescore")
     def rescore_run(run_id: str):
         return service.rescore(run_id)
+
+    @application.post("/api/v1/runs/{run_id}/replay")
+    def replay_run(run_id: str, body: dict):
+        fixture = body.get("cases", {})
+        service.provider = ReplayProvider(fixture).invoke
+        return service.execute(run_id, fixture.keys())
 
     @application.get("/api/v1/runs/{run_id}/events")
     def events(run_id: str):

@@ -48,16 +48,22 @@ class RunService:
         self._emit(run_id, "running", {"status": "running"})
         results = []
         scores = []
-        for case in cases:
-            result = self.provider(case) if self.provider is not None else {"case_id": case}
-            self._emit(run_id, "model_response", {"case_id": case, "result": result})
-            results.append({"case_id": case, "result": result})
-            fixture = getattr(self.provider, "__self__", None)
-            expected = getattr(fixture, "fixture", {}).get(case, {}).get("expected")
-            if expected is not None:
-                passed = result == expected
-                scores.append({"case_id": case, "passed": passed})
-                self._emit(run_id, "score", {"case_id": case, "passed": passed})
+        try:
+            for case in cases:
+                result = self.provider(case) if self.provider is not None else {"case_id": case}
+                self._emit(run_id, "model_response", {"case_id": case, "result": result})
+                results.append({"case_id": case, "result": result})
+                fixture = getattr(self.provider, "__self__", None)
+                expected = getattr(fixture, "fixture", {}).get(case, {}).get("expected")
+                if expected is not None:
+                    passed = result == expected
+                    scores.append({"case_id": case, "passed": passed})
+                    self._emit(run_id, "score", {"case_id": case, "passed": passed})
+        except Exception as error:
+            run.update({"status": "failed", "error": {"type": type(error).__name__, "message": str(error)}})
+            self.repository.put(run_id, run)
+            self._emit(run_id, "failed", {"status": "failed", "error": run["error"]})
+            return deepcopy(run)
         run.update({"status": "completed", "cases": results, "scores": scores})
         self.repository.put(run_id, run)
         self._emit(run_id, "completed", {"status": "completed"})
@@ -80,6 +86,24 @@ class RunService:
         self.repository.put(run_id, run)
         self._emit(run_id, "rescored", {"status": run["status"]})
         return deepcopy(run)
+
+    def mark_unsupported(self, run_id: str, code: str) -> dict[str, Any]:
+        run = self.get_run(run_id)
+        if run["status"] in self.TERMINAL:
+            return run
+        run.update({"status": "unsupported", "error": {"code": code}})
+        self.repository.put(run_id, run)
+        self._emit(run_id, "unsupported", {"status": "unsupported", "error": run["error"]})
+        return deepcopy(run)
+
+    def retry(self, run_id: str) -> dict[str, Any]:
+        parent = self.get_run(run_id)
+        if parent["status"] not in {"failed", "cancelled", "unsupported"}:
+            raise ValueError("only failed, cancelled, or unsupported runs can be retried")
+        child = self.create_run(parent["scenario_version"], parent.get("manifest", {}))
+        child["parent_run_id"] = run_id
+        self.repository.put(child["id"], child)
+        return deepcopy(child)
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
         events = self._events.get(run_id)
