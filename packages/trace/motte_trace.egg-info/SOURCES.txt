@@ -1,6 +1,0 @@
-pyproject.toml
-motte_trace/__init__.py
-motte_trace.egg-info/PKG-INFO
-motte_trace.egg-info/SOURCES.txt
-motte_trace.egg-info/dependency_links.txt
-motte_trace.egg-info/top_level.txt

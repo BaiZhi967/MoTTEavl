@@ -1,7 +1,0 @@
-pyproject.toml
-motte_contracts/__init__.py
-motte_contracts.egg-info/PKG-INFO
-motte_contracts.egg-info/SOURCES.txt
-motte_contracts.egg-info/dependency_links.txt
-motte_contracts.egg-info/requires.txt
-motte_contracts.egg-info/top_level.txt

@@ -1,6 +1,0 @@
-pyproject.toml
-motte_sdk/__init__.py
-motte_sdk.egg-info/PKG-INFO
-motte_sdk.egg-info/SOURCES.txt
-motte_sdk.egg-info/dependency_links.txt
-motte_sdk.egg-info/top_level.txt

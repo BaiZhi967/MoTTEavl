@@ -1,6 +1,0 @@
-pyproject.toml
-motte_storage/__init__.py
-motte_storage.egg-info/PKG-INFO
-motte_storage.egg-info/SOURCES.txt
-motte_storage.egg-info/dependency_links.txt
-motte_storage.egg-info/top_level.txt
