@@ -1,9 +1,13 @@
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
+from motte_sdk.service import RunService
+from motte_storage.repositories import InMemoryRepository
 
 app = FastAPI(title="MoTTEavl API", version="0.1.0")
-runs: dict[str, dict] = {}
+_repository = InMemoryRepository()
+_run_service = RunService(_repository)
+runs = _repository._items
 
 
 @app.get("/health")
@@ -24,9 +28,7 @@ def create_run(body: dict):
                 }
             },
         )
-    rid = f"run-{len(runs) + 1}"
-    runs[rid] = {"id": rid, "status": "queued", **body}
-    return runs[rid]
+    return _run_service.create_run(scenario, body.get("manifest", {}))
 
 
 @app.get("/api/v1/runs/{run_id}")
@@ -35,12 +37,20 @@ def get_run(run_id: str):
 
     if run_id not in runs:
         raise HTTPException(status_code=404, detail="run not found")
-    return runs[run_id]
+    return _run_service.get_run(run_id)
+
+
+@app.post("/api/v1/runs/{run_id}/cancel")
+def cancel_run(run_id: str):
+    return _run_service.cancel(run_id)
+
+
+@app.post("/api/v1/runs/{run_id}/rescore")
+def rescore_run(run_id: str):
+    return _run_service.rescore(run_id)
 
 
 @app.get("/api/v1/runs/{run_id}/events")
 def events(run_id: str):
-    payload = json.dumps(
-        {"run_id": run_id, "type": "state", "status": runs.get(run_id, {}).get("status", "unknown")}
-    )
-    return StreamingResponse(iter([f"data: {payload}\n\n"]), media_type="text/event-stream")
+    payloads = [json.dumps(event) for event in _run_service.events(run_id)]
+    return StreamingResponse((f"data: {payload}\n\n" for payload in payloads), media_type="text/event-stream")

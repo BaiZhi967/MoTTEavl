@@ -20,3 +20,17 @@
 | 12 | Replay integration、发布与运维文档 | ✅ | `49138cc`（基于 `e428fae`、`d9aa9a6`、`2afcfe0`） | `uv run pytest -q`（38 passed）；replay 1 passed；`uv run ruff check .`；compileall；Compose config；Web test 通过；CI 使用 portable compileall type gate |
 
 状态说明：⏳ 未开始，🚧 开发中，✅ 已通过仓库验证，⚠️ 受外部依赖或未运行 live smoke 影响。
+
+## 当前推进阶段：Direct LLM Run 纵向切片
+
+阶段目标是让 API、CLI、Worker 和 SDK 共用一个可持久化的 RunService，并先以 replay Provider 验证完整生命周期，再接入真实 Provider。
+
+- [x] 共享 `RunService`：create/get/execute/cancel/rescore/events
+- [x] queued/running/completed/cancelled 生命周期与幂等执行
+- [x] API 使用共享服务并提供 Run 查询、SSE、cancel、rescore 入口
+- [x] CLI 与 Worker 使用同一服务入口
+- [x] 新增 4 个 RunService 回归测试；全量测试达到 42 passed
+- [ ] 将进程内 repository 替换为 SQLite 开发实现与 PostgreSQL 生产实现
+- [ ] 接入 replay Provider 的真实 Trace/Score 产物
+- [ ] 在不触发付费调用的前提下完成 Direct LLM E2E
+- [ ] 由操作者执行一次显式 live smoke 并记录 Provider 证据
