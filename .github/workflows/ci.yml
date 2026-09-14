@@ -1,7 +1,7 @@
 name: CI
 on: [push, pull_request]
 jobs:
-  checks:
+  python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -9,7 +9,20 @@ jobs:
         with: {python-version: '3.12'}
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run pytest tests/test_workspace_health.py -q
+      - run: uv run pytest -q -m "not live"
       - run: uv run ruff check .
       - run: uv run python -m compileall -q packages apps
-      - run: docker compose -f infra/docker-compose.yml config
+      - run: docker compose -f infra/docker-compose.yml config -q
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: {version: '9.15.0'}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/web build
+      - run: pnpm -r test
