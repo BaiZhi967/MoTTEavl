@@ -46,3 +46,7 @@
 本轮验证：`uv run pytest -q`（60 passed）、`uv run ruff check .`、PostgreSQL boundary tests 通过。真实 Provider、Celery broker 和 PostgreSQL 服务未启动。
 
 阶段 A 的纵向链路已推进到 API → SQLite → Worker → RunService → replay Trace/Score；Provider 已增加可离线测试的 HTTP transport（`ce465fa`），尚未执行真实网络调用。
+
+## 下一阶段
+
+阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。

@@ -2,6 +2,7 @@
 
 - [架构设计基线](superpowers/specs/2026-09-14-llm-agent-harness-evaluation-platform-design.md)
 - [完整开发计划](superpowers/plans/2026-09-14-motteavl-platform-implementation-plan.md)
+- [下一阶段任务安排](superpowers/plans/2026-09-15-next-phase-task-plan.md)
 - [架构决策记录](superpowers/specs/adr/2026-09-14-runtime-safety-and-execution-policy.md)
 - [开发进度记录](PROGRESS.md)
 
