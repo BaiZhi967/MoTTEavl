@@ -21,6 +21,9 @@ services:
     volumes: ["..:/workspace", "../var/artifacts:/workspace/var/artifacts"]
     environment:
       ARTIFACT_ROOT: /workspace/var/artifacts
+      MOTTE_DB_PATH: /workspace/var/runs.db
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "apps.worker.motte_worker"]
     depends_on: [postgres, redis]
 volumes:
   postgres-data:

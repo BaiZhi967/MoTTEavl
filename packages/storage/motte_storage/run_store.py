@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS scores (
 );
 """
 
+# Worker 崩溃后卡住的中间态；重启时回收回 queued。
+INTERRUPTED_STATES = ("preparing", "running", "collecting", "scoring")
+
 
 def _connect(path: str) -> sqlite3.Connection:
     connection = sqlite3.connect(path, isolation_level=None)
@@ -74,6 +77,48 @@ class _SQLiteRuns:
             rows = connection.execute("SELECT id FROM runs").fetchall()
         numbers = [int(row[0].split("-")[-1]) for row in rows if row[0].startswith("run-")]
         return f"run-{max(numbers, default=0) + 1}"
+
+    def claim_next_queued(self) -> dict[str, Any] | None:
+        """原子抢占最早创建的 queued Run（置为 preparing），用于 Worker 轮询调度。"""
+        connection = _connect(self._path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute("SELECT id, payload FROM runs ORDER BY rowid").fetchall()
+            claimed = None
+            for _, payload in rows:
+                run = json.loads(payload)
+                if run.get("status") == "queued":
+                    claimed = run
+                    break
+            if claimed is not None:
+                claimed["status"] = "preparing"
+                connection.execute(
+                    "UPDATE runs SET payload = ? WHERE id = ?",
+                    (json.dumps(claimed, sort_keys=True), claimed["id"]),
+                )
+            connection.execute("COMMIT")
+        finally:
+            connection.close()
+        return deepcopy(claimed) if claimed is not None else None
+
+    def requeue_interrupted(self) -> list[str]:
+        """把卡在中间态的 Run 回收为 queued（Worker 重启恢复）。"""
+        connection = _connect(self._path)
+        requeued: list[str] = []
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for run_id, payload in connection.execute("SELECT id, payload FROM runs ORDER BY rowid").fetchall():
+                run = json.loads(payload)
+                if run.get("status") in INTERRUPTED_STATES:
+                    run["status"] = "queued"
+                    connection.execute(
+                        "UPDATE runs SET payload = ? WHERE id = ?", (json.dumps(run, sort_keys=True), run_id)
+                    )
+                    requeued.append(run_id)
+            connection.execute("COMMIT")
+        finally:
+            connection.close()
+        return requeued
 
 
 class _SQLiteCaseRuns:
@@ -203,6 +248,24 @@ class _InMemoryRuns:
     def next_run_id(self) -> str:
         numbers = [int(key.split("-")[-1]) for key in self._runs if key.startswith("run-")]
         return f"run-{max(numbers, default=0) + 1}"
+
+    def claim_next_queued(self) -> dict[str, Any] | None:
+        for run_id in self._runs:
+            run = self._runs[run_id]
+            if run.get("status") == "queued":
+                claimed = deepcopy(run)
+                claimed["status"] = "preparing"
+                self._runs[run_id] = claimed
+                return deepcopy(claimed)
+        return None
+
+    def requeue_interrupted(self) -> list[str]:
+        requeued = []
+        for run_id in self._runs:
+            if self._runs[run_id].get("status") in INTERRUPTED_STATES:
+                self._runs[run_id]["status"] = "queued"
+                requeued.append(run_id)
+        return requeued
 
 
 class _InMemoryCaseRuns:
