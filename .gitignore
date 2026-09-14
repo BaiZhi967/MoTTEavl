@@ -8,5 +8,7 @@ __pycache__/
 node_modules/
 dist/
 var/artifacts/*
+var/*.db
+var/*.db-*
 !.gitkeep
 .env

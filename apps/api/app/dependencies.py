@@ -1,3 +1,5 @@
-def get_run_store():
-    from .main import runs
-    return runs
+from fastapi import Request
+
+
+def get_run_service(request: Request):
+    return request.app.state.run_service
