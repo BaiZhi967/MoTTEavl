@@ -11,7 +11,7 @@
 | 3 | Storage、migration、artifact | ✅ | `96d92ee` | `uv run pytest tests/storage -q`（4 passed）；ArtifactStore SHA-256/path safety |
 | 4 | Provider runtime 与 model catalog | ✅ | `4aacb84` | `uv run pytest tests/provider -q`（4 passed）；四协议归一化、strict 校验、pricing |
 | 5 | Trace、replay、executor、foundation slice | ✅ | `5599e6c` | `uv run pytest tests/trace tests/runtime -q`（3 passed）；trace/redaction/replay/idempotent executor/scheduler 已验证 |
-| 6 | Docker sandbox、Skill、ToolRegistry | ⏳ | — | — |
+| 6 | Docker sandbox、Skill、ToolRegistry | ✅ | `1faeaa3` | `uv run pytest tests/sandbox -q`（4 passed）；默认 deny network、策略分离、tool modes |
 | 7 | BuiltinReAct、Pi bridge | ⏳ | — | — |
 | 8 | Claude/Codex Harness | ⏳ | — | — |
 | 9 | Evaluators、aggregation、gates、Inspect | ⏳ | — | — |
