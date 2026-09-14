@@ -74,6 +74,18 @@
 
 未完成（留给阶段 2+）：真实 Provider 调用（openai_compatible 真适配器、canonical 落盘、价格版本、live smoke）；Redis broker 上的 Celery 实测（当前 eager）；PostgreSQL repository。
 
+## 阶段 2：第一个真实 Provider —— openai_compatible（2026-09-15）
+
+| Task | Commit | 内容 |
+|---|---|---|
+| P2-1..P2-5 | `cf2a67a` | 真适配器：ModelRequest → `/chat/completions` → 统一 envelope（content/usage/metering/cost/canonical/error）；transport 增加 `post_json_detailed`（attempts/latency_ms/错误分类 auth/rate_limit/timeout/server/client/network/protocol，异常携带 outcome）；canonical request/response 落盘前经 redaction 脱敏，Authorization 头永不持久化；PriceTable 版本化（未知价格保持 None，成本带 price_table_version 快照）；strict 参数预检在构造与请求两级执行 |
+| — | `61c0112` | run 链路接线：API 创建时预检 provider 配置（422 UNSUPPORTED_PARAMETER / PROVIDER_CONFIG_INVALID）；Worker 构造失败落 unsupported（零网络调用）；失败 Run 记录 error.class + 脱敏 evidence；评分对 envelope 结果取 content 比较 |
+| P2-6 | `aeab491` | CLI 子命令化（doctor/run/replay/live-smoke）；`live-smoke` 显式真实调用（密钥仅从环境变量读取，缺失即拒绝），支持 `--report` JSON 与 `--record` markdown 记录（`docs/operations/live-smoke-log.md` 含模板） |
+
+验收门核对：默认测试全部 fixture/replay（114 passed，零网络）✓；live smoke 仅显式启动（CI/测试永不触发）✓；API key 不出现在 envelope/Run/CaseRun/TraceEvent/SSE/CLI/记录（多个断言测试）✓；strict 不支持参数在付费调用前失败（构造级 + 请求级 + API 创建级三层，opener 调用数为 0 的测试）✓；成本计算使用请求发生时的 price table version（manifest 快照）✓。
+
+剩余：live smoke 待操作者带真实 key 执行一次并记录（`docs/operations/live-smoke-log.md`）；Redis broker 上的 Celery 实测仍为 eager；OpenAI Responses / Anthropic Messages 仍为 openai_chat 别名 shim（按计划后续接入）。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。
