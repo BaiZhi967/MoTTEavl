@@ -1,0 +1,1 @@
+export function ModelProfileEditor({profile}:{profile:any}) { return <section><h2>模型能力</h2><p>输入模态：{(profile.input_modalities||[]).join('、')}</p><p>上下文上限：{profile.context_window??'未知'}</p><p>输出上限：{profile.max_output_tokens??'未知'}</p><p>支持工具：{profile.supports_tools?'是':'否'}</p></section> }
