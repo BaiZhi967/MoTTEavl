@@ -74,8 +74,18 @@ class RunService:
         return deepcopy(run)
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
-        return deepcopy(self._events.get(run_id, []))
+        events = self._events.get(run_id)
+        if events is None and hasattr(self.repository, "keys"):
+            events = [self.repository.get(key) for key in self.repository.keys(f"event:{run_id}:")]
+            events = [event for event in events if event is not None]
+        return deepcopy(events or [])
 
     def _emit(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        if run_id not in self._events and hasattr(self.repository, "keys"):
+            existing = [self.repository.get(key) for key in self.repository.keys(f"event:{run_id}:")]
+            self._events[run_id] = [event for event in existing if event is not None]
         events = self._events.setdefault(run_id, [])
-        events.append({"run_id": run_id, "seq": len(events) + 1, "type": event_type, **payload})
+        event = {"run_id": run_id, "seq": len(events) + 1, "type": event_type, **payload}
+        events.append(event)
+        if hasattr(self.repository, "put"):
+            self.repository.put(f"event:{run_id}:{event['seq']:08d}", event)

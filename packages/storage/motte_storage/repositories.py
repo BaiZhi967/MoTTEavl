@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from copy import deepcopy
 import json
 import sqlite3
@@ -22,6 +24,9 @@ class InMemoryRepository:
 
     def delete(self, key: str) -> None:
         self._items.pop(key, None)
+
+    def keys(self, prefix: str = "") -> list[str]:
+        return sorted(key for key in self._items if key.startswith(prefix))
 
 
 class SQLiteRepository:
@@ -51,3 +56,8 @@ class SQLiteRepository:
     def delete(self, key: str) -> None:
         with sqlite3.connect(self.path) as connection:
             connection.execute("DELETE FROM records WHERE key = ?", (key,))
+
+    def keys(self, prefix: str = "") -> list[str]:
+        with sqlite3.connect(self.path) as connection:
+            rows = connection.execute("SELECT key FROM records WHERE key LIKE ? ORDER BY key", (f"{prefix}%",)).fetchall()
+        return [row[0] for row in rows]
