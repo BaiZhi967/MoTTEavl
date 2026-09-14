@@ -38,11 +38,10 @@ RETRYABLE = {"failed", "cancelled", "unsupported", "profile_stale"}
 
 def build_run_service(db_path: str | Path | None = None) -> RunService:
     """API、CLI、Worker 共用的服务构造入口（MOTTE_DB_PATH，默认 var/runs.db）。"""
-    from motte_storage.repositories import SQLiteRepository
+    from motte_storage.run_store import SQLiteRunStore
 
     path = Path(db_path if db_path is not None else os.environ.get("MOTTE_DB_PATH", "var/runs.db"))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return RunService(SQLiteRepository(path))
+    return RunService(SQLiteRunStore(path))
 
 
 class RunService:
@@ -50,13 +49,9 @@ class RunService:
 
     TERMINAL = {"completed", "failed", "cancelled", "unsupported", "profile_stale"}
 
-    def __init__(self, repository: Any, provider: Callable[[str], Any] | None = None) -> None:
-        self.repository = repository
+    def __init__(self, store: Any, provider: Callable[[str], Any] | None = None) -> None:
+        self.store = store
         self.provider = provider
-        self._events: dict[str, list[dict[str, Any]]] = {}
-        existing = repository.list()
-        ids = [int(item["id"].split("-")[-1]) for item in existing if str(item.get("id", "")).startswith("run-")]
-        self._next_id = max(ids, default=0) + 1
 
     def create_run(
         self,
@@ -64,8 +59,7 @@ class RunService:
         manifest: dict[str, Any],
         case_ids: Iterable[str] = (),
     ) -> dict[str, Any]:
-        run_id = f"run-{self._next_id}"
-        self._next_id += 1
+        run_id = self.store.runs.next_run_id()
         run = {
             "id": run_id,
             "scenario_version": scenario_version,
@@ -73,15 +67,15 @@ class RunService:
             "manifest": deepcopy(manifest),
             "case_ids": list(case_ids),
         }
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, "queued", {"status": "queued"})
-        return deepcopy(run)
+        return self._view(run_id)
 
     def get_run(self, run_id: str) -> dict[str, Any]:
-        run = self.repository.get(run_id)
+        run = self.store.runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
-        return run
+        return self._view(run_id)
 
     def execute(
         self,
@@ -90,109 +84,118 @@ class RunService:
         provider: Callable[[str], Any] | None = None,
         expectations: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        run = self.get_run(run_id)
+        run = self._load(run_id)
         if run["status"] == "completed":
-            return run
+            return self._view(run_id)
         if run["status"] in self.TERMINAL:
             raise ValueError("run is terminal")
         invoke = provider if provider is not None else self.provider
         ids = list(case_ids) if case_ids is not None else list(run.get("case_ids") or [])
         if ids and not run.get("case_ids"):
             run["case_ids"] = ids
-            self.repository.put(run_id, run)
+            self.store.runs.save(run)
         if run["status"] == "queued":
-            run = self._transition(run_id, "preparing")
-        if run["status"] != "running":
-            run = self._transition(run_id, "running")
-        results = list(run.get("cases") or [])
-        done = {entry["case_id"] for entry in results}
+            self._transition(run_id, "preparing")
+        if self._load(run_id)["status"] != "running":
+            self._transition(run_id, "running")
+        done = {row["case_id"] for row in self.store.case_runs.list_for_run(run_id)}
         try:
             for case_id in ids:
                 if case_id in done:
                     continue
-                if self.get_run(run_id)["status"] == "cancelled":
+                if self._load(run_id)["status"] == "cancelled":
                     return self.get_run(run_id)
                 result = invoke(case_id) if invoke is not None else {"case_id": case_id}
                 expected = self._expected_for(invoke, expectations, case_id)
-                entry = {"case_id": case_id, "result": result}
+                entry: dict[str, Any] = {"run_id": run_id, "case_id": case_id, "result": result}
                 if expected is not None:
                     entry["expected"] = expected
-                results.append(entry)
-                run = self.get_run(run_id)
-                run["cases"] = results
-                self.repository.put(run_id, run)
+                self.store.case_runs.upsert(entry)
                 self._emit(run_id, "model_response", {"case_id": case_id, "result": result})
         except Exception as error:
             return self._fail(run_id, error)
-        if self.get_run(run_id)["status"] == "cancelled":
+        if self._load(run_id)["status"] == "cancelled":
             return self.get_run(run_id)
-        run = self._transition(run_id, "collecting", cases=results)
-        run = self._transition(run_id, "scoring")
+        results = self.store.case_runs.list_for_run(run_id)
+        self._transition(run_id, "collecting")
+        self._transition(run_id, "scoring")
         scores = self._score_results(run_id, results, emit_events=True)
-        return self._transition(run_id, "completed", cases=results, scores=scores)
+        self.store.scores.replace_for_run(run_id, scores)
+        return self._transition(run_id, "completed")
 
     def cancel(self, run_id: str, reason: str | None = None) -> dict[str, Any]:
-        run = self.get_run(run_id)
+        run = self._load(run_id)
         if run["status"] in self.TERMINAL:
-            return run
+            return self._view(run_id)
         run["status"] = "cancelled"
         payload: dict[str, Any] = {"status": "cancelled"}
         if reason is not None:
             run["cancellation"] = {"reason": reason}
             payload["reason"] = reason
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, "cancelled", payload)
-        return deepcopy(run)
+        return self._view(run_id)
 
     def rescore(self, run_id: str) -> dict[str, Any]:
-        run = self.get_run(run_id)
+        run = self._load(run_id)
         if run["status"] != "completed":
             raise ValueError("only completed runs can be rescored")
-        scores = self._score_results(run_id, run.get("cases") or [], emit_events=False)
-        run["scores"] = scores
+        scores = self._score_results(run_id, self.store.case_runs.list_for_run(run_id), emit_events=False)
+        self.store.scores.replace_for_run(run_id, scores)
         run["rescored"] = True
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, "rescored", {"status": run["status"], "scores": deepcopy(scores)})
-        return deepcopy(run)
+        return self._view(run_id)
 
     def mark_unsupported(self, run_id: str, code: str) -> dict[str, Any]:
-        run = self.get_run(run_id)
+        run = self._load(run_id)
         if run["status"] in self.TERMINAL:
-            return run
+            return self._view(run_id)
         run.update({"status": "unsupported", "error": {"code": code}})
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, "unsupported", {"status": "unsupported", "error": run["error"]})
-        return deepcopy(run)
+        return self._view(run_id)
 
     def mark_profile_stale(self, run_id: str, reason: str | None = None) -> dict[str, Any]:
-        run = self.get_run(run_id)
+        run = self._load(run_id)
         if run["status"] in self.TERMINAL:
-            return run
+            return self._view(run_id)
         if run["status"] != "queued":
             raise ValueError("profile staleness is detected before execution")
         error: dict[str, Any] = {"code": "PROFILE_STALE"}
         if reason is not None:
             error["message"] = reason
         run.update({"status": "profile_stale", "error": error})
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, "profile_stale", {"status": "profile_stale", "error": error})
-        return deepcopy(run)
+        return self._view(run_id)
 
     def retry(self, run_id: str) -> dict[str, Any]:
-        parent = self.get_run(run_id)
+        parent = self._load(run_id)
         if parent["status"] not in RETRYABLE:
             raise ValueError("only failed, cancelled, unsupported, or profile_stale runs can be retried")
         child = self.create_run(parent["scenario_version"], parent.get("manifest", {}), parent.get("case_ids") or [])
         child["parent_run_id"] = run_id
-        self.repository.put(child["id"], child)
-        return deepcopy(child)
+        self.store.runs.save(child)
+        return self._view(child["id"])
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
-        events = self._events.get(run_id)
-        if events is None and hasattr(self.repository, "keys"):
-            events = [self.repository.get(key) for key in self.repository.keys(f"event:{run_id}:")]
-            events = [event for event in events if event is not None]
-        return deepcopy(events or [])
+        return self.store.events.list_for_run(run_id)
+
+    def events_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
+        return self.store.events.list_after(run_id, seq)
+
+    def _load(self, run_id: str) -> dict[str, Any]:
+        run = self.store.runs.get(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        return run
+
+    def _view(self, run_id: str) -> dict[str, Any]:
+        run = deepcopy(self._load(run_id))
+        run["cases"] = self.store.case_runs.list_for_run(run_id)
+        run["scores"] = self.store.scores.list_for_run(run_id)
+        return run
 
     def _score_results(
         self,
@@ -210,21 +213,20 @@ class RunService:
         return scores
 
     def _fail(self, run_id: str, error: Exception) -> dict[str, Any]:
-        run = self.get_run(run_id)
+        run = self._load(run_id)
         run.update({"status": "failed", "error": {"type": type(error).__name__, "message": str(error)}})
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, "failed", {"status": "failed", "error": run["error"]})
-        return deepcopy(run)
+        return self._view(run_id)
 
-    def _transition(self, run_id: str, status: str, **fields: Any) -> dict[str, Any]:
-        run = self.get_run(run_id)
+    def _transition(self, run_id: str, status: str) -> dict[str, Any]:
+        run = self._load(run_id)
         if status not in TRANSITIONS.get(run["status"], set()):
             raise ValueError(f"invalid transition: {run['status']} -> {status}")
         run["status"] = status
-        run.update(fields)
-        self.repository.put(run_id, run)
+        self.store.runs.save(run)
         self._emit(run_id, status, {"status": status})
-        return deepcopy(run)
+        return self._view(run_id)
 
     @staticmethod
     def _expected_for(
@@ -243,11 +245,4 @@ class RunService:
         return None
 
     def _emit(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        if run_id not in self._events and hasattr(self.repository, "keys"):
-            existing = [self.repository.get(key) for key in self.repository.keys(f"event:{run_id}:")]
-            self._events[run_id] = [event for event in existing if event is not None]
-        events = self._events.setdefault(run_id, [])
-        event = {"run_id": run_id, "seq": len(events) + 1, "type": event_type, **payload}
-        events.append(event)
-        if hasattr(self.repository, "put"):
-            self.repository.put(f"event:{run_id}:{event['seq']:08d}", event)
+        self.store.events.append({"run_id": run_id, "type": event_type, **payload})

@@ -1,7 +1,7 @@
 import pytest
 from motte_sdk.replay_run import ReplayProvider
 from motte_sdk.service import TRANSITIONS, RunService, build_run_service
-from motte_storage.repositories import InMemoryRepository, SQLiteRepository
+from motte_storage.run_store import InMemoryRunStore, SQLiteRunStore
 
 
 def test_build_run_service_honors_motte_db_path(tmp_path, monkeypatch):
@@ -17,7 +17,7 @@ def test_execute_emits_full_lifecycle_events(tmp_path):
         "case-1": {"output": {"n": 1}, "expected": {"n": 1}},
         "case-2": {"output": {"n": 2}, "expected": {"n": 9}},
     }
-    service = RunService(SQLiteRepository(tmp_path / "runs.db"), provider=ReplayProvider(fixture).invoke)
+    service = RunService(SQLiteRunStore(tmp_path / "runs.db"), provider=ReplayProvider(fixture).invoke)
     run = service.create_run("replay@1", {})
     result = service.execute(run["id"], fixture.keys())
     assert [event["type"] for event in service.events(run["id"])] == [
@@ -39,7 +39,7 @@ def test_execute_emits_full_lifecycle_events(tmp_path):
 
 
 def test_cancel_records_reason_and_blocks_remaining_cases():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {}, case_ids=["case-1", "case-2", "case-3"])
     invoked: list[str] = []
 
@@ -60,7 +60,7 @@ def test_cancel_records_reason_and_blocks_remaining_cases():
 
 
 def test_cancel_is_idempotent_on_terminal_run():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {})
     service.cancel(run["id"], reason="stop")
     again = service.cancel(run["id"], reason="second")
@@ -69,7 +69,7 @@ def test_cancel_is_idempotent_on_terminal_run():
 
 
 def test_retry_inherits_case_ids_and_creates_child_run():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {}, case_ids=["case-1"])
 
     def failing(_case):
@@ -84,14 +84,14 @@ def test_retry_inherits_case_ids_and_creates_child_run():
 
 
 def test_retry_rejects_non_retryable_run():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {})
     with pytest.raises(ValueError, match="retried"):
         service.retry(run["id"])
 
 
 def test_profile_stale_blocks_execution_and_is_retryable():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {})
     stale = service.mark_profile_stale(run["id"], reason="model profile updated")
     assert stale["status"] == "profile_stale"
@@ -109,7 +109,7 @@ def test_rescore_recomputes_scores_without_provider_calls():
         calls.append(case_id)
         return {"n": 1}
 
-    service = RunService(InMemoryRepository(), provider=tracking)
+    service = RunService(InMemoryRunStore(), provider=tracking)
     run = service.create_run("replay@1", {})
     service.execute(run["id"], ["case-1"], expectations={"case-1": {"n": 1}})
     assert calls == ["case-1"]
@@ -123,7 +123,7 @@ def test_rescore_recomputes_scores_without_provider_calls():
 
 
 def test_invalid_transition_is_rejected():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {})
     with pytest.raises(ValueError, match="invalid transition"):
         service._transition(run["id"], "completed")
@@ -131,9 +131,27 @@ def test_invalid_transition_is_rejected():
 
 
 def test_completed_run_reexecution_returns_same_result():
-    service = RunService(InMemoryRepository())
+    service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {})
     first = service.execute(run["id"], ["case-1"])
     second = service.execute(run["id"], ["case-1"])
     assert first == second
     assert service.get_run(run["id"])["case_ids"] == ["case-1"]
+
+
+def test_repeated_execution_does_not_duplicate_case_runs(tmp_path):
+    fixture = {
+        "case-1": {"output": {"n": 1}, "expected": {"n": 1}},
+        "case-2": {"output": {"n": 2}, "expected": {"n": 2}},
+    }
+    service = RunService(SQLiteRunStore(tmp_path / "runs.db"), provider=ReplayProvider(fixture).invoke)
+    run = service.create_run("replay@1", {}, case_ids=list(fixture))
+    service.execute(run["id"])
+    again = service.execute(run["id"])
+    assert again["status"] == "completed"
+    rows = service.store.case_runs.list_for_run(run["id"])
+    assert [row["case_id"] for row in rows] == ["case-1", "case-2"]
+    assert again["scores"] == [
+        {"case_id": "case-1", "passed": True},
+        {"case_id": "case-2", "passed": True},
+    ]

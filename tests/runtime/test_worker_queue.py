@@ -1,11 +1,11 @@
 from apps.worker.motte_worker.tasks import configure_service, enqueue_run, execute_queued_run
 from motte_sdk.service import RunService
-from motte_storage.repositories import SQLiteRepository
+from motte_storage.run_store import SQLiteRunStore
 
 
 def test_worker_queue_transitions_queued_run_to_completed(tmp_path):
     path = tmp_path / "runs.db"
-    service = RunService(SQLiteRepository(path))
+    service = RunService(SQLiteRunStore(path))
     run = service.create_run("replay@1", {})
     configure_service(path)
     ticket = enqueue_run(run["id"], ["case-1"])

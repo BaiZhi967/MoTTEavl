@@ -8,8 +8,8 @@ from motte_sdk.service import RunService, build_run_service
 from motte_sdk.replay_run import ReplayProvider
 
 
-def create_app(repository=None) -> FastAPI:
-    service = build_run_service() if repository is None else RunService(repository)
+def create_app(store=None) -> FastAPI:
+    service = build_run_service() if store is None else RunService(store)
     application = FastAPI(title="MoTTEavl API", version="0.1.0")
     application.state.run_service = service
 

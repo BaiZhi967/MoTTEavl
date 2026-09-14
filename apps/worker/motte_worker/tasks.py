@@ -1,5 +1,5 @@
 from motte_sdk.service import RunService, build_run_service
-from motte_storage.repositories import SQLiteRepository
+from motte_storage.run_store import SQLiteRunStore
 
 _service: RunService | None = None
 _queued: dict[str, tuple[str, tuple[str, ...]]] = {}
@@ -14,7 +14,7 @@ def get_service() -> RunService:
 
 def configure_service(path=None) -> None:
     global _service
-    _service = RunService(SQLiteRepository(path)) if path is not None else build_run_service()
+    _service = RunService(SQLiteRunStore(path)) if path is not None else build_run_service()
 
 
 def execute_run(run_id, cases=()):
