@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from motte_sdk.service import RunService
+from motte_sdk.service import RunService, build_run_service
 from motte_sdk.replay_run import ReplayProvider
-from motte_storage.repositories import SQLiteRepository
 
 
 def create_app(repository=None) -> FastAPI:
-    if repository is None:
-        path = Path(os.environ.get("MOTTE_DB_PATH", "var/runs.db"))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        repository = SQLiteRepository(path)
-    service = RunService(repository)
+    service = build_run_service() if repository is None else RunService(repository)
     application = FastAPI(title="MoTTEavl API", version="0.1.0")
     application.state.run_service = service
 
@@ -39,12 +32,21 @@ def create_app(repository=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="run not found") from error
 
     @application.post("/api/v1/runs/{run_id}/cancel")
-    def cancel_run(run_id: str):
-        return service.cancel(run_id)
+    def cancel_run(run_id: str, body: dict | None = None):
+        return service.cancel(run_id, reason=(body or {}).get("reason"))
 
     @application.post("/api/v1/runs/{run_id}/rescore")
     def rescore_run(run_id: str):
         return service.rescore(run_id)
+
+    @application.post("/api/v1/runs/{run_id}/retry")
+    def retry_run(run_id: str):
+        try:
+            return service.retry(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="run not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/v1/runs/{run_id}/replay")
     def replay_run(run_id: str, body: dict):

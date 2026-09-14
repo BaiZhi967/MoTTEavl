@@ -12,6 +12,9 @@ class ReplayProvider:
             raise KeyError(case_id)
         return self.fixture[case_id]["output"]
 
+    def expected_for(self, case_id: str) -> Any:
+        return self.fixture.get(case_id, {}).get("expected")
+
 
 def run_replay(run_id: str, cases: dict[str, dict[str, Any]], provider: ReplayProvider) -> dict[str, Any]:
     trace: list[dict[str, Any]] = []

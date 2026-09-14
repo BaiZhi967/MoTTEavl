@@ -35,3 +35,24 @@ def test_replay_run_completes_through_api(tmp_path):
     response = client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": fixture})
     assert response.status_code == 200
     assert response.json()["scores"] == [{"case_id": "case-1", "passed": True}]
+
+
+def test_retry_endpoint_creates_child_run_for_cancelled_run():
+    repository = InMemoryRepository()
+    client = TestClient(create_app(repository))
+    run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
+    cancelled = client.post(f"/api/v1/runs/{run['id']}/cancel", json={"reason": "operator request"})
+    assert cancelled.json()["cancellation"] == {"reason": "operator request"}
+    retried = client.post(f"/api/v1/runs/{run['id']}/retry")
+    assert retried.status_code == 200
+    child = retried.json()
+    assert child["parent_run_id"] == run["id"]
+    assert child["status"] == "queued"
+
+
+def test_retry_endpoint_rejects_completed_run(tmp_path):
+    client = TestClient(create_app(SQLiteRepository(tmp_path / "api.db")))
+    run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
+    client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": {"case-1": {"output": 1, "expected": 1}}})
+    conflict = client.post(f"/api/v1/runs/{run['id']}/retry")
+    assert conflict.status_code == 409

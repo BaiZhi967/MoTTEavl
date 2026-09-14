@@ -21,7 +21,10 @@ def test_trace_events_are_available_after_service_restart(tmp_path):
     second = RunService(SQLiteRepository(path))
     assert [event["type"] for event in second.events(run["id"])] == [
         "queued",
+        "preparing",
         "running",
         "model_response",
+        "collecting",
+        "scoring",
         "completed",
     ]

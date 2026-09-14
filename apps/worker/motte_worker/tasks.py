@@ -1,18 +1,24 @@
-from motte_sdk.service import RunService
-from motte_storage.repositories import InMemoryRepository
+from motte_sdk.service import RunService, build_run_service
 from motte_storage.repositories import SQLiteRepository
 
-_service = RunService(InMemoryRepository())
+_service: RunService | None = None
 _queued: dict[str, tuple[str, tuple[str, ...]]] = {}
 
 
-def configure_service(path):
+def get_service() -> RunService:
     global _service
-    _service = RunService(SQLiteRepository(path))
+    if _service is None:
+        _service = build_run_service()
+    return _service
+
+
+def configure_service(path=None) -> None:
+    global _service
+    _service = RunService(SQLiteRepository(path)) if path is not None else build_run_service()
 
 
 def execute_run(run_id, cases=()):
-    return _service.execute(run_id, cases)
+    return get_service().execute(run_id, cases)
 
 
 def enqueue_run(run_id, cases=()):
