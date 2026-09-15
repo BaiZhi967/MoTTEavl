@@ -8,7 +8,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .postgres import create_postgres_run_store
+from .postgres import create_postgres_run_store, normalize_dsn
+from .resource_store import PostgresResourceStore, ResourceStore, SQLiteResourceStore
 from .run_store import RunStore, SQLiteRunStore
 
 SUPPORTED_BACKENDS = ("sqlite", "postgres")
@@ -30,4 +31,23 @@ def create_run_store(
         if not resolved:
             raise ValueError("postgres storage requires MOTTE_PG_DSN or DATABASE_URL")
         return create_postgres_run_store(resolved, migrate=migrate)
+    raise ValueError(f"unsupported storage backend: {backend!r} (expected one of {SUPPORTED_BACKENDS})")
+
+
+def create_resource_store(
+    db_path: str | Path | None = None,
+    *,
+    storage: str | None = None,
+    dsn: str | None = None,
+) -> ResourceStore:
+    """版本化资源（providers/models/datasets/scenarios/price_tables）的后端选择。"""
+    backend = storage or os.environ.get("MOTTE_STORAGE", "sqlite")
+    if backend == "sqlite":
+        path = Path(db_path if db_path is not None else os.environ.get("MOTTE_DB_PATH", "var/runs.db"))
+        return SQLiteResourceStore(path)
+    if backend == "postgres":
+        resolved = dsn or os.environ.get("MOTTE_PG_DSN") or os.environ.get("DATABASE_URL")
+        if not resolved:
+            raise ValueError("postgres storage requires MOTTE_PG_DSN or DATABASE_URL")
+        return PostgresResourceStore(normalize_dsn(resolved))
     raise ValueError(f"unsupported storage backend: {backend!r} (expected one of {SUPPORTED_BACKENDS})")
