@@ -12,3 +12,6 @@ var/*.db
 var/*.db-*
 !.gitkeep
 .env
+
+# ZCode 本地会话目录
+.zcode/
