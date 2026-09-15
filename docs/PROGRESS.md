@@ -120,6 +120,17 @@
 
 `motte_harness.install`：`inspect_installation(binary)` 报告 installed/path/realpath/source（npm/homebrew/local/system/unknown，基于 realpath 启发式——npm 全局符号链接可还原到 node_modules）/version（semver 提取）/version_ok/error；`ClaudeHarness.inspect()` 与 `CodexHarness.inspect()` 在此之上给出 `runnable` 结论；`motte doctor` 输出 claude/codex/pi-bridge 三项安装情况（JSON 与文本两种形式，缺失 CLI 不是 doctor 失败）。本机验证：claude（npm, v2.1.170）、codex（npm, v0.154.0）、pi-bridge（node + bridge 就绪）均正确识别。
 
+## 阶段 5：Evaluator 与 Web 产品层（2026-09-15）
+
+| Task | Commit | 内容 |
+|---|---|---|
+| 资源存储 | `75a512c` | 版本化资源存储 `resource_store.py`：providers/models/datasets/scenarios/price_tables 五类（PG 表结构对应 0001 迁移，SQLite/InMemory/PG 三后端，键幂等 upsert） |
+| 资源与目录 API | `4d42a3b` | 九组资源齐备：providers/models/datasets/scenarios CRUD（models 走 ModelProfile contract 校验；provider 拒绝明文凭据字段，只收 api_key_env）；agents/harnesses/skills 目录（harnesses 返回真实安装检测报告）；runs 增加列表与状态过滤；`GET /runs/{id}/report` 汇总（评分统计 + 成本合计 + price_table_versions 溯源） |
+| Web 控制台 | 见下方提交 | 四页签：运行（创建/列表/取消/重试/重评分 + SSE 实时时间线 + 事件过滤 + 评分表 + 报告导出）、Provider 管理（只存密钥环境变量名）、模型管理、Agent/Harness 安装情况；简体中文 UI，任何页面不显示凭据；vitest + happy-dom + RTL 组件测试（7 个）替换原 echo 健康检查 |
+| 类型生成 | 见下方提交 | `api/openapi.json`（20 个路径）+ `openapi-typescript` 生成 `src/api/schema.d.ts` 入库；`make openapi` 一键再生成；CI 增加两道漂移门禁（openapi.json diff + schema.d.ts diff）；web 的 TS 降至 5.x（openapi-typescript 尚不支持 TS7 原生编译器） |
+
+验证：全量 152 passed + web 7 passed；真实服务器冒烟：provider 创建/凭据拒绝/harnesses 安装报告/运行+报告/SSE 全通过。已知限制：FastAPI 端点目前为 dict body，生成类型的响应面较弱，client 暂用手写接口（schema.d.ts 作为形状事实源 + 漂移门禁），待端点类型化后切换。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。

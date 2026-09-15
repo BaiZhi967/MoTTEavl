@@ -28,6 +28,10 @@ jobs:
       - run: uv run ruff check .
       - run: uv run python -m compileall -q packages apps
       - run: docker compose -f infra/docker-compose.yml config -q
+      - name: openapi 无漂移
+        run: |
+          uv run python -c "import json; from apps.api.app.main import app; open('api/openapi.json.new', 'w', encoding='utf-8').write(json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + '\n')"
+          diff api/openapi.json api/openapi.json.new
   web:
     runs-on: ubuntu-latest
     steps:
@@ -41,3 +45,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir apps/web build
       - run: pnpm -r test
+      - name: TypeScript API 类型无漂移
+        run: |
+          pnpm --dir apps/web gen:api
+          git diff --exit-code apps/web/src/api/schema.d.ts

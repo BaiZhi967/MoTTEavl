@@ -22,6 +22,11 @@ worker:
 web-build:
 	pnpm --dir apps/web build
 
+# 导出 OpenAPI 规范并重新生成 TypeScript 类型（CI 校验无漂移）
+openapi:
+	uv run python -c "import json; from apps.api.app.main import app; open('api/openapi.json', 'w', encoding='utf-8').write(json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + '\n')"
+	pnpm --dir apps/web gen:api
+
 web-test:
 	pnpm -r test
 

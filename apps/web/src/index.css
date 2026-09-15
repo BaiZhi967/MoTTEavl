@@ -1,0 +1,251 @@
+:root {
+  color-scheme: light;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1c1e21;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: #1f2937;
+  color: #fff;
+}
+
+.topbar h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.topbar nav {
+  display: flex;
+  gap: 8px;
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: #374151;
+  color: #fff;
+}
+
+.page {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 24px;
+  align-items: flex-start;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 320px;
+  flex: 1;
+}
+
+.panel.detail {
+  flex-basis: 100%;
+}
+
+.panel h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+  color: #374151;
+}
+
+form label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+form input,
+form textarea,
+form select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font: inherit;
+}
+
+form .checkbox input {
+  display: inline;
+  width: auto;
+  margin-right: 6px;
+}
+
+button {
+  font: inherit;
+  padding: 5px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #f3f4f6;
+}
+
+button.link {
+  border: none;
+  background: none;
+  color: #2563eb;
+  padding: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f1f3;
+}
+
+th {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.kv dt {
+  color: #6b7280;
+}
+
+.timeline {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.timeline .event {
+  display: flex;
+  gap: 10px;
+  padding: 4px 8px;
+  border-left: 3px solid #d1d5db;
+  margin-bottom: 2px;
+  background: #fafafa;
+}
+
+.event-completed,
+.event-score {
+  border-left-color: #10b981;
+}
+
+.event-failed,
+.event-unsupported,
+.event-profile_stale {
+  border-left-color: #ef4444;
+}
+
+.event-running,
+.event-preparing,
+.event-collecting,
+.event-scoring {
+  border-left-color: #3b82f6;
+}
+
+.event .seq {
+  color: #9ca3af;
+  min-width: 36px;
+}
+
+.event .detail {
+  color: #6b7280;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #e5e7eb;
+}
+
+.status-completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-failed,
+.status-unsupported,
+.status-cancelled,
+.status-profile_stale {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-running {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-queued {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.pass {
+  color: #059669;
+}
+
+.fail {
+  color: #dc2626;
+}
+
+.empty {
+  color: #9ca3af;
+  text-align: center;
+}
+
+.error {
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.summary {
+  font-size: 13px;
+  color: #4b5563;
+}

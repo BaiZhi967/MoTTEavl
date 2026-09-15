@@ -3,18 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "node -e \"console.log('web workspace healthy')\"",
+    "test": "vitest run",
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "gen:api": "openapi-typescript ../../api/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.1.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "typescript": "^7.0.2",
     "vite": "^8.3.0"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "happy-dom": "^20.14.5",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
     "vitest": "^5.0.0"
   }
 }
