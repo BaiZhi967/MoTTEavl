@@ -1,12 +1,11 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { ActivityIcon, CubeIcon, PlayIcon, PlugIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
+import { ActivityIcon, PlayIcon, PlugIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
 import { RunsPage } from "./pages/RunsPage";
-import { HarnessesPage, ModelsPage, ProvidersPage } from "./pages/ResourcesPage";
+import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 
 const TABS = [
   { id: "runs", label: "运行", icon: PlayIcon },
-  { id: "providers", label: "Provider", icon: PlugIcon },
-  { id: "models", label: "模型", icon: CubeIcon },
+  { id: "providers", label: "Provider 与模型", icon: PlugIcon },
   { id: "harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
 ] as const;
 
@@ -36,9 +35,6 @@ export default function App() {
         </Tabs.Content>
         <Tabs.Content value="providers" className="tab-panel">
           <ProvidersPage />
-        </Tabs.Content>
-        <Tabs.Content value="models" className="tab-panel">
-          <ModelsPage />
         </Tabs.Content>
         <Tabs.Content value="harnesses" className="tab-panel">
           <HarnessesPage />
