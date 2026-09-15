@@ -86,6 +86,18 @@
 
 剩余：live smoke 待操作者带真实 key 执行一次并记录（`docs/operations/live-smoke-log.md`）；Redis broker 上的 Celery 实测仍为 eager；OpenAI Responses / Anthropic Messages 仍为 openai_chat 别名 shim（按计划后续接入）。
 
+## 阶段 3：PostgreSQL 生产存储（2026-09-15）
+
+| Task | Commit | 内容 |
+|---|---|---|
+| P3-1 | `81fc492` | 版本化迁移管理：`migrations/versions/` 每个版本声明 revision/down_revision/up/down，runner 记录于 `schema_migrations`、线性链校验、支持 `--revert` 按步回退；`0001_initial` 建全量十表（ProviderConnection/ModelProfile/PriceTable/DatasetVersion/ScenarioVersion/Run/CaseRun/TraceEvent/Artifact/Score）；`python migrations/env.py` 可执行入口（兼容 `postgresql+asyncpg://` DSN） |
+| P3-2+P3-3 | `58c69e0` | `PostgresRunStore`（psycopg 3）实装，与 SQLiteRunStore 同构四实体 repository：乐观原子抢占（`UPDATE ... WHERE status='queued'`）、advisory lock 内分配单调 seq、`(run_id, seq)`/`(run_id, case_id)` 唯一约束；删除恒抛错的旧 boundary 与 db.py 占位；`motte_storage.factory.create_run_store()` 按 `MOTTE_STORAGE`（sqlite/postgres）选择后端，API/Worker 经 `build_run_service` 只依赖工厂 |
+| P3-5+P3-6 | `a51c04d` | 真实 PG 集成测试（`MOTTE_PG_DSN` 存在才跑）：空库 → migration → API create → worker execute → 查询 Run/Trace/Score，含回滚重放、Worker 崩溃恢复、抢占互斥；CI python job 增加 postgres service；compose 增加 healthcheck、migrate 一次性服务、api 服务与 `service_completed_successfully` 依赖 |
+
+验收门核对：空库 → migration → API create → worker execute → 查询 Run/Trace/Score 已在本地 Docker 真实 PostgreSQL 上全链路通过（4 passed）；SQLite 路径行为不变（全量 116 passed）；迁移幂等（重复 apply 无操作）✓；`--revert` 回退后可重新应用 ✓。过程中修复一处 Trace 一致性缺陷：Worker 抢占路径此前缺少 `preparing` 事件，现幂等补齐，三入口事件序列一致。
+
+已知限制：compose 中 migrate/api/worker 仍使用 `python:3.12-slim` 通用镜像（未内嵌依赖，真实镜像构建留待发布阶段）；PG 表中版本资源六表（provider_connections 等）schema 已就位、repository 待阶段 5 资源化 API 启用。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。
