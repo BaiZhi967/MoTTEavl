@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import sys
 
 
 def _load_json(raw: str):
@@ -66,6 +67,21 @@ def _build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--record", help="把结果小节追加到 markdown 记录（如 docs/operations/live-smoke-log.md）")
     smoke.add_argument("--timeout", type=float, default=30.0)
     smoke.add_argument("--max-retries", type=int, default=2)
+
+    backup = sub.add_parser("backup", help="在线备份 SQLite 与 artifacts")
+    backup.add_argument("--target", required=True, help="备份目录")
+    backup.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    backup.add_argument("--artifacts-root", default=None, help="artifact 根目录（默认不备份工件）")
+
+    restore = sub.add_parser("restore", help="从最新备份恢复（先停 API 与 Worker）")
+    restore.add_argument("--source", required=True, help="备份目录")
+    restore.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    restore.add_argument("--artifacts-root", default=None, help="artifact 根目录（备份含工件时恢复）")
+
+    cleanup = sub.add_parser("cleanup-artifacts", help="按 TTL 清理 artifact（默认 dry-run）")
+    cleanup.add_argument("--older-than-days", type=float, required=True)
+    cleanup.add_argument("--artifacts-root", default=None, help="artifact 根目录，默认 ARTIFACT_ROOT")
+    cleanup.add_argument("--apply", action="store_true", help="真正删除（缺省仅报告）")
     return parser
 
 
@@ -139,6 +155,29 @@ def main(argv=None):
             record_live_smoke(report, args.record)
         print(json.dumps(report, ensure_ascii=False))
         return exit_code
+
+    if args.command in ("backup", "restore", "cleanup-artifacts"):
+        import os
+
+        from motte_storage.maintenance import backup_sqlite, cleanup_artifacts, restore_sqlite
+
+        db_path = args.db or os.environ.get("MOTTE_DB_PATH", "var/runs.db")
+        artifacts_root = getattr(args, "artifacts_root", None) or os.environ.get("ARTIFACT_ROOT")
+
+        if args.command == "backup":
+            manifest = backup_sqlite(db_path, args.target, artifacts_root=artifacts_root)
+            print(json.dumps(manifest, ensure_ascii=False))
+            return 0
+        if args.command == "restore":
+            restored = restore_sqlite(args.source, db_path, artifacts_root=artifacts_root)
+            print(json.dumps(restored, ensure_ascii=False))
+            return 0
+        if not artifacts_root:
+            print("cleanup-artifacts 需要 --artifacts-root 或 ARTIFACT_ROOT", file=sys.stderr)
+            return 2
+        report = cleanup_artifacts(artifacts_root, older_than_days=args.older_than_days, dry_run=not args.apply)
+        print(json.dumps(report, ensure_ascii=False))
+        return 0
 
     return 0
 

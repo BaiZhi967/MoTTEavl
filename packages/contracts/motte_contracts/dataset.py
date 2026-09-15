@@ -1,4 +1,6 @@
 import hashlib, json
+from typing import Any
+
 from .messages import Contract
 from .scenario import Case
 
@@ -9,11 +11,11 @@ class DatasetVersion(Contract):
     sha256: str
     encoding: str = "utf-8"
     schema_version: int = 1
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
 
 
 def validate_jsonl(text: str, *, encoding: str = "utf-8") -> DatasetVersion:
-    cases = []
+    cases: list[Case] = []
     for n, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue

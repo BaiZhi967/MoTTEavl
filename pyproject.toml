@@ -28,7 +28,7 @@ dependencies = [
 required-version = ">=0.11.6,<0.12"
 
 [dependency-groups]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=9.0.3,<10", "mypy>=1.13,<2", "pip-audit>=2.7,<3"]
 
 [tool.uv.sources]
 motte-contracts = {workspace = true}
@@ -71,3 +71,5 @@ lint.ignore = ["E401", "E402", "F401", "F403"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# 分期启用：阶段 6 起 CI 只对 contracts 运行 strict；
+# 其余包（sdk/storage/provider 等）待逐包清零后加入 CI 命令。

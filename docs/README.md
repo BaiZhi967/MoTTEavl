@@ -12,4 +12,7 @@
 
 - [安装](operations/install.md)
 - [升级](operations/upgrade.md)
-- [Provider compatibility](protocols/provider-compatibility.md)
+- [备份与恢复](operations/backup-restore.md)
+- [版本回退](operations/rollback.md)
+- [Live smoke 记录](operations/live-smoke-log.md)
+- [兼容矩阵](protocols/provider-compatibility.md)

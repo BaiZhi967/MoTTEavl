@@ -1,6 +1,6 @@
 from motte_sdk.service import RunService, build_run_service
 
-COMMANDS = ("doctor", "run", "replay", "live-smoke")
+COMMANDS = ("doctor", "run", "replay", "live-smoke", "backup", "restore", "cleanup-artifacts")
 
 
 def get_service() -> RunService:

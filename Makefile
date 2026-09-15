@@ -1,4 +1,4 @@
-.PHONY: install test lint replay worker web-build web-test compose-config check dev clean
+.PHONY: install test lint audit replay worker web-build web-test compose-config check dev clean
 
 # 统一开发入口；与 CI 使用完全相同的命令（见 .github/workflows/ci.yml）
 
@@ -11,7 +11,12 @@ test:
 
 lint:
 	uv run ruff check .
+	uv run mypy packages/contracts
 	uv run python -m compileall -q packages apps
+
+audit:
+	uv run pip-audit --skip-editable
+	pnpm --dir apps/web audit --audit-level high
 
 replay:
 	uv run pytest -m replay -q

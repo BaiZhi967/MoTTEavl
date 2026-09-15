@@ -17,7 +17,7 @@ class ParameterProfile(Contract):
 
     @field_validator("temperature", "top_p")
     @classmethod
-    def probability_range(cls, v):
+    def probability_range(cls, v: Any) -> Any:
         if v is not None and not 0 <= v <= 1:
             raise ValueError("must be between 0 and 1")
         return v
@@ -40,7 +40,7 @@ class ModelProfile(Contract):
 
     @field_validator("capabilities")
     @classmethod
-    def require_modalities(cls, v):
+    def require_modalities(cls, v: dict[str, Any]) -> dict[str, Any]:
         if "input_modalities" in v and not v["input_modalities"]:
             raise ValueError("input_modalities cannot be empty")
         return v

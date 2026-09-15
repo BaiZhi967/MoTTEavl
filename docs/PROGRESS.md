@@ -131,6 +131,25 @@
 
 验证：全量 152 passed + web 7 passed；真实服务器冒烟：provider 创建/凭据拒绝/harnesses 安装报告/运行+报告/SSE 全通过。已知限制：FastAPI 端点目前为 dict body，生成类型的响应面较弱，client 暂用手写接口（schema.d.ts 作为形状事实源 + 漂移门禁），待端点类型化后切换。
 
+## 阶段 6：发布与质量门禁（2026-09-15）
+
+此前已提前落地的门禁：replay-only CI（阶段 0）、PostgreSQL migration/全链路测试与 CI service（阶段 3）、OpenAPI diff 与 TypeScript 类型漂移门禁（阶段 5）、live smoke 记录模板（阶段 2）。本阶段补齐剩余项：
+
+| 项 | 内容 |
+|---|---|
+| 依赖与镜像扫描 | `make audit` = pip-audit（`--skip-editable`，本地 workspace 包跳过）+ pnpm audit（high 级）；CI python job 增加 pip-audit 与 trivy config 扫描（compose IaC），web job 增加 pnpm audit。**门禁即抓即修**：接入当天发现 pytest 8.4.2 存在 PYSEC-2026-1845，已升级至 9.1.1 |
+| backup/restore | `motte_storage.maintenance`：SQLite 在线备份（sqlite3 backup API，WAL 安全）+ artifacts 快照 + manifest（毫秒时间戳防同秒覆盖）；恢复取最新 manifest；CLI `motte backup / restore`；PG 侧 pg_dump/pg_restore runbook（docs/operations/backup-restore.md）；6 个测试覆盖往返/最新恢复/工件/dry-run |
+| artifact cleanup | TTL 清理默认 dry-run（报告删除清单/保留数/可释放字节），`--apply` 才执行并清空目录；CLI `motte cleanup-artifacts --older-than-days N [--apply]` |
+| rollback | docs/operations/rollback.md：先备份→回代码（推荐 git revert）→按步 alembic downgrade→重启验证（Worker 自动 recover）→灰度检查单 |
+| 兼容矩阵 | docs/protocols/provider-compatibility.md 从 3 行占位重写为完整矩阵：Provider（openai_compatible 完整/openai_responses 与 anthropic 仍为 shim）、Agent、Harness（含本机实测版本）、Sandbox、工具链版本锁定 |
+| mypy strict 分期 | 修复 contracts 包全部 6 个 strict 错误后纳入 CI（`uv run mypy packages/contracts`，dev 依赖加 mypy）；其余包待逐包清零后加入（pyproject 有注释说明分期策略） |
+
+验证：全量 158 passed + web 7 passed；`make check` 与 `make audit` 全绿；mypy contracts strict 零错误。
+
+## 路线图收尾状态（2026-09-15）
+
+阶段 0–6 全部完成。仍开放的操作者事项：① live smoke 真实调用与 `docs/operations/live-smoke-log.md` 记录；② 真实 Claude/Codex harness 执行验证（本机已装，doctor 可查）；③ Codex app-server JSON-RPC 传输、真实 Pi runtime、OpenAI Responses / Anthropic Messages 真适配器（兼容矩阵中标 🚧）；④ 生产镜像构建（compose 仍用通用 python:3.12-slim）。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。

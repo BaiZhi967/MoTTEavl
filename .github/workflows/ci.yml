@@ -26,8 +26,14 @@ jobs:
       - run: uv sync
       - run: uv run pytest -q -m "not live"
       - run: uv run ruff check .
+      - run: uv run mypy packages/contracts
+      - run: uv run pip-audit --skip-editable
       - run: uv run python -m compileall -q packages apps
       - run: docker compose -f infra/docker-compose.yml config -q
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: infra/docker-compose.yml
       - name: openapi 无漂移
         run: |
           uv run python -c "import json; from apps.api.app.main import app; open('api/openapi.json.new', 'w', encoding='utf-8').write(json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + '\n')"
@@ -45,6 +51,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir apps/web build
       - run: pnpm -r test
+      - run: pnpm --dir apps/web audit --audit-level high
       - name: TypeScript API 类型无漂移
         run: |
           pnpm --dir apps/web gen:api
