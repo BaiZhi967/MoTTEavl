@@ -127,6 +127,35 @@ def test_direct_llm_run_requires_provider_manifest():
     assert store.runs.list() == []
 
 
+def test_provider_reference_is_resolved_before_run_is_queued():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    resources.providers.put({
+        "name": "local", "kind": "openai_compatible", "model": "m",
+        "base_url": "http://localhost:8001/v1",
+    })
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    response = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1", "manifest": {"provider": "local"},
+        "case_ids": ["case-1"],
+    })
+    assert response.status_code == 202
+    assert response.json()["manifest"]["provider"]["model"] == "m"
+    resources.providers.put({"name": "local", "model": "changed"})
+    assert client.get(f"/api/v1/runs/{response.json()['id']}").json()["manifest"]["provider"]["model"] == "m"
+
+
+def test_create_run_rejects_unknown_scenario_version():
+    store = InMemoryRunStore()
+    response = TestClient(create_app(store)).post(
+        "/api/v1/runs", json={"scenario_version": "missing@99"}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "SCENARIO_NOT_FOUND"
+    assert store.runs.list() == []
+
+
 def test_create_run_rejects_nested_plaintext_credentials():
     store = InMemoryRunStore()
     client = TestClient(create_app(store))

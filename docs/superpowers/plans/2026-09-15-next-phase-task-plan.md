@@ -36,7 +36,7 @@
 
 ### P0-2 Run 创建校验
 
-- 已完成 direct-llm 缺 Provider 的结构化 422、inline/provider-name 校验和明文凭据拒绝。
+- 已完成 direct-llm 缺 Provider 的结构化 422、inline/provider-name 校验、未知 Scenario 拒绝和明文凭据拒绝。
 - 已完成缺 Provider 时 Worker 安全失败，禁止伪造成功结果。
 - `POST /runs/{id}/messages` 已有终态检查和事件入口；持久化命令队列仍待实现。
 - 仍需创建 Run 前解析 Scenario、DatasetVersion、ModelProfile、Agent、Skill、Sandbox 和 limits。

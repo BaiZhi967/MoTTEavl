@@ -20,6 +20,7 @@ AGENT_CATALOG = [
 ]
 
 HARNESS_CATALOG = ["claude", "codex"]
+BUILTIN_SCENARIOS = {"replay@1", "json_extract@1", "direct-llm@1", "vision@1"}
 
 _FORBIDDEN_SECRET_FIELDS = ("api_key", "key", "token", "secret", "password", "authorization")
 
@@ -99,8 +100,28 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if rejected is not None:
             return rejected
         scenario = body.get("scenario_version", "")
+        if not isinstance(scenario, str) or not scenario:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "SCENARIO_REQUIRED", "message": "scenario_version is required"}},
+            )
         if scenario.startswith("vision@"):
             return JSONResponse(status_code=422, content={"error": {"code": "MODEL_CAPABILITY_UNSUPPORTED", "message": "vision capability is unsupported"}})
+        if scenario not in BUILTIN_SCENARIOS:
+            try:
+                scenario_name, scenario_version = scenario.rsplit("@", 1)
+            except ValueError:
+                scenario_name, scenario_version = scenario, ""
+            if not scenario_name or resources.scenarios.get(scenario_name, scenario_version) is None:
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {
+                            "code": "SCENARIO_NOT_FOUND",
+                            "message": f"scenario not found: {scenario}",
+                        }
+                    },
+                )
         manifest = body.get("manifest") or {}
         provider_config = manifest.get("provider")
         if scenario.startswith("direct-llm@") and not provider_config:
@@ -119,7 +140,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 if invalid is not None:
                     return invalid
             elif isinstance(provider_config, str):
-                if resources.providers.get(provider_config) is None:
+                resolved_provider = resources.providers.get(provider_config)
+                if resolved_provider is None:
                     return JSONResponse(
                         status_code=422,
                         content={
@@ -129,6 +151,13 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                             }
                         },
                     )
+                rejected = _reject_secret_fields(resolved_provider)
+                if rejected is not None:
+                    return rejected
+                invalid = _validate_provider(resolved_provider)
+                if invalid is not None:
+                    return invalid
+                manifest = {**manifest, "provider": resolved_provider}
             else:
                 return JSONResponse(
                     status_code=422,
