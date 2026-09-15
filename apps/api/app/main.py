@@ -101,12 +101,45 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         scenario = body.get("scenario_version", "")
         if scenario.startswith("vision@"):
             return JSONResponse(status_code=422, content={"error": {"code": "MODEL_CAPABILITY_UNSUPPORTED", "message": "vision capability is unsupported"}})
-        provider_config = (body.get("manifest") or {}).get("provider")
+        manifest = body.get("manifest") or {}
+        provider_config = manifest.get("provider")
+        if scenario.startswith("direct-llm@") and not provider_config:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "PROVIDER_REQUIRED",
+                        "message": "direct-llm runs require manifest.provider",
+                    }
+                },
+            )
         if provider_config:
-            invalid = _validate_provider(provider_config)
-            if invalid is not None:
-                return invalid
-        return service.create_run(scenario, body.get("manifest", {}), body.get("case_ids", []))
+            if isinstance(provider_config, dict):
+                invalid = _validate_provider(provider_config)
+                if invalid is not None:
+                    return invalid
+            elif isinstance(provider_config, str):
+                if resources.providers.get(provider_config) is None:
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "error": {
+                                "code": "RESOURCE_NOT_FOUND",
+                                "message": f"provider not found: {provider_config}",
+                            }
+                        },
+                    )
+            else:
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {
+                            "code": "PROVIDER_CONFIG_INVALID",
+                            "message": "manifest.provider must be an object or resource name",
+                        }
+                    },
+                )
+        return service.create_run(scenario, manifest, body.get("case_ids", []))
 
     @application.get("/api/v1/runs")
     def list_runs(status: str | None = None):

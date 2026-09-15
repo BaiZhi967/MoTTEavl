@@ -230,13 +230,22 @@ def test_build_case_provider_reads_api_key_from_env(monkeypatch):
     class FakeTransport:
         def __init__(self, base_url, api_key, **kwargs):
             created["api_key"] = api_key
+            created["kwargs"] = kwargs
 
     import motte_provider.config as config_module
 
     monkeypatch.setattr(config_module, "HTTPTransport", FakeTransport)
     provider = build_case_provider(
-        {"kind": "openai_compatible", "base_url": "https://x", "model": "m", "api_key_env": "MY_PROVIDER_KEY"},
+        {
+            "kind": "openai_compatible",
+            "base_url": "https://x",
+            "model": "m",
+            "api_key_env": "MY_PROVIDER_KEY",
+            "backoff_initial_ms": 750,
+            "backoff_max_ms": 5000,
+        },
         {},
     )
     assert created["api_key"] == SECRET
+    assert created["kwargs"] == {"timeout": 30.0, "max_retries": 2, "backoff_initial": 0.75, "backoff_max": 5.0}
     assert isinstance(provider, CaseDrivenProvider)

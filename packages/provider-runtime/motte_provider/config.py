@@ -41,6 +41,8 @@ def build_case_provider(
         api_key,
         timeout=config.get("timeout", 30.0),
         max_retries=config.get("max_retries", 2),
+        backoff_initial=float(config.get("backoff_initial_ms", 500)) / 1000,
+        backoff_max=float(config.get("backoff_max_ms", 30000)) / 1000,
     )
     provider = OpenAICompatibleProvider(
         transport,

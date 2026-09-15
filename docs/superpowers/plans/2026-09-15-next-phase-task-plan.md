@@ -27,18 +27,19 @@
 
 ### P0-1 Provider transport
 
-- 保持 `HTTPTransport` 的 keyword timeout 调用约定。
-- 429、Retry-After、网络暂态错误按有限指数退避；认证、参数和能力错误不重试。
-- 为默认 urllib opener 增加本地 HTTP server 测试，避免 fake opener 掩盖签名错误。
+- 已完成 keyword timeout 调用约定。
+- 已支持 408/429/5xx、Retry-After 秒数或 HTTP date、有限指数退避；认证、参数和能力错误不重试。
+- 已增加本地 HTTP server 与 fake opener 测试。
 - 保存脱敏 canonical request/response、usage、latency、attempts 和 error class。
 
 验收：本地 HTTP fixture 能产生完整 envelope；live smoke 仍需显式命令才能触发真实费用。
 
 ### P0-2 Run 创建校验
 
-- 创建 Run 前解析 Scenario、DatasetVersion、ModelProfile、Provider、Agent、Skill、Sandbox 和 limits。
-- 缺少 Provider 或能力不匹配时返回结构化 422，Worker 不得伪造成功结果。
-- `POST /runs/{id}/messages` 进入持久化命令队列，终态 Run 拒绝写入。
+- 已完成 direct-llm 缺 Provider 的结构化 422、inline/provider-name 校验和明文凭据拒绝。
+- 已完成缺 Provider 时 Worker 安全失败，禁止伪造成功结果。
+- `POST /runs/{id}/messages` 已有终态检查和事件入口；持久化命令队列仍待实现。
+- 仍需创建 Run 前解析 Scenario、DatasetVersion、ModelProfile、Agent、Skill、Sandbox 和 limits。
 - API、CLI、Worker 共用同一个 validation service。
 
 验收：无 Provider、未知 Scenario、缺 Case、能力不足、明文凭据均在付费调用前失败。

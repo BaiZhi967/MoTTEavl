@@ -4,6 +4,8 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
+from datetime import timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -11,6 +13,7 @@ from .errors import (
     ProviderAuthenticationError,
     ProviderHTTPError,
     ProviderRateLimitError,
+    classify_status,
 )
 
 
@@ -38,17 +41,23 @@ class HTTPTransport:
         *,
         timeout: float = 30.0,
         max_retries: int = 2,
+        backoff_initial: float = 0.5,
+        backoff_max: float = 30.0,
         opener: Callable = urlopen,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.base_url = base_url.rstrip("/") + "/"
         self._api_key = api_key
         self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
+        self.backoff_initial = max(0.0, float(backoff_initial))
+        self.backoff_max = max(self.backoff_initial, float(backoff_max))
         self._opener = opener
         self._sleep = sleep
         self._clock = clock
+        self._wall_clock = wall_clock
 
     def __repr__(self) -> str:
         return (
@@ -94,15 +103,11 @@ class HTTPTransport:
                     status=exc.code,
                     attempts=attempt,
                     latency_ms=(self._clock() - started) * 1000,
-                    error_class="rate_limit" if exc.code == 429 else None,
+                    error_class=classify_status(exc.code),
                     error_message=str(exc.reason),
                 )
-                if exc.code == 429 and attempt <= self.max_retries:
-                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
-                    try:
-                        delay = max(0.0, float(retry_after)) if retry_after else 0.0
-                    except ValueError:
-                        delay = 0.0
+                if self._is_retryable_status(exc.code) and attempt <= self.max_retries:
+                    delay = self._retry_delay(exc.headers, attempt)
                     self._sleep(delay)
                     continue
                 error = self._http_error(exc)
@@ -119,12 +124,37 @@ class HTTPTransport:
                     error_message=str(exc),
                 )
                 if outcome.error_class == "network" and attempt <= self.max_retries:
-                    delay = min(30.0, 0.5 * (2 ** (attempt - 1)))
+                    delay = min(self.backoff_max, self.backoff_initial * (2 ** (attempt - 1)))
                     self._sleep(delay)
                     continue
                 error = ProviderHTTPError(str(exc), error_class=outcome.error_class)
                 error.outcome = outcome
                 raise error from exc
+
+    def _retry_delay(self, headers: object, attempt: int) -> float:
+        """Resolve Retry-After (delta or HTTP date), falling back to backoff."""
+        retry_after = None
+        if headers is not None and hasattr(headers, "get"):
+            retry_after = headers.get("Retry-After")  # type: ignore[union-attr]
+        delay: float | None = None
+        if retry_after:
+            try:
+                delay = max(0.0, float(str(retry_after).strip()))
+            except (TypeError, ValueError):
+                try:
+                    parsed = parsedate_to_datetime(str(retry_after))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    delay = max(0.0, parsed.timestamp() - self._wall_clock())
+                except (TypeError, ValueError, OverflowError):
+                    delay = None
+        if delay is None:
+            delay = self.backoff_initial * (2 ** (attempt - 1))
+        return min(self.backoff_max, delay)
+
+    @staticmethod
+    def _is_retryable_status(status: int) -> bool:
+        return status in (408, 429, 500, 502, 503, 504)
 
     @staticmethod
     def _http_error(exc: HTTPError) -> ProviderHTTPError:

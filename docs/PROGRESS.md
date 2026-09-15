@@ -148,7 +148,7 @@
 
 ## 路线图收尾状态（2026-09-15）
 
-阶段 0–6 的基础产物已落库，但不再视为“稳定完成”：真实 Responses/Anthropic/Pi/Codex app-server、Evaluator/Inspect、Windows Harness 和生产运行验证仍在进行。2026-09-15 已修复真实 HTTP transport 的 timeout 调用、暂态网络退避、嵌套凭据拒绝、Harness 消息 API、缺 Provider 安全终态和跨平台 workspace 路径校验；新增统一 Dockerfile，尚待 Docker build/up 验证。
+阶段 0–6 的基础产物已落库，但不再视为“稳定完成”：真实 Responses/Anthropic/Pi/Codex app-server、Evaluator/Inspect、Windows Harness 和生产运行验证仍在进行。2026-09-15 已修复真实 HTTP transport 的 timeout 调用、暂态网络退避（含 Retry-After）、嵌套凭据拒绝、direct-llm 缺 Provider 的创建期拒绝、Harness 消息 API、缺 Provider 安全终态和跨平台 workspace 路径校验；新增统一 Dockerfile，尚待 Docker build/up 验证。
 
 ## 下一阶段
 

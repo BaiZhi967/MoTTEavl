@@ -117,6 +117,16 @@ def test_create_run_accepts_valid_openai_compatible_provider_config():
     assert response.json()["status"] == "queued"
 
 
+def test_direct_llm_run_requires_provider_manifest():
+    store = InMemoryRunStore()
+    response = TestClient(create_app(store)).post(
+        "/api/v1/runs", json={"scenario_version": "direct-llm@1"}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROVIDER_REQUIRED"
+    assert store.runs.list() == []
+
+
 def test_create_run_rejects_nested_plaintext_credentials():
     store = InMemoryRunStore()
     client = TestClient(create_app(store))
