@@ -1,1 +1,11 @@
-{"name":"@motteavl/pi-bridge","version":"0.1.0","private":true,"type":"module","scripts":{"test":"node -e \"console.log('pi bridge workspace healthy')\""}}
+{
+  "name": "@motteavl/pi-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "motte-pi-bridge": "./bridge.mjs" },
+  "scripts": {
+    "bridge": "node bridge.mjs",
+    "test": "node selftest.mjs"
+  }
+}

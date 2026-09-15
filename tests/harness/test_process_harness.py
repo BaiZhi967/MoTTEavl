@@ -1,0 +1,85 @@
+"""ProcessRunner 与 Claude/Codex harness 的真实子进程测试（fake binary）。"""
+import asyncio
+import json
+
+from motte_harness.claude import ClaudeHarness
+from motte_harness.codex import CodexHarness
+from motte_harness.process import ProcessRunner
+
+
+def make_fake_binary(tmp_path, name, *, version_line="fake 1.2.3", body='echo \'{"type":"assistant","text":"hi"}\''):
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = "--version" ]; then echo "{version_line}"; else\n'
+        f"{body}\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_process_runner_captures_exit_code_and_output(tmp_path):
+    async def scenario():
+        return await ProcessRunner(timeout=5).run(["/bin/sh", "-c", "echo out; echo err >&2; exit 3"])
+
+    result = asyncio.run(scenario())
+    assert result["status"] == "exited"
+    assert result["exit_code"] == 3
+    assert result["stdout"] == "out\n"
+    assert result["stderr"] == "err\n"
+
+
+def test_process_runner_timeout_kills_process_group():
+    async def scenario():
+        return await ProcessRunner(timeout=0.2).run(["/bin/sh", "-c", "sleep 30; echo late"])
+
+    result = asyncio.run(scenario())
+    assert result["status"] == "timeout"
+    assert result["exit_code"] != 0
+    assert "late" not in result["stdout"]
+
+
+def test_claude_probe_and_run_with_fake_binary(tmp_path):
+    binary = make_fake_binary(
+        tmp_path,
+        "fake-claude",
+        body='echo \'{"type":"assistant","text":"hi"}\'\necho not-json',
+    )
+
+    async def scenario():
+        harness = ClaudeHarness(binary=binary, timeout=5)
+        probe = await harness.probe()
+        assert probe == {"name": "claude-cli", "version": "1.2.3", "available": True}
+        result = await harness.run("say hi")
+        return result
+
+    result = asyncio.run(scenario())
+    assert result["harness"] == "claude-cli"
+    assert result["parser"] == "jsonl-v1"
+    assert result["events"][0] == {"type": "assistant", "text": "hi"}
+    assert result["events"][1]["error"] == "malformed_line"
+    assert result["events"][1]["parser"] == "jsonl-v1"
+
+
+def test_codex_run_records_transport_and_events(tmp_path):
+    binary = make_fake_binary(tmp_path, "fake-codex", body='echo \'{"type":"item","item":"done"}\'')
+
+    async def scenario():
+        return await CodexHarness(binary=binary, timeout=5).run("do it")
+
+    result = asyncio.run(scenario())
+    assert result["harness"] == "codex-cli"
+    assert result["transport"] == "cli"
+    assert result["events"] == [{"type": "item", "item": "done"}]
+    assert json.dumps(result)
+
+
+def test_probe_reports_missing_binary_as_unavailable():
+    async def scenario():
+        return await ClaudeHarness(binary="definitely-missing-claude-xyz").probe()
+
+    probe = asyncio.run(scenario())
+    assert probe["available"] is False
+    assert probe["version"] is None

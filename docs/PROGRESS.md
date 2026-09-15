@@ -102,6 +102,20 @@
 
 按决策弃用自研 runner，改用标准 Alembic（`alembic>=1.13` + `sqlalchemy>=2`）：根目录 `alembic.ini`、标准 `migrations/env.py`（DSN 从 MOTTE_PG_DSN / DATABASE_URL 读取，归一化为 `postgresql+psycopg://`）与 `script.py.mako`；`0001_initial` 转为标准 `upgrade()/downgrade()` 格式（DDL 不变）；`motte_storage.migrations` 变为 Alembic 薄封装（`upgrade/downgrade/current/revision_ids`），`create_postgres_run_store(migrate=True)` 与测试走编程入口，CLI 用 `uv run alembic upgrade head` / `downgrade -1`；版本登记表改为 `alembic_version`。已在本地真实 PostgreSQL 上验证：空库 upgrade → 幂等复跑 → downgrade → re-upgrade，以及全套 PG e2e（4 passed）与全量测试（116 passed）。
 
+## 阶段 4：真实 Sandbox、Agent 与 Harness（2026-09-15）
+
+| Task | 内容 |
+|---|---|
+| Docker Sandbox | 真实实现（docker SDK，client 可注入）：统一适配器契约 prepare/start/send/events/interrupt/collect/cleanup；command policy 与 network policy 分离（argv-only、无 shell、程序黑白名单；网络仅允许 "none"）；永不 privileged、drop ALL caps、no-new-privileges、非 root；只挂载受控 workspace（绝不挂 Docker socket）；环境变量仅白名单透传；CPU/内存/PID/磁盘(tmpfs)/输出字节/TTL 限制；cleanup 在成功/失败/超时/策略违规路径恒执行；workspace artifact 采集（name/size/sha256） |
+| BuiltinReAct | 真实 agent 循环：模型经 `complete(ModelRequest)->envelope` 调用（阶段 2 provider 接口），文本 JSON 动作协议（tool/final），工具调用带 deny 与错误回灌（observation），步数预算，全程事件（step/tool/final/budget） |
+| Pi bridge | `bridges/pi/bridge.mjs` 真实桥接进程（协议 v1：probe→version、prompt→started/output/finished、malformed→error；默认确定性 echo 模式，真实 Pi runtime 接入时替换实现）；Python 侧 `PiAgentRuntime` spawn 驱动 + 版本/协议握手；`node selftest.mjs` 自测并入 `pnpm -r test` |
+| Claude CLI harness | `ProcessRunner` 实装（asyncio 子进程、超时杀进程组、退出码/stdout/stderr/耗时采集）；probe=`claude --version`；执行 `claude -p <prompt> --output-format json`；JSONL 解析带 parser version；terminal channel 保持 deny-by-default |
+| Codex harness | 同一 `ProcessRunner` 通道：probe=`codex --version`、执行 `codex exec --json`，结果记录 transport=cli（app-server JSON-RPC 传输为后续形态） |
+
+验证：全量 137 passed（离线零 Docker、零网络）；Docker Sandbox live 冒烟（`MOTTE_SANDBOX_LIVE=1 uv run pytest tests/sandbox/test_docker_sandbox_live.py`，操作者显式启动）在本机真实 Docker 上 4 passed：echo 完成即清理、默认无网络（出站全部失败）、TTL 超时杀伤 + 清理、workspace artifact 采集。
+
+已知限制：磁盘限制经 tmpfs(/tmp) 实现而非根文件系统配额（overlay2 配额依赖存储驱动）；Codex app-server JSON-RPC 会话与 Pi 真实 runtime 待对应环境具备后接入；send 通道对 sandbox 显式 UnsupportedOperation。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。
