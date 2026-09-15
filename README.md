@@ -34,7 +34,7 @@ make install        # uv sync + pnpm install --frozen-lockfile
 
 ## Environment variables
 
-Copy `.env.example` to `.env`. Variables actually read today: `MOTTE_STORAGE` (`sqlite` default, or `postgres` for production), `MOTTE_DB_PATH` (SQLite location), `MOTTE_PG_DSN`/`DATABASE_URL` (PostgreSQL DSN, `postgresql+asyncpg://` prefixes accepted), `ARTIFACT_ROOT` (artifact store). Migrations: `python migrations/env.py` (add `--revert` to roll back the last one).
+Copy `.env.example` to `.env`. Variables actually read today: `MOTTE_STORAGE` (`sqlite` default, or `postgres` for production), `MOTTE_DB_PATH` (SQLite location), `MOTTE_PG_DSN`/`DATABASE_URL` (PostgreSQL DSN, `postgresql+asyncpg://` prefixes accepted), `ARTIFACT_ROOT` (artifact store). Migrations use Alembic: `uv run alembic upgrade head` / `uv run alembic downgrade -1`.
 
 ## CI
 

@@ -18,7 +18,7 @@ services:
     volumes: ["..:/workspace"]
     environment:
       DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
-    command: ["python", "migrations/env.py"]
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy

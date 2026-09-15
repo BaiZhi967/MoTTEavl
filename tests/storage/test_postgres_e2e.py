@@ -1,4 +1,4 @@
-"""PostgreSQL 端到端集成测试：空库 → migration → API create → worker execute → 查询 Run/Trace/Score。
+"""PostgreSQL 端到端集成测试：空库 → alembic migration → API create → worker execute → 查询 Run/Trace/Score。
 
 仅在设置 MOTTE_PG_DSN 时运行（CI 的 postgres service 会设置；本地默认跳过）。
 """
@@ -8,7 +8,7 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
-from motte_storage.migrations import apply_migrations, revert_last_migration, revisions  # noqa: E402
+from motte_storage.migrations import current, downgrade, upgrade  # noqa: E402
 from motte_storage.postgres import create_postgres_run_store  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
@@ -35,25 +35,33 @@ def dsn() -> str:
 
 @pytest.fixture(scope="module")
 def migrated_dsn(dsn):
-    """空库起底：清掉全部已知表后应用迁移。"""
+    """空库起底：幂等 DROP 全部已知表后 alembic upgrade 到 head。"""
+    import importlib.util
+    from pathlib import Path
+
+    version_file = Path(__file__).resolve().parents[2] / "migrations" / "versions" / "0001_initial.py"
+    spec = importlib.util.spec_from_file_location("v0001", version_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
     with psycopg.connect(dsn) as connection:
-        for revision in reversed(revisions()):
-            with connection.cursor() as cursor:
-                for statement in revision.down:
-                    cursor.execute(statement)
         with connection.cursor() as cursor:
+            for statement in module.DOWN_STATEMENTS:
+                cursor.execute(statement)
             cursor.execute("DROP TABLE IF EXISTS schema_migrations")
+            cursor.execute("DROP TABLE IF EXISTS alembic_version")
         connection.commit()
-        applied = apply_migrations(connection)
-        assert applied == ["0001_initial"]
-        assert apply_migrations(connection) == []  # 幂等
+
+    assert current(dsn) is None
+    assert upgrade(dsn) == "0001_initial"
+    assert upgrade(dsn) == "0001_initial"  # 幂等
     return dsn
 
 
 def test_migration_rollback_and_reapply(migrated_dsn):
-    with psycopg.connect(migrated_dsn) as connection:
-        assert revert_last_migration(connection) == "0001_initial"
-        assert apply_migrations(connection) == ["0001_initial"]
+    assert downgrade(migrated_dsn) is None
+    assert current(migrated_dsn) is None
+    assert upgrade(migrated_dsn) == "0001_initial"
 
 
 def test_full_run_lifecycle_on_postgres(migrated_dsn):

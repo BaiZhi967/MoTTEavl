@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from psycopg import connect
 from psycopg.types.json import Json
 
-from .migrations import apply_migrations
+from .migrations import upgrade as upgrade_migrations
 from .run_store import INTERRUPTED_STATES, RunStore
 
 
@@ -216,11 +216,10 @@ class PostgresRunStore(RunStore):
 
 
 def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRunStore:
-    """构造 PG RunStore；migrate=True 时先应用迁移（空库一步到位）。"""
+    """构造 PG RunStore；migrate=True 时先执行 alembic upgrade（空库一步到位）。"""
     normalized = normalize_dsn(dsn)
     if migrate:
-        with _connect(normalized) as connection:
-            apply_migrations(connection)
+        upgrade_migrations(normalized)
     return PostgresRunStore(
         dsn=normalized,
         runs=_PgRuns(normalized),

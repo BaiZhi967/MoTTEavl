@@ -98,6 +98,10 @@
 
 已知限制：compose 中 migrate/api/worker 仍使用 `python:3.12-slim` 通用镜像（未内嵌依赖，真实镜像构建留待发布阶段）；PG 表中版本资源六表（provider_connections 等）schema 已就位、repository 待阶段 5 资源化 API 启用。
 
+## 迁移管理切换到标准 Alembic（2026-09-15）
+
+按决策弃用自研 runner，改用标准 Alembic（`alembic>=1.13` + `sqlalchemy>=2`）：根目录 `alembic.ini`、标准 `migrations/env.py`（DSN 从 MOTTE_PG_DSN / DATABASE_URL 读取，归一化为 `postgresql+psycopg://`）与 `script.py.mako`；`0001_initial` 转为标准 `upgrade()/downgrade()` 格式（DDL 不变）；`motte_storage.migrations` 变为 Alembic 薄封装（`upgrade/downgrade/current/revision_ids`），`create_postgres_run_store(migrate=True)` 与测试走编程入口，CLI 用 `uv run alembic upgrade head` / `downgrade -1`；版本登记表改为 `alembic_version`。已在本地真实 PostgreSQL 上验证：空库 upgrade → 幂等复跑 → downgrade → re-upgrade，以及全套 PG e2e（4 passed）与全量测试（116 passed）。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。

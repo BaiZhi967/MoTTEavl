@@ -1,49 +1,57 @@
-"""迁移执行入口：`python migrations/env.py [--revert]`。
+"""Alembic migration environment。
 
-DSN 读取顺序：--dsn 参数 > MOTTE_PG_DSN > DATABASE_URL（兼容 postgresql+asyncpg 前缀）。
+DSN 读取顺序：MOTTE_PG_DSN > DATABASE_URL > alembic.ini 的 sqlalchemy.url；
+统一归一化为 postgresql+psycopg://（同步驱动，psycopg 3）。
 """
 from __future__ import annotations
 
 import os
 import sys
 
+from alembic import context
+from sqlalchemy import engine_from_config, pool
 
-def _normalize_dsn(dsn: str) -> str:
-    scheme, _, rest = dsn.partition("://")
-    scheme = scheme.split("+", 1)[0]
-    if scheme not in {"postgres", "postgresql"}:
-        raise SystemExit(f"DSN 必须使用 postgres:// 或 postgresql://，当前：{scheme}://")
-    return f"postgresql://{rest}"
+config = context.config
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    revert = "--revert" in argv
-    dsn_flag = "--dsn"
-    dsn = None
-    if dsn_flag in argv:
-        index = argv.index(dsn_flag)
-        dsn = argv[index + 1]
-        del argv[index : index + 2]
-    if dsn is None:
-        dsn = os.environ.get("MOTTE_PG_DSN") or os.environ.get("DATABASE_URL")
+def _database_url() -> str:
+    from motte_storage.postgres import normalize_dsn
+
+    dsn = (
+        os.environ.get("MOTTE_PG_DSN")
+        or os.environ.get("DATABASE_URL")
+        or config.get_main_option("sqlalchemy.url")
+    )
     if not dsn:
-        raise SystemExit("缺少 DSN：设置 MOTTE_PG_DSN 或 DATABASE_URL，或使用 --dsn")
-
-    import psycopg
-
-    from motte_storage.migrations import apply_migrations, revert_last_migration
-
-    dsn = _normalize_dsn(dsn)
-    with psycopg.connect(dsn) as connection:
-        if revert:
-            reverted = revert_last_migration(connection)
-            print(f"reverted: {reverted}" if reverted else "nothing to revert")
-        else:
-            applied = apply_migrations(connection)
-            print(f"applied: {applied}" if applied else "already up to date")
-    return 0
+        raise SystemExit("缺少 DSN：设置 MOTTE_PG_DSN 或 DATABASE_URL，或在 alembic.ini 配置 sqlalchemy.url")
+    return normalize_dsn(dsn).replace("postgresql://", "postgresql+psycopg://", 1)
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def run_migrations_offline() -> None:
+    context.configure(
+        url=_database_url(),
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = _database_url()
+    connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=None)
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

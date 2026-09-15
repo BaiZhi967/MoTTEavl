@@ -3,12 +3,19 @@ ScenarioVersion / Run / CaseRun / TraceEvent / Artifact / Score。
 
 run 执行链四表（runs/case_runs/trace_events/scores）与 SQLiteRunStore 同构；
 payload 统一 JSONB，唯一约束保证幂等： (run_id, seq)、(run_id, case_id)。
+
+Revision ID: 0001_initial
+Revises:
+Create Date: 2026-09-15
 """
+from alembic import op
 
 revision = "0001_initial"
 down_revision = None
+branch_labels = None
+depends_on = None
 
-up = (
+UP_STATEMENTS = (
     """
     CREATE TABLE provider_connections (
         name TEXT PRIMARY KEY,
@@ -96,7 +103,7 @@ up = (
     """,
 )
 
-down = (
+DOWN_STATEMENTS = (
     "DROP TABLE IF EXISTS artifacts",
     "DROP TABLE IF EXISTS scores",
     "DROP TABLE IF EXISTS trace_events",
@@ -109,3 +116,13 @@ down = (
     "DROP TABLE IF EXISTS model_profiles",
     "DROP TABLE IF EXISTS provider_connections",
 )
+
+
+def upgrade() -> None:
+    for statement in UP_STATEMENTS:
+        op.execute(statement)
+
+
+def downgrade() -> None:
+    for statement in DOWN_STATEMENTS:
+        op.execute(statement)

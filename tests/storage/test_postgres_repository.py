@@ -1,9 +1,21 @@
+import importlib.util
+from pathlib import Path
+
 import pytest
 
 from motte_storage.factory import SUPPORTED_BACKENDS, create_run_store
-from motte_storage.migrations import migration_manifest, migration_sql, revisions
+from motte_storage.migrations import MIGRATIONS_DIR, alembic_config, revision_ids
 from motte_storage.postgres import UnsupportedStorageError, normalize_dsn
 from motte_storage.run_store import RunStore
+
+VERSION_FILE = MIGRATIONS_DIR / "versions" / "0001_initial.py"
+
+
+def _load_version_module():
+    spec = importlib.util.spec_from_file_location("v0001", VERSION_FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_dsn_is_validated_and_normalized():
@@ -15,17 +27,17 @@ def test_dsn_is_validated_and_normalized():
         normalize_dsn("postgresql:///db")
 
 
-def test_migration_registry_is_an_ordered_linear_chain():
-    chain = revisions()
-    assert chain[0].down_revision is None
-    assert chain[0].revision == "0001_initial"
-    for parent, child in zip(chain, chain[1:]):
-        assert child.down_revision == parent.revision
-        assert child.up and child.down, "每个迁移必须同时声明 up 与 down"
+def test_alembic_revision_chain_is_linear_and_complete():
+    assert revision_ids() == ["0001_initial"]
+    config = alembic_config("postgresql://user@localhost/db")
+    assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)
+    assert "postgresql+psycopg://" in config.get_main_option("sqlalchemy.url")
 
 
-def test_initial_migration_covers_all_entities():
-    sql = "\n".join(migration_sql()[0])
+def test_initial_migration_covers_all_entities_with_downgrade():
+    module = _load_version_module()
+    assert callable(module.upgrade) and callable(module.downgrade)
+    sql = "\n".join(module.UP_STATEMENTS)
     for table in (
         "provider_connections",
         "model_profiles",
@@ -39,9 +51,10 @@ def test_initial_migration_covers_all_entities():
         "artifacts",
     ):
         assert f"CREATE TABLE {table}" in sql
+        assert f"DROP TABLE IF EXISTS {table}" in "\n".join(module.DOWN_STATEMENTS)
     assert "PRIMARY KEY (run_id, seq)" in sql
     assert "PRIMARY KEY (run_id, case_id)" in sql
-    assert "0001_initial" in migration_manifest()
+    assert Path(VERSION_FILE).exists()
 
 
 def test_factory_selects_backend(monkeypatch, tmp_path):
