@@ -56,17 +56,28 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
     replay.add_argument("--json", action="store_true")
 
+    from motte_provider.config import smoke_kinds
+
     smoke = sub.add_parser("live-smoke", help="显式发起一次真实 Provider 调用（会产生费用）")
-    smoke.add_argument("--provider", required=True, choices=["openai-compatible"])
+    smoke.add_argument("--provider", required=True, help=f"provider kind：{', '.join(smoke_kinds())}（连字符拼写兼容）")
     smoke.add_argument("--model", required=True)
     smoke.add_argument("--base-url", required=True)
-    smoke.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    smoke.add_argument("--credentials", default=None, help="凭据文件 profile 名（~/.motte/credentials.toml），优先于环境变量")
+    smoke.add_argument("--api-key-env", default="OPENAI_API_KEY", help="回退用的密钥环境变量名")
     smoke.add_argument("--prompt", default="Reply with the single word: ok")
     smoke.add_argument("--price-table", help="价格表 JSON 或 @文件：{version, input_per_million, output_per_million}")
     smoke.add_argument("--report", help="把脱敏报告写入 JSON 文件")
     smoke.add_argument("--record", help="把结果小节追加到 markdown 记录（如 docs/operations/live-smoke-log.md）")
     smoke.add_argument("--timeout", type=float, default=30.0)
     smoke.add_argument("--max-retries", type=int, default=2)
+
+    credentials = sub.add_parser("credentials", help="管理本地凭据文件（~/.motte/credentials.toml）")
+    credentials_sub = credentials.add_subparsers(dest="credentials_command", required=True)
+    credentials_set = credentials_sub.add_parser("set", help="为 profile 设置 api key（交互输入，无回显）")
+    credentials_set.add_argument("profile", help="凭据 profile 名，通常与 provider 连接同名")
+    credentials_sub.add_parser("list", help="列出 profile 与掩码密钥")
+    credentials_remove = credentials_sub.add_parser("remove", help="删除一个 profile")
+    credentials_remove.add_argument("profile")
 
     backup = sub.add_parser("backup", help="在线备份 SQLite 与 artifacts")
     backup.add_argument("--target", required=True, help="备份目录")
@@ -92,6 +103,13 @@ def _service(args):
     return RunService(SQLiteRunStore(args.db)) if args.db else build_run_service()
 
 
+def _resources(args):
+    from motte_storage.factory import create_resource_store
+    from motte_storage.resource_store import SQLiteResourceStore
+
+    return SQLiteResourceStore(args.db) if args.db else create_resource_store()
+
+
 def main(argv=None):
     args = _build_parser().parse_args(argv)
 
@@ -112,11 +130,19 @@ def main(argv=None):
         return 0
 
     if args.command == "run":
+        from motte_sdk.resolve import ManifestResolutionError, resolve_manifest
+
         spec = _load_json(args.spec)
         service = _service(args)
+        manifest = spec.get("manifest", {})
+        try:
+            manifest = resolve_manifest(manifest, _resources(args))
+        except ManifestResolutionError as error:
+            print(json.dumps({"error": {"code": error.code, "message": str(error)}}, ensure_ascii=False), file=sys.stderr)
+            return 2
         run = service.create_run(
             spec.get("scenario_version", "default@1"),
-            spec.get("manifest", {}),
+            manifest,
             spec.get("case_ids", []),
         )
         print(json.dumps(run, ensure_ascii=False))
@@ -134,9 +160,14 @@ def main(argv=None):
 
     if args.command == "live-smoke":
         from motte_cli.smoke import execute_smoke, record_live_smoke, resolve_api_key
+        from motte_provider.config import smoke_kinds
         from motte_provider.pricing import parse_price_table
 
-        api_key = resolve_api_key(args.api_key_env)
+        kind = args.provider.replace("-", "_")
+        if kind not in smoke_kinds():
+            print(f"--provider 仅支持：{', '.join(smoke_kinds())}", file=sys.stderr)
+            return 2
+        api_key = resolve_api_key(args.api_key_env, profile=args.credentials)
         price_table = parse_price_table(_load_json(args.price_table)) if args.price_table else None
         report, exit_code = execute_smoke(
             args.provider,
@@ -155,6 +186,33 @@ def main(argv=None):
             record_live_smoke(report, args.record)
         print(json.dumps(report, ensure_ascii=False))
         return exit_code
+
+    if args.command == "credentials":
+        from motte_provider import credentials as store
+
+        if args.credentials_command == "set":
+            import getpass
+
+            key = getpass.getpass(f"api key for {args.profile}: ").strip()
+            if not key:
+                print("空密钥，未写入", file=sys.stderr)
+                return 2
+            path = store.save_api_key(args.profile, key)
+            print(f"已写入 {path}（0600）")
+            return 0
+        if args.credentials_command == "list":
+            profiles = store.load_credentials()
+            if not profiles:
+                print(f"（无凭据；文件位置：{store.credentials_path()}）")
+            for name in sorted(profiles):
+                key = profiles[name].get("api_key")
+                print(f"{name}  {store.mask(key) if isinstance(key, str) and key else '未配置'}")
+            return 0
+        if not store.remove_profile(args.profile):
+            print(f"profile 不存在：{args.profile}", file=sys.stderr)
+            return 1
+        print(f"已删除 profile {args.profile}")
+        return 0
 
     if args.command in ("backup", "restore", "cleanup-artifacts"):
         import os

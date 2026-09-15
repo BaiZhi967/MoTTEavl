@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from motte_sdk.replay_run import ReplayProvider
+from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, resolve_manifest
 from motte_sdk.service import RunService, build_run_service
 from motte_storage.factory import create_resource_store
 from motte_storage.resource_store import InMemoryResourceStore
@@ -23,25 +24,6 @@ HARNESS_CATALOG = ["claude", "codex"]
 BUILTIN_SCENARIOS = {"replay@1", "json_extract@1", "direct-llm@1", "vision@1"}
 
 _FORBIDDEN_SECRET_FIELDS = ("api_key", "key", "token", "secret", "password", "authorization")
-
-
-def _secret_paths(value: Any, path: str = "$") -> list[str]:
-    """Find credential-shaped keys at every nesting level before persistence."""
-    found: list[str] = []
-    if isinstance(value, dict):
-        for key, child in value.items():
-            key_text = str(key)
-            lowered = key_text.lower()
-            if lowered in {
-                "api_key", "api-key", "x-api-key", "authorization", "password", "token",
-                "secret", "cookie", "set-cookie", "proxy-authorization",
-            }:
-                found.append(f"{path}.{key_text}")
-            found.extend(_secret_paths(child, f"{path}.{key_text}"))
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            found.extend(_secret_paths(child, f"{path}[{index}]"))
-    return found
 
 
 def _validate_provider(provider_config: dict):
@@ -65,14 +47,14 @@ def _validate_provider(provider_config: dict):
 
 
 def _reject_secret_fields(body: dict):
-    leaked = _secret_paths(body)
+    leaked = find_secret_paths(body)
     if leaked:
         return JSONResponse(
             status_code=422,
             content={
                 "error": {
                     "code": "CREDENTIALS_REJECTED",
-                    "message": f"凭据字段不接受明文存储：{leaked}；只允许 api_key_env 变量名",
+                    "message": f"凭据字段不接受明文存储：{leaked}；密钥请配置在凭据文件（python -m motte_cli credentials set）或 api_key_env 变量名",
                 }
             },
         )
@@ -124,50 +106,27 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 )
         manifest = body.get("manifest") or {}
         provider_config = manifest.get("provider")
-        if scenario.startswith("direct-llm@") and not provider_config:
+        if scenario.startswith("direct-llm@") and not provider_config and not manifest.get("model"):
             return JSONResponse(
                 status_code=422,
                 content={
                     "error": {
                         "code": "PROVIDER_REQUIRED",
-                        "message": "direct-llm runs require manifest.provider",
+                        "message": "direct-llm runs require manifest.provider or manifest.model",
                     }
                 },
             )
-        if provider_config:
-            if isinstance(provider_config, dict):
-                invalid = _validate_provider(provider_config)
-                if invalid is not None:
-                    return invalid
-            elif isinstance(provider_config, str):
-                resolved_provider = resources.providers.get(provider_config)
-                if resolved_provider is None:
-                    return JSONResponse(
-                        status_code=422,
-                        content={
-                            "error": {
-                                "code": "RESOURCE_NOT_FOUND",
-                                "message": f"provider not found: {provider_config}",
-                            }
-                        },
-                    )
-                rejected = _reject_secret_fields(resolved_provider)
-                if rejected is not None:
-                    return rejected
-                invalid = _validate_provider(resolved_provider)
-                if invalid is not None:
-                    return invalid
-                manifest = {**manifest, "provider": resolved_provider}
-            else:
-                return JSONResponse(
-                    status_code=422,
-                    content={
-                        "error": {
-                            "code": "PROVIDER_CONFIG_INVALID",
-                            "message": "manifest.provider must be an object or resource name",
-                        }
-                    },
-                )
+        try:
+            manifest = resolve_manifest(manifest, resources)
+        except ManifestResolutionError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": error.code, "message": str(error)}},
+            )
+        if isinstance(manifest.get("provider"), dict):
+            invalid = _validate_provider(manifest["provider"])
+            if invalid is not None:
+                return invalid
         return service.create_run(scenario, manifest, body.get("case_ids", []))
 
     @application.get("/api/v1/runs")
@@ -314,12 +273,14 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 return {"deleted": key}
 
     def _validate_provider_resource(body: dict):
+        from motte_provider.config import validate_connection_config
+
         if not body.get("name"):
             return JSONResponse(status_code=422, content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": "name is required"}})
-        if not body.get("kind"):
-            return JSONResponse(status_code=422, content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": "kind is required"}})
-        if body.get("kind") == "openai_compatible" and not body.get("base_url"):
-            return JSONResponse(status_code=422, content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": "base_url is required for openai_compatible"}})
+        try:
+            validate_connection_config(body)
+        except ValueError as error:
+            return JSONResponse(status_code=422, content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": str(error)}})
         return None
 
     def _validate_model(body: dict):
@@ -335,6 +296,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 status_code=422,
                 content={"error": {"code": "CONTRACT_INVALID", "message": issue["msg"], "field": str(issue["loc"])}},
             )
+        provider_name = body.get("provider")
+        if provider_name and resources.providers.get(provider_name) is None:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "RESOURCE_NOT_FOUND", "message": f"provider not found: {provider_name}"}},
+            )
         return None
 
     def _validate_named_version(body: dict):
@@ -343,10 +310,23 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": f"{field} is required"}})
         return None
 
+    def _validate_price_table(body: dict):
+        from motte_provider.pricing import parse_price_table
+
+        for field in ("model_id", "version"):
+            if not body.get(field):
+                return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": f"{field} is required"}})
+        try:
+            parse_price_table(body)
+        except ValueError as error:
+            return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
+        return None
+
     _resource_routes("providers", _validate_provider_resource, versioned=False)
     _resource_routes("models", _validate_model, versioned=False)
     _resource_routes("datasets", _validate_named_version, versioned=True)
     _resource_routes("scenarios", _validate_named_version, versioned=True)
+    _resource_routes("price_tables", _validate_price_table, versioned=True)
 
     # ------------------------------------------------------------ 目录
 

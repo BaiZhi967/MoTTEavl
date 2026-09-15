@@ -8,8 +8,7 @@ import time
 from typing import Any
 
 from motte_provider.capabilities import UnsupportedParameterError
-from motte_provider.config import build_case_provider
-from motte_sdk.replay_run import ReplayProvider
+from motte_provider.config import build_provider
 from motte_sdk.service import RunService
 
 
@@ -17,14 +16,9 @@ def provider_for_run(run: dict[str, Any]):
     """按 Run manifest 选择 provider；构造失败（strict 预检）会抛异常阻断付费调用。"""
     manifest = run.get("manifest") or {}
     provider_config = manifest.get("provider") or {}
-    kind = provider_config.get("kind")
-    if not kind:
+    if not provider_config.get("kind"):
         raise ValueError("run manifest requires provider.kind")
-    if kind == "replay":
-        return ReplayProvider(provider_config.get("fixture") or {}).invoke
-    if kind == "openai_compatible":
-        return build_case_provider(provider_config, manifest.get("cases") or {}).invoke
-    raise ValueError(f"unsupported provider kind: {kind!r}")
+    return build_provider(provider_config, manifest).invoke
 
 
 class WorkerLoop:

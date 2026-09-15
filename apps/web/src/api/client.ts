@@ -26,6 +26,7 @@ export interface ProviderRecord {
   name: string;
   kind: string;
   base_url?: string;
+  credentials?: string;
   api_key_env?: string;
   [key: string]: any;
 }
@@ -33,6 +34,7 @@ export interface ProviderRecord {
 export interface ModelRecord {
   id: string;
   provider: string;
+  model?: string | null;
   capabilities: Record<string, any>;
   context_window?: number | null;
   supports_tools?: boolean;

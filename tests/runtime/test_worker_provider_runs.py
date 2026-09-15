@@ -2,7 +2,7 @@
 import json
 from urllib.error import HTTPError
 
-import apps.worker.motte_worker.runtime as worker_runtime
+import motte_provider.config as provider_config
 from apps.worker.motte_worker.runtime import WorkerLoop
 from motte_provider.openai_compatible import CaseDrivenProvider, OpenAICompatibleProvider
 from motte_provider.pricing import parse_price_table
@@ -35,7 +35,8 @@ def _fake_case_provider(monkeypatch, responder):
         )
         return CaseDrivenProvider(provider, cases)
 
-    monkeypatch.setattr(worker_runtime, "build_case_provider", factory)
+    # 注册表的 build lambda 在调用期从 motte_provider.config 取 build_case_provider，patch 在那里
+    monkeypatch.setattr(provider_config, "build_case_provider", factory)
 
 
 OPENAI_MANIFEST = {
@@ -130,3 +131,56 @@ def test_provider_failure_records_classified_evidence_on_run(tmp_path, monkeypat
     evidence = result["error"]["evidence"]
     assert evidence["canonical"]["request"]["body"]["model"] == "test-model"
     assert SECRET not in json.dumps(result["error"])
+
+
+def test_worker_executes_anthropic_run_with_tools_end_to_end(tmp_path, monkeypatch):
+    """anthropic_messages 经 registry 分发端到端（fake opener，零网络）。"""
+    from motte_provider.anthropic_messages import AnthropicMessagesProvider
+    from motte_provider.transport import HTTPTransport
+
+    captured = []
+
+    def responder(request, *, timeout):
+        captured.append(json.loads(request.data))
+        return FakeResponse({
+            "id": "msg_worker",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 2},
+        })
+
+    def factory(config, cases, **kwargs):
+        transport = HTTPTransport(
+            "https://api.anthropic.test/v1", "sk-ant-worker",
+            opener=responder, sleep=lambda _: None,
+            auth="x-api-key", default_headers={"anthropic-version": "2023-06-01"},
+        )
+        return CaseDrivenProvider(
+            AnthropicMessagesProvider(transport, config["model"]),
+            cases,
+            tools=kwargs.get("tools"),
+        )
+
+    monkeypatch.setattr(provider_config, "build_case_provider", factory)
+    manifest = {
+        "provider": {"kind": "anthropic_messages", "base_url": "https://api.anthropic.test/v1", "model": "claude-sonnet-4-5"},
+        "tools": [{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}],
+        "cases": {"case-1": {"prompt": "hi", "expected": "ok"}},
+    }
+    service = RunService(SQLiteRunStore(tmp_path / "runs.db"))
+    service.create_run("direct-llm@1", manifest, case_ids=["case-1"])
+
+    result = WorkerLoop(RunService(SQLiteRunStore(tmp_path / "runs.db"))).claim_and_execute()
+    assert result["status"] == "completed"
+    persisted = result["cases"][0]["result"]
+    assert persisted["provider"] == "anthropic_messages"
+    assert persisted["content"] == "ok"
+    assert persisted["usage"] == {"prompt_tokens": 9, "completion_tokens": 2}
+    assert result["scores"] == [{"case_id": "case-1", "passed": True}]
+    # manifest 级 tools 注入到了 Anthropic 请求
+    assert captured[0]["tools"] == [{"name": "echo", "input_schema": {"type": "object"}, "description": None}]
+    assert captured[0]["max_tokens"] == 4096
+    assert "sk-ant-worker" not in json.dumps(result)

@@ -13,8 +13,11 @@ from .errors import (
     ProviderAuthenticationError,
     ProviderHTTPError,
     ProviderRateLimitError,
+    classify_error_type,
     classify_status,
 )
+
+AUTH_STYLES = ("bearer", "x-api-key")
 
 
 @dataclass(frozen=True)
@@ -43,17 +46,23 @@ class HTTPTransport:
         max_retries: int = 2,
         backoff_initial: float = 0.5,
         backoff_max: float = 30.0,
+        auth: str = "bearer",
+        default_headers: dict[str, str] | None = None,
         opener: Callable = urlopen,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
+        if auth not in AUTH_STYLES:
+            raise ValueError(f"unsupported auth style: {auth!r} (expected one of {AUTH_STYLES})")
         self.base_url = base_url.rstrip("/") + "/"
         self._api_key = api_key
         self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
         self.backoff_initial = max(0.0, float(backoff_initial))
         self.backoff_max = max(self.backoff_initial, float(backoff_max))
+        self._auth = auth
+        self._default_headers = dict(default_headers or {})
         self._opener = opener
         self._sleep = sleep
         self._clock = clock
@@ -72,9 +81,16 @@ class HTTPTransport:
     def post_json_detailed(self, path: str, payload: dict) -> TransportOutcome:
         """POST JSON 并返回计量结果（attempts/latency_ms/错误分类）。"""
         url = self.base_url + path.lstrip("/")
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            **self._default_headers,
+        }
         if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+            if self._auth == "x-api-key":
+                headers["x-api-key"] = self._api_key
+            else:
+                headers["Authorization"] = f"Bearer {self._api_key}"
         request = Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
 
         started = self._clock()
@@ -93,24 +109,29 @@ class HTTPTransport:
                     response_body=body,
                     attempts=attempt,
                     latency_ms=(self._clock() - started) * 1000,
-                    headers={"Content-Type": headers["Content-Type"], "Accept": headers["Accept"]},
+                    headers={"Content-Type": "application/json", "Accept": "application/json", **self._default_headers},
                 )
             except HTTPError as exc:
+                error_body = _read_error_body(exc)
+                error_type, error_message = _provider_error_info(error_body)
+                error_class = classify_error_type(error_type) or classify_status(exc.code)
                 outcome = TransportOutcome(
                     url=url,
                     path=path,
                     request_body=payload,
                     status=exc.code,
+                    response_body=error_body if isinstance(error_body, dict) else None,
                     attempts=attempt,
                     latency_ms=(self._clock() - started) * 1000,
-                    error_class=classify_status(exc.code),
-                    error_message=str(exc.reason),
+                    error_class=error_class,
+                    error_message=error_message or str(exc.reason),
+                    headers={"Content-Type": "application/json", "Accept": "application/json", **self._default_headers},
                 )
                 if self._is_retryable_status(exc.code) and attempt <= self.max_retries:
                     delay = self._retry_delay(exc.headers, attempt)
                     self._sleep(delay)
                     continue
-                error = self._http_error(exc)
+                error = self._http_error(exc, error_type=error_type, error_message=error_message)
                 error.outcome = outcome
                 raise error from exc
             except (TimeoutError, URLError, OSError, json.JSONDecodeError) as exc:
@@ -154,13 +175,53 @@ class HTTPTransport:
 
     @staticmethod
     def _is_retryable_status(status: int) -> bool:
-        return status in (408, 429, 500, 502, 503, 504)
+        # 529：Anthropic overloaded（可重试的容量类错误）
+        return status in (408, 429, 500, 502, 503, 504, 529)
 
     @staticmethod
-    def _http_error(exc: HTTPError) -> ProviderHTTPError:
+    def _http_error(
+        exc: HTTPError,
+        *,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> ProviderHTTPError:
         message = f"provider HTTP {exc.code}: {exc.reason}"
+        if error_type or error_message:
+            detail = error_message or exc.reason
+            message = f"provider HTTP {exc.code}: {detail}"
+            if error_type:
+                message += f" (type={error_type})"
         if exc.code in (401, 403):
             return ProviderAuthenticationError(message, status=exc.code)
         if exc.code == 429:
             return ProviderRateLimitError(message, status=exc.code)
         return ProviderHTTPError(message, status=exc.code)
+
+
+def _read_error_body(exc: HTTPError) -> dict | list | None:
+    """尽力读取错误响应体并解析 JSON；失败返回 None（不影响错误传播）。"""
+    try:
+        raw = exc.read()
+    except Exception:  # noqa: BLE001 — 证据读取绝不改变错误语义
+        return None
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+
+
+def _provider_error_info(body: dict | list | None) -> tuple[str | None, str | None]:
+    """从 OpenAI/Anthropic 通行错误形状 {error: {type, message}} 提取信息。"""
+    if not isinstance(body, dict):
+        return None, None
+    error = body.get("error")
+    if isinstance(error, dict):
+        error_type = error.get("type")
+        message = error.get("message")
+        return (
+            error_type if isinstance(error_type, str) else None,
+            message if isinstance(message, str) else None,
+        )
+    if isinstance(error, str):
+        return None, error
+    return None, None

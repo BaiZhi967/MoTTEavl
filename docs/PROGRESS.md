@@ -150,6 +150,10 @@
 
 阶段 0–6 的基础产物已落库，但不再视为“稳定完成”：真实 Responses/Anthropic/Pi/Codex app-server、Evaluator/Inspect、Windows Harness 和生产运行验证仍在进行。2026-09-15 已修复真实 HTTP transport 的 timeout 调用、暂态网络退避（含 Retry-After）、嵌套凭据拒绝、direct-llm 缺 Provider 的创建期拒绝、Harness 消息 API、缺 Provider 安全终态和跨平台 workspace 路径校验；新增统一 Dockerfile，尚待 Docker build/up 验证。
 
+Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册表（`motte_provider.registry`，Worker/API/CLI 分发单一来源）；资源关系定型为 ProviderConnection（怎么连）← ModelProfile（调什么，新增 `model` 字段）→ PriceTable（`(model_id, version)` 版本化，REST 端点已接）；manifest 引用解析下沉到 `motte_sdk.resolve`（API 与 CLI 共用，创建期展开快照）；凭据文件 `~/.motte/credentials.toml`（0600，CLI `credentials set/list/remove` 管理，环境变量降级为回退）。
+
+真适配器落地（2026-09-16）：`anthropic_messages` 与 `openai_responses` 从 shim 变为完整适配器（离线 fixture 验证，零网络零费用）——Anthropic 的 x-api-key/anthropic-version 头、system 顶层、content blocks、tool_use/tool_result、必填 max_tokens、529 overloaded 重试；Responses 的 instructions/input、扁平 function 工具、response id、reasoning/cached usage、incomplete→length。公共流程抽取为 `BaseHTTPProvider`（envelope/计量/脱敏单一来源）；工具调用契约全链路打通（canonical = OpenAI 形状，`manifest.tools`/`case.tools` 注入，模型档案 `supports_tools=false` 时付费前拒绝）；错误体 `error.type` 精化分类；live-smoke 改为注册表驱动，新适配器自动可冒烟。流式 SSE、GET probe 与真实端点冒烟记录仍待操作者执行。
+
 ## 下一阶段
 
 当前修复与接入顺序见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：Direct LLM 可复核链路 → 生产镜像 → 真实协议与 Harness → Evaluator/Inspect → 并发、类型和发布质量。

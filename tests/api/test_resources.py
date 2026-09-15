@@ -37,6 +37,16 @@ def test_model_crud_validates_contract():
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "CONTRACT_INVALID"
 
+    orphan = client.post(
+        "/api/v1/models",
+        json={"id": "qwen-7b", "provider": "local-vllm", "capabilities": {"text": True}},
+    )
+    assert orphan.status_code == 422
+    assert orphan.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+    client.post("/api/v1/providers", json={
+        "name": "local-vllm", "kind": "openai_compatible", "base_url": "http://localhost:8001/v1",
+    })
     created = client.post(
         "/api/v1/models",
         json={"id": "qwen-7b", "provider": "local-vllm", "capabilities": {"text": True}},

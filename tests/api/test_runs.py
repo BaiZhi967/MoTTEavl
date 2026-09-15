@@ -184,3 +184,88 @@ def test_messages_endpoint_accepts_active_run_message():
     response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue"})
     assert response.status_code == 202
     assert response.json()["run_id"] == run["id"]
+
+
+def test_create_run_with_model_reference_expands_snapshot():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    resources.providers.put({
+        "name": "openai-main", "kind": "openai_compatible",
+        "base_url": "https://api.openai.test/v1",
+    })
+    resources.models.put({
+        "id": "gpt-4o-mini", "provider": "openai-main",
+        "model": "gpt-4o-mini-2024-07-18", "capabilities": {},
+        "parameters": {"temperature": 0.2},
+    })
+    resources.price_tables.put({
+        "model_id": "gpt-4o-mini", "version": "2024-09",
+        "input_per_million": 0.15, "output_per_million": 0.6,
+    })
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    response = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1",
+        "manifest": {"model": "gpt-4o-mini"},
+        "case_ids": ["case-1"],
+    })
+    assert response.status_code == 202
+    provider = response.json()["manifest"]["provider"]
+    assert provider["model"] == "gpt-4o-mini-2024-07-18"
+    assert provider["parameters"] == {"temperature": 0.2}
+    assert provider["price_table"]["version"] == "2024-09"
+
+
+def test_create_run_with_unknown_model_returns_model_not_found():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    response = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1", "manifest": {"model": "missing-model"},
+    })
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "MODEL_NOT_FOUND"
+
+
+def test_price_tables_crud_roundtrip():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    created = client.post("/api/v1/price_tables", json={
+        "model_id": "gpt-4o-mini", "version": "2024-09",
+        "input_per_million": 0.15, "output_per_million": 0.6,
+    })
+    assert created.status_code == 201
+    assert client.get("/api/v1/price_tables/gpt-4o-mini/2024-09").json()["input_per_million"] == 0.15
+    negative = client.post("/api/v1/price_tables", json={
+        "model_id": "m", "version": "v", "input_per_million": -1,
+    })
+    assert negative.status_code == 422
+    assert client.delete("/api/v1/price_tables/gpt-4o-mini/2024-09").status_code == 200
+    assert client.get("/api/v1/price_tables/gpt-4o-mini/2024-09").status_code == 404
+
+
+def test_provider_resource_rejects_bad_transport_params():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    response = client.post("/api/v1/providers", json={
+        "name": "bad", "kind": "openai_compatible", "base_url": "https://x.test", "timeout": "fast",
+    })
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROVIDER_CONFIG_INVALID"
+
+
+def test_model_resource_requires_existing_provider():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    response = client.post("/api/v1/models", json={
+        "id": "m1", "provider": "nope", "capabilities": {},
+    })
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"

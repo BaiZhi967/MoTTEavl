@@ -1,0 +1,20 @@
+{
+  "id": "resp_67ccf18e2a1c8e70b1e8f9a7e0d1f2a3",
+  "object": "response",
+  "created_at": 1758902202,
+  "status": "completed",
+  "model": "gpt-4o-mini-2024-07-18",
+  "output": [
+    {"type": "reasoning", "id": "rs_1", "summary": []},
+    {"type": "message", "status": "completed", "role": "assistant", "content": [
+      {"type": "output_text", "text": "Hi there", "annotations": []}
+    ]}
+  ],
+  "usage": {
+    "input_tokens": 92,
+    "input_tokens_details": {"cached_tokens": 64},
+    "output_tokens": 17,
+    "output_tokens_details": {"reasoning_tokens": 90},
+    "total_tokens": 109
+  }
+}

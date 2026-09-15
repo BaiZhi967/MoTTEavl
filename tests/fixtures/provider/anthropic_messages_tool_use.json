@@ -1,0 +1,17 @@
+{
+  "id": "msg_02ToolUseMarker",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-5-20250929",
+  "content": [
+    {"type": "text", "text": "Let me check the weather."},
+    {"type": "tool_use", "id": "toolu_01A09q90qw90lq917835lq9", "name": "get_weather", "input": {"city": "San Francisco", "unit": "celsius"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 400,
+    "output_tokens": 200,
+    "cache_creation": {"ephemeral_5m_input_tokens": 128}
+  }
+}

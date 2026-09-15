@@ -23,4 +23,18 @@ make check          # 与 CI 相同的门禁
 
 各环境变量的消费状态见 `.env.example` 内注释。
 
+## Provider 密钥（凭据文件）
+
+密钥推荐配置在本地凭据文件（0600 权限），不依赖环境变量：
+
+```
+python -m motte_cli credentials set openai-main     # 交互输入，无回显
+python -m motte_cli credentials list                # 掩码显示（sk-a...3f2a）
+python -m motte_cli credentials remove openai-main
+```
+
+- 文件位置：`~/.motte/credentials.toml`（profile 名通常与 Provider 连接同名）；容器部署时用卷挂载并以 `MOTTE_CREDENTIALS_PATH` 指向。
+- 解析优先级：显式传参 > 凭据文件 profile > 环境变量（`api_key_env`，兼容旧配置）。
+- 密钥本体绝不进入数据库、trace、报告或任何 markdown 记录；平台侧存储的只有 profile 名（`credentials` 字段）。
+
 Windows 原生环境只通过 Docker Desktop 或 WSL2 运行容器与 CLI Harness；进程树终止、PTY 和 rootless 能力差异会写入运行诊断。

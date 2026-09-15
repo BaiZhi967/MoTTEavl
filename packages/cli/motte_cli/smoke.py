@@ -1,21 +1,25 @@
 """live smoke：由操作者显式启动的一次真实 Provider 调用与证据记录。
 
-密钥只从环境变量读取，绝不进入报告、日志或 markdown 记录。
+密钥只从凭据文件或环境变量读取，绝不进入报告、日志或 markdown 记录。
 """
 from __future__ import annotations
 
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from motte_contracts.messages import Message, ModelRequest
-from motte_provider.openai_compatible import OpenAICompatibleProvider, ProviderCallError
+from motte_provider.base import ProviderCallError
+from motte_provider.config import adapter_for, smoke_kinds
 from motte_provider.pricing import PriceTable
 from motte_provider.transport import HTTPTransport
 
-SUPPORTED_SMOKE_PROVIDERS = ("openai-compatible",)
+
+def supported_smoke_providers() -> tuple[str, ...]:
+    """注册表中支持冒烟的 kind（含连字符别名的兼容拼写）。"""
+    kinds = smoke_kinds()
+    return kinds + tuple(kind.replace("_", "-") for kind in kinds)
 
 
 def _smoke_meta(provider_kind: str, model: str, base_url: str, price_table: PriceTable | None) -> dict[str, Any]:
@@ -41,11 +45,16 @@ def run_live_smoke(
     transport: HTTPTransport | None = None,
 ) -> dict[str, Any]:
     """执行一次真实调用并返回脱敏报告；失败时抛 ProviderCallError（带证据）。"""
-    if provider_kind not in SUPPORTED_SMOKE_PROVIDERS:
+    if provider_kind not in supported_smoke_providers():
         raise ValueError(f"unsupported smoke provider: {provider_kind!r}")
+    kind = provider_kind.replace("-", "_")
+    provider_cls = adapter_for(kind).provider_cls
     if transport is None:
-        transport = HTTPTransport(base_url, api_key, timeout=timeout, max_retries=max_retries)
-    provider = OpenAICompatibleProvider(transport, model, price_table=price_table)
+        transport = HTTPTransport(
+            base_url, api_key, timeout=timeout, max_retries=max_retries,
+            **adapter_for(kind).transport_kwargs,
+        )
+    provider = provider_cls(transport, model, price_table=price_table)
     request = ModelRequest(model=model, messages=[Message(role="user", content=prompt)])
     envelope = provider.complete(request)
     return {"smoke": _smoke_meta(provider_kind, model, base_url, price_table), "result": envelope}
@@ -119,9 +128,17 @@ def record_live_smoke(report: dict[str, Any], path: str | Path) -> None:
         handle.write(smoke_markdown(report))
 
 
-def resolve_api_key(env_name: str) -> str:
-    key = os.environ.get(env_name)
+def resolve_api_key(env_name: str | None = None, *, profile: str | None = None) -> str:
+    """live-smoke 密钥解析：--credentials profile 优先，回退 --api-key-env 环境变量。"""
+    key = resolve_smoke_key(profile, env_name=env_name)
     if not key:
-        print(f"live-smoke 需要环境变量 {env_name}（密钥只从环境读取，不落盘）", file=sys.stderr)
+        hint = f"python -m motte_cli credentials set {profile}" if profile else f"环境变量 {env_name}"
+        print(f"live-smoke 需要密钥（{hint}；密钥绝不落盘）", file=sys.stderr)
         raise SystemExit(2)
     return key
+
+
+def resolve_smoke_key(profile: str | None, *, env_name: str | None = None) -> str | None:
+    from motte_provider.credentials import resolve_api_key as resolve
+
+    return resolve(profile, env_name=env_name)

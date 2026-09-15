@@ -42,6 +42,30 @@ def classify_status(status: int) -> str:
     return "client"
 
 
+# 响应体 error.type（OpenAI / Anthropic 通行拼写）→ 错误分类；状态码之外的精化来源
+_ERROR_TYPE_CLASSES = {
+    "authentication_error": "auth",
+    "permission_error": "auth",
+    "invalid_api_key": "auth",
+    "forbidden": "auth",
+    "rate_limit_error": "rate_limit",
+    "rate_limit_exceeded": "rate_limit",
+    "overloaded_error": "server",
+    "api_error": "server",
+    "server_error": "server",
+    "internal_server_error": "server",
+    "timeout_error": "timeout",
+    "request_timeout": "timeout",
+}
+
+
+def classify_error_type(error_type: object) -> str | None:
+    """按响应体 error.type 精化错误分类；未知类型返回 None（回退状态码分类）。"""
+    if not isinstance(error_type, str):
+        return None
+    return _ERROR_TYPE_CLASSES.get(error_type.strip().lower())
+
+
 def classify_exception(error: Exception) -> str:
     return getattr(error, "error_class", None) or (
         "network" if isinstance(error, (TimeoutError, OSError)) else "unknown"

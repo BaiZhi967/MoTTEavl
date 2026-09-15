@@ -360,6 +360,148 @@
         "summary": "Get Item"
       }
     },
+    "/api/v1/price_tables": {
+      "get": {
+        "operationId": "list_items_api_v1_price_tables_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Items"
+      },
+      "post": {
+        "operationId": "create_item_api_v1_price_tables_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Item"
+      }
+    },
+    "/api/v1/price_tables/{resource_name}/{version}": {
+      "delete": {
+        "operationId": "delete_versioned_api_v1_price_tables__resource_name___version__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_name",
+            "required": true,
+            "schema": {
+              "title": "Resource Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Versioned"
+      },
+      "get": {
+        "operationId": "get_versioned_api_v1_price_tables__resource_name___version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_name",
+            "required": true,
+            "schema": {
+              "title": "Resource Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Versioned"
+      }
+    },
     "/api/v1/providers": {
       "get": {
         "operationId": "list_items_api_v1_providers_get",

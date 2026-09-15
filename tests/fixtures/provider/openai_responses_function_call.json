@@ -1,0 +1,11 @@
+{
+  "id": "resp_6a1c8e70b1e8f9a7e0d1f2a367ccf18e",
+  "object": "response",
+  "created_at": 1758902233,
+  "status": "completed",
+  "model": "gpt-4o-mini-2024-07-18",
+  "output": [
+    {"type": "function_call", "id": "fc_01", "call_id": "call_abc123", "name": "get_weather", "arguments": "{\"city\": \"San Francisco\"}"}
+  ],
+  "usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+}
