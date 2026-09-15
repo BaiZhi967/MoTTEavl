@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import * as Switch from "@radix-ui/react-switch";
 import {
   createModel,
   createProvider,
@@ -164,10 +165,17 @@ export function ModelsPage() {
           上下文窗口
           <input value={contextWindow} onChange={(change) => setContextWindow(change.target.value)} placeholder="32768" />
         </label>
-        <label className="checkbox">
-          <input type="checkbox" checked={supportsTools} onChange={(change) => setSupportsTools(change.target.checked)} />
-          支持工具调用
-        </label>
+        <div className="switch-row">
+          <span>支持工具调用</span>
+          <Switch.Root
+            className="switch"
+            checked={supportsTools}
+            onCheckedChange={setSupportsTools}
+            aria-label="支持工具调用"
+          >
+            <Switch.Thumb className="switch-thumb" />
+          </Switch.Root>
+        </div>
         <button type="submit">注册</button>
         {error && <p className="error">{error}</p>}
       </form>

@@ -19,7 +19,7 @@ export function ScoreTable({ scores }: { scores: Score[] }) {
         <tbody>
           {scores.map((score) => (
             <tr key={score.case_id}>
-              <td>{score.case_id}</td>
+              <td className="mono">{score.case_id}</td>
               <td className={score.passed ? "pass" : "fail"}>{score.passed ? "通过" : "未通过"}</td>
             </tr>
           ))}

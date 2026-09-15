@@ -1,21 +1,6 @@
 import { useMemo, useState } from "react";
 import type { TraceEvent } from "../api/client";
-
-const EVENT_LABELS: Record<string, string> = {
-  queued: "进入队列",
-  preparing: "准备",
-  running: "开始运行",
-  collecting: "收集结果",
-  scoring: "评分",
-  completed: "完成",
-  failed: "失败",
-  cancelled: "取消",
-  unsupported: "不支持",
-  profile_stale: "配置过期",
-  model_response: "模型响应",
-  score: "评分结果",
-  rescored: "重新评分",
-};
+import { eventLabel, eventTone } from "./statusMeta";
 
 function summarize(event: TraceEvent): string {
   switch (event.type) {
@@ -47,16 +32,16 @@ export function RunTimeline({ events }: { events: TraceEvent[] }) {
           <option value="all">全部（{events.length}）</option>
           {types.map((type) => (
             <option key={type} value={type}>
-              {EVENT_LABELS[type] ?? type}
+              {eventLabel(type)}
             </option>
           ))}
         </select>
       </label>
       <ol className="timeline">
         {visible.map((event) => (
-          <li key={`${event.seq}-${event.type}`} className={`event event-${event.type}`}>
+          <li key={`${event.seq}-${event.type}`} className={`event event-tone-${eventTone(event.type)}`}>
             <span className="seq">#{event.seq}</span>
-            <span className="type">{EVENT_LABELS[event.type] ?? event.type}</span>
+            <span className="type">{eventLabel(event.type)}</span>
             {summarize(event) && <span className="detail">{summarize(event)}</span>}
           </li>
         ))}
