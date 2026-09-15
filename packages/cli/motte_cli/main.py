@@ -1,5 +1,6 @@
 """`python -m motte_cli` 入口：doctor / run / replay / live-smoke。"""
 import argparse
+import asyncio
 import json
 
 
@@ -8,6 +9,32 @@ def _load_json(raw: str):
         with open(raw[1:], encoding="utf-8") as handle:
             return json.load(handle)
     return json.loads(raw)
+
+
+def _harness_installations() -> dict:
+    """Claude / Codex / Pi bridge 的本地安装检测（缺失不是错误，如实报告）。"""
+    from motte_harness.claude import ClaudeHarness
+    from motte_harness.codex import CodexHarness
+
+    async def collect():
+        return {
+            "claude": await ClaudeHarness().inspect(),
+            "codex": await CodexHarness().inspect(),
+        }
+
+    reports = asyncio.run(collect())
+    try:
+        from motte_agent.pi import PiAgentRuntime
+
+        runtime = PiAgentRuntime()
+        reports["pi-bridge"] = {
+            "name": "pi-bridge",
+            "installed": runtime.available(),
+            "detail": f"node={runtime._node is not None}, bridge={runtime.bridge_path}",
+        }
+    except Exception as error:  # agent 包异常时 doctor 不失败
+        reports["pi-bridge"] = {"name": "pi-bridge", "installed": False, "error": str(error)}
+    return reports
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -53,9 +80,19 @@ def main(argv=None):
     args = _build_parser().parse_args(argv)
 
     if args.command in (None, "doctor"):
-        result = {"status": "ok", "checks": {"python": "ok"}}
+        result = {"status": "ok", "checks": {"python": "ok", "harnesses": _harness_installations()}}
         as_json = getattr(args, "json", False) or getattr(args, "jsonl", False)
-        print(json.dumps(result) if as_json else "doctor: ok")
+        if as_json:
+            print(json.dumps(result, ensure_ascii=False))
+        else:
+            print("doctor: ok")
+            for name, report in result["checks"]["harnesses"].items():
+                if not report.get("installed"):
+                    print(f"  {name}: not installed")
+                elif "version" in report:
+                    print(f"  {name}: installed ({report.get('source')}, v{report.get('version')}) @ {report.get('path')}")
+                else:
+                    print(f"  {name}: installed ({report.get('detail')})")
         return 0
 
     if args.command == "run":

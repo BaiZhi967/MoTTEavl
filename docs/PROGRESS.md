@@ -116,6 +116,10 @@
 
 已知限制：磁盘限制经 tmpfs(/tmp) 实现而非根文件系统配额（overlay2 配额依赖存储驱动）；Codex app-server JSON-RPC 会话与 Pi 真实 runtime 待对应环境具备后接入；send 通道对 sandbox 显式 UnsupportedOperation。
 
+## Harness 本地安装检测（2026-09-15）
+
+`motte_harness.install`：`inspect_installation(binary)` 报告 installed/path/realpath/source（npm/homebrew/local/system/unknown，基于 realpath 启发式——npm 全局符号链接可还原到 node_modules）/version（semver 提取）/version_ok/error；`ClaudeHarness.inspect()` 与 `CodexHarness.inspect()` 在此之上给出 `runnable` 结论；`motte doctor` 输出 claude/codex/pi-bridge 三项安装情况（JSON 与文本两种形式，缺失 CLI 不是 doctor 失败）。本机验证：claude（npm, v2.1.170）、codex（npm, v0.154.0）、pi-bridge（node + bridge 就绪）均正确识别。
+
 ## 下一阶段
 
 阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。
