@@ -28,7 +28,7 @@ dependencies = [
 required-version = ">=0.11.6,<0.12"
 
 [dependency-groups]
-dev = ["pytest>=9.0.3,<10", "mypy>=1.13,<2", "pip-audit>=2.7,<3"]
+dev = ["pytest>=9.0.3,<10", "mypy>=1.13,<2", "pip-audit>=2.7,<3", "ruff>=0.14.11,<0.15"]
 
 [tool.uv.sources]
 motte-contracts = {workspace = true}
