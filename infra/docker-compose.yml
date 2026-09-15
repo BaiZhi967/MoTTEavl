@@ -7,6 +7,21 @@ services:
       POSTGRES_DB: motteavl
     ports: ["127.0.0.1:5432:5432"]
     volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U motteavl -d motteavl"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  migrate:
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes: ["..:/workspace"]
+    environment:
+      DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
+    command: ["python", "migrations/env.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
   redis:
     image: redis:7-alpine
     ports: ["127.0.0.1:6379:6379"]
@@ -15,15 +30,31 @@ services:
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes: ["./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"]
     ports: ["127.0.0.1:4317:4317"]
+  api:
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes: ["..:/workspace", "../var/artifacts:/workspace/var/artifacts"]
+    environment:
+      MOTTE_STORAGE: postgres
+      DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
+      ARTIFACT_ROOT: /workspace/var/artifacts
+    command: ["python", "-m", "uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
   worker:
     image: python:3.12-slim
     working_dir: /workspace
     volumes: ["..:/workspace", "../var/artifacts:/workspace/var/artifacts"]
     environment:
-      ARTIFACT_ROOT: /workspace/var/artifacts
-      MOTTE_DB_PATH: /workspace/var/runs.db
+      MOTTE_STORAGE: postgres
+      DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
       REDIS_URL: redis://redis:6379/0
+      ARTIFACT_ROOT: /workspace/var/artifacts
     command: ["python", "-m", "apps.worker.motte_worker"]
-    depends_on: [postgres, redis]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 volumes:
   postgres-data:
