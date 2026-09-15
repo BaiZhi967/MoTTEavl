@@ -26,6 +26,19 @@ def test_worker_executes_replay_run_created_by_api(tmp_path):
         {"case_id": "case-1", "passed": True},
         {"case_id": "case-2", "passed": True},
     ]
+    # Worker 抢占路径与直连执行路径的事件序列必须一致。
+    assert [event["type"] for event in worker.service.events(run["id"])] == [
+        "queued",
+        "preparing",
+        "running",
+        "model_response",
+        "model_response",
+        "collecting",
+        "scoring",
+        "score",
+        "score",
+        "completed",
+    ]
     assert worker.claim_and_execute() is None
 
 

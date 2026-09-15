@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from pathlib import Path
@@ -37,11 +36,10 @@ RETRYABLE = {"failed", "cancelled", "unsupported", "profile_stale"}
 
 
 def build_run_service(db_path: str | Path | None = None) -> RunService:
-    """API、CLI、Worker 共用的服务构造入口（MOTTE_DB_PATH，默认 var/runs.db）。"""
-    from motte_storage.run_store import SQLiteRunStore
+    """API、CLI、Worker 共用的服务构造入口；存储后端经 motte_storage 工厂选择。"""
+    from motte_storage.factory import create_run_store
 
-    path = Path(db_path if db_path is not None else os.environ.get("MOTTE_DB_PATH", "var/runs.db"))
-    return RunService(SQLiteRunStore(path))
+    return RunService(create_run_store(db_path))
 
 
 class RunService:
@@ -96,6 +94,10 @@ class RunService:
             self.store.runs.save(run)
         if run["status"] == "queued":
             self._transition(run_id, "preparing")
+        elif run["status"] == "preparing":
+            # Worker 抢占已把状态置为 preparing（无事件）；这里幂等补齐事件，保证三入口 Trace 一致。
+            if not any(event["type"] == "preparing" for event in self.store.events.list_for_run(run_id)):
+                self._emit(run_id, "preparing", {"status": "preparing"})
         if self._load(run_id)["status"] != "running":
             self._transition(run_id, "running")
         done = {row["case_id"] for row in self.store.case_runs.list_for_run(run_id)}

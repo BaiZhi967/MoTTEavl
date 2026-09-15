@@ -1,6 +1,8 @@
 __version__ = "0.1.0"
-from .repositories import InMemoryRepository
 from .artifacts import ArtifactStore
-from .postgres import PostgresRepository, UnsupportedStorageError, create_postgres_repository
+from .factory import create_run_store
+from .postgres import PostgresRunStore, UnsupportedStorageError, create_postgres_run_store
+from .repositories import InMemoryRepository
+from .run_store import InMemoryRunStore, SQLiteRunStore
 
 __version__ = "0.1.0"
