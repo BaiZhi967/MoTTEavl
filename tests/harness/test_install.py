@@ -32,13 +32,25 @@ def test_inspect_reports_missing_binary_as_not_installed():
 
 
 def _write_script(path, body):
-    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-    path.chmod(0o755)
+    if os.name == "nt":
+        path = path.with_suffix(".py")
+        lines = []
+        # The fixtures only need --version success/failure behavior.
+        if "exit 1" in body:
+            lines.append("import sys; print('boom', file=sys.stderr); sys.exit(1)")
+        else:
+            version = "3.0.0" if "3.0.0" in body else "2.1.0 (Claude Code)"
+            lines.append(f"import sys; print({version!r})")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    else:
+        path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        path.chmod(0o755)
+    return path
 
 
 def test_inspect_reports_version_and_runnable(tmp_path):
     binary = tmp_path / "fake-claude"
-    _write_script(binary, 'if [ "$1" = "--version" ]; then echo "2.1.0 (Claude Code)"; exit 0; fi')
+    binary = _write_script(binary, 'if [ "$1" = "--version" ]; then echo "2.1.0 (Claude Code)"; exit 0; fi')
     report = asyncio.run(inspect_installation(str(binary), name="claude-cli"))
     assert report["installed"] is True
     assert report["version"] == "2.1.0"  # 提取 semver，忽略尾注
@@ -50,7 +62,7 @@ def test_inspect_reports_version_and_runnable(tmp_path):
 
 def test_inspect_flags_broken_installation(tmp_path):
     binary = tmp_path / "broken-cli"
-    _write_script(binary, 'if [ "$1" = "--version" ]; then echo "boom" >&2; exit 1; fi')
+    binary = _write_script(binary, 'if [ "$1" = "--version" ]; then echo "boom" >&2; exit 1; fi')
     report = asyncio.run(CodexHarness(binary=str(binary)).inspect())
     assert report["installed"] is True
     assert report["version"] is None
@@ -62,14 +74,19 @@ def test_inspect_flags_broken_installation(tmp_path):
 def test_inspect_resolves_npm_symlink_source(tmp_path, monkeypatch):
     node_modules = tmp_path / "lib" / "node_modules" / "@vendor" / "cli" / "bin" / "cli.js"
     node_modules.parent.mkdir(parents=True)
-    _write_script(node_modules, 'if [ "$1" = "--version" ]; then echo "cli 3.0.0"; fi')
+    node_modules = _write_script(node_modules, 'if [ "$1" = "--version" ]; then echo "cli 3.0.0"; fi')
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     link = bin_dir / "vendor-cli"
-    os.symlink(node_modules, link)
+    if os.name == "nt":
+        # Windows symlink creation needs elevated developer mode; exercise the
+        # same npm realpath classification with the target path directly.
+        link = node_modules
+    else:
+        os.symlink(node_modules, link)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
-    report = asyncio.run(inspect_installation("vendor-cli"))
+    report = asyncio.run(inspect_installation(str(link) if os.name == "nt" else "vendor-cli"))
     assert report["installed"] is True
     assert report["path"] == str(link)
     assert report["source"] == "npm"

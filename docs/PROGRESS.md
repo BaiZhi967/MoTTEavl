@@ -9,15 +9,15 @@
 | 1 | 工作区、依赖、Compose、CI | ✅ | `2f8e15c`（含基础提交） | `uv run pytest tests/test_workspace_health.py -q`（1 passed）；Compose config 通过 |
 | 2 | Canonical contracts 与 schema | ✅ | `02f698c` | `uv run pytest tests/contract -q`（8 passed）；schema 导出 16 个 contract |
 | 3 | Storage、migration、artifact | ✅ | `96d92ee` | `uv run pytest tests/storage -q`（4 passed）；ArtifactStore SHA-256/path safety |
-| 4 | Provider runtime 与 model catalog | ✅ | `4aacb84` | `uv run pytest tests/provider -q`（4 passed）；四协议归一化、strict 校验、pricing |
+| 4 | Provider runtime 与 model catalog | ⚠️ | `4aacb84` | OpenAI-compatible 已接入并修复真实 urllib timeout；Responses/Anthropic 仍为 shim，需 live smoke |
 | 5 | Trace、replay、executor、foundation slice | ✅ | `5599e6c` | `uv run pytest tests/trace tests/runtime -q`（3 passed）；trace/redaction/replay/idempotent executor/scheduler 已验证 |
 | 6 | Docker sandbox、Skill、ToolRegistry | ✅ | `1faeaa3` | `uv run pytest tests/sandbox -q`（4 passed）；默认 deny network、策略分离、tool modes |
 | 7 | BuiltinReAct、Pi bridge | ✅ | `ff9fcb0` | `uv run pytest tests/runtime -q`（4 passed）；BuiltinReAct、Pi JSONL protocol |
-| 8 | Claude/Codex Harness | ✅ | `1d67798` | `uv run pytest tests/harness -q`（3 passed）；JSONL parser、进程生命周期、terminal channel、probe |
-| 9 | Evaluators、aggregation、gates、Inspect | ✅ | `1702957` | `uv run pytest tests/evaluators -q`（4 passed）；deterministic/trajectory/aggregate/pass@k/gate/judge metadata |
+| 8 | Claude/Codex Harness | ⚠️ | `1d67798` | Linux/WSL2 fake binary 路径可测；Windows 进程树/PTY 与 Codex app-server 仍待完成 |
+| 9 | Evaluators、aggregation、gates、Inspect | ⚠️ | `1702957` | 基础 evaluator 骨架可测；Inspect 仍 dry-run，完整统计与回归门禁待实现 |
 | 10 | API、Celery worker、CLI | ✅ | `c6daa75`（基于 `60f03e2`、`e1f9b49`） | `uv run pytest tests/api tests/cli -q`（3 passed）；`uv run python -m motte_cli --help` 可用 |
 | 11 | React Web console | ✅ | `c5ecf86` | `pnpm --dir apps/web test`（web workspace healthy）；中文能力/限制/运行时间线/评分组件 |
-| 12 | Replay integration、发布与运维文档 | ✅ | `49138cc`（基于 `e428fae`、`d9aa9a6`、`2afcfe0`） | `uv run pytest -q`（38 passed）；replay 1 passed；`uv run ruff check .`；compileall；Compose config；Web test 通过；CI 使用 portable compileall type gate |
+| 12 | Replay integration、发布与运维文档 | ⚠️ | `49138cc`（基于 `e428fae`、`d9aa9a6`、`2afcfe0`） | 当前 Windows 全量：164 passed、8 skipped；Ruff/contracts mypy/compileall/pip-audit/Web build+test 通过；Docker build/up 尚待验证 |
 
 状态说明：⏳ 未开始，🚧 开发中，✅ 已通过仓库验证，⚠️ 受外部依赖或未运行 live smoke 影响。
 
@@ -148,8 +148,8 @@
 
 ## 路线图收尾状态（2026-09-15）
 
-阶段 0–6 全部完成。仍开放的操作者事项：① live smoke 真实调用与 `docs/operations/live-smoke-log.md` 记录；② 真实 Claude/Codex harness 执行验证（本机已装，doctor 可查）；③ Codex app-server JSON-RPC 传输、真实 Pi runtime、OpenAI Responses / Anthropic Messages 真适配器（兼容矩阵中标 🚧）；④ 生产镜像构建（compose 仍用通用 python:3.12-slim）。
+阶段 0–6 的基础产物已落库，但不再视为“稳定完成”：真实 Responses/Anthropic/Pi/Codex app-server、Evaluator/Inspect、Windows Harness 和生产运行验证仍在进行。2026-09-15 已修复真实 HTTP transport 的 timeout 调用、暂态网络退避、嵌套凭据拒绝、Harness 消息 API、缺 Provider 安全终态和跨平台 workspace 路径校验；新增统一 Dockerfile，尚待 Docker build/up 验证。
 
 ## 下一阶段
 
-阶段 A 收尾后的任务安排见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：阶段 0 可复现基线 → 阶段 1 Run 执行内核 → 阶段 2 真实 Provider → 阶段 3 PostgreSQL → 阶段 4 Sandbox/Agent/Harness → 阶段 5 产品层 → 阶段 6 质量门禁。
+当前修复与接入顺序见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：Direct LLM 可复核链路 → 生产镜像 → 真实协议与 Harness → Evaluator/Inspect → 并发、类型和发布质量。

@@ -55,7 +55,7 @@ def make_provider(opener, *, parameters=None, price_table=None):
 
 
 def test_complete_returns_metered_envelope_with_redacted_canonical():
-    opener = lambda request, timeout: FakeResponse(chat_body())  # noqa: E731
+    opener = lambda request, *, timeout: FakeResponse(chat_body())  # noqa: E731
     provider = make_provider(opener)
     envelope = provider.complete(ModelRequest(model="test-model", messages=[Message(role="user", content="ping")]))
     assert envelope["content"] == "hi"
@@ -74,7 +74,7 @@ def test_complete_returns_metered_envelope_with_redacted_canonical():
 def test_request_body_merges_provider_and_request_level_parameters():
     captured = []
 
-    def opener(request, timeout):
+    def opener(request, *, timeout):
         captured.append(json.loads(request.data))
         return FakeResponse(chat_body())
 
@@ -98,7 +98,7 @@ def test_request_body_merges_provider_and_request_level_parameters():
 def test_unsupported_parameter_fails_before_any_paid_call():
     calls = []
 
-    def opener(request, timeout):
+    def opener(request, *, timeout):
         calls.append(request)
         return FakeResponse(chat_body())
 
@@ -117,7 +117,7 @@ def test_unsupported_parameter_fails_before_any_paid_call():
 def test_429_retry_records_retry_count():
     attempts = []
 
-    def opener(request, timeout):
+    def opener(request, *, timeout):
         attempts.append(1)
         if len(attempts) == 1:
             raise HTTPError(request.full_url, 429, "busy", {"Retry-After": "0"}, None)
@@ -132,7 +132,7 @@ def test_429_retry_records_retry_count():
 
 
 def test_auth_failure_is_classified_and_carries_evidence():
-    def opener(request, timeout):
+    def opener(request, *, timeout):
         raise HTTPError(request.full_url, 401, "unauthorized", {}, None)
 
     provider = make_provider(opener)
@@ -151,7 +151,7 @@ def test_cost_uses_price_table_version_snapshot():
     table = parse_price_table(
         {"version": "2026-09-15", "input_per_million": 1.0, "output_per_million": 2.0}
     )
-    envelope = make_provider(lambda r, t: FakeResponse(chat_body()), price_table=table).complete(
+    envelope = make_provider(lambda r, *, timeout: FakeResponse(chat_body()), price_table=table).complete(
         ModelRequest(model="test-model", messages=[Message(role="user", content="x")])
     )
     assert envelope["cost"]["total"] == 0.000008
@@ -169,7 +169,7 @@ def test_unknown_prices_stay_null():
 def test_nested_secrets_in_request_body_are_redacted():
     secret_payload = [{"type": "text", "text": "x", "api_key": SECRET, "authorization": SECRET}]
 
-    opener = lambda request, timeout: FakeResponse(chat_body())  # noqa: E731
+    opener = lambda request, *, timeout: FakeResponse(chat_body())  # noqa: E731
     provider = make_provider(opener)
     envelope = provider.complete(
         ModelRequest(model="test-model", messages=[Message(role="user", content=secret_payload)])
@@ -183,7 +183,7 @@ def test_nested_secrets_in_request_body_are_redacted():
 def test_case_driven_provider_maps_cases_to_requests():
     captured = []
 
-    def opener(request, timeout):
+    def opener(request, *, timeout):
         captured.append(json.loads(request.data))
         return FakeResponse(chat_body(content="42"))
 

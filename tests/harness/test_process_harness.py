@@ -1,6 +1,8 @@
 """ProcessRunner 与 Claude/Codex harness 的真实子进程测试（fake binary）。"""
 import asyncio
 import json
+import os
+import sys
 
 from motte_harness.claude import ClaudeHarness
 from motte_harness.codex import CodexHarness
@@ -8,21 +10,46 @@ from motte_harness.process import ProcessRunner
 
 
 def make_fake_binary(tmp_path, name, *, version_line="fake 1.2.3", body='echo \'{"type":"assistant","text":"hi"}\''):
-    script = tmp_path / name
-    script.write_text(
-        "#!/bin/sh\n"
-        f'if [ "$1" = "--version" ]; then echo "{version_line}"; else\n'
-        f"{body}\n"
-        "fi\n",
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
+    suffix = ".py" if os.name == "nt" else ""
+    script = tmp_path / f"{name}{suffix}"
+    if os.name == "nt":
+        # Keep the fake executable portable on Windows where /bin/sh and
+        # executable-bit semantics are unavailable.
+        output_lines = []
+        for line in body.splitlines():
+            if line.startswith("echo "):
+                value = line[5:]
+                expression = value if value[:1] in {"'", '"'} else repr(value)
+                output_lines.append(f"print({expression})")
+            else:
+                output_lines.append(line)
+        script.write_text(
+            "import sys\n"
+            f"if len(sys.argv) > 1 and sys.argv[1] == '--version': print({version_line!r})\n"
+            "else:\n"
+            + "\n".join(f"    {line}" for line in output_lines)
+            + "\n",
+            encoding="utf-8",
+        )
+    else:
+        script.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = "--version" ]; then echo "{version_line}"; else\n'
+            f"{body}\n"
+            "fi\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
     return str(script)
 
 
 def test_process_runner_captures_exit_code_and_output(tmp_path):
     async def scenario():
-        return await ProcessRunner(timeout=5).run(["/bin/sh", "-c", "echo out; echo err >&2; exit 3"])
+        if os.name == "nt":
+            command = [sys.executable, "-c", "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"]
+        else:
+            command = ["/bin/sh", "-c", "echo out; echo err >&2; exit 3"]
+        return await ProcessRunner(timeout=5).run(command)
 
     result = asyncio.run(scenario())
     assert result["status"] == "exited"
@@ -33,7 +60,11 @@ def test_process_runner_captures_exit_code_and_output(tmp_path):
 
 def test_process_runner_timeout_kills_process_group():
     async def scenario():
-        return await ProcessRunner(timeout=0.2).run(["/bin/sh", "-c", "sleep 30; echo late"])
+        if os.name == "nt":
+            command = [sys.executable, "-c", "import time; time.sleep(30); print('late')"]
+        else:
+            command = ["/bin/sh", "-c", "sleep 30; echo late"]
+        return await ProcessRunner(timeout=0.2).run(command)
 
     result = asyncio.run(scenario())
     assert result["status"] == "timeout"

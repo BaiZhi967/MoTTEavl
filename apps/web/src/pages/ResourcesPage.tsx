@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   createModel,
   createProvider,
@@ -32,7 +32,7 @@ export function ProvidersPage() {
     void refresh();
   }, [refresh]);
 
-  const submit = async (form: Event) => {
+  const submit = async (form: FormEvent<HTMLFormElement>) => {
     form.preventDefault();
     setError("");
     try {
@@ -130,7 +130,7 @@ export function ModelsPage() {
     void refresh();
   }, [refresh]);
 
-  const submit = async (form: Event) => {
+  const submit = async (form: FormEvent<HTMLFormElement>) => {
     form.preventDefault();
     setError("");
     try {

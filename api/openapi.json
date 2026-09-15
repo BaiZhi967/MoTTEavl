@@ -703,6 +703,55 @@
         "summary": "Events"
       }
     },
+    "/api/v1/runs/{run_id}/messages": {
+      "post": {
+        "operationId": "send_run_message_api_v1_runs__run_id__messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Run Message"
+      }
+    },
     "/api/v1/runs/{run_id}/replay": {
       "post": {
         "operationId": "replay_run_api_v1_runs__run_id__replay_post",

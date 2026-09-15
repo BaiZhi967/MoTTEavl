@@ -1,4 +1,10 @@
 services:
+  app-image:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: motteavl:local
+    profiles: ["build"]
   postgres:
     image: postgres:16-alpine
     environment:
@@ -13,9 +19,11 @@ services:
       timeout: 3s
       retries: 12
   migrate:
-    image: python:3.12-slim
+    image: motteavl:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
     working_dir: /workspace
-    volumes: ["..:/workspace"]
     environment:
       DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
     command: ["alembic", "upgrade", "head"]
@@ -31,9 +39,12 @@ services:
     volumes: ["./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro"]
     ports: ["127.0.0.1:4317:4317"]
   api:
-    image: python:3.12-slim
+    image: motteavl:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
     working_dir: /workspace
-    volumes: ["..:/workspace", "../var/artifacts:/workspace/var/artifacts"]
+    volumes: ["../var/artifacts:/workspace/var/artifacts"]
     environment:
       MOTTE_STORAGE: postgres
       DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
@@ -44,9 +55,12 @@ services:
       migrate:
         condition: service_completed_successfully
   worker:
-    image: python:3.12-slim
+    image: motteavl:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
     working_dir: /workspace
-    volumes: ["..:/workspace", "../var/artifacts:/workspace/var/artifacts"]
+    volumes: ["../var/artifacts:/workspace/var/artifacts"]
     environment:
       MOTTE_STORAGE: postgres
       DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl

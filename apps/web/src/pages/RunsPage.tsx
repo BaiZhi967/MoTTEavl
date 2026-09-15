@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   cancelRun,
   createRun,
@@ -129,7 +129,7 @@ export function RunsPage() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const submit = async (form: Event) => {
+  const submit = async (form: FormEvent<HTMLFormElement>) => {
     form.preventDefault();
     setError("");
     try {

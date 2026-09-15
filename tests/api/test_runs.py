@@ -115,3 +115,33 @@ def test_create_run_accepts_valid_openai_compatible_provider_config():
     )
     assert response.status_code == 202
     assert response.json()["status"] == "queued"
+
+
+def test_create_run_rejects_nested_plaintext_credentials():
+    store = InMemoryRunStore()
+    client = TestClient(create_app(store))
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "scenario_version": "direct-llm@1",
+            "manifest": {
+                "provider": {
+                    "kind": "openai_compatible",
+                    "base_url": "https://api.example.test/v1",
+                    "model": "m",
+                    "api_key": "sk-review-secret",
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "CREDENTIALS_REJECTED"
+    assert store.runs.list() == []
+
+
+def test_messages_endpoint_accepts_active_run_message():
+    client = TestClient(create_app(InMemoryRunStore()))
+    run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
+    response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue"})
+    assert response.status_code == 202
+    assert response.json()["run_id"] == run["id"]

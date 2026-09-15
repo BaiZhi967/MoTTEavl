@@ -6,7 +6,7 @@ command policy 与 network policy 相互独立；默认全部收窄：
 - 环境变量：只有显式声明的名字会传入容器。
 """
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 class PolicyViolationError(ValueError):
@@ -56,7 +56,15 @@ class SandboxPolicy:
             raise PolicyViolationError("network policy only supports 'none' (deny by default)")
         if self.privileged:
             raise PolicyViolationError("privileged mode is forbidden")
-        if Path(self.workspace).is_absolute() or ".." in Path(self.workspace).parts:
+        workspace = str(self.workspace)
+        if (
+            Path(workspace).is_absolute()
+            or PurePosixPath(workspace).is_absolute()
+            or PureWindowsPath(workspace).is_absolute()
+            or ".." in Path(workspace).parts
+            or ".." in PurePosixPath(workspace).parts
+            or ".." in PureWindowsPath(workspace).parts
+        ):
             raise PolicyViolationError("workspace escape")
         if self.memory_mb <= 0 or self.pids_limit <= 0 or self.disk_mb <= 0:
             raise PolicyViolationError("resource limits must be positive")

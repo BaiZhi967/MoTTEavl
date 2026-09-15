@@ -30,7 +30,7 @@ make install        # uv sync + pnpm install --frozen-lockfile
 - **API**: `uv run uvicorn apps.api.app.main:app --reload --port 8000` (or just `make dev`). Reads `MOTTE_DB_PATH` (default `./var/runs.db`, SQLite).
 - **Web**: `pnpm --dir apps/web dev` — Vite on `http://localhost:5173`, `/api` is proxied to the API on port 8000.
 - **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
-- **Optional services** (PostgreSQL, Redis, OTel collector): `docker compose -f infra/docker-compose.yml up -d`.
+- **Optional services** (PostgreSQL, Redis, OTel collector): `docker compose -f infra/docker-compose.yml up -d`. Compose builds the `motteavl:local` image before starting API, migration, and Worker services.
 
 ## Environment variables
 
@@ -39,3 +39,5 @@ Copy `.env.example` to `.env`. Variables actually read today: `MOTTE_STORAGE` (`
 ## CI
 
 `.github/workflows/ci.yml` runs exactly the same commands as `make check` plus the frozen pnpm install; keep the two in sync when changing gates.
+
+The current execution adapters are explicitly tracked in the [compatibility matrix](docs/protocols/provider-compatibility.md). Replay and OpenAI-compatible runs are supported locally; Responses, Anthropic, real Pi, and Codex app-server remain planned adapter work.

@@ -34,7 +34,7 @@ def _chat_body():
 
 
 def test_run_live_smoke_produces_redacted_report():
-    transport = HTTPTransport("https://api.example.test/v1", SECRET, opener=lambda r, t: FakeResponse(_chat_body()))
+    transport = HTTPTransport("https://api.example.test/v1", SECRET, opener=lambda r, *, timeout: FakeResponse(_chat_body()))
     report = run_live_smoke(
         "openai-compatible",
         "m",
@@ -67,7 +67,7 @@ def test_execute_smoke_returns_failure_report_with_error_class():
 
 
 def test_smoke_markdown_and_record_contain_no_secret(tmp_path):
-    transport = HTTPTransport("https://api.example.test/v1", SECRET, opener=lambda r, t: FakeResponse(_chat_body()))
+    transport = HTTPTransport("https://api.example.test/v1", SECRET, opener=lambda r, *, timeout: FakeResponse(_chat_body()))
     report = run_live_smoke(
         "openai-compatible",
         "m",

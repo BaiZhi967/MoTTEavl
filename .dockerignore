@@ -1,0 +1,10 @@
+.git
+.venv
+node_modules
+apps/web/node_modules
+apps/web/dist
+var
+*.db
+__pycache__
+.pytest_cache
+.ruff_cache

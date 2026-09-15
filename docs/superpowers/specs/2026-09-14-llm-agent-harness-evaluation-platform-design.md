@@ -321,7 +321,7 @@ retention:
 - TraceEvent、Observation、Artifact。
 - Score、EvaluationReport。
 
-默认 PostgreSQL 保存元数据与查询所需 JSON；本地 artifact 目录保存大型工件，MinIO 为可选实现。Redis 负责任务队列和实时传输。SQLite 与内存/本地队列用于开发配置，但不作为并发运行的默认配置。
+默认 PostgreSQL 保存元数据与查询所需 JSON；本地 artifact 目录保存大型工件，MinIO 为可选实现。Redis 负责任务队列和实时传输。SQLite 与内存/本地队列用于开发配置，但不作为并发运行的默认配置。API、Worker 和 migration 使用同一份项目运行时镜像构建，不能依赖裸 Python 基础镜像在启动时恰好存在项目依赖。
 
 Run 主流程状态：
 

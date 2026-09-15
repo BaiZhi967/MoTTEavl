@@ -19,7 +19,7 @@ def provider_for_run(run: dict[str, Any]):
     provider_config = manifest.get("provider") or {}
     kind = provider_config.get("kind")
     if not kind:
-        return None
+        raise ValueError("run manifest requires provider.kind")
     if kind == "replay":
         return ReplayProvider(provider_config.get("fixture") or {}).invoke
     if kind == "openai_compatible":

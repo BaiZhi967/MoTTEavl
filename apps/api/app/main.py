@@ -24,6 +24,25 @@ HARNESS_CATALOG = ["claude", "codex"]
 _FORBIDDEN_SECRET_FIELDS = ("api_key", "key", "token", "secret", "password", "authorization")
 
 
+def _secret_paths(value: Any, path: str = "$") -> list[str]:
+    """Find credential-shaped keys at every nesting level before persistence."""
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            lowered = key_text.lower()
+            if lowered in {
+                "api_key", "api-key", "x-api-key", "authorization", "password", "token",
+                "secret", "cookie", "set-cookie", "proxy-authorization",
+            }:
+                found.append(f"{path}.{key_text}")
+            found.extend(_secret_paths(child, f"{path}.{key_text}"))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found.extend(_secret_paths(child, f"{path}[{index}]"))
+    return found
+
+
 def _validate_provider(provider_config: dict):
     """strict 预检：不合法的 provider 配置在创建阶段就拒绝，不产生任何付费调用。"""
     from motte_provider.capabilities import UnsupportedParameterError
@@ -45,8 +64,7 @@ def _validate_provider(provider_config: dict):
 
 
 def _reject_secret_fields(body: dict):
-    lowered = {key.lower() for key in body}
-    leaked = sorted(lowered & set(_FORBIDDEN_SECRET_FIELDS))
+    leaked = _secret_paths(body)
     if leaked:
         return JSONResponse(
             status_code=422,
@@ -77,6 +95,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
     @application.post("/api/v1/runs", status_code=202)
     def create_run(body: dict):
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
         scenario = body.get("scenario_version", "")
         if scenario.startswith("vision@"):
             return JSONResponse(status_code=422, content={"error": {"code": "MODEL_CAPABILITY_UNSUPPORTED", "message": "vision capability is unsupported"}})
@@ -117,6 +138,26 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="run not found") from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/v1/runs/{run_id}/messages", status_code=202)
+    def send_run_message(run_id: str, body: dict):
+        try:
+            run = service.get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="run not found") from error
+        if run["status"] in RunService.TERMINAL:
+            raise HTTPException(status_code=409, detail="run is not active")
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        content = body.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "MESSAGE_INVALID", "message": "content is required"}},
+            )
+        service._emit(run_id, "user_message", {"content": content})
+        return {"run_id": run_id, "status": "accepted"}
 
     @application.post("/api/v1/runs/{run_id}/replay")
     def replay_run(run_id: str, body: dict):

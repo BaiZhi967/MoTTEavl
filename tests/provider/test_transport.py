@@ -1,5 +1,5 @@
 import json
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -39,7 +39,8 @@ def test_post_json_joins_base_url_and_injects_redacted_authorization():
 
 
 def test_timeout_is_classified_as_provider_http_error():
-    def opener(_request, _timeout):
+    def opener(_request, *, timeout):
+        assert timeout == 30.0
         raise TimeoutError("timed out")
 
     with pytest.raises(ProviderHTTPError, match="timed out"):
@@ -58,3 +59,30 @@ def test_429_is_retried_and_succeeds_without_network():
     transport = HTTPTransport("https://example.test", max_retries=1, opener=opener, sleep=lambda _: None)
     assert transport.post_json("chat", {}) == {"done": True}
     assert len(calls) == 2
+
+
+def test_opener_receives_timeout_as_keyword_argument():
+    def opener(request, *, timeout):
+        assert timeout == 30.0
+        return FakeResponse({"ok": True})
+
+    transport = HTTPTransport("https://example.test", opener=opener)
+    assert transport.post_json("chat", {}) == {"ok": True}
+
+
+def test_transient_network_error_is_retried_with_backoff():
+    calls = []
+    delays = []
+
+    def opener(request, *, timeout):
+        calls.append((request, timeout))
+        if len(calls) == 1:
+            raise URLError("temporary connection reset")
+        return FakeResponse({"done": True})
+
+    transport = HTTPTransport(
+        "https://example.test", max_retries=1, opener=opener, sleep=delays.append
+    )
+    assert transport.post_json("chat", {}) == {"done": True}
+    assert len(calls) == 2
+    assert delays == [0.5]

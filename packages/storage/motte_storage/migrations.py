@@ -26,7 +26,11 @@ def _psycopg_url(dsn: str) -> str:
 
 
 def alembic_config(dsn: str | None = None) -> Config:
-    cfg = Config(str(ALEMBIC_INI))
+    # Build the config in memory so Windows locale encodings cannot make
+    # reading the UTF-8 ``alembic.ini`` fail before migrations even start.
+    # The migration script location and DSN are the only settings required by
+    # the programmatic API; the CLI continues to read ``alembic.ini`` itself.
+    cfg = Config(file_=None)
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     if dsn is not None:
         cfg.set_main_option("sqlalchemy.url", _psycopg_url(dsn))

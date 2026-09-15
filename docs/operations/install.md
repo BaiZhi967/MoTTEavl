@@ -13,7 +13,7 @@ make test           # 全量测试（零网络、零花费）
 make check          # 与 CI 相同的门禁
 ```
 
-可选服务（PostgreSQL / Redis / OTel collector）：`docker compose -f infra/docker-compose.yml up -d`。
+可选服务（PostgreSQL / Redis / OTel collector）：`docker compose -f infra/docker-compose.yml up -d`。Compose 会先构建 `motteavl:local`，再启动 migration、API 与 Worker；不再使用未安装项目依赖的裸 `python:3.12-slim`。
 
 ## 日常启动
 
@@ -22,3 +22,5 @@ make check          # 与 CI 相同的门禁
 - 一键：`make dev`
 
 各环境变量的消费状态见 `.env.example` 内注释。
+
+Windows 原生环境只通过 Docker Desktop 或 WSL2 运行容器与 CLI Harness；进程树终止、PTY 和 rootless 能力差异会写入运行诊断。

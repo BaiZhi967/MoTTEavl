@@ -61,7 +61,7 @@ def _chat_body(content):
 def test_worker_executes_openai_compatible_run_end_to_end(tmp_path, monkeypatch):
     calls = []
 
-    def responder(request, timeout):
+    def responder(request, *, timeout):
         calls.append(request)
         return FakeResponse(_chat_body("2"))
 
@@ -78,6 +78,16 @@ def test_worker_executes_openai_compatible_run_end_to_end(tmp_path, monkeypatch)
     assert persisted["cost"]["total"] == (5 * 1.0 + 7 * 2.0) / 1_000_000
     assert result["scores"] == [{"case_id": "case-1", "passed": True}]
     assert SECRET not in json.dumps(result)
+
+
+def test_worker_rejects_run_without_provider_instead_of_fabricating_result(tmp_path):
+    service = RunService(SQLiteRunStore(tmp_path / "runs.db"))
+    service.create_run("direct-llm@1", {}, case_ids=["case-1"])
+
+    result = WorkerLoop(RunService(SQLiteRunStore(tmp_path / "runs.db"))).claim_and_execute()
+    assert result["status"] == "unsupported"
+    assert result["error"]["code"] == "PROVIDER_CONFIG_INVALID"
+    assert result["cases"] == []
 
 
 def test_worker_marks_run_unsupported_for_strict_precheck_failure(tmp_path):
@@ -107,7 +117,7 @@ def test_worker_marks_run_unsupported_for_unknown_provider_kind(tmp_path):
 
 
 def test_provider_failure_records_classified_evidence_on_run(tmp_path, monkeypatch):
-    def responder(request, timeout):
+    def responder(request, *, timeout):
         raise HTTPError(request.full_url, 401, "unauthorized", {}, None)
 
     _fake_case_provider(monkeypatch, responder)

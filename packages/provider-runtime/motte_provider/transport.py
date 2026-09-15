@@ -73,7 +73,7 @@ class HTTPTransport:
         while True:
             attempt += 1
             try:
-                with self._opener(request, self.timeout) as response:
+                with self._opener(request, timeout=self.timeout) as response:
                     raw = response.read()
                 body = json.loads(raw)
                 return TransportOutcome(
@@ -118,6 +118,10 @@ class HTTPTransport:
                     error_class="protocol" if isinstance(exc, json.JSONDecodeError) else "network",
                     error_message=str(exc),
                 )
+                if outcome.error_class == "network" and attempt <= self.max_retries:
+                    delay = min(30.0, 0.5 * (2 ** (attempt - 1)))
+                    self._sleep(delay)
+                    continue
                 error = ProviderHTTPError(str(exc), error_class=outcome.error_class)
                 error.outcome = outcome
                 raise error from exc

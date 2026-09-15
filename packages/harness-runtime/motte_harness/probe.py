@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from typing import Any
 
 from .process import ProcessRunner
@@ -13,7 +14,8 @@ def probe_version(name, version=None):
 
 async def probe_binary(binary: str, *, name: str | None = None, timeout: float = 10.0) -> dict[str, Any]:
     """执行 `<binary> --version` 并解析首行版本；binary 缺失时 available=False。"""
-    if shutil.which(binary) is None and "/" not in binary:
+    is_path = Path(binary).is_file() or "/" in binary or "\\" in binary
+    if shutil.which(binary) is None and not is_path:
         return {"name": name or binary, "version": None, "available": False}
     result = await ProcessRunner(timeout=timeout).run([binary, "--version"])
     version = None

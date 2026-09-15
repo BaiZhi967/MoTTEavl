@@ -6,7 +6,7 @@
 
 | Adapter | 状态 | 传输 | strict 预检 | 计量 | 价格/成本 | canonical 脱敏 |
 |---|---|---|---|---|---|---|
-| `openai_compatible` | ✅ 完整 | 自有 HTTPTransport（timeout/429 Retry-After/有限重试/错误分类） | ✅ | ✅ latency/attempts/retry_count | ✅ 版本化快照，未知为 null | ✅ |
+| `openai_compatible` | ✅ 本地可用 | 自有 HTTPTransport（keyword timeout/429/暂态网络退避/错误分类） | ✅ | ✅ latency/attempts/retry_count | ✅ 版本化快照，未知为 null | ✅ |
 | `replay` | ✅ 确定性回放 | 无网络 | — | — | — | — |
 | `openai_chat` | ✅ 响应归一化（被 openai_compatible 复用） | 同上 | ✅ | ✅ | ✅ | ✅ |
 | `openai_responses` | 🚧 openai_chat 别名 shim，真适配器待接入 | — | — | — | — | — |
@@ -17,15 +17,15 @@
 | 运行时 | 状态 | 协议 | 验证 |
 |---|---|---|---|
 | `builtin-react` | ✅ 完整 | 文本 JSON 动作协议（tool/final），observation 回灌，步数预算，全程事件 | 离线测试（fake complete） |
-| `pi` | ✅ bridge v0.1.0 / 协议 v1 | NDJSON 双向（probe→version，prompt→started/output/finished，malformed→error），默认确定性 echo 模式 | Node 自测 + Python 驱动测试；真实 Pi runtime 待接入 |
+| `pi` | ⚠️ bridge v0.1.0 / 协议 v1 | NDJSON 双向（probe→version，prompt→started/output/finished，malformed→error），当前为确定性 echo | Node 自测 + Python 驱动测试；真实 Pi runtime 待接入 |
 
 ## Harness
 
 | Harness | 状态 | probe | 传输 | 验证 |
 |---|---|---|---|---|
-| `claude-cli` | ✅ CLI 通道 | `claude --version` + 安装检测（路径/来源/版本） | `claude -p <prompt> --output-format json` | fake binary 全流程 + 本机真实安装检测（npm v2.1.170） |
-| `codex-cli` | ✅ CLI 通道 | `codex --version` + 安装检测 | `codex exec --json` | fake binary 全流程 + 本机真实安装检测（npm v0.154.0）；app-server JSON-RPC 传输待接入 |
-| `inspect` | 🚧 dry-run 占位 | — | — | — |
+| `claude-cli` | ⚠️ CLI 通道（Linux/WSL2） | `claude --version` + 安装检测（路径/来源/版本） | `claude -p <prompt> --output-format json` | Linux fake binary 全流程；Windows 进程适配仍需补齐 |
+| `codex-cli` | ⚠️ CLI 通道（Linux/WSL2） | `codex --version` + 安装检测 | `codex exec --json` | Linux fake binary 全流程；app-server JSON-RPC 与 Windows 进程适配待接入 |
+| `inspect` | 🚧 dry-run 占位 | — | — | Inspect Task/Solver/Scorer 映射待接入 |
 
 ## Sandbox
 

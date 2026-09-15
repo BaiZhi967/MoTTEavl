@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from pathlib import Path
 from typing import Any
 
 from .process import ProcessRunner
@@ -30,9 +31,9 @@ _SOURCE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def classify_source(path: str) -> str:
     """按解析后的真实路径判定安装来源。"""
-    real = os.path.realpath(path)
+    real = os.path.realpath(path).replace("\\", "/").lower()
     for source, markers in _SOURCE_RULES:
-        if any(marker in real for marker in markers):
+        if any(marker.lower() in real for marker in markers):
             return source
     return "unknown"
 
@@ -64,7 +65,7 @@ async def inspect_installation(
         "version_ok": False,
         "error": None,
     }
-    path = shutil.which(binary)
+    path = str(Path(binary)) if Path(binary).is_file() else shutil.which(binary)
     if path is None:
         return report
     report.update(
