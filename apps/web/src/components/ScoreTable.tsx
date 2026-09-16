@@ -1,10 +1,10 @@
 import type { Score } from "../api/client";
 
-export function ScoreTable({ scores }: { scores: Score[] }) {
+export function ScoreTable({ scores, embedded = false }: { scores: Score[]; embedded?: boolean }) {
   const passed = scores.filter((score) => score.passed).length;
   return (
-    <section className="panel">
-      <h2>评分结果</h2>
+    <section className={embedded ? undefined : "panel"}>
+      <h2 className={embedded ? "embed-title" : undefined}>评分结果</h2>
       <p className="summary">
         共 {scores.length} 项，通过 {passed}，未通过 {scores.length - passed}
         {scores.length > 0 && `（通过率 ${Math.round((passed / scores.length) * 100)}%）`}

@@ -18,17 +18,23 @@ function summarize(event: TraceEvent): string {
   }
 }
 
-export function RunTimeline({ events }: { events: TraceEvent[] }) {
+export function RunTimeline({ events, embedded = false }: { events: TraceEvent[]; embedded?: boolean }) {
   const [filter, setFilter] = useState("all");
   const types = useMemo(() => Array.from(new Set(events.map((event) => event.type))), [events]);
   const visible = filter === "all" ? events : events.filter((event) => event.type === filter);
 
   return (
-    <section className="panel">
-      <h2>运行时间线</h2>
-      <label>
-        事件过滤：
-        <select value={filter} onChange={(change) => setFilter(change.target.value)} aria-label="事件过滤">
+    <section className={embedded ? undefined : "panel"}>
+      <h2 className={embedded ? "embed-title" : undefined}>运行时间线</h2>
+      <div className="inline-field">
+        <label className="field-label" htmlFor="timeline-filter">事件过滤</label>
+        <select
+          id="timeline-filter"
+          className="control"
+          value={filter}
+          onChange={(change) => setFilter(change.target.value)}
+          aria-label="事件过滤"
+        >
           <option value="all">全部（{events.length}）</option>
           {types.map((type) => (
             <option key={type} value={type}>
@@ -36,7 +42,7 @@ export function RunTimeline({ events }: { events: TraceEvent[] }) {
             </option>
           ))}
         </select>
-      </label>
+      </div>
       <ol className="timeline">
         {visible.map((event) => (
           <li key={`${event.seq}-${event.type}`} className={`event event-tone-${eventTone(event.type)}`}>

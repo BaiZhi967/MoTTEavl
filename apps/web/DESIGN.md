@@ -88,12 +88,15 @@ token 与本文冲突时，以本文为准并立即修正 token。
 
 | 组件 | 规范 |
 |---|---|
-| 应用骨架 | 左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字）+ 右侧全屏工作台（独立滚动，`.page` 内容最大 1440px 居中） |
+| 应用骨架 | 左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字）+ 右侧全屏工作台（独立滚动，`.page` 内容最大 1240px 居中，padding 16/32） |
+| 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）——禁止两个内容面板 50/50 平分 |
 | 导航项 | 图标（Phosphor Bold 16px）+ 13px 文字，静默态次色，hover `--bg-subtle`，active `--tone-neutral-bg` + 主文字色 + 500 字重 |
-| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500；行 hover `--bg-subtle`；ID / 数字列加 `.mono` |
+| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
 | 状态徽章 | pill（9999px）、12px、语义粉彩底 + 对应前景色 |
-| 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono |
+| 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono；无内层滚动，由所在容器统一滚动 |
 | 表单 | label 13px 次色在控件上方；控件白底 1px 边框 6px 圆角；focus-visible 2px info 色描边 |
+| 行内过滤控件 | 表单体系之外的控件用 `.control`（与表单控件同款）+ `.field-label` + `.inline-field`（label 与控件并排），禁止浏览器默认外观裸奔 |
+| 嵌入分节 | 已有卡片壳的容器（滑出面板等）内部分节用 `embedded` 组件 + `.embed-title`（14px 标题、无壳），禁止卡片套卡片 |
 | 按钮 | primary：`--ink` 实底白字，hover `--ink-hover`，active `scale(0.98)`；secondary：白底 1px 边框；link：文字按钮用 info 前景色 |
 | 空状态 | 居中、`--text-faint`，文案「暂无 X」 |
 | 错误提示 | 内联 alert：`--tone-error-bg` 底 + 前景色，禁止 `window.alert` |

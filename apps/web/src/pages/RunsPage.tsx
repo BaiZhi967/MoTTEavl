@@ -42,8 +42,13 @@ function RunDetail({ runId, onClose }: { runId: string; onClose: () => void }) {
     let alive = true;
     getRun(runId).then((record) => alive && setRun(record)).catch((e) => alive && setError(String(e)));
     const unsubscribe = subscribeRunEvents(runId, {
-      onEvent: (event) =>
-        setEvents((current) => (current.some((item) => item.seq === event.seq) ? current : [...current, event])),
+      onEvent: (event) => {
+        setEvents((current) => (current.some((item) => item.seq === event.seq) ? current : [...current, event]));
+        // 状态型事件回写运行状态：徽章与导出按钮随 SSE 实时流转，无需关闭重开
+        if (typeof event.status === "string") {
+          setRun((current) => (current ? { ...current, status: event.status } : current));
+        }
+      },
     });
     return () => {
       alive = false;
@@ -119,8 +124,8 @@ function RunDetail({ runId, onClose }: { runId: string; onClose: () => void }) {
               导出报告
             </button>
           </div>
-          <RunTimeline events={events} />
-          {run?.scores && <ScoreTable scores={run.scores} />}
+          <RunTimeline events={events} embedded />
+          {run?.scores && <ScoreTable scores={run.scores} embedded />}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -165,14 +170,16 @@ export function RunsPage() {
   const [scenario, setScenario] = useState("replay@1");
   const [caseIds, setCaseIds] = useState("case-1");
   const [manifest, setManifest] = useState("");
-  const [error, setError] = useState("");
+  const [formError, setFormError] = useState("");
+  const [listError, setListError] = useState("");
 
   const refresh = useCallback(async () => {
     try {
       const payload = await getRuns(statusFilter === "all" ? undefined : statusFilter);
       setRuns(payload.items);
+      setListError("");
     } catch (e) {
-      setError(String(e));
+      setListError(String(e));
     }
   }, [statusFilter]);
 
@@ -184,7 +191,7 @@ export function RunsPage() {
 
   const submit = async (form: FormEvent<HTMLFormElement>) => {
     form.preventDefault();
-    setError("");
+    setFormError("");
     try {
       const body: { scenario_version: string; case_ids?: string[]; manifest?: any } = {
         scenario_version: scenario,
@@ -195,7 +202,7 @@ export function RunsPage() {
       setSelected(created.id);
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setFormError(String(e));
     }
   };
 
@@ -204,13 +211,13 @@ export function RunsPage() {
       await action();
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setListError(String(e));
     }
   };
 
   return (
     <div className="page">
-      <form className="panel" onSubmit={submit} aria-label="创建运行">
+      <form className="panel form-panel" onSubmit={submit} aria-label="创建运行">
         <h2>创建运行</h2>
         <label>
           场景版本
@@ -225,21 +232,24 @@ export function RunsPage() {
           <textarea rows={3} value={manifest} onChange={(change) => setManifest(change.target.value)} placeholder='{"provider":{"kind":"replay","fixture":{...}}}' />
         </label>
         <button type="submit">创建</button>
-        {error && <p className="error">{error}</p>}
+        {formError && <p className="error">{formError}</p>}
       </form>
 
       <section className="panel">
         <h2>运行列表</h2>
-        <label>
-          状态过滤：
+        <div className="inline-field">
+          <span className="field-label">状态过滤</span>
           <StatusFilter value={statusFilter} onChange={setStatusFilter} />
-        </label>
+        </div>
+        {listError && <p className="error">{listError}</p>}
         <table>
           <thead>
             <tr>
               <th>ID</th>
               <th>场景</th>
               <th>状态</th>
+              <th>Cases</th>
+              <th>通过</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -247,6 +257,8 @@ export function RunsPage() {
             {runs.map((run) => {
               const cancellable = !TERMINAL_STATUSES.includes(run.status);
               const retryable = RETRYABLE_STATUSES.includes(run.status);
+              const total = run.case_ids?.length ?? 0;
+              const passed = run.scores?.filter((score) => score.passed).length;
               return (
                 <tr key={run.id}>
                   <td>
@@ -258,7 +270,11 @@ export function RunsPage() {
                   <td>
                     <StatusBadge status={run.status} />
                   </td>
-                  <td className="actions">
+                  <td className="mono">{total || "—"}</td>
+                  <td className="mono">
+                    {run.scores && run.scores.length > 0 ? `${passed}/${run.scores.length}` : "—"}
+                  </td>
+                  <td className="row-actions">
                     {cancellable || retryable ? (
                       <DropdownMenu.Root>
                         <DropdownMenu.Trigger asChild>
@@ -293,7 +309,7 @@ export function RunsPage() {
             })}
             {runs.length === 0 && (
               <tr>
-                <td colSpan={4} className="empty">
+                <td colSpan={6} className="empty">
                   暂无运行
                 </td>
               </tr>

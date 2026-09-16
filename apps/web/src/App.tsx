@@ -30,13 +30,13 @@ export default function App() {
         </Tabs.List>
       </aside>
       <div className="workbench">
-        <Tabs.Content value="runs" className="tab-panel">
+        <Tabs.Content value="runs">
           <RunsPage />
         </Tabs.Content>
-        <Tabs.Content value="providers" className="tab-panel">
+        <Tabs.Content value="providers">
           <ProvidersPage />
         </Tabs.Content>
-        <Tabs.Content value="harnesses" className="tab-panel">
+        <Tabs.Content value="harnesses">
           <HarnessesPage />
         </Tabs.Content>
       </div>

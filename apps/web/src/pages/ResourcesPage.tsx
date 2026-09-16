@@ -59,7 +59,7 @@ export function ProvidersPage() {
 
   return (
     <div className="page">
-      <form className="panel" onSubmit={submit} aria-label="创建 Provider">
+      <form className="panel form-panel" onSubmit={submit} aria-label="创建 Provider">
         <h2>创建 Provider（openai_compatible）</h2>
         <label>
           名称
@@ -203,7 +203,7 @@ function ProviderSection({
               <td className="mono">{model.model ?? model.id}</td>
               <td>{model.context_window ?? "未知"}</td>
               <td>{model.supports_tools ? "是" : "否"}</td>
-              <td>
+              <td className="row-actions">
                 <button className="link danger" onClick={() => void removeModel(model.id)}>
                   删除
                 </button>
