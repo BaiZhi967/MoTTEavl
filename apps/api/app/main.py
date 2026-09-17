@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from motte_sdk.replay_run import ReplayProvider
-from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, prepare_run
+from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, prepare_run, resolve_manifest
 from motte_sdk.service import RunService, build_run_service
 from motte_storage.factory import create_resource_store
 from motte_storage.resource_store import InMemoryResourceStore, ResourceConflictError
