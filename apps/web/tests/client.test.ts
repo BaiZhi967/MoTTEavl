@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelRun, createRun, getRuns, setCredential } from "../src/api/client";
+import { cancelRun, createRun, getRuns, setCredential, updateModel, updateProvider } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
   const spy = vi.fn(async () => ({
@@ -45,5 +45,26 @@ describe("api client", () => {
     expect(url).toBe("/api/v1/credentials/local-vllm");
     expect((init as any).method).toBe("PUT");
     expect(JSON.parse((init as any).body)).toEqual({ api_key: "sk-live-0123456789abcdef" });
+  });
+
+  // 更新端点服务端只注册 PUT：错发 POST 会被 405 挡下（启用/停用开关就走这条路径）
+  it("PUT updateProvider 走 set 语义而不是注册用 POST", async () => {
+    const fetchMock = mockFetch(200, { name: "local-vllm", enabled: false });
+    const updated = await updateProvider("local-vllm", { enabled: false });
+    expect(updated.enabled).toBe(false);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/providers/local-vllm");
+    expect((init as any).method).toBe("PUT");
+    expect(JSON.parse((init as any).body)).toEqual({ enabled: false });
+  });
+
+  it("PUT updateModel 走 set 语义而不是注册用 POST", async () => {
+    const fetchMock = mockFetch(200, { id: "qwen2.5-7b", enabled: true });
+    const updated = await updateModel("qwen2.5-7b", { enabled: true });
+    expect(updated.enabled).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/models/qwen2.5-7b");
+    expect((init as any).method).toBe("PUT");
+    expect(JSON.parse((init as any).body)).toEqual({ enabled: true });
   });
 });

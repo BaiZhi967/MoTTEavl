@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,6 +90,38 @@ def test_transient_network_error_is_retried_with_backoff():
     assert transport.post_json("chat", {}) == {"done": True}
     assert len(calls) == 2
     assert delays == [0.5]
+
+
+def test_dns_failure_message_names_host_and_points_at_base_url():
+    """裸的 getaddrinfo failed 对使用者没有指向性：提示必须点名主机与 Base URL。"""
+
+    def opener(request, *, timeout):
+        raise URLError(socket.gaierror(11001, "getaddrinfo failed"))
+
+    transport = HTTPTransport("https://6a-g-bits.com/v1", max_retries=0, opener=opener)
+    with pytest.raises(ProviderHTTPError) as failure:
+        transport.post_json("chat", {})
+
+    error = failure.value
+    assert error.error_class == "network"
+    assert "6a-g-bits.com" in str(error)
+    assert "DNS" in str(error)
+    assert "Base URL" in str(error)
+    assert "getaddrinfo failed" in str(error)  # 原始证据保留
+    assert error.outcome.error_message == str(error)
+
+
+def test_connection_refused_message_names_host_and_port_hint():
+    def opener(request, *, timeout):
+        raise URLError(ConnectionRefusedError(10061, "No connection could be made"))
+
+    transport = HTTPTransport("http://gateway.internal:9000/v1", max_retries=0, opener=opener)
+    with pytest.raises(ProviderHTTPError) as failure:
+        transport.post_json("chat", {})
+
+    message = str(failure.value)
+    assert "gateway.internal" in message
+    assert "端口" in message
 
 
 def test_retry_after_http_date_is_honored_for_transient_status():

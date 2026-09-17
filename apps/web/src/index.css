@@ -148,8 +148,6 @@ body {
   gap: 16px;
   padding: 16px 16px 32px;
   align-items: flex-start;
-  max-width: 1240px;
-  margin: 0 auto;
 }
 
 .panel {
@@ -289,47 +287,229 @@ button.link.danger {
   color: var(--tone-error-fg);
 }
 
-/* ---------- Provider 分组（连接 + 模型同卡管理） ---------- */
+/* ---------- Provider master-detail（清单窄列 + 详情卡） ---------- */
 
-.provider-block + .provider-block {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-
-.provider-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-
-/* kind 徽章搭在名称旁：借用状态徽章的 neutral pill，只补排版间距 */
 .kind-badge {
-  margin-left: 8px;
   font-family: var(--font-mono);
 }
 
-.provider-meta {
+/* 清单窄列：Provider 等导航型列表 */
+.panel.list-panel {
+  flex: 0 0 240px;
+  min-width: 240px;
+  max-width: 240px;
+}
+
+.panel-head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.provider-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.provider-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+.provider-item:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.provider-item[data-state="active"] {
+  background: var(--tone-neutral-bg);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.provider-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.provider-item[data-enabled="false"] .provider-item-name {
+  color: var(--text-faint);
+}
+
+/* 会话内测试状态点：仅映射真实测试结果，无数据不渲染 */
+.state-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+}
+
+.state-dot.pass {
+  background: var(--tone-success-fg);
+}
+
+.state-dot.fail {
+  background: var(--tone-error-fg);
+}
+
+/* 详情头：mono 名称 + kind 徽章 + 启用开关 + 操作组 */
+.detail-head {
+  display: flex;
+  align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  font-size: 13px;
-  color: var(--text-secondary);
+  margin-bottom: 16px;
 }
 
-.provider-actions {
+.detail-head h2 {
+  margin: 0;
+}
+
+.detail-actions {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 12px;
 }
 
-.provider-actions .link {
+/* `.inline-field` 自带 12px 下边距（过滤行排版用），留在详情头会把开关顶到中心线之上 */
+.detail-head .inline-field {
+  margin-bottom: 0;
+}
+
+.detail-actions .link,
+.model-actions .link,
+.panel-head-actions .link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-family: var(--font-sans);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.section-head .embed-title {
+  margin: 0;
+}
+
+/* 连接分节：协议 + 端点可编辑，凭据信息 kv 只读 */
+.connection-form {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.connection-grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.connection-grid label {
+  flex: 1 1 200px;
+}
+
+.connection-form .kv {
+  margin-top: 4px;
+}
+
+/* 模型紧凑行：mono ID + 徽章群 + 参数摘要，行尾开关与操作 */
+.model-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.model-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.model-item:last-child {
+  border-bottom: none;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+}
+
+.model-row:hover {
+  background: var(--bg-subtle);
+}
+
+.model-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.model-id {
+  font-size: 13px;
+}
+
+.model-badge {
+  font-family: var(--font-mono);
+}
+
+.model-params {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.model-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.model-test-result {
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  font-size: 12px;
 }
 
 /* 更新密钥行：卡片内非 form 容器，控件走 .control 体系 */
@@ -418,20 +598,6 @@ td.row-actions {
 
 td.row-actions .link {
   margin-left: 12px;
-}
-
-/* 参数列与行内测试结果：mono 小字号、弱化展示 */
-.params-cell {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.test-result-row td {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-subtle);
-  font-size: 12px;
-  padding: 4px 8px;
 }
 
 /* ---------- 键值列表 ---------- */
@@ -671,12 +837,15 @@ td.row-actions .link {
   color: var(--text-secondary);
 }
 
+/* Radix Switch.Root 渲染为 <button>：必须显式清掉全局 button 的 padding 与 hover 底色，
+   thumb 走绝对定位（flex 收缩会把 12px 圆点压扁并顶出胶囊右缘）。 */
 .switch {
+  position: relative;
   flex: none;
-  display: inline-flex;
-  align-items: center;
   width: 32px;
   height: 18px;
+  box-sizing: border-box;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 9999px;
   background: var(--tone-neutral-bg);
@@ -684,23 +853,30 @@ td.row-actions .link {
   transition: background-color 200ms ease, border-color 200ms ease;
 }
 
-.switch[data-state="checked"] {
+.switch:hover {
+  background: var(--tone-neutral-bg);
+}
+
+.switch[data-state="checked"],
+.switch[data-state="checked"]:hover {
   background: var(--ink);
   border-color: var(--ink);
 }
 
 .switch-thumb {
-  display: block;
+  position: absolute;
+  top: 50%;
+  left: 2px;
   width: 12px;
   height: 12px;
-  margin-left: 2px;
   border-radius: 50%;
   background: var(--bg-surface);
+  transform: translateY(-50%);
   transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .switch[data-state="checked"] .switch-thumb {
-  transform: translateX(14px);
+  transform: translate(14px, -50%);
 }
 
 /* ---------- 结果与提示 ---------- */

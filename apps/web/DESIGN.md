@@ -88,8 +88,13 @@ token 与本文冲突时，以本文为准并立即修正 token。
 
 | 组件 | 规范 |
 |---|---|
-| 应用骨架 | 左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字）+ 右侧全屏工作台（独立滚动，`.page` 内容最大 1240px 居中，padding 16/32） |
-| 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）——禁止两个内容面板 50/50 平分 |
+| 应用骨架 | 左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字）+ 右侧全屏工作台（独立滚动，`.page` 通栏铺满工作台、不设最大宽度、禁止居中，padding 16/32） |
+| 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）；导航型清单列用 `.panel.list-panel`（240px 固定窄列）——禁止两个内容面板 50/50 平分 |
+| Provider 清单 | 列表头 `.panel-head`（15px 标题 + `icon-btn` 刷新 + link「添加」）；列表项 `.provider-item`（Phosphor Plug 16px + mono 名称 + 会话内测试状态点），选中态同导航 active（`--tone-neutral-bg` + 500 字重），禁用项名称弱化为 `--text-faint` |
+| 测试状态点 | `.state-dot`（8px 圆点）：只映射本次会话内真实测试结果（pass 用 success 前景色 / fail 用 error 前景色），无数据不渲染；禁止装饰性常亮 |
+| Provider 详情头 | `.detail-head`：mono 名称 + kind 徽章（neutral pill）+ 启用 Switch（随行 `.field-label`，包在 `.inline-field` 里且清零其下边距，与操作 link 同一中心线）+ link 操作组（更新密钥 / 两步确认删除） |
+| 连接分节 | `.connection-form`：`.embed-title`「连接」+ `.connection-grid` 双列（协议 select + Base URL 输入，窄屏换行）；凭据 profile / 密钥 hint 用 `.kv` 只读；表单脏状态才显示「保存连接」 |
+| 模型紧凑行 | `.model-row`：mono ID + neutral pill 徽章（上下文格式化 256000→256K、1000000→1M；能力如「工具」）+ 参数摘要 12px mono 次色；行尾启用 Switch + link 操作（测试/编辑/删除）；行 hover `--bg-subtle`；测试结果用 `.model-test-result` 行内反馈（`--bg-subtle` 底、12px、pass/fail 前景色） |
 | 导航项 | 图标（Phosphor Bold 16px）+ 13px 文字，静默态次色，hover `--bg-subtle`，active `--tone-neutral-bg` + 主文字色 + 500 字重 |
 | 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
 | 行内反馈行 | 即时操作结果（如连通性测试）用 `colSpan` 整行嵌在目标行下方：`--bg-subtle` 底、12px、成功 `pass` / 失败 `fail` 前景色；进行中用 `--text-faint` 文案 |
@@ -102,10 +107,10 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 空状态 | 居中、`--text-faint`，文案「暂无 X」 |
 | 错误提示 | 内联 alert：`--tone-error-bg` 底 + 前景色，禁止 `window.alert` |
 | 键值展示 | `<dl class="kv">` 两列网格，dt 次色 |
-| 滑出面板（Dialog） | 富视图详情（如运行详情）用右侧滑出：`min(720px, 100vw - 280px)` 宽、左边框 1px、200ms 右滑入场；遮罩 `rgba(17,17,17,0.32)`；标题左侧、X 关闭按钮右侧 |
+| 滑出面板（Dialog） | 富视图详情与创建表单（运行详情、创建 Provider）用右侧滑出：`min(720px, 100vw - 280px)` 宽、左边框 1px、200ms 右滑入场；遮罩 `rgba(17,17,17,0.32)`；标题左侧、X 关闭按钮右侧 |
 | 下拉菜单（DropdownMenu） | 行操作收敛为 `···` 触发；白底 1px 边框 8px 圆角 + 极淡阴影 `0 4px 16px rgba(0,0,0,0.05)`；破坏性操作文字用 error 前景色 |
 | 下拉选择（Select） | Radix Select，trigger 与原生输入控件同规格（168px 起、1px 边框、6px 圆角），选中项右侧 Check 指示；简单过滤场景可用同款样式的原生 `<select>`（如时间线事件过滤、表单内固定选项的协议类型） |
-| 开关（Switch） | 32×18 pill，关闭态 `--tone-neutral-bg`，开启态 `--ink` 实色，thumb 200ms 位移 |
+| 开关（Switch） | 32×18 pill（`box-sizing: border-box` + `padding: 0`，并显式压掉全局 `button` 的 hover 底色——Radix Switch.Root 本身就是 `<button>`），关闭态 `--tone-neutral-bg`，开启态 `--ink` 实色；thumb 12px 绝对定位、离边 2px，位移只用 `transform` 200ms，禁止把滑块写成 flex 流内元素（会被压扁并顶出胶囊） |
 | 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
 | kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
 | 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |

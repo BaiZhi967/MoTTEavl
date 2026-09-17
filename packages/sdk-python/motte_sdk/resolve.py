@@ -167,6 +167,8 @@ def _provider_resource(name: Any, resources: Any) -> dict[str, Any]:
     connection = resources.providers.get(name) if isinstance(name, str) else None
     if connection is None:
         raise ManifestResolutionError("RESOURCE_NOT_FOUND", f"provider not found: {name}")
+    if connection.get("enabled") is False:
+        raise ManifestResolutionError("PROVIDER_DISABLED", f"provider is disabled: {name}")
     leaked = find_secret_paths(connection)
     if leaked:
         raise ManifestResolutionError(
@@ -179,6 +181,8 @@ def _model_profile(model_id: str, resources: Any) -> dict[str, Any]:
     profile = resources.models.get(model_id)
     if profile is None:
         raise ManifestResolutionError("MODEL_NOT_FOUND", f"model not found: {model_id}")
+    if profile.get("enabled") is False:
+        raise ManifestResolutionError("MODEL_DISABLED", f"model is disabled: {model_id}")
     return profile
 
 

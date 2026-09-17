@@ -27,6 +27,7 @@ class ModelProfile(Contract):
     id: str
     provider: str
     model: str | None = None
+    enabled: bool = True
     capabilities: dict[str, Any]
     input_modalities: list[str] = Field(default_factory=lambda: ["text"])
     output_modalities: list[str] = Field(default_factory=lambda: ["text"])

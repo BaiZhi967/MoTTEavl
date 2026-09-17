@@ -28,6 +28,7 @@ export interface ProviderRecord {
   base_url?: string;
   credentials?: string;
   api_key_env?: string;
+  enabled?: boolean;
   [key: string]: any;
 }
 
@@ -35,6 +36,7 @@ export interface ModelRecord {
   id: string;
   provider: string;
   model?: string | null;
+  enabled?: boolean;
   capabilities: Record<string, any>;
   context_window?: number | null;
   supports_tools?: boolean;
@@ -75,7 +77,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-const jsonBody = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+/** 写请求统一入口：注册类端点用 POST，读-改-写更新端点用 PUT（服务端只注册 PUT，错发 POST 会 405）。 */
+const jsonRequest = (method: "POST" | "PUT", body: unknown): RequestInit => ({
+  method,
+  body: JSON.stringify(body),
+});
+
+const jsonBody = (body: unknown): RequestInit => jsonRequest("POST", body);
 
 // ---------------------------------------------------------------- runs
 
@@ -103,11 +111,17 @@ export const getReport = (id: string) => request<RunReport>(`/api/v1/runs/${id}/
 
 export const getProviders = () => request<{ items: ProviderRecord[] }>(`/api/v1/providers`);
 export const createProvider = (body: ProviderRecord) => request<ProviderRecord>("/api/v1/providers", jsonBody(body));
+/** 读-改-写更新连接（kind / base_url / credentials / api_key_env / enabled）；name 不可变。 */
+export const updateProvider = (name: string, body: Partial<ProviderRecord>) =>
+  request<ProviderRecord>(`/api/v1/providers/${name}`, jsonRequest("PUT", body));
 export const deleteProvider = (name: string) =>
   request<{ deleted: string }>(`/api/v1/providers/${name}`, { method: "DELETE" });
 
 export const getModels = () => request<{ items: ModelRecord[] }>(`/api/v1/models`);
 export const createModel = (body: any) => request<ModelRecord>("/api/v1/models", jsonBody(body));
+/** 读-改-写更新模型档案（合并式，保留未提及字段）；id / provider 不可变。 */
+export const updateModel = (id: string, body: Partial<ModelRecord>) =>
+  request<ModelRecord>(`/api/v1/models/${id}`, jsonRequest("PUT", body));
 
 // ---------------------------------------------------------------- model test
 

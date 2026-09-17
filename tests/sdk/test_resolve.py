@@ -116,6 +116,23 @@ def test_unknown_provider_and_model(resources):
     assert error.value.code == "MODEL_NOT_FOUND"
 
 
+def test_disabled_provider_and_model_are_rejected(resources):
+    resources.providers.put({
+        "name": "off", "kind": "openai_compatible",
+        "base_url": "https://x.test", "enabled": False,
+    })
+    with pytest.raises(ManifestResolutionError) as error:
+        resolve_manifest({"provider": "off"}, resources)
+    assert error.value.code == "PROVIDER_DISABLED"
+
+    resources.models.put({
+        "id": "paused", "provider": "openai-main", "capabilities": {}, "enabled": False,
+    })
+    with pytest.raises(ManifestResolutionError) as error:
+        resolve_manifest({"model": "paused"}, resources)
+    assert error.value.code == "MODEL_DISABLED"
+
+
 def test_stored_provider_with_plaintext_secret_is_rejected(resources):
     resources.providers.put({
         "name": "leaky", "kind": "openai_compatible", "base_url": "https://x.test", "model": "m",

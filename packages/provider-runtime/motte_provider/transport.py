@@ -1,12 +1,15 @@
 """Small, dependency-free HTTP transport for OpenAI-compatible providers."""
 
 import json
+import socket
+import ssl
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from datetime import timezone
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .errors import (
@@ -135,20 +138,22 @@ class HTTPTransport:
                 error.outcome = outcome
                 raise error from exc
             except (TimeoutError, URLError, OSError, json.JSONDecodeError) as exc:
+                error_class = "protocol" if isinstance(exc, json.JSONDecodeError) else "network"
+                message = str(exc) if error_class == "protocol" else describe_network_error(url, exc)
                 outcome = TransportOutcome(
                     url=url,
                     path=path,
                     request_body=payload,
                     attempts=attempt,
                     latency_ms=(self._clock() - started) * 1000,
-                    error_class="protocol" if isinstance(exc, json.JSONDecodeError) else "network",
-                    error_message=str(exc),
+                    error_class=error_class,
+                    error_message=message,
                 )
                 if outcome.error_class == "network" and attempt <= self.max_retries:
                     delay = min(self.backoff_max, self.backoff_initial * (2 ** (attempt - 1)))
                     self._sleep(delay)
                     continue
-                error = ProviderHTTPError(str(exc), error_class=outcome.error_class)
+                error = ProviderHTTPError(message, error_class=outcome.error_class)
                 error.outcome = outcome
                 raise error from exc
 
@@ -196,6 +201,27 @@ class HTTPTransport:
         if exc.code == 429:
             return ProviderRateLimitError(message, status=exc.code)
         return ProviderHTTPError(message, status=exc.code)
+
+
+def describe_network_error(url: str, exc: Exception) -> str:
+    """网络层失败 → 可操作提示：点名主机与排查方向，原始异常原样附后（证据不丢）。
+
+    urllib 把底层 socket 错误包进 URLError，根因在 exc.reason 上，因此两者都看。
+    "getaddrinfo failed" / "[Errno 11001]" 这类裸文本对使用者毫无指向性，必须补出主机名。
+    """
+    host = urlsplit(url).hostname or url
+    reason = getattr(exc, "reason", exc)
+    detail = str(exc)
+    lowered = detail.lower()
+    if isinstance(reason, socket.gaierror) or "getaddrinfo" in lowered:
+        return f"无法解析主机 {host}（DNS 查询失败）：请核对该连接的 Base URL 与网络/代理设置；原始错误：{detail}"
+    if isinstance(reason, ssl.SSLError) or "certificate" in lowered:
+        return f"TLS 握手失败（{host}）：证书校验未通过或协议不受支持；原始错误：{detail}"
+    if isinstance(reason, ConnectionRefusedError) or "refused" in lowered:
+        return f"连接被拒绝（{host} 上无服务监听该端口）：请核对 Base URL 的地址与端口；原始错误：{detail}"
+    if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) or "timed out" in lowered:
+        return f"请求超时（{host} 未在超时时间内响应）：请核对该端点是否可达；原始错误：{detail}"
+    return f"网络错误（无法连接 {host}）：原始错误：{detail}"
 
 
 def _read_error_body(exc: HTTPError) -> dict | list | None:

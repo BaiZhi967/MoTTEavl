@@ -1,6 +1,16 @@
-import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import * as Switch from "@radix-ui/react-switch";
-import { KeyIcon, PencilSimpleIcon, PlayIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import {
+  ArrowClockwiseIcon,
+  KeyIcon,
+  PencilSimpleIcon,
+  PlayIcon,
+  PlugIcon,
+  PlusIcon,
+  TrashIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import {
   createModel,
   createProvider,
@@ -14,6 +24,8 @@ import {
   getProviders,
   setCredential,
   testModel,
+  updateModel,
+  updateProvider,
   type CredentialSummary,
   type HarnessReport,
   type ModelRecord,
@@ -33,24 +45,32 @@ const FALLBACK_KINDS: ProviderKindMeta[] = [
   },
 ];
 
-/** Provider 与其模型合并管理：连接（协议 / Base URL / 凭据）在 Provider 上，模型挂在 Provider 下。 */
+/** 上下文窗口徽章格式：256000 → 256K、1000000 → 1M，小数最多一位。 */
+function formatContext(contextWindow?: number | null): string | null {
+  if (contextWindow == null) return null;
+  if (contextWindow >= 1_000_000) {
+    const millions = contextWindow / 1_000_000;
+    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+  }
+  if (contextWindow >= 1_000) {
+    const thousands = contextWindow / 1_000;
+    return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
+  }
+  return String(contextWindow);
+}
+
+/** Provider 管理采用 master-detail：左列清单选中，右列编辑选中 Provider 的连接与模型。 */
 export function ProvidersPage() {
   const [kinds, setKinds] = useState<ProviderKindMeta[]>(FALLBACK_KINDS);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [credentialSummaries, setCredentialSummaries] = useState<CredentialSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState(FALLBACK_KINDS[0].kind);
-  const [baseUrl, setBaseUrl] = useState("");
-  const [credentials, setCredentials] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [error, setError] = useState("");
-
-  const kindMeta = kinds.find((entry) => entry.kind === kind);
-  const defaultUrls = kinds
-    .map((entry) => entry.default_base_url)
-    .filter((url): url is string => Boolean(url));
+  const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  /** 本会话内各 Provider 最近一次测试结果（true 通过 / false 失败）；只喂给清单状态点，未测不显示。 */
+  const [providerTests, setProviderTests] = useState<Record<string, boolean>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -62,8 +82,9 @@ export function ProvidersPage() {
       setProviders(providerPayload.items);
       setModels(modelPayload.items);
       setCredentialSummaries(credentialPayload.items);
+      setLoadError("");
     } catch (e) {
-      setError(String(e));
+      setLoadError(String(e));
     } finally {
       setLoaded(true);
     }
@@ -75,6 +96,115 @@ export function ProvidersPage() {
       .then((payload) => setKinds(payload.items))
       .catch(() => undefined);
   }, [refresh]);
+
+  // 选中项被删除时自动回落到第一个，保证右侧始终有内容
+  const selectedProvider = providers.find((provider) => provider.name === selected) ?? providers[0] ?? null;
+
+  return (
+    <div className="page">
+      <aside className="panel list-panel" aria-label="Provider 清单">
+        <div className="panel-head">
+          <h2>Provider</h2>
+          <div className="panel-head-actions">
+            <button type="button" className="icon-btn" aria-label="刷新清单" onClick={() => void refresh()}>
+              <ArrowClockwiseIcon size={14} weight="bold" aria-hidden />
+            </button>
+            <button type="button" className="link" onClick={() => setCreating(true)}>
+              <PlusIcon size={14} weight="bold" aria-hidden />
+              添加
+            </button>
+          </div>
+        </div>
+        {loadError && <p className="error">{loadError}</p>}
+        {!loaded && providers.length === 0 ? (
+          <p className="empty">加载中</p>
+        ) : providers.length === 0 ? (
+          <p className="empty">暂无 Provider</p>
+        ) : (
+          <ul className="provider-list">
+            {providers.map((provider) => (
+              <li key={provider.name}>
+                <button
+                  type="button"
+                  className="provider-item"
+                  data-state={selectedProvider?.name === provider.name ? "active" : undefined}
+                  data-enabled={provider.enabled === false ? "false" : undefined}
+                  onClick={() => setSelected(provider.name)}
+                >
+                  <PlugIcon size={16} weight="bold" aria-hidden />
+                  <span className="provider-item-name mono">{provider.name}</span>
+                  {providerTests[provider.name] === true && (
+                    <span className="state-dot pass" aria-label="最近测试通过" />
+                  )}
+                  {providerTests[provider.name] === false && (
+                    <span className="state-dot fail" aria-label="最近测试失败" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+
+      {selectedProvider ? (
+        <ProviderDetail
+          key={selectedProvider.name}
+          provider={selectedProvider}
+          models={models.filter((model) => model.provider === selectedProvider.name)}
+          kinds={kinds}
+          credentialHint={
+            credentialSummaries.find((entry) => entry.profile === (selectedProvider.credentials ?? selectedProvider.name))
+              ?.key_hint
+          }
+          onTestResult={(ok) =>
+            setProviderTests((current) => ({ ...current, [selectedProvider.name]: ok }))
+          }
+          onChanged={refresh}
+        />
+      ) : (
+        loaded && (
+          <section className="panel provider-detail">
+            <p className="empty">暂无 Provider，点击左侧「添加」创建第一个连接</p>
+          </section>
+        )
+      )}
+
+      <CreateProviderDialog
+        open={creating}
+        kinds={kinds}
+        onClose={() => setCreating(false)}
+        onCreated={async (name) => {
+          await refresh();
+          setSelected(name);
+        }}
+      />
+    </div>
+  );
+}
+
+/** 创建 Provider 的滑出面板：连接信息一次性填写，密钥写凭据文件、不回显、不入库。 */
+function CreateProviderDialog({
+  open,
+  kinds,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  kinds: ProviderKindMeta[];
+  onClose: () => void;
+  onCreated: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState(FALLBACK_KINDS[0].kind);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [credentials, setCredentials] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [error, setError] = useState("");
+
+  const kindMeta = kinds.find((entry) => entry.kind === kind);
+  const defaultUrls = kinds
+    .map((entry) => entry.default_base_url)
+    .filter((url): url is string => Boolean(url));
 
   /** 切换协议时同步默认端点：只在输入为空或仍是另一个 kind 的默认值时替换，不覆盖手输内容。 */
   const changeKind = (nextKind: string) => {
@@ -100,90 +230,87 @@ export function ProvidersPage() {
         ...(credentials ? { credentials } : {}),
       });
       setName("");
+      setBaseUrl("");
       setCredentials("");
       setApiKey("");
-      await refresh();
+      onClose();
+      await onCreated(name);
     } catch (e) {
       setError(String(e));
     }
   };
 
   return (
-    <div className="page">
-      <form className="panel form-panel" onSubmit={submit} aria-label="创建 Provider">
-        <h2>创建 Provider</h2>
-        <label>
-          协议类型
-          <select value={kind} onChange={(change) => changeKind(change.target.value)}>
-            {kinds.map((entry) => (
-              <option key={entry.kind} value={entry.kind}>
-                {entry.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        {kindMeta?.description && <p className="hint">{kindMeta.description}</p>}
-        <label>
-          名称
-          <input value={name} onChange={(change) => setName(change.target.value)} placeholder="my-provider" required />
-        </label>
-        <label>
-          Base URL
-          <input
-            value={baseUrl}
-            onChange={(change) => setBaseUrl(change.target.value)}
-            placeholder={kindMeta?.default_base_url ?? "http://localhost:8001/v1"}
-            required
-          />
-        </label>
-        <label>
-          凭据 profile（留空则与名称相同）
-          <input value={credentials} onChange={(change) => setCredentials(change.target.value)} placeholder="my-provider" />
-        </label>
-        <label>
-          API Key（可选；写入服务器凭据文件，不回显、不入库）
-          <input
-            type="password"
-            autoComplete="new-password"
-            value={apiKey}
-            onChange={(change) => setApiKey(change.target.value)}
-            placeholder="sk-…"
-          />
-        </label>
-        <p className="hint">
-          API Key 会写入服务器凭据文件（0600），与 <code>python -m motte_cli credentials set {"<profile>"}</code> 等价
-          {kindMeta?.default_key_env && <>；未填写时回退环境变量 <code>{kindMeta.default_key_env}</code></>}
-        </p>
-        <button type="submit">创建</button>
-        {error && <p className="error">{error}</p>}
-      </form>
-
-      <section className="panel">
-        <h2>Provider 与模型</h2>
-        {!loaded && providers.length === 0 ? (
-          <p className="empty">加载中</p>
-        ) : providers.length === 0 ? (
-          <p className="empty">暂无 Provider，在左侧创建第一个连接</p>
-        ) : (
-          providers.map((provider) => (
-            <ProviderSection
-              key={provider.name}
-              provider={provider}
-              models={models.filter((model) => model.provider === provider.name)}
-              credentialHint={
-                credentialSummaries.find((entry) => entry.profile === (provider.credentials ?? provider.name))
-                  ?.key_hint
-              }
-              onChanged={refresh}
-            />
-          ))
-        )}
-      </section>
-    </div>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content className="dialog-content" aria-label="创建 Provider">
+          <div className="dialog-header">
+            <Dialog.Title className="dialog-title">创建 Provider</Dialog.Title>
+            <Dialog.Close asChild>
+              <button type="button" className="icon-btn" aria-label="关闭创建面板">
+                <XIcon size={16} weight="bold" aria-hidden />
+              </button>
+            </Dialog.Close>
+          </div>
+          <form onSubmit={submit}>
+            <label>
+              协议类型
+              <select value={kind} onChange={(change) => changeKind(change.target.value)}>
+                {kinds.map((entry) => (
+                  <option key={entry.kind} value={entry.kind}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {kindMeta?.description && <p className="hint">{kindMeta.description}</p>}
+            <label>
+              名称
+              <input value={name} onChange={(change) => setName(change.target.value)} placeholder="my-provider" required />
+            </label>
+            <label>
+              Base URL
+              <input
+                value={baseUrl}
+                onChange={(change) => setBaseUrl(change.target.value)}
+                placeholder={kindMeta?.default_base_url ?? "http://localhost:8001/v1"}
+                required
+              />
+            </label>
+            <label>
+              凭据 profile（留空则与名称相同）
+              <input value={credentials} onChange={(change) => setCredentials(change.target.value)} placeholder="my-provider" />
+            </label>
+            <label>
+              API Key（可选；写入服务器凭据文件，不回显、不入库）
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={apiKey}
+                onChange={(change) => setApiKey(change.target.value)}
+                placeholder="sk-…"
+              />
+            </label>
+            <p className="hint">
+              API Key 会写入服务器凭据文件（0600），与 <code>python -m motte_cli credentials set {"<profile>"}</code> 等价
+              {kindMeta?.default_key_env && <>；未填写时回退环境变量 <code>{kindMeta.default_key_env}</code></>}
+            </p>
+            <button type="submit">创建</button>
+            {error && <p className="error">{error}</p>}
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
-/** 模型表单的参数列摘要：temp 0.2 top_p 0.9 max 4096；空则返回 null。 */
+/** 模型行的参数摘要：temp 0.2 top_p 0.9 max 4096；空则返回 null。 */
 function parameterSummary(parameters?: ModelRecord["parameters"]) {
   if (!parameters) {
     return null;
@@ -195,15 +322,19 @@ function parameterSummary(parameters?: ModelRecord["parameters"]) {
   return parts.length ? parts.join("  ") : null;
 }
 
-function ProviderSection({
+function ProviderDetail({
   provider,
   models,
+  kinds,
   credentialHint,
+  onTestResult,
   onChanged,
 }: {
   provider: ProviderRecord;
   models: ModelRecord[];
+  kinds: ProviderKindMeta[];
   credentialHint?: string;
+  onTestResult: (ok: boolean) => void;
   onChanged: () => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
@@ -220,6 +351,11 @@ function ProviderSection({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tests, setTests] = useState<Record<string, ModelTestResult | "running">>({});
   const [error, setError] = useState("");
+  // 连接编辑：初值取自 provider 记录，脏状态才显示保存按钮
+  const [connectionKind, setConnectionKind] = useState(provider.kind);
+  const [connectionUrl, setConnectionUrl] = useState(provider.base_url ?? "");
+  const [savingConnection, setSavingConnection] = useState(false);
+  const connectionDirty = connectionKind !== provider.kind || connectionUrl !== (provider.base_url ?? "");
 
   const resetModelForm = () => {
     setModelId("");
@@ -259,15 +395,19 @@ function ProviderSection({
     if (topP) parameters.top_p = Number(topP);
     if (maxOutputTokens) parameters.max_output_tokens = Number(maxOutputTokens);
     try {
-      await createModel({
-        id: modelId,
-        provider: provider.name,
+      const payload = {
         ...(modelName ? { model: modelName } : {}),
         capabilities: { text: true },
         ...(contextWindow ? { context_window: Number(contextWindow) } : {}),
         supports_tools: supportsTools,
         ...(Object.keys(parameters).length ? { parameters } : {}),
-      });
+      };
+      // 编辑走合并式 PUT，保留未提及字段（enabled、provenance 等）；新增仍是 POST 注册
+      if (editing) {
+        await updateModel(editing, payload);
+      } else {
+        await createModel({ id: modelId, provider: provider.name, ...payload });
+      }
       resetModelForm();
       setAdding(false);
       await onChanged();
@@ -282,11 +422,13 @@ function ProviderSection({
     try {
       const report = await testModel(id);
       setTests((current) => ({ ...current, [id]: report }));
+      onTestResult(report.ok);
     } catch (e) {
       setTests((current) => ({
         ...current,
         [id]: { ok: false, provider: provider.kind, model: id, tested_at: "", error: { message: String(e) } },
       }));
+      onTestResult(false);
     }
   };
 
@@ -312,6 +454,40 @@ function ProviderSection({
     }
   };
 
+  const saveConnection = async (form: FormEvent<HTMLFormElement>) => {
+    form.preventDefault();
+    setError("");
+    setSavingConnection(true);
+    try {
+      await updateProvider(provider.name, { kind: connectionKind, base_url: connectionUrl });
+      await onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingConnection(false);
+    }
+  };
+
+  const toggleProvider = async (next: boolean) => {
+    setError("");
+    try {
+      await updateProvider(provider.name, { enabled: next });
+      await onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const toggleModel = async (model: ModelRecord, next: boolean) => {
+    setError("");
+    try {
+      await updateModel(model.id, { enabled: next });
+      await onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const removeProviderWithModels = async () => {
     setError("");
     try {
@@ -324,45 +500,42 @@ function ProviderSection({
   };
 
   return (
-    <div className="provider-block">
-      <header className="provider-head">
-        <div>
-          <strong className="mono">{provider.name}</strong>
-          <span className="status-badge status-tone-neutral kind-badge">{provider.kind}</span>
-        </div>
-        <div className="provider-meta">
-          <span className="mono">{provider.base_url ?? "—"}</span>
-          <span>凭据 {provider.credentials ?? provider.name}</span>
-          {credentialHint && (
-            <span>
-              密钥 <span className="mono">{credentialHint}</span>
-            </span>
-          )}
-        </div>
-        <div className="provider-actions">
-          <button className="link" onClick={startAdd}>
-            <PlusIcon size={14} weight="bold" aria-hidden />
-            添加模型
-          </button>
-          <button className="link" onClick={() => setKeyEditing((open) => !open)}>
+    <section className="panel provider-detail" aria-label={`Provider ${provider.name} 详情`}>
+      <header className="detail-head">
+        <h2 className="mono">{provider.name}</h2>
+        <span className="status-badge status-tone-neutral kind-badge">{provider.kind}</span>
+        <div className="detail-actions">
+          <span className="inline-field">
+            <span className="field-label">启用</span>
+            <Switch.Root
+              className="switch"
+              checked={provider.enabled !== false}
+              onCheckedChange={(next) => void toggleProvider(next)}
+              aria-label={`启用 ${provider.name}`}
+            >
+              <Switch.Thumb className="switch-thumb" />
+            </Switch.Root>
+          </span>
+          <button type="button" className="link" onClick={() => setKeyEditing((open) => !open)}>
             <KeyIcon size={14} weight="bold" aria-hidden />
             更新密钥
           </button>
           {confirmDelete ? (
             <>
               <button
+                type="button"
                 className="link danger"
                 title={`删除 ${provider.name} 及其 ${models.length} 个模型`}
                 onClick={() => void removeProviderWithModels()}
               >
                 确认删除
               </button>
-              <button className="link" onClick={() => setConfirmDelete(false)}>
+              <button type="button" className="link" onClick={() => setConfirmDelete(false)}>
                 取消
               </button>
             </>
           ) : (
-            <button className="link danger" onClick={() => setConfirmDelete(true)}>
+            <button type="button" className="link danger" onClick={() => setConfirmDelete(true)}>
               <TrashIcon size={14} weight="bold" aria-hidden />
               删除
             </button>
@@ -391,79 +564,117 @@ function ProviderSection({
         </div>
       )}
 
-      <table>
-        <thead>
-          <tr>
-            <th>模型 ID</th>
-            <th>API 模型名</th>
-            <th>上下文</th>
-            <th>参数</th>
-            <th>工具</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
+      <form className="connection-form" onSubmit={saveConnection} aria-label="连接配置">
+        <div className="section-head">
+          <h3 className="embed-title">连接</h3>
+        </div>
+        <div className="connection-grid">
+          <label>
+            协议类型
+            <select value={connectionKind} onChange={(change) => setConnectionKind(change.target.value)}>
+              {kinds.map((entry) => (
+                <option key={entry.kind} value={entry.kind}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Base URL
+            <input
+              value={connectionUrl}
+              onChange={(change) => setConnectionUrl(change.target.value)}
+              placeholder="http://localhost:8001/v1"
+            />
+          </label>
+        </div>
+        <dl className="kv">
+          <dt>凭据 profile</dt>
+          <dd className="mono">{provider.credentials ?? provider.name}</dd>
+          <dt>密钥</dt>
+          <dd className="mono">{credentialHint ?? "未配置"}</dd>
+        </dl>
+        {connectionDirty && (
+          <button type="submit" disabled={savingConnection}>
+            保存连接
+          </button>
+        )}
+      </form>
+
+      <section aria-label="模型列表">
+        <div className="section-head">
+          <h3 className="embed-title">模型列表</h3>
+          <button type="button" className="link" onClick={startAdd}>
+            <PlusIcon size={14} weight="bold" aria-hidden />
+            添加模型
+          </button>
+        </div>
+        <ul className="model-list">
           {models.map((model) => {
             const summary = parameterSummary(model.parameters);
+            const context = formatContext(model.context_window);
             const test = tests[model.id];
             return (
-              <Fragment key={model.id}>
-                <tr>
-                  <td className="mono">{model.id}</td>
-                  <td className="mono">{model.model ?? model.id}</td>
-                  <td>{model.context_window ?? "未知"}</td>
-                  <td className={summary ? "mono params-cell" : undefined}>{summary ?? "—"}</td>
-                  <td>{model.supports_tools ? "是" : "否"}</td>
-                  <td className="row-actions">
-                    <button className="link" onClick={() => startEdit(model)}>
-                      <PencilSimpleIcon size={14} weight="bold" aria-hidden />
-                      编辑
-                    </button>
-                    <button className="link" onClick={() => void runTest(model.id)}>
+              <li key={model.id} className="model-item">
+                <div className="model-row">
+                  <div className="model-main">
+                    <span className="mono model-id">{model.id}</span>
+                    {context && <span className="status-badge status-tone-neutral model-badge">{context}</span>}
+                    {model.supports_tools && (
+                      <span className="status-badge status-tone-neutral model-badge">工具</span>
+                    )}
+                    {summary && <span className="model-params mono">{summary}</span>}
+                  </div>
+                  <div className="model-actions">
+                    <Switch.Root
+                      className="switch"
+                      checked={model.enabled !== false}
+                      onCheckedChange={(next) => void toggleModel(model, next)}
+                      aria-label={`启用 ${model.id}`}
+                    >
+                      <Switch.Thumb className="switch-thumb" />
+                    </Switch.Root>
+                    <button type="button" className="link" onClick={() => void runTest(model.id)}>
                       <PlayIcon size={14} weight="bold" aria-hidden />
                       测试
                     </button>
-                    <button className="link danger" onClick={() => void removeModel(model.id)}>
+                    <button type="button" className="link" onClick={() => startEdit(model)}>
+                      <PencilSimpleIcon size={14} weight="bold" aria-hidden />
+                      编辑
+                    </button>
+                    <button type="button" className="link danger" onClick={() => void removeModel(model.id)}>
                       删除
                     </button>
-                  </td>
-                </tr>
+                  </div>
+                </div>
                 {test && (
-                  <tr className="test-result-row">
-                    <td colSpan={6}>
-                      {test === "running" ? (
-                        <span className="muted">测试中，真实调用进行中</span>
-                      ) : test.ok ? (
-                        <span className="pass">
-                          通过 <span className="mono">{Math.round(test.latency_ms ?? 0)}ms</span>
-                          {test.usage && (
-                            <span className="muted">
-                              {" "}
-                              tokens {test.usage.prompt_tokens ?? "?"} + {test.usage.completion_tokens ?? "?"}
-                            </span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="fail">
-                          失败 {test.error?.class && <span className="mono">{test.error.class}</span>}{" "}
-                          {test.error?.message ?? "未知错误"}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
+                  <div className="model-test-result">
+                    {test === "running" ? (
+                      <span className="muted">测试中，真实调用进行中</span>
+                    ) : test.ok ? (
+                      <span className="pass">
+                        通过 <span className="mono">{Math.round(test.latency_ms ?? 0)}ms</span>
+                        {test.usage && (
+                          <span className="muted">
+                            {" "}
+                            tokens {test.usage.prompt_tokens ?? "?"} + {test.usage.completion_tokens ?? "?"}
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="fail">
+                        失败 {test.error?.class && <span className="mono">{test.error.class}</span>}{" "}
+                        {test.error?.message ?? "未知错误"}
+                      </span>
+                    )}
+                  </div>
                 )}
-              </Fragment>
+              </li>
             );
           })}
-          {models.length === 0 && (
-            <tr>
-              <td colSpan={6} className="empty">
-                暂无模型
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+          {models.length === 0 && <li className="empty">暂无模型</li>}
+        </ul>
+      </section>
 
       {adding && (
         <form
@@ -548,7 +759,7 @@ function ProviderSection({
         </form>
       )}
       {error && <p className="error">{error}</p>}
-    </div>
+    </section>
   );
 }
 

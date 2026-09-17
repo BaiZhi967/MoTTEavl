@@ -242,7 +242,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
     # ------------------------------------------------------- 资源 CRUD
 
-    def _resource_routes(name: str, validate, *, versioned: bool):
+    def _resource_routes(name: str, validate, *, versioned: bool, key_is_path: bool = False):
         repository = getattr(resources, name)
 
         @application.get(f"/api/v1/{name}")
@@ -277,7 +277,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 return {"deleted": f"{resource_name}@{version}"}
 
         else:
-            path = f"/api/v1/{name}/{{key}}"
+            # 资源键可能自带路径分隔符（如模型 id `Qwen/Qwen2.5-7B`）：整键交给路由，不做路径切分
+            path = f"/api/v1/{name}/{{key:path}}" if key_is_path else f"/api/v1/{name}/{{key}}"
 
             @application.get(path)
             def get_item(key: str):
@@ -342,11 +343,82 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
         return None
 
-    _resource_routes("providers", _validate_provider_resource, versioned=False)
-    _resource_routes("models", _validate_model, versioned=False)
+    _resource_routes("providers", _validate_provider_resource, versioned=False, key_is_path=True)
+    _resource_routes("models", _validate_model, versioned=False, key_is_path=True)
     _resource_routes("datasets", _validate_named_version, versioned=True)
     _resource_routes("scenarios", _validate_named_version, versioned=True)
     _resource_routes("price_tables", _validate_price_table, versioned=True)
+
+    # 读-改-写更新：只接受白名单字段，其余载荷原样保留（put 是整记录覆盖，先合再校验）
+    PROVIDER_UPDATABLE_FIELDS = ("kind", "base_url", "credentials", "api_key_env", "enabled")
+    MODEL_UPDATABLE_FIELDS = (
+        "model", "enabled", "capabilities", "input_modalities", "output_modalities",
+        "supports_tools", "tool_features", "context_window", "max_output_tokens",
+        "reasoning", "parameters", "provenance",
+    )
+
+    @application.put("/api/v1/providers/{name:path}")
+    def update_provider(name: str, body: dict):
+        record = resources.providers.get(name)
+        if record is None:
+            raise HTTPException(status_code=404, detail="provider not found")
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        if "name" in body and body["name"] != name:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": "provider name is immutable"}},
+            )
+        unknown = sorted(set(body) - set(PROVIDER_UPDATABLE_FIELDS) - {"name"})
+        if unknown:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": f"unknown fields: {unknown}"}},
+            )
+        merged = {
+            **record,
+            **{key: body[key] for key in PROVIDER_UPDATABLE_FIELDS if key in body},
+        }
+        if not isinstance(merged.get("enabled"), bool):
+            merged["enabled"] = True
+        invalid = _validate_provider_resource(merged)
+        if invalid is not None:
+            return invalid
+        return resources.providers.put(merged)
+
+    @application.put("/api/v1/models/{model_id:path}")
+    def update_model(model_id: str, body: dict):
+        record = resources.models.get(model_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="model not found")
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        if "id" in body and body["id"] != model_id:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": "model id is immutable"}},
+            )
+        if "provider" in body and body["provider"] != record.get("provider"):
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": "model provider is immutable"}},
+            )
+        unknown = sorted(set(body) - set(MODEL_UPDATABLE_FIELDS) - {"id", "provider"})
+        if unknown:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": f"unknown fields: {unknown}"}},
+            )
+        merged = {
+            **record,
+            **{key: body[key] for key in MODEL_UPDATABLE_FIELDS if key in body},
+        }
+        invalid = _validate_model(merged)
+        if invalid is not None:
+            return invalid
+        return resources.models.put(merged)
 
     @application.get("/api/v1/provider_kinds")
     def list_provider_kinds():
@@ -371,7 +443,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         return {"items": items, "total": len(items)}
 
-    @application.post("/api/v1/models/{model_id}/test")
+    @application.post("/api/v1/models/{model_id:path}/test")
     def test_model(model_id: str, body: dict | None = None):
         """对单个模型做一次最小真实调用（Web 版 live smoke，操作者显式触发）。
 

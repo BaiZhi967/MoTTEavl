@@ -67,6 +67,112 @@ def test_model_crud_validates_contract():
     assert client.get("/api/v1/models/qwen-7b").json()["provider"] == "local-vllm"
 
 
+def test_provider_update_edits_connection_and_toggles_enabled():
+    client, _ = client_with_resources()
+    client.post("/api/v1/providers", json={
+        "name": "local-vllm", "kind": "openai_compatible", "base_url": "http://localhost:8001/v1",
+    })
+    updated = client.put(
+        "/api/v1/providers/local-vllm",
+        json={"base_url": "http://gateway:9000/v1", "credentials": "gateway-profile", "enabled": False},
+    )
+    assert updated.status_code == 200
+    record = client.get("/api/v1/providers/local-vllm").json()
+    assert record["base_url"] == "http://gateway:9000/v1"
+    assert record["credentials"] == "gateway-profile"
+    assert record["enabled"] is False
+    assert client.put("/api/v1/providers/local-vllm", json={"enabled": True}).json()["enabled"] is True
+
+    renamed = client.put("/api/v1/providers/local-vllm", json={"name": "other"})
+    assert renamed.status_code == 422
+    assert client.put("/api/v1/providers/missing", json={"enabled": True}).status_code == 404
+    leaked = client.put("/api/v1/providers/local-vllm", json={"api_key": "sk-123"})
+    assert leaked.status_code == 422
+    assert leaked.json()["error"]["code"] == "CREDENTIALS_REJECTED"
+    invalid = client.put(
+        "/api/v1/providers/local-vllm",
+        json={"kind": "anthropic_messages", "base_url": ""},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "PROVIDER_CONFIG_INVALID"
+
+
+def test_model_update_merges_fields_and_toggles_enabled():
+    client, _ = client_with_resources()
+    client.post("/api/v1/providers", json={
+        "name": "local-vllm", "kind": "openai_compatible", "base_url": "http://localhost:8001/v1",
+    })
+    client.post(
+        "/api/v1/models",
+        json={"id": "qwen-7b", "provider": "local-vllm", "capabilities": {"text": True}, "parameters": {"temperature": 0.2}},
+    )
+    updated = client.put(
+        "/api/v1/models/qwen-7b",
+        json={"parameters": {"temperature": 0.9, "top_p": 0.8}, "enabled": False},
+    )
+    assert updated.status_code == 200
+    record = client.get("/api/v1/models/qwen-7b").json()
+    assert record["parameters"] == {"temperature": 0.9, "top_p": 0.8}
+    assert record["enabled"] is False
+
+    moved = client.put("/api/v1/models/qwen-7b", json={"provider": "other"})
+    assert moved.status_code == 422
+    unknown_field = client.put("/api/v1/models/qwen-7b", json={"unknown_field": 1})
+    assert unknown_field.status_code == 422
+    assert client.put("/api/v1/models/missing", json={"enabled": True}).status_code == 404
+
+
+def test_slash_in_model_id_and_provider_name_is_addressable():
+    """带路径分隔符的资源键（Qwen/Qwen2.5-7B 这类 id）必须整键路由，不能被路径切分。"""
+    client, store = client_with_resources()
+    client.post("/api/v1/providers", json={
+        "name": "gateway/cn", "kind": "openai_compatible", "base_url": "http://localhost:8001/v1",
+    })
+    created = client.post(
+        "/api/v1/models",
+        json={"id": "Qwen/Qwen2.5-7B-Instruct", "provider": "gateway/cn", "capabilities": {"text": True}},
+    )
+    assert created.status_code == 201
+
+    model_path = "/api/v1/models/Qwen/Qwen2.5-7B-Instruct"
+    assert client.get(model_path).json()["provider"] == "gateway/cn"
+    assert client.put(model_path, json={"enabled": False}).json()["enabled"] is False
+    assert client.put(model_path, json={"enabled": True}).json()["enabled"] is True
+    assert client.put("/api/v1/providers/gateway/cn", json={"enabled": False}).json()["enabled"] is False
+    assert client.put(model_path, json={"enabled": True}).status_code == 200
+
+    assert client.delete(model_path).json()["deleted"] == "Qwen/Qwen2.5-7B-Instruct"
+    assert store.models.list() == []
+    assert client.delete("/api/v1/providers/gateway/cn").status_code == 200
+
+
+def test_run_rejects_disabled_provider_and_model():
+    client, _ = client_with_resources()
+    client.post("/api/v1/providers", json={
+        "name": "local-vllm", "kind": "openai_compatible", "base_url": "http://localhost:8001/v1",
+    })
+    client.post(
+        "/api/v1/models",
+        json={"id": "qwen-7b", "provider": "local-vllm", "capabilities": {"text": True}},
+    )
+    client.put("/api/v1/providers/local-vllm", json={"enabled": False})
+    blocked_provider = client.post(
+        "/api/v1/runs",
+        json={"scenario_version": "direct-llm@1", "case_ids": ["case-1"], "manifest": {"provider": "local-vllm"}},
+    )
+    assert blocked_provider.status_code == 422
+    assert blocked_provider.json()["error"]["code"] == "PROVIDER_DISABLED"
+
+    client.put("/api/v1/providers/local-vllm", json={"enabled": True})
+    client.put("/api/v1/models/qwen-7b", json={"enabled": False})
+    blocked_model = client.post(
+        "/api/v1/runs",
+        json={"scenario_version": "direct-llm@1", "case_ids": ["case-1"], "manifest": {"model": "qwen-7b"}},
+    )
+    assert blocked_model.status_code == 422
+    assert blocked_model.json()["error"]["code"] == "MODEL_DISABLED"
+
+
 def test_versioned_scenario_and_dataset_routes():
     client, _ = client_with_resources()
     created = client.post("/api/v1/scenarios", json={"name": "json_extract", "version": "3", "cases": []})

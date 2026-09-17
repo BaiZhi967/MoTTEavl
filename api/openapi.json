@@ -426,6 +426,55 @@
         "summary": "Get Item"
       }
     },
+    "/api/v1/models/{model_id}": {
+      "put": {
+        "operationId": "update_model_api_v1_models__model_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Model"
+      }
+    },
     "/api/v1/models/{model_id}/test": {
       "post": {
         "description": "对单个模型做一次最小真实调用（Web 版 live smoke，操作者显式触发）。\n\n连接、密钥、模型名一次验证：密钥按凭据链解析、绝不进入响应；\nmax_output_tokens=16 封顶费用；报告复用 adapter envelope（已脱敏）。",
@@ -763,6 +812,55 @@
           }
         },
         "summary": "Get Item"
+      }
+    },
+    "/api/v1/providers/{name}": {
+      "put": {
+        "operationId": "update_provider_api_v1_providers__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Provider"
       }
     },
     "/api/v1/runs": {
