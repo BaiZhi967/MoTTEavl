@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getRun, type RunRecord } from "../../api/client";
+import { getReport, getRun, type RunRecord } from "../../api/client";
 import { suiteRoutes } from "../registry";
 
 const ROUTES = suiteRoutes("gsm8k");
@@ -10,11 +10,12 @@ interface Column {
   model: string;
   accuracy: number | null;
   tokens: number;
+  cost: number | null;
   failedCases: string[];
   run: RunRecord;
 }
 
-function collect(run: RunRecord): Column {
+function collect(run: RunRecord, report: { cost?: { total?: number | null } } | null): Column {
   const scores = run.scores ?? [];
   const passed = scores.filter((score) => score.passed);
   const tokens = (run.cases ?? []).reduce((sum, row) => sum + (row.result?.usage?.total_tokens ?? 0), 0);
@@ -23,6 +24,7 @@ function collect(run: RunRecord): Column {
     model: run.model ?? run.id,
     accuracy: scores.length > 0 ? Math.round((passed.length / scores.length) * 100) : null,
     tokens,
+    cost: report?.cost?.total ?? null,
     failedCases: scores.filter((score) => !score.passed).map((score) => score.case_id),
     run,
   };
@@ -36,8 +38,8 @@ export function Gsm8kCompare() {
   const [openCase, setOpenCase] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all(runIds.map((id) => getRun(id)))
-      .then((runs) => setColumns(runs.map(collect)))
+    Promise.all(runIds.map((id) => Promise.all([getRun(id), getReport(id).catch(() => null)])))
+      .then((entries) => setColumns(entries.map(([run, report]) => collect(run, report))))
       .catch((e) => setError(String(e)));
   }, [runIds.join(",")]);
 
@@ -76,7 +78,8 @@ export function Gsm8kCompare() {
           <tbody>
             <tr><td>accuracy</td>{columns.map((c) => <td key={c.runId} className="mono">{c.accuracy == null ? "—" : `${c.accuracy}%`}</td>)}</tr>
             <tr><td>tokens</td>{columns.map((c) => <td key={c.runId} className="mono">{c.tokens}</td>)}</tr>
-            <tr><td>答错题重合</td><td colSpan={columns.length} className="mono">{[...sharedFailed].join(", ") || "无"}</td></tr>
+            <tr><td>成本</td>{columns.map((c) => <td key={c.runId} className="mono">{c.cost == null ? "—" : `¥${c.cost}`}</td>)}</tr>
+            <tr><td>答错题重合</td><td colSpan={Math.max(1, columns.length)} className="mono">{[...sharedFailed].join(", ") || "无"}</td></tr>
           </tbody>
         </table>
 
@@ -96,7 +99,7 @@ export function Gsm8kCompare() {
                     return (
                       <p key={column.runId}>
                         <span className="field-label">{column.model}</span>
-                        <span className="mono">{typeof result?.content === "string" ? result.content : JSON.stringify(result?.content ?? "（无结果）")}</span>
+                        <span className="mono">{typeof result?.content === "string" ? result.content : result?.content != null ? JSON.stringify(result.content) : "（无结果）"}</span>
                       </p>
                     );
                   })}
