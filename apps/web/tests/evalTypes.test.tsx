@@ -304,6 +304,9 @@ describe("Gsm8kCompare", () => {
         { case_id: "case-3", input: { question: "Q3" }, expected: "3" },
       ] } } },
     }));
+    clientMocks.getReport.mockImplementation(async (id: string) =>
+      id === "run-41" ? { cost: { total: 0.42 } } : { cost: { total: null } }
+    );
     render(
       <MemoryRouter initialEntries={["/gsm8k/compare?runs=run-41,run-42"]}>
         <Gsm8kCompare />
@@ -313,9 +316,17 @@ describe("Gsm8kCompare", () => {
     expect(screen.getByText("model-run-42")).toBeTruthy();
     expect(screen.getByText("67%")).toBeTruthy();
     expect(screen.getByText("33%")).toBeTruthy();
+    expect(screen.getByText("¥0.42")).toBeTruthy();
+    expect(screen.getByText("—", { selector: "td" })).toBeTruthy();
     /* 答错题重合单元格与逐题下钻按钮都含 case-2 文本，getByText(/case-2/) 会命中多个元素，按选择器分别断言 */
     expect(screen.getByText("case-2", { selector: "td" })).toBeTruthy();
     expect(screen.getByText("case-2", { selector: "button" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "case-2" }));
+    expect(screen.getByText("Q2")).toBeTruthy();
+    expect(screen.getByText("2", { selector: "span.mono" })).toBeTruthy();
+    /* 无结果回退文案不加引号（JSON.stringify 路径只用于真实对象） */
+    expect(screen.getAllByText("（无结果）").length).toBe(2);
   });
 
   it("缺少 runs 参数时不崩溃", async () => {
@@ -326,5 +337,7 @@ describe("Gsm8kCompare", () => {
     );
     expect(await screen.findByText("GSM8K · 多模型对比")).toBeTruthy();
     expect(screen.getByText("无")).toBeTruthy();
+    /* 空列时 colSpan 至少为 1，避免渲染 colspan="0" */
+    expect(screen.getByText("无").getAttribute("colspan")).toBe("1");
   });
 });
