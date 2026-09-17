@@ -12,6 +12,12 @@ Each nonblank source record must have exactly string `question` and `answer` fie
 
 ## Import and run (no hand-built cases)
 
+### Web 控制台（推荐）
+
+`make dev` 后打开「测试集」页：填官方仓库 40 位 commit 与 license，点「下载并导入」——服务端从 `raw.githubusercontent.com` 拉 `grade_school_math/data/test.jsonl`，源文件存到 `var/datasets/gsm8k/`（已 gitignore），校验后创建 dataset 与 `gsm8k-test-smoke@1` 场景。同版本重复导入幂等，内容冲突返回 409。同页可配置模型档案与可选 `temperature`/`max_tokens` 创建跑测，并在「测试集与进度」表中查看最近 10 次运行的状态与准确率（5 秒轮询）。对应接口：`GET/POST /api/v1/benchmarks/gsm8k`、`/import`、`/runs`。
+
+### CLI（离线/已有本地文件时）
+
 Run from the project directory. Use the same SQLite path/environment for CLI, API and Worker. Stop any Worker before preparing data if you do not want an already-running Worker to start a queued paid job.
 
 ```bash

@@ -18,3 +18,6 @@ var/*.db-*
 
 # 本地 Git worktree
 /.worktrees/
+
+# 测试集受控下载目录（官方数据集源文件）
+var/datasets/
