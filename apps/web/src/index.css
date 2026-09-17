@@ -140,12 +140,6 @@ body {
   color: var(--text-primary);
 }
 
-.tab[data-state="active"] {
-  background: var(--tone-neutral-bg);
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
 .tab[aria-current="page"] {
   background: var(--tone-neutral-bg);
   color: var(--text-primary);

@@ -70,6 +70,18 @@ describe("FallbackResultPage", () => {
     await waitFor(() => expect(screen.getByText("unknown@9")).toBeTruthy());
     expect(screen.getByText(/通过率/)).toBeTruthy();
   });
+
+  it("导出报告对任意终态开放，重新评分仍限 completed", async () => {
+    clientMocks.getRun.mockResolvedValue({ ...RUN, status: "failed" });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-9/result"]}>
+        <FallbackResultPage />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByText("unknown@9")).toBeTruthy());
+    expect((screen.getByRole("button", { name: "导出报告" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "重新评分" }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });
 
 describe("RunsOverviewPage", () => {
@@ -420,6 +432,32 @@ describe("DirectLlmOperate", () => {
     expect(screen.getByText(/已创建 1 个运行/)).toBeTruthy();
     const link = await screen.findByRole("link", { name: /查看批次进度/ });
     expect(link.getAttribute("href")).toBe("/direct-llm/monitor?runs=run-52");
+  });
+
+  it("多选时隐藏的推理等级下拉值不随批生效", async () => {
+    clientMocks.getModels.mockResolvedValue({
+      items: [
+        { id: "glm-4.7", provider: "zhipu", capabilities: {}, reasoning: { supported: true, levels: ["low", "high"], default_level: "high", control: "{}" } },
+        { id: "qwen-max", provider: "zhipu", capabilities: {} },
+      ],
+    });
+    clientMocks.createRun.mockResolvedValue({ id: "run-53", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("选择模型 glm-4.7");
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.change(screen.getByLabelText(/推理等级/), { target: { value: "low" } });
+    /* 加入第二个模型后下拉隐藏，此前的 low 不应写进任一 manifest */
+    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
+    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
+    await waitFor(() => expect(clientMocks.createRun).toHaveBeenCalledTimes(2));
+    for (const call of clientMocks.createRun.mock.calls) {
+      expect(call[0].manifest.reasoning_level).toBeUndefined();
+    }
   });
 });
 
