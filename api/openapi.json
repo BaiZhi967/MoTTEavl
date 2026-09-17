@@ -78,6 +78,99 @@
         "summary": "List Agents"
       }
     },
+    "/api/v1/benchmarks/gsm8k": {
+      "get": {
+        "operationId": "gsm8k_overview_api_v1_benchmarks_gsm8k_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Gsm8K Overview"
+      }
+    },
+    "/api/v1/benchmarks/gsm8k/import": {
+      "post": {
+        "description": "从官方仓库 pinned revision 下载 test.jsonl 并导入（幂等；重复版本冲突返回 409）。",
+        "operationId": "gsm8k_import_api_v1_benchmarks_gsm8k_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gsm8K Import"
+      }
+    },
+    "/api/v1/benchmarks/gsm8k/runs": {
+      "post": {
+        "operationId": "gsm8k_run_api_v1_benchmarks_gsm8k_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gsm8K Run"
+      }
+    },
     "/api/v1/credentials": {
       "get": {
         "operationId": "list_credentials_api_v1_credentials_get",
