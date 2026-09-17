@@ -17,6 +17,7 @@ export interface RunRecord {
   case_ids?: string[];
   cases?: CaseRun[];
   scores?: Score[];
+  model?: string | null;
   parent_run_id?: string;
   cancellation?: { reason?: string };
   error?: any;
