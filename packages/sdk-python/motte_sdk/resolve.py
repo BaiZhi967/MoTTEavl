@@ -112,6 +112,28 @@ def _effective_provider(
         effective["parameters"] = _merge_parameters(
             profile.get("parameters") or {}, manifest.get("parameters") or {}
         )
+        ceiling = _max_output_ceiling(profile)
+        if ceiling is not None:
+            override = (manifest.get("parameters") or {}).get("max_output_tokens")
+            if override is not None and (type(override) is not int or not 0 < override <= ceiling):
+                raise ManifestResolutionError(
+                    "MODEL_CONFIG_INVALID", f"max_output_tokens must be positive and <= model ceiling {ceiling}"
+                )
+            effective["parameters"]["max_output_tokens"] = override if override is not None else ceiling
+            effective["max_output_tokens"] = ceiling
+        else:
+            effective.pop("max_output_tokens", None)
+        from motte_contracts.model import ReasoningProfile
+        from motte_contracts.reasoning import reasoning_patch
+
+        try:
+            reasoning = ReasoningProfile.model_validate(profile.get("reasoning") or {})
+            level = manifest.get("reasoning_level", reasoning.default_level)
+            reasoning_patch(reasoning.model_dump(), level)
+        except ValueError as error:
+            raise ManifestResolutionError("MODEL_CONFIG_INVALID", str(error)) from error
+        effective["reasoning"] = deepcopy(reasoning.model_dump())
+        effective["reasoning_level"] = level
         effective["price_table"] = _resolve_price_table(model_ref, connection, manifest, resources)
     elif "model" not in effective:
         # 兼容旧 payload：连接里带 model 的继续可用；不带的交给 strict 校验报错
@@ -124,6 +146,16 @@ def _merge_parameters(profile_params: dict[str, Any], manifest_params: dict[str,
     merged = {k: v for k, v in profile_params.items() if v is not None}
     merged.update({k: v for k, v in manifest_params.items() if v is not None})
     return merged
+
+
+def _max_output_ceiling(profile: dict[str, Any]) -> int | None:
+    """Canonical non-null value wins; legacy is only a fallback."""
+    ceiling = profile.get("max_output_tokens")
+    if ceiling is None:
+        ceiling = (profile.get("parameters") or {}).get("max_output_tokens")
+    if ceiling is not None and (type(ceiling) is not int or ceiling <= 0):
+        raise ManifestResolutionError("MODEL_CONFIG_INVALID", "max_output_tokens must be a positive integer")
+    return ceiling
 
 
 def _resolve_price_table(

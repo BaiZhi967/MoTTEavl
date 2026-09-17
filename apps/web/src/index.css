@@ -27,6 +27,14 @@
   --tone-neutral-bg: #efefed;
   --tone-neutral-fg: #5f5e5b;
 
+  --space-none: 0;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --size-full: 100%;
+  --border-width: 1px;
+  --font-label: 13px;
+  --weight-semibold: 600;
+
   /* 字体 */
   --font-sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
@@ -545,8 +553,46 @@ button.link.danger {
   margin-bottom: 0;
 }
 
-.model-add .switch-row {
-  margin-bottom: 4px;
+.model-config-group {
+  flex-basis: var(--size-full);
+  min-width: var(--space-none);
+  margin: var(--space-none);
+  padding: var(--space-md) var(--space-none);
+  border: none;
+  border-top: var(--border-width) solid var(--border);
+}
+
+.model-config-group legend,
+.model-config-group summary {
+  font-size: var(--font-label);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.model-config-group summary {
+  cursor: pointer;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-none);
+}
+
+.model-option .hint {
+  margin: var(--space-none);
+}
+
+.model-option .switch {
+  flex-shrink: var(--space-none);
+}
+
+.model-config-group textarea {
+  box-sizing: border-box;
+  max-width: var(--size-full);
+  resize: vertical;
 }
 
 .icon-btn {
