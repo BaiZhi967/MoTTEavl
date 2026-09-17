@@ -79,6 +79,44 @@ def test_import_conflict_on_same_version(tmp_path, monkeypatch):
     assert conflict.status_code == 409
 
 
+def test_gsm8k_accuracy_helper():
+    from apps.api.app.main import _gsm8k_accuracy
+
+    scores = [{"outcome": "correct"}] * 18 + [{"outcome": "wrong_answer"}] * 2
+    assert _gsm8k_accuracy({"scores": scores}) == 0.9
+    # run 行内无 scores（SQLite 完成态分数存 scores 表）或为空 → None
+    assert _gsm8k_accuracy({"id": "run-1"}) is None
+    assert _gsm8k_accuracy({"scores": []}) is None
+    # 显式传入分数列表（概览路径从 scores 表读取）
+    assert _gsm8k_accuracy({}, scores) == 0.9
+    assert _gsm8k_accuracy({}, scores[:10]) is None
+
+
+def test_overview_reports_accuracy_after_execution(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOTTE_DATASET_DIR", str(tmp_path / "datasets"))
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    resources = InMemoryResourceStore()
+    client = TestClient(create_app(InMemoryRunStore(), resources))
+    assert client.post("/api/v1/benchmarks/gsm8k/import", json={"revision": REVISION, "license": "MIT"}).status_code == 201
+    resources.providers.put({"name": "local", "kind": "openai_compatible",
+                             "base_url": "http://offline.invalid", "max_retries": 0})
+    resources.models.put({"id": "m", "provider": "local", "model": "synthetic-model",
+                          "max_output_tokens": 2048})
+    created = client.post("/api/v1/benchmarks/gsm8k/runs", json={"model": "m"}).json()
+    service = client.app.state.run_service
+
+    # 合成 gold = 案例序号，fake provider 按序号回答 → 全部 correct
+    def invoke(case_id):
+        return {"content": f"reasoning\n#### {int(case_id.rsplit('-', 1)[1])}"}
+
+    result = service.execute(created["id"], provider=invoke)
+    assert result["status"] == "completed"
+    overview = client.get("/api/v1/benchmarks/gsm8k").json()
+    run_row = overview["items"][0]["runs"][0]
+    assert run_row["id"] == created["id"]
+    assert run_row["status"] == "completed" and run_row["accuracy"] == 1.0
+
+
 def test_run_creation_requires_model_and_validates(tmp_path, monkeypatch):
     monkeypatch.setenv("MOTTE_DATASET_DIR", str(tmp_path / "datasets"))
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
