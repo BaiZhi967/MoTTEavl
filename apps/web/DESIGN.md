@@ -102,7 +102,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 
 | 组件 | 规范 |
 |---|---|
-| 应用骨架 | 左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字）+ 右侧全屏工作台（独立滚动，`.page` 通栏铺满工作台、不设最大宽度、禁止居中，padding 16/32） |
+| 应用骨架 | `.app-shell` 使用 fixed 定位与 `inset: var(--space-none)` 固定在视口内，外框不滚动；左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字），不随右侧内容滚动，导航自身超高时内部滚动；右侧全屏工作台独立滚动（`.page` 通栏铺满工作台、不设最大宽度、禁止居中，padding 16/32） |
 | 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）；导航型清单列用 `.panel.list-panel`（240px 固定窄列）——禁止两个内容面板 50/50 平分 |
 | Provider 清单 | 列表头 `.panel-head`（15px 标题 + `icon-btn` 刷新 + link「添加」）；列表项 `.provider-item`（Phosphor Plug 16px + mono 名称 + 会话内测试状态点），选中态同导航 active（`--tone-neutral-bg` + 500 字重），禁用项名称弱化为 `--text-faint` |
 | 测试状态点 | `.state-dot`（8px 圆点）：只映射本次会话内真实测试结果（pass 用 success 前景色 / fail 用 error 前景色），无数据不渲染；禁止装饰性常亮 |
