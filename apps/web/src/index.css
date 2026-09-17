@@ -1170,3 +1170,57 @@ td.row-actions .link {
   background: var(--tone-neutral-bg);
   color: var(--text-faint);
 }
+
+/* ---------- 指标卡与钻取行 ---------- */
+
+.metric-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metric-card {
+  flex: 1 1 140px;
+  min-width: 130px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.metric-card[data-tone="success"] .metric-value {
+  color: var(--tone-success-fg);
+}
+
+.metric-card[data-tone="error"] .metric-value {
+  color: var(--tone-error-fg);
+}
+
+.metric-value {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.metric-label {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.drill-detail {
+  border-left: 3px solid var(--tone-error-fg);
+  background: var(--bg-subtle);
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.drill-detail p {
+  margin: 4px 0;
+}
+
+.drill-detail .field-label {
+  margin-right: 8px;
+}
