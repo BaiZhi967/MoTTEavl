@@ -6,6 +6,7 @@ import { BatchMonitor } from "../src/components/BatchMonitor";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
 import { gridCells } from "../src/evalTypes/gsm8k/grid";
 import { Gsm8kOperate } from "../src/evalTypes/gsm8k/Gsm8kOperate";
+import { Gsm8kResult } from "../src/evalTypes/gsm8k/Gsm8kResult";
 import { RunsOverviewPage } from "../src/pages/RunsOverviewPage";
 
 const clientMocks = vi.hoisted(() => ({
@@ -229,5 +230,55 @@ describe("BatchMonitor", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText(/等待 Worker 领取/)).toBeTruthy();
+  });
+});
+
+const GSM8K_RUN = {
+  id: "run-42",
+  scenario_version: "gsm8k-test-smoke@1",
+  status: "completed",
+  model: "glm-4.7",
+  case_ids: ["case-1", "case-2"],
+  cases: [
+    { case_id: "case-1", result: { content: "72", usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } },
+    { case_id: "case-2", result: { content: "答非所问", error: { class: "extraction", message: "无法解析数字" }, usage: { prompt_tokens: 90, completion_tokens: 30, total_tokens: 120 } } },
+  ],
+  scores: [
+    { case_id: "case-1", outcome: "correct", passed: true },
+    { case_id: "case-2", outcome: "wrong", passed: false },
+  ],
+  manifest: {
+    benchmark_snapshot: {
+      dataset: {
+        cases: [
+          { case_id: "case-1", input: { question: "Natalia 四月卖了 48 个夹子，五月卖了一半。共多少？" }, expected: "72" },
+          { case_id: "case-2", input: { question: "每周存 18 元，四周共多少？" }, expected: "72" },
+        ],
+      },
+    },
+  },
+};
+
+describe("Gsm8kResult", () => {
+  it("渲染指标卡与钻取表，展开失败行看输出与期望", async () => {
+    clientMocks.getRun.mockResolvedValue(GSM8K_RUN);
+    clientMocks.getReport.mockResolvedValue({
+      run_id: "run-42", scenario_version: "gsm8k-test-smoke@1", status: "completed", generated_at: "",
+      summary: { cases: 2, scored: 2, passed: 1, failed: 1, pass_rate: 0.5 },
+      cost: { total: 0.42, price_table_versions: ["v3"] }, scores: [],
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/runs/run-42/result"]}>
+        <Gsm8kResult />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("50%")).toBeTruthy();
+    expect(screen.getByText("¥0.42")).toBeTruthy();
+    expect(screen.getByText("case-2").textContent).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "case-2" }));
+    expect(screen.getByText(/无法解析数字/)).toBeTruthy();
+    expect(screen.getByText(/Natalia|每周存/)).toBeTruthy();
+    expect(screen.getByText(/期望/)).toBeTruthy();
   });
 });

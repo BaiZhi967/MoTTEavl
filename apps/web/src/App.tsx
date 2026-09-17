@@ -7,6 +7,7 @@ import { EVAL_SUITES } from "./evalTypes/registry";
 import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
 import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kMonitor } from "./evalTypes/gsm8k/Gsm8kMonitor";
+import { Gsm8kResult } from "./evalTypes/gsm8k/Gsm8kResult";
 
 const GENERAL_NAV = [
   { to: "/runs", label: "运行", icon: StackIcon },
@@ -51,6 +52,7 @@ export default function App() {
           <Route path="/harnesses" element={<HarnessesPage />} />
           <Route path="/gsm8k" element={<Gsm8kOperate />} />
           <Route path="/gsm8k/monitor" element={<Gsm8kMonitor />} />
+          <Route path="/gsm8k/runs/:runId/result" element={<Gsm8kResult />} />
           <Route path="/runs/:runId/monitor" element={<FallbackMonitorPage />} />
           <Route path="/runs/:runId/result" element={<FallbackResultPage />} />
           <Route path="*" element={<Navigate to="/runs" replace />} />
