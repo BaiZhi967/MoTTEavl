@@ -33,6 +33,7 @@ import {
   type ProviderKindMeta,
   type ProviderRecord,
 } from "../api/client";
+import { formatContext } from "../components/ModelPicker";
 
 /** 目录接口不可用时的兜底：至少能创建本地兼容端点。 */
 const FALLBACK_KINDS: ProviderKindMeta[] = [
@@ -44,20 +45,6 @@ const FALLBACK_KINDS: ProviderKindMeta[] = [
     default_key_env: "OPENAI_API_KEY",
   },
 ];
-
-/** 上下文窗口徽章格式：256000 → 256K、1000000 → 1M，小数最多一位。 */
-function formatContext(contextWindow?: number | null): string | null {
-  if (contextWindow == null) return null;
-  if (contextWindow >= 1_000_000) {
-    const millions = contextWindow / 1_000_000;
-    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
-  }
-  if (contextWindow >= 1_000) {
-    const thousands = contextWindow / 1_000;
-    return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
-  }
-  return String(contextWindow);
-}
 
 /** Provider 管理采用 master-detail：左列清单选中，右列编辑选中 Provider 的连接与模型。 */
 export function ProvidersPage() {
