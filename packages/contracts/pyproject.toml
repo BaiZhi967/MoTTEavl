@@ -2,4 +2,7 @@
 name = "motte-contracts"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.8"]
+dependencies = [
+    "cel-python>=0.5,<0.6",
+    "pydantic>=2.8",
+]

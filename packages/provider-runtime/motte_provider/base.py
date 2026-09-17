@@ -7,6 +7,9 @@ canonical 脱敏与 ProviderCallError 证据携带全部由基类统一处理。
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
+
+from motte_contracts.reasoning import reasoning_patch
 from typing import Any, ClassVar
 
 from motte_contracts.messages import ModelRequest, ModelResponse
@@ -18,13 +21,28 @@ from .pricing import PriceTable, cost_detail, parse_price_table
 from .transport import HTTPTransport, TransportOutcome
 
 
+def validate_output_limit(value: Any) -> int:
+    """max_output_tokens 必须是正整数（bool 不算）；adapter 参数表再约束上限区间。"""
+    if type(value) is not int or value <= 0:
+        raise ValueError("max_output_tokens must be a positive integer")
+    return value
+
+
 def validate_http_provider_config(config: dict[str, Any], supported_parameters: dict[str, Any]) -> None:
     """HTTP provider 通用 strict 预检：形状 + 各自参数表 + 价格表。"""
     for required in ("base_url", "model"):
         if not config.get(required):
             raise ValueError(f"provider config requires {required}")
-    validate_parameters(config.get("parameters") or {}, supported_parameters)
+    params = dict(config.get("parameters") or {})
+    ceiling = config.get("max_output_tokens")
+    if ceiling is not None:
+        validate_output_limit(ceiling)
+        params.setdefault("max_output_tokens", ceiling)
+        if params["max_output_tokens"] > ceiling:
+            raise ValueError(f"max_output_tokens exceeds model ceiling {ceiling}")
+    validate_parameters(params, supported_parameters)
     parse_price_table(config.get("price_table"))
+    reasoning_patch(config.get("reasoning"), config.get("reasoning_level"))
 
 
 class ProviderCallError(ProviderError):
@@ -50,6 +68,9 @@ class BaseHTTPProvider:
         *,
         parameters: dict[str, Any] | None = None,
         price_table: PriceTable | None = None,
+        max_output_tokens: int | None = None,
+        reasoning: dict[str, Any] | None = None,
+        reasoning_level: str | None = None,
         redactor: Callable[[Any], Any] = redact,
     ) -> None:
         params = dict(parameters or {})
@@ -57,6 +78,9 @@ class BaseHTTPProvider:
         self.transport = transport
         self.model = model
         self.parameters = params
+        self.max_output_tokens = validate_output_limit(max_output_tokens) if max_output_tokens is not None else None
+        self.reasoning = deepcopy(reasoning or {})
+        self.reasoning_level = reasoning_level
         self.price_table = price_table
         self._redactor = redactor
         self.calls: list[dict[str, Any]] = []
@@ -83,10 +107,22 @@ class BaseHTTPProvider:
         }
         validate_parameters(request_params, self.SUPPORTED_PARAMETERS)
         merged.update(request_params)
+        # 模型档案 ceiling：canonical top-level（resolve 快照）→ 请求级不得超过；
+        # 请求级未给时以 ceiling 作为默认值落入合并参数。
+        if self.max_output_tokens is not None:
+            requested = merged.get("max_output_tokens")
+            if requested is None:
+                merged["max_output_tokens"] = self.max_output_tokens
+            elif type(requested) is not int or requested <= 0 or requested > self.max_output_tokens:
+                raise ValueError(
+                    f"max_output_tokens must be a positive integer <= model ceiling {self.max_output_tokens}"
+                )
         return merged
 
     def complete(self, request: ModelRequest) -> dict[str, Any]:
         body = self.build_request_body(request)
+        # Final, nonrecursive top-level merge. Validate again immediately before network.
+        body.update(reasoning_patch(self.reasoning, self.reasoning_level))
         try:
             outcome = self.transport.post_json_detailed(self.request_path, body)
         except ProviderError as error:

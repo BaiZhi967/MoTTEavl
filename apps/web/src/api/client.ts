@@ -39,7 +39,15 @@ export interface ModelRecord {
   enabled?: boolean;
   capabilities: Record<string, any>;
   context_window?: number | null;
+  max_output_tokens?: number | null;
+  input_modalities?: string[];
   supports_tools?: boolean;
+  reasoning?: {
+    supported: boolean;
+    levels: string[];
+    control: string | null;
+    default_level?: string | null;
+  };
   parameters?: Record<string, number | null>;
 }
 
