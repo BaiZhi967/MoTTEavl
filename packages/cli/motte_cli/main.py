@@ -81,8 +81,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     backup = sub.add_parser("backup", help="在线备份 SQLite 与 artifacts")
     backup.add_argument("--target", required=True, help="备份目录")
-    backup.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    backup.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
     backup.add_argument("--artifacts-root", default=None, help="artifact 根目录（默认不备份工件）")
+
+    benchmark = sub.add_parser("benchmark", help="GSM8K-20 冒烟基准（导入数据集 / 创建运行）")
+    benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
+    bench_import = benchmark_sub.add_parser("import", help="导入本地 official-format GSM8K JSONL（question/answer 两列）")
+    bench_import.add_argument("--file", required=True, help="official-format test JSONL 路径")
+    bench_import.add_argument("--name", required=True)
+    bench_import.add_argument("--version", required=True)
+    bench_import.add_argument("--revision", required=True, help="官方数据 pinned commit hash")
+    bench_import.add_argument("--license", dest="license_id", required=True)
+    bench_import.add_argument("--synthetic", action="store_true", help="标记为合成冒烟数据（跳过 commit hash 校验）")
+    bench_import.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    bench_run = benchmark_sub.add_parser("run", help="创建 benchmark queued Run（由 Worker 执行）")
+    bench_run.add_argument("--scenario", required=True, help="benchmark scenario 引用，如 gsm8k-20-smoke@1")
+    selection = bench_run.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--provider", help="provider connection name or provider object JSON/@file (not a manifest)")
+    selection.add_argument("--model", help="model profile resource id")
+    bench_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    bench_run.add_argument("--json", action="store_true")
+
 
     restore = sub.add_parser("restore", help="从最新备份恢复（先停 API 与 Worker）")
     restore.add_argument("--source", required=True, help="备份目录")
@@ -130,20 +149,20 @@ def main(argv=None):
         return 0
 
     if args.command == "run":
-        from motte_sdk.resolve import ManifestResolutionError, resolve_manifest
+        from motte_sdk.resolve import ManifestResolutionError, prepare_run
 
         spec = _load_json(args.spec)
         service = _service(args)
         manifest = spec.get("manifest", {})
         try:
-            manifest = resolve_manifest(manifest, _resources(args))
+            manifest, case_ids = prepare_run(spec.get("scenario_version", "default@1"), manifest, spec.get("case_ids", []), _resources(args))
         except ManifestResolutionError as error:
             print(json.dumps({"error": {"code": error.code, "message": str(error)}}, ensure_ascii=False), file=sys.stderr)
             return 2
         run = service.create_run(
             spec.get("scenario_version", "default@1"),
             manifest,
-            spec.get("case_ids", []),
+            case_ids,
         )
         print(json.dumps(run, ensure_ascii=False))
         return 0
@@ -186,6 +205,53 @@ def main(argv=None):
             record_live_smoke(report, args.record)
         print(json.dumps(report, ensure_ascii=False))
         return exit_code
+
+    if args.command == "benchmark":
+        from motte_contracts.gsm8k import import_official_jsonl
+        from motte_sdk.resolve import ManifestResolutionError, prepare_run
+
+        if args.benchmark_command == "import":
+            with open(args.file, "rb") as handle:
+                raw = handle.read()
+            record = import_official_jsonl(
+                raw, name=args.name, version=args.version, revision=args.revision,
+                license_id=args.license_id, synthetic=args.synthetic,
+            )
+            scenario = {
+                "name": f"{args.name}-smoke", "version": args.version,
+                "mode": "direct-llm", "benchmark": record["benchmark"],
+                "dataset": f"{args.name}@{args.version}",
+            }
+            resources = _resources(args)
+            resources.datasets.put(record)
+            resources.scenarios.put(scenario)
+            print(json.dumps({"imported": f"{args.name}@{args.version}",
+                              "scenario": f"{args.name}-smoke@{args.version}",
+                              "cases": len(record["cases"]),
+                              "source_sha256": record["provenance"]["source_sha256"],
+                              "cases_sha256": record["cases_sha256"]}, ensure_ascii=False))
+            return 0
+        name, _, version = args.scenario.rpartition("@")
+        scenario = _resources(args).scenarios.get(name, version)
+        if scenario is None:
+            print(json.dumps({"error": {"code": "SCENARIO_NOT_FOUND",
+                                        "message": f"scenario not found: {args.scenario}"}},
+                             ensure_ascii=False), file=sys.stderr)
+            return 2
+        if args.model:
+            requested = {"model": args.model}
+        else:
+            provider_ref = _load_json(args.provider) if args.provider.startswith(("{", "@")) else args.provider
+            requested = {"provider": provider_ref}
+        try:
+            manifest, case_ids = prepare_run(args.scenario, requested, [], _resources(args))
+        except ManifestResolutionError as error:
+            print(json.dumps({"error": {"code": error.code, "message": str(error)}},
+                             ensure_ascii=False), file=sys.stderr)
+            return 2
+        run = _service(args).create_run(args.scenario, manifest, case_ids)
+        print(json.dumps(run, ensure_ascii=False))
+        return 0
 
     if args.command == "credentials":
         from motte_provider import credentials as store

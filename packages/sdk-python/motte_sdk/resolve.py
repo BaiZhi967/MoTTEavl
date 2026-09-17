@@ -14,6 +14,7 @@ from copy import deepcopy
 from typing import Any
 
 from motte_provider.config import validate_provider_config
+from motte_provider.capabilities import UnsupportedParameterError
 
 _SECRET_KEYS = {
     "api_key", "api-key", "x-api-key", "authorization", "password", "token",
@@ -74,6 +75,46 @@ def resolve_manifest(manifest: dict[str, Any], resources: Any) -> dict[str, Any]
     if effective is not None:
         resolved["provider"] = effective
     return resolved
+
+
+def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resources: Any):
+    """Shared creation preflight; benchmark resources expand once, never in Worker."""
+    from motte_contracts.gsm8k import is_benchmark
+    from motte_sdk.benchmark import resolve_benchmark_manifest
+
+    manifest = deepcopy(manifest or {})
+    if find_secret_paths(manifest):
+        raise ManifestResolutionError("CREDENTIALS_REJECTED", "plaintext credentials are not accepted")
+    if any(k in manifest for k in ("benchmark_snapshot", "benchmark_provenance", "benchmark_cases")):
+        raise ManifestResolutionError("SNAPSHOT_RESERVED", "benchmark snapshots are generated at creation")
+    name, sep, version = scenario_version.rpartition("@")
+    scenario = resources.scenarios.get(name, version) if sep else None
+    benchmark = scenario is not None and is_benchmark(scenario)
+    try:
+        if benchmark:
+            manifest = resolve_benchmark_manifest(scenario, manifest, resources)
+        resolved = resolve_manifest(manifest, resources)
+        ids = list(case_ids or [])
+        if benchmark:
+            selected = list(manifest["cases"])
+            if ids and ids != selected:
+                raise ValueError("benchmark case selection is fixed by the preset")
+            ids = selected
+            provider = resolved.get("provider")
+            if not isinstance(provider, dict):
+                raise ValueError("benchmark requires a provider or model resource")
+            preset = manifest["benchmark_provenance"]
+            provider["max_retries"] = preset["max_retries"]
+            provider["parameters"] = {**(provider.get("parameters") or {}),
+                                      "max_output_tokens": preset["max_output_tokens"]}
+        validate_resolved_manifest(resolved)
+    except ManifestResolutionError:
+        raise
+    except UnsupportedParameterError as error:
+        raise ManifestResolutionError("UNSUPPORTED_PARAMETER", str(error)) from error
+    except ValueError as error:
+        raise ManifestResolutionError("RUN_CONFIG_INVALID", str(error)) from error
+    return resolved, ids
 
 
 def _connection_for(provider_ref: Any, model_ref: Any, resources: Any) -> dict[str, Any] | None:
