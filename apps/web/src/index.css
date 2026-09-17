@@ -314,6 +314,13 @@ button.link.danger {
   color: var(--tone-error-fg);
 }
 
+/* 路由内链接（react-router Link）沿用 link 语气：info 前景色 */
+a.link {
+  color: var(--tone-info-fg);
+  font-size: 13px;
+  text-decoration: underline;
+}
+
 /* ---------- Provider master-detail（清单窄列 + 详情卡） ---------- */
 
 .kind-badge {
