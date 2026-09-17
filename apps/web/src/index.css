@@ -1240,3 +1240,24 @@ td.row-actions .link {
 .compare-case-list li {
   display: inline-block;
 }
+
+/* ---------- Direct LLM case 流式卡片 ---------- */
+
+.case-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.case-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--bg-subtle);
+  font-size: 13px;
+}
+
+.case-card p {
+  margin: 2px 0;
+}

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import React from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BatchMonitor } from "../src/components/BatchMonitor";
+import { DirectLlmOperate, DirectLlmResult } from "../src/evalTypes/directllm/DirectLlmPages";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
 import { gridCells } from "../src/evalTypes/gsm8k/grid";
 import { Gsm8kCompare } from "../src/evalTypes/gsm8k/Gsm8kCompare";
@@ -13,6 +14,7 @@ import { RunsOverviewPage } from "../src/pages/RunsOverviewPage";
 const clientMocks = vi.hoisted(() => ({
   getRuns: vi.fn(),
   getRun: vi.fn(),
+  createRun: vi.fn(),
   cancelRun: vi.fn(),
   retryRun: vi.fn(),
   rescoreRun: vi.fn(),
@@ -339,5 +341,84 @@ describe("Gsm8kCompare", () => {
     expect(screen.getByText("无")).toBeTruthy();
     /* 空列时 colSpan 至少为 1，避免渲染 colspan="0" */
     expect(screen.getByText("无").getAttribute("colspan")).toBe("1");
+  });
+});
+
+describe("DirectLlmOperate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clientMocks.getModels.mockResolvedValue({
+      items: [
+        { id: "glm-4.7", provider: "zhipu", capabilities: {}, reasoning: { supported: true, levels: ["low", "high"], default_level: "high", control: "{}" } },
+      ],
+    });
+  });
+
+  it("选模型填 case 后按 manifest.model 创建并跳批次过程页", async () => {
+    clientMocks.createRun.mockResolvedValue({ id: "run-51", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("选择模型 glm-4.7");
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1, case-2" } });
+    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
+    await waitFor(() => expect(clientMocks.createRun).toHaveBeenCalledWith({
+      scenario_version: "direct-llm@1",
+      manifest: { model: "glm-4.7" },
+      case_ids: ["case-1", "case-2"],
+    }));
+    /* createRun 断言通过时 promise 可能尚未落地，跳转需另行等待 */
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/direct-llm/monitor?runs=run-51"));
+  });
+
+  it("个别模型失败不阻塞整批，错误就地显示且提供批次入口", async () => {
+    clientMocks.getModels.mockResolvedValue({
+      items: [
+        { id: "glm-4.7", provider: "zhipu", capabilities: {} },
+        { id: "qwen-max", provider: "zhipu", capabilities: {} },
+      ],
+    });
+    clientMocks.createRun
+      .mockRejectedValueOnce(new Error("MODEL_DISABLED"))
+      .mockResolvedValueOnce({ id: "run-52", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("选择模型 glm-4.7");
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
+    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
+    expect(await screen.findByText(/MODEL_DISABLED/)).toBeTruthy();
+    expect(screen.getByTestId("location").textContent).toBe("/direct-llm");
+    expect(screen.getByText(/已创建 1 个运行/)).toBeTruthy();
+    const link = await screen.findByRole("link", { name: /查看批次进度/ });
+    expect(link.getAttribute("href")).toBe("/direct-llm/monitor?runs=run-52");
+  });
+});
+
+describe("DirectLlmResult", () => {
+  it("期望对比钻取", async () => {
+    clientMocks.getRun.mockResolvedValue({
+      id: "run-51", scenario_version: "direct-llm@1", status: "completed", model: "glm-4.7",
+      case_ids: ["case-1"],
+      cases: [{ case_id: "case-1", result: { content: "42" }, expected: 42 }],
+      scores: [{ case_id: "case-1", passed: false }],
+    });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/runs/run-51/result"]}>
+        <DirectLlmResult />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByText("case-1")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "case-1" }));
+    expect(screen.getByText(/期望/)).toBeTruthy();
   });
 });
