@@ -635,7 +635,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                               | {"synthetic": dataset.get("provenance", {}).get("synthetic", False)},
                 "cases": len(dataset.get("cases", ())),
                 "runs": [{"id": run["id"], "status": run["status"], "created_at": run.get("created_at"),
-                          "accuracy": _gsm8k_accuracy(run)} for run in runs[:10]],
+                          "accuracy": _gsm8k_accuracy(run, service.store.scores.list_for_run(run["id"]))}
+                         for run in runs[:10]],
             })
         return {"items": presets, "total": len(presets)}
 
@@ -733,10 +734,10 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     return application
 
 
-def _gsm8k_accuracy(run: dict[str, Any]) -> float | None:
-    scores = run.get("scores") or []
-    correct = sum(1 for score in scores if score.get("outcome") == "correct")
-    return round(correct / 20, 4) if len(scores) == 20 else None
+def _gsm8k_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = None) -> float | None:
+    rows = scores if scores is not None else (run.get("scores") or [])
+    correct = sum(1 for score in rows if score.get("outcome") == "correct")
+    return round(correct / 20, 4) if len(rows) == 20 else None
 
 
 def _build_report(run: dict[str, Any]) -> dict[str, Any]:
