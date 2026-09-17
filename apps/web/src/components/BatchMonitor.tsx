@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { cancelRun, getRun, retryRun, type RunRecord } from "../api/client";
+import { cancelRun, getRun, modelLabel, retryRun, type RunRecord } from "../api/client";
 import { StatusBadge } from "./StatusBadge";
 import { RunProgress } from "./RunProgress";
 import { countDone, isTerminal, useRunEvents } from "../hooks/useRunEvents";
@@ -40,7 +40,7 @@ function BatchRow({ runId, resultPath, renderDetail }: {
         <button type="button" className="link" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
           {runId}
         </button>
-        <span className="mono">{run?.model ?? "—"}</span>
+        <span className="mono">{modelLabel(run) ?? "—"}</span>
         <StatusBadge status={current} />
         <RunProgress done={done} total={total} />
         {terminal ? (

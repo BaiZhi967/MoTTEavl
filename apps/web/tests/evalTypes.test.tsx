@@ -26,7 +26,11 @@ const clientMocks = vi.hoisted(() => ({
   getModels: vi.fn(),
   subscribeRunEvents: vi.fn(() => () => undefined),
 }));
-vi.mock("../src/api/client", () => clientMocks);
+/* 保留真实导出（如 modelLabel 纯函数），仅以 mock 覆盖网络调用。 */
+vi.mock("../src/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api/client")>()),
+  ...clientMocks,
+}));
 
 /** 当前 location 探针，供跳转断言；本文件后续套件用例复用。 */
 function LocationProbe() {
@@ -127,7 +131,7 @@ describe("Gsm8kOperate", () => {
     fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
     fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
     await waitFor(() => expect(clientMocks.createBenchmarkRun).toHaveBeenCalledTimes(2));
-    expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({ model: "glm-4.7" });
+    expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({ model: "glm-4.7", scenario: "gsm8k-test-smoke@1" });
     expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-42,run-43");
   });
 
@@ -199,9 +203,11 @@ describe("gridCells", () => {
 });
 
 describe("BatchMonitor", () => {
-  it("全部终态后显示对比入口与单个结果链接", async () => {
+  it("全部终态后显示对比入口与单个结果链接，模型列从 manifest 摘要", async () => {
+    /* 详情端点不回顶层 model（仅列表端点回）；两分支各覆盖一次 */
     clientMocks.getRun.mockImplementation(async (id: string) => ({
-      id, scenario_version: "gsm8k-test-smoke@1", status: "completed", model: id,
+      id, scenario_version: "gsm8k-test-smoke@1", status: "completed",
+      manifest: id === "run-42" ? { model: "glm-4.7" } : { provider: { model: "qwen-max" } },
       case_ids: ["c1"], cases: [{ case_id: "c1", result: {} }], scores: [],
     }));
     render(
@@ -216,6 +222,8 @@ describe("BatchMonitor", () => {
     );
     const compare = await screen.findByRole("link", { name: /查看对比结果/ });
     expect(compare.getAttribute("href")).toBe("/gsm8k/compare?runs=run-42,run-43");
+    expect(screen.getByText("glm-4.7", { selector: "span.mono" })).toBeTruthy();
+    expect(screen.getByText("qwen-max", { selector: "span.mono" })).toBeTruthy();
     const idToggle = screen.getByRole("button", { name: "run-42" });
     fireEvent.click(idToggle);
     expect(idToggle.getAttribute("aria-expanded")).toBe("true");
@@ -225,7 +233,8 @@ describe("BatchMonitor", () => {
 
   it("排队中显示 Worker 提示", async () => {
     clientMocks.getRun.mockResolvedValue({
-      id: "run-45", scenario_version: "gsm8k-test-smoke@1", status: "queued", model: "m",
+      id: "run-45", scenario_version: "gsm8k-test-smoke@1", status: "queued",
+      manifest: { model: "m" },
       case_ids: ["c1"], cases: [], scores: [],
     });
     render(
@@ -241,7 +250,6 @@ const GSM8K_RUN = {
   id: "run-42",
   scenario_version: "gsm8k-test-smoke@1",
   status: "completed",
-  model: "glm-4.7",
   case_ids: ["case-1", "case-2", "case-3"],
   cases: [
     { case_id: "case-1", result: { content: "72", usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } },
@@ -253,6 +261,7 @@ const GSM8K_RUN = {
     { case_id: "case-3", outcome: "not_attempted", passed: false },
   ],
   manifest: {
+    model: "glm-4.7",
     benchmark_snapshot: {
       dataset: {
         cases: [
@@ -295,17 +304,20 @@ describe("Gsm8kCompare", () => {
       id,
       scenario_version: "gsm8k-test-smoke@1",
       status: "completed",
-      model: `model-${id}`,
       case_ids: ["case-1", "case-2", "case-3"],
       cases: [],
       scores: id === "run-41"
         ? [{ case_id: "case-1", passed: true }, { case_id: "case-2", passed: false }, { case_id: "case-3", passed: true }]
         : [{ case_id: "case-1", passed: true }, { case_id: "case-2", passed: false }, { case_id: "case-3", passed: false }],
-      manifest: { benchmark_snapshot: { dataset: { cases: [
-        { case_id: "case-1", input: { question: "Q1" }, expected: "1" },
-        { case_id: "case-2", input: { question: "Q2" }, expected: "2" },
-        { case_id: "case-3", input: { question: "Q3" }, expected: "3" },
-      ] } } },
+      /* 详情端点不回顶层 model；run-41 走 manifest.model、run-42 走 manifest.provider.model */
+      manifest: {
+        ...(id === "run-41" ? { model: "model-run-41" } : { provider: { model: "model-run-42" } }),
+        benchmark_snapshot: { dataset: { cases: [
+          { case_id: "case-1", input: { question: "Q1" }, expected: "1" },
+          { case_id: "case-2", input: { question: "Q2" }, expected: "2" },
+          { case_id: "case-3", input: { question: "Q3" }, expected: "3" },
+        ] } },
+      },
     }));
     clientMocks.getReport.mockImplementation(async (id: string) =>
       id === "run-41" ? { cost: { total: 0.42 } } : { cost: { total: null } }
@@ -406,9 +418,10 @@ describe("DirectLlmOperate", () => {
 });
 
 describe("DirectLlmResult", () => {
-  it("期望对比钻取", async () => {
+  it("期望对比钻取，模型列从 manifest 摘要", async () => {
     clientMocks.getRun.mockResolvedValue({
-      id: "run-51", scenario_version: "direct-llm@1", status: "completed", model: "glm-4.7",
+      id: "run-51", scenario_version: "direct-llm@1", status: "completed",
+      manifest: { model: "glm-4.7" },
       case_ids: ["case-1"],
       cases: [{ case_id: "case-1", result: { content: "42" }, expected: 42 }],
       scores: [{ case_id: "case-1", passed: false }],
@@ -419,6 +432,7 @@ describe("DirectLlmResult", () => {
       </MemoryRouter>
     );
     await waitFor(() => expect(screen.getByText("case-1")).toBeTruthy());
+    expect(screen.getByText("glm-4.7", { selector: ".metric-value" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "case-1" }));
     expect(screen.getByText(/期望/)).toBeTruthy();
   });
