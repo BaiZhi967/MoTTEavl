@@ -28,6 +28,11 @@ export function DirectLlmOperate() {
     getModels().then((payload) => setModels(payload.items)).catch(() => undefined);
   }, []);
 
+  /* 推理等级下拉只在唯一选中模型时可见；离开该状态时清空，避免隐藏值批量生效。 */
+  useEffect(() => {
+    if (selected.length !== 1) setReasoningLevel("");
+  }, [selected.length]);
+
   const selectedModel = models.find((model) => selected.length === 1 && model.id === selected[0]);
   const ceiling = selectedModel?.max_output_tokens ?? null;
 

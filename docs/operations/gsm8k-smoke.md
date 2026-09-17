@@ -14,7 +14,7 @@ Each nonblank source record must have exactly string `question` and `answer` fie
 
 ### Web 控制台（推荐）
 
-`make dev` 后打开「测试集」页：填官方仓库 40 位 commit 与 license，点「下载并导入」——服务端从 `raw.githubusercontent.com` 拉 `grade_school_math/data/test.jsonl`，源文件存到 `var/datasets/gsm8k/`（已 gitignore），校验后创建 dataset 与 `gsm8k-test-smoke@1` 场景。同版本重复导入幂等，内容冲突返回 409。同页可配置模型档案与可选 `temperature`/`max_tokens` 创建跑测，并在「测试集与进度」表中查看最近 10 次运行的状态与准确率（5 秒轮询）。对应接口：`GET/POST /api/v1/benchmarks/gsm8k`、`/import`、`/runs`。
+`make dev` 后打开 `/gsm8k` 操作页：数据集卡展示当前 pinned 数据集（场景名、题数、revision 前缀）；尚无数据集时页面即导入表单，填官方仓库 40 位 commit 与 license，点「下载并导入」——服务端从 `raw.githubusercontent.com` 拉 `grade_school_math/data/test.jsonl`，源文件存到 `var/datasets/gsm8k/`（已 gitignore），校验后创建 dataset 与 `gsm8k-test-smoke@1` 场景。同版本重复导入幂等，内容冲突返回 409。跑测参数卡为 preset 固定值只读展示（题数 / 输出上限 1024 / 零重试），不提供 `temperature`/`max_tokens` 配置。模型卡（ModelPicker）按 Provider 分组多选，发起后为每个模型创建一个 run（个别创建失败就地列示，不阻塞整批），自动进入 `/gsm8k/monitor` 批次过程页：每个 run 一行（ID、模型、状态、进度、取消/重试），展开可见 20 格逐题网格与 SSE 实时事件流。全部终态后出现「查看对比结果」入口（`/gsm8k/compare`，accuracy / tokens / 成本 / 答错题重合）；单 run 指标卡与逐题钻取在 `/gsm8k/runs/{id}/result`。对应接口：`GET/POST /api/v1/benchmarks/gsm8k`、`/import`、`/runs`。
 
 ### CLI（离线/已有本地文件时）
 

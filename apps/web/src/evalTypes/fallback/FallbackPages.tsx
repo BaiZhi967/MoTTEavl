@@ -114,6 +114,7 @@ export function FallbackResultPage() {
                   setError(String(e));
                 }
               }}
+              disabled={run?.status !== "completed" && !isTerminal(run?.status ?? null)}
             >
               导出报告
             </button>
