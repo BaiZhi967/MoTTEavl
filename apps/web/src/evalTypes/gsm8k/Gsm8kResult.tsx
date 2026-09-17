@@ -5,9 +5,12 @@ import { MetricCards } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { StatusBadge } from "../../components/StatusBadge";
 
+/* 词汇表对齐真实 scorer（packages/evaluators/motte_eval/gsm8k.py）五种 outcome。 */
 const OUTCOME_LABELS: Record<string, { label: string; tone: "success" | "error" | "neutral" }> = {
   correct: { label: "答对", tone: "success" },
-  wrong: { label: "答错", tone: "error" },
+  wrong_answer: { label: "答错", tone: "error" },
+  parse_failure: { label: "解析失败", tone: "error" },
+  call_failed: { label: "调用失败", tone: "error" },
   not_attempted: { label: "未尝试", tone: "neutral" },
 };
 
@@ -22,11 +25,17 @@ export function Gsm8kResult() {
   const { runId = "" } = useParams();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [cost, setCost] = useState<number | null>(null);
+  const [priceTable, setPriceTable] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     getRun(runId).then(setRun).catch((e) => setError(String(e)));
-    getReport(runId).then((report) => setCost(report.cost?.total ?? null)).catch(() => undefined);
+    getReport(runId)
+      .then((report) => {
+        setCost(report.cost?.total ?? null);
+        setPriceTable(report.cost?.price_table_versions?.[0] ?? null);
+      })
+      .catch(() => undefined);
   }, [runId]);
 
   if (error) return <div className="page"><section className="panel detail"><p className="error">{error}</p></section></div>;
@@ -91,7 +100,7 @@ export function Gsm8kResult() {
         <MetricCards items={[
           { label: `accuracy · ${passed}/${scores.length}`, value: accuracy == null ? "—" : `${accuracy}%`, tone: "success" },
           { label: `tokens（输入 ${usage.prompt} + 输出 ${usage.completion}）`, value: String(usage.prompt + usage.completion), tone: "neutral" },
-          { label: "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
+          { label: priceTable ? `成本 · pt ${priceTable}` : "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
           { label: `口径（选中 ${run.case_ids?.length ?? 0} · 应答 ${attempted}）`, value: `${passed}/${scores.length}`, tone: "neutral" },
         ]} />
         <CaseDrillTable rows={rows} />

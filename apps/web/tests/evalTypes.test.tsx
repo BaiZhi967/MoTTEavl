@@ -186,18 +186,20 @@ describe("Gsm8kOperate", () => {
 });
 
 describe("gridCells", () => {
-  it("由 scores 推导格子状态，无分为未跑", () => {
+  it("由 scores 推导格子状态：实际错答标红，not_attempted 与无分同为未跑", () => {
     const run = {
-      case_ids: ["c1", "c2", "c3"],
+      case_ids: ["c1", "c2", "c3", "c4"],
       scores: [
         { case_id: "c1", outcome: "correct", passed: true },
-        { case_id: "c2", outcome: "wrong", passed: false },
+        { case_id: "c2", outcome: "wrong_answer", passed: false },
+        { case_id: "c3", outcome: "not_attempted", passed: false },
       ],
     } as any;
     expect(gridCells(run)).toEqual([
       { caseId: "c1", state: "pass" },
       { caseId: "c2", state: "fail" },
       { caseId: "c3", state: "pending" },
+      { caseId: "c4", state: "pending" },
     ]);
   });
 });
@@ -257,7 +259,7 @@ const GSM8K_RUN = {
   ],
   scores: [
     { case_id: "case-1", outcome: "correct", passed: true },
-    { case_id: "case-2", outcome: "wrong", passed: false },
+    { case_id: "case-2", outcome: "wrong_answer", passed: false },
     { case_id: "case-3", outcome: "not_attempted", passed: false },
   ],
   manifest: {
@@ -288,8 +290,12 @@ describe("Gsm8kResult", () => {
     );
     expect(await screen.findByText("33%")).toBeTruthy();
     expect(screen.getByText("¥0.42")).toBeTruthy();
+    expect(screen.getByText("成本 · pt v3")).toBeTruthy();
     expect(screen.getByText(/应答 2/)).toBeTruthy();
     expect(screen.getByText("case-2").textContent).toBeTruthy();
+    /* 词汇表对齐真实 scorer：wrong_answer 显示答错，not_attempted 显示未尝试 */
+    expect(screen.getByText("答错", { selector: ".status-badge" })).toBeTruthy();
+    expect(screen.getByText("未尝试", { selector: ".status-badge" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "case-2" }));
     expect(screen.getByText(/无法解析数字/)).toBeTruthy();
