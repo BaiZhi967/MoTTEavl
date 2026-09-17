@@ -57,3 +57,17 @@ describe("App 骨架", () => {
     await waitFor(() => expect(screen.getByText("Harness 安装情况")).toBeTruthy());
   });
 });
+
+describe("应用路由（收尾）", () => {
+  it("根路径重定向到 GSM8K 专区", async () => {
+    renderWithLocation("/");
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/gsm8k"));
+  });
+
+  it("侧边栏含三个类型入口", () => {
+    renderWithLocation("/gsm8k");
+    expect(screen.getByRole("link", { name: /GSM8K 数学评测/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Direct LLM 评测/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Replay 回放/ })).toBeTruthy();
+  });
+});
