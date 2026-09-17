@@ -139,3 +139,17 @@ interface EvalTypeSuite {
 - 新数据集类型接入（GSM8K 之外的基准导入流程）。
 - 后端批次 / 对照组概念、统计显著性、跨场景聚合。
 - 运行总览分页与后端筛选。
+
+## 14. 范围裁剪记录（2026-09-18 实施后）
+
+以下第一期裁剪经评审接受，作为已确认偏差记录在案（恢复时按本节逐项补齐）：
+
+1. **Direct LLM 场景选择固定 `direct-llm@1`**：当前唯一内置场景，操作页场景输入为只读；变体选择（`replay@1` / `json_extract@1` 之类的多场景下拉）待后续场景库存量出现后再做。
+2. **对比页无耗时行**：后端 run / report 无耗时数据源（无 wall-clock 汇总字段），前端不臆造；待后端补充耗时口径后再加行。
+3. **实际/期望 diff 高亮留后续**：Direct LLM 与 Replay 结果页暂以纯文本并排展示实际与期望，不做字符级 diff 高亮。
+4. **操作页参数不预填档案默认值**：Direct LLM 的 temperature / max_output_tokens / reasoning_level 均从空值起步，不读取模型档案默认值预填。
+
+两个低成本补充已随收尾落地，弥补部分裁剪影响：
+
+- GSM8K 结果页成本卡附带 price_table 版本（`成本 · pt v…`，取 `report.cost.price_table_versions[0]`）。
+- GSM8K 过程页行内展开在逐题网格下方附带运行时间线（复用 `RunTimeline` + `useRunEvents`）。

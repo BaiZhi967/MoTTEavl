@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { getRun, type RunRecord } from "../../api/client";
 import { BatchMonitor } from "../../components/BatchMonitor";
-import { isTerminal } from "../../hooks/useRunEvents";
+import { RunTimeline } from "../../components/RunTimeline";
+import { isTerminal, useRunEvents } from "../../hooks/useRunEvents";
 import { gridCells } from "./grid";
 import { suiteRoutes } from "../registry";
 
@@ -27,6 +28,7 @@ function GridDetail({ run }: { run: RunRecord }) {
 
 function Gsm8kRowDetail({ runId }: { runId: string }) {
   const [run, setRun] = useState<RunRecord | null>(null);
+  const { events } = useRunEvents(runId);
   useEffect(() => {
     let alive = true;
     const load = () => getRun(runId).then((record) => alive && setRun(record)).catch(() => undefined);
@@ -34,7 +36,13 @@ function Gsm8kRowDetail({ runId }: { runId: string }) {
     const timer = setInterval(load, 3000);
     return () => { alive = false; clearInterval(timer); };
   }, [runId]);
-  return run ? <GridDetail run={run} /> : <p className="hint">加载逐题进度…</p>;
+  if (!run) return <p className="hint">加载逐题进度…</p>;
+  return (
+    <>
+      <GridDetail run={run} />
+      <RunTimeline events={events} embedded />
+    </>
+  );
 }
 
 export function Gsm8kMonitor() {
