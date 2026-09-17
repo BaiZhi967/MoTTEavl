@@ -1,6 +1,6 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { ActivityIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
-import { RunsPage } from "./pages/RunsPage";
+import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 import { EVAL_SUITES } from "./evalTypes/registry";
@@ -43,7 +43,7 @@ export default function App() {
       <div className="workbench">
         <Routes>
           <Route path="/" element={<Navigate to="/runs" replace />} />
-          <Route path="/runs" element={<RunsPage />} />
+          <Route path="/runs" element={<RunsOverviewPage />} />
           <Route path="/benchmarks" element={<BenchmarksPage />} />
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
