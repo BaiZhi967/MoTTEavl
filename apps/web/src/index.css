@@ -1225,3 +1225,18 @@ td.row-actions .link {
 .drill-detail .field-label {
   margin-right: 8px;
 }
+
+/* ---------- 多模型对比：逐题下钻横排清单 ---------- */
+
+.compare-case-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compare-case-list li {
+  display: inline-block;
+}

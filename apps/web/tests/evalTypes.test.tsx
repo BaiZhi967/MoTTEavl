@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BatchMonitor } from "../src/components/BatchMonitor";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
 import { gridCells } from "../src/evalTypes/gsm8k/grid";
+import { Gsm8kCompare } from "../src/evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "../src/evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kResult } from "../src/evalTypes/gsm8k/Gsm8kResult";
 import { RunsOverviewPage } from "../src/pages/RunsOverviewPage";
@@ -282,5 +283,48 @@ describe("Gsm8kResult", () => {
     expect(screen.getByText(/无法解析数字/)).toBeTruthy();
     expect(screen.getByText(/Natalia|每周存/)).toBeTruthy();
     expect(screen.getByText(/期望/)).toBeTruthy();
+  });
+});
+
+describe("Gsm8kCompare", () => {
+  it("并排指标与答错重合", async () => {
+    clientMocks.getRun.mockImplementation(async (id: string) => ({
+      id,
+      scenario_version: "gsm8k-test-smoke@1",
+      status: "completed",
+      model: `model-${id}`,
+      case_ids: ["case-1", "case-2", "case-3"],
+      cases: [],
+      scores: id === "run-41"
+        ? [{ case_id: "case-1", passed: true }, { case_id: "case-2", passed: false }, { case_id: "case-3", passed: true }]
+        : [{ case_id: "case-1", passed: true }, { case_id: "case-2", passed: false }, { case_id: "case-3", passed: false }],
+      manifest: { benchmark_snapshot: { dataset: { cases: [
+        { case_id: "case-1", input: { question: "Q1" }, expected: "1" },
+        { case_id: "case-2", input: { question: "Q2" }, expected: "2" },
+        { case_id: "case-3", input: { question: "Q3" }, expected: "3" },
+      ] } } },
+    }));
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/compare?runs=run-41,run-42"]}>
+        <Gsm8kCompare />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("model-run-41")).toBeTruthy();
+    expect(screen.getByText("model-run-42")).toBeTruthy();
+    expect(screen.getByText("67%")).toBeTruthy();
+    expect(screen.getByText("33%")).toBeTruthy();
+    /* 答错题重合单元格与逐题下钻按钮都含 case-2 文本，getByText(/case-2/) 会命中多个元素，按选择器分别断言 */
+    expect(screen.getByText("case-2", { selector: "td" })).toBeTruthy();
+    expect(screen.getByText("case-2", { selector: "button" })).toBeTruthy();
+  });
+
+  it("缺少 runs 参数时不崩溃", async () => {
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/compare"]}>
+        <Gsm8kCompare />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("GSM8K · 多模型对比")).toBeTruthy();
+    expect(screen.getByText("无")).toBeTruthy();
   });
 });
