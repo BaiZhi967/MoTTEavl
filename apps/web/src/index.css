@@ -1058,3 +1058,27 @@ td.row-actions .link {
   margin: 0;
   accent-color: var(--ink);
 }
+
+/* ---------- 类型操作页三卡布局 ---------- */
+
+.operate-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.operate-card {
+  flex: 1 1 280px;
+  min-width: 260px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}

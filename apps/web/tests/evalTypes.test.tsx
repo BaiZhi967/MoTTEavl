@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
+import { Gsm8kOperate } from "../src/evalTypes/gsm8k/Gsm8kOperate";
 import { RunsOverviewPage } from "../src/pages/RunsOverviewPage";
 
 const clientMocks = vi.hoisted(() => ({
@@ -12,6 +13,10 @@ const clientMocks = vi.hoisted(() => ({
   retryRun: vi.fn(),
   rescoreRun: vi.fn(),
   getReport: vi.fn(),
+  getBenchmarkOverview: vi.fn(),
+  importBenchmark: vi.fn(),
+  createBenchmarkRun: vi.fn(),
+  getModels: vi.fn(),
   subscribeRunEvents: vi.fn(() => () => undefined),
 }));
 vi.mock("../src/api/client", () => clientMocks);
@@ -82,5 +87,58 @@ describe("RunsOverviewPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "run-31" }));
     expect(screen.getByTestId("location").textContent).toBe("/runs/run-31/result");
+  });
+});
+
+describe("Gsm8kOperate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clientMocks.getBenchmarkOverview.mockResolvedValue({
+      items: [{ scenario: "gsm8k-test-smoke@1", dataset: "gsm8k-test@1", cases: 20, runs: [] }],
+      total: 1,
+    });
+    clientMocks.getModels.mockResolvedValue({
+      items: [
+        { id: "glm-4.7", provider: "zhipu", capabilities: {}, context_window: 128000 },
+        { id: "qwen-max", provider: "zhipu", capabilities: {}, context_window: 32000 },
+      ],
+    });
+  });
+
+  it("勾选多个模型发起后跳转批次过程页", async () => {
+    clientMocks.createBenchmarkRun
+      .mockResolvedValueOnce({ id: "run-42", status: "queued" })
+      .mockResolvedValueOnce({ id: "run-43", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-smoke@1");
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
+    fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
+    await waitFor(() => expect(clientMocks.createBenchmarkRun).toHaveBeenCalledTimes(2));
+    expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({ model: "glm-4.7" });
+    expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-42,run-43");
+  });
+
+  it("个别模型失败不阻塞整批，错误就地显示", async () => {
+    clientMocks.createBenchmarkRun
+      .mockRejectedValueOnce(new Error("MODEL_DISABLED"))
+      .mockResolvedValueOnce({ id: "run-44", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-smoke@1");
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
+    fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-44"));
+    expect(screen.getByText(/MODEL_DISABLED/)).toBeTruthy();
   });
 });
