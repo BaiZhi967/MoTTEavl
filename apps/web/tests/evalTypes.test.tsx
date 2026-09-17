@@ -9,6 +9,7 @@ import { gridCells } from "../src/evalTypes/gsm8k/grid";
 import { Gsm8kCompare } from "../src/evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "../src/evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kResult } from "../src/evalTypes/gsm8k/Gsm8kResult";
+import { ReplayOperate } from "../src/evalTypes/replay/ReplayPages";
 import { RunsOverviewPage } from "../src/pages/RunsOverviewPage";
 
 const clientMocks = vi.hoisted(() => ({
@@ -420,5 +421,28 @@ describe("DirectLlmResult", () => {
     await waitFor(() => expect(screen.getByText("case-1")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "case-1" }));
     expect(screen.getByText(/期望/)).toBeTruthy();
+  });
+});
+
+describe("ReplayOperate", () => {
+  it("手写 Manifest 作为 inline provider 创建运行", async () => {
+    clientMocks.createRun.mockResolvedValue({ id: "run-61", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/replay"]}>
+        <ReplayOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1" } });
+    fireEvent.change(screen.getByLabelText(/Manifest JSON/), {
+      target: { value: '{"provider":{"kind":"replay","model":"fixture-model"}}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /创建回放/ }));
+    await waitFor(() => expect(clientMocks.createRun).toHaveBeenCalledWith({
+      scenario_version: "replay@1",
+      manifest: { provider: { kind: "replay", model: "fixture-model" } },
+      case_ids: ["case-1"],
+    }));
+    expect(screen.getByTestId("location").textContent).toBe("/replay/monitor?runs=run-61");
   });
 });

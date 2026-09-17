@@ -10,6 +10,7 @@ import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kMonitor } from "./evalTypes/gsm8k/Gsm8kMonitor";
 import { Gsm8kResult } from "./evalTypes/gsm8k/Gsm8kResult";
 import { DirectLlmOperate, DirectLlmMonitor, DirectLlmResult } from "./evalTypes/directllm/DirectLlmPages";
+import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
 
 const GENERAL_NAV = [
   { to: "/runs", label: "运行", icon: StackIcon },
@@ -59,6 +60,9 @@ export default function App() {
           <Route path="/direct-llm" element={<DirectLlmOperate />} />
           <Route path="/direct-llm/monitor" element={<DirectLlmMonitor />} />
           <Route path="/direct-llm/runs/:runId/result" element={<DirectLlmResult />} />
+          <Route path="/replay" element={<ReplayOperate />} />
+          <Route path="/replay/monitor" element={<ReplayMonitor />} />
+          <Route path="/replay/runs/:runId/result" element={<ReplayResult />} />
           <Route path="/runs/:runId/monitor" element={<FallbackMonitorPage />} />
           <Route path="/runs/:runId/result" element={<FallbackResultPage />} />
           <Route path="*" element={<Navigate to="/runs" replace />} />
