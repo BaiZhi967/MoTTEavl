@@ -238,7 +238,7 @@ const GSM8K_RUN = {
   scenario_version: "gsm8k-test-smoke@1",
   status: "completed",
   model: "glm-4.7",
-  case_ids: ["case-1", "case-2"],
+  case_ids: ["case-1", "case-2", "case-3"],
   cases: [
     { case_id: "case-1", result: { content: "72", usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } } },
     { case_id: "case-2", result: { content: "答非所问", error: { class: "extraction", message: "无法解析数字" }, usage: { prompt_tokens: 90, completion_tokens: 30, total_tokens: 120 } } },
@@ -246,6 +246,7 @@ const GSM8K_RUN = {
   scores: [
     { case_id: "case-1", outcome: "correct", passed: true },
     { case_id: "case-2", outcome: "wrong", passed: false },
+    { case_id: "case-3", outcome: "not_attempted", passed: false },
   ],
   manifest: {
     benchmark_snapshot: {
@@ -272,8 +273,9 @@ describe("Gsm8kResult", () => {
         <Gsm8kResult />
       </MemoryRouter>
     );
-    expect(await screen.findByText("50%")).toBeTruthy();
+    expect(await screen.findByText("33%")).toBeTruthy();
     expect(screen.getByText("¥0.42")).toBeTruthy();
+    expect(screen.getByText(/应答 2/)).toBeTruthy();
     expect(screen.getByText("case-2").textContent).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "case-2" }));
