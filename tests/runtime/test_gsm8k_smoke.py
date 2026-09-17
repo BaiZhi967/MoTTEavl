@@ -119,7 +119,7 @@ def test_cli_api_worker_parity_and_no_gold_leakage(tmp_path, capsys, monkeypatch
     assert json.loads(capsys.readouterr().out) == first
     resources = SQLiteResourceStore(db)
     resources.providers.put({'name':'local','kind':'openai_compatible','base_url':'https://offline.invalid', 'max_retries':9})
-    resources.models.put({'id':'m','provider':'local','model':'synthetic-model','parameters':{'max_output_tokens':3}})
+    resources.models.put({'id':'m','provider':'local','model':'synthetic-model','max_output_tokens':2048})
     spec = {'scenario_version':first['scenario'], 'manifest':{'model':'m'}}
     assert main(['run','--spec',json.dumps(spec),'--db',db]) == 0
     cli_run = json.loads(capsys.readouterr().out)
@@ -159,6 +159,51 @@ def test_cli_api_worker_parity_and_no_gold_leakage(tmp_path, capsys, monkeypatch
     assert all(body['max_tokens'] == 1024 for body in captured)
     assert service.rescore(result['id'])['scores'] == result['scores']
     assert len(captured) == 20
+
+
+def test_benchmark_run_rejects_ceiling_below_preset(tmp_path, capsys):
+    """Preset max_output_tokens=1024 overrides profile defaults but never the hard ceiling."""
+    from motte_cli.main import main
+    from fastapi.testclient import TestClient
+    from apps.api.app.main import create_app
+    from motte_storage.resource_store import SQLiteResourceStore
+    from motte_storage.run_store import SQLiteRunStore
+
+    source = tmp_path / 'synthetic.jsonl'
+    source.write_text('\n'.join(json.dumps({'question': f'SYNTHETIC {i}: compute one.',
+        'answer': '#### 1'}) for i in range(25)), encoding='utf-8')
+    db = str(tmp_path / 'runs.db')
+    assert main(['benchmark','import','--file',str(source),'--name','synthetic','--version','1',
+                 '--revision','synthetic','--license','synthetic-only','--synthetic','--db',db]) == 0
+    scenario = json.loads(capsys.readouterr().out)['scenario']
+    resources = SQLiteResourceStore(db)
+    resources.providers.put({'name':'local','kind':'openai_compatible','base_url':'https://offline.invalid'})
+    resources.models.put({'id':'small','provider':'local','model':'synthetic-model','max_output_tokens':3})
+    resources.models.put({'id':'default-only','provider':'local','model':'synthetic-model',
+                          'parameters':{'max_output_tokens':2048}})
+
+    # CLI benchmark run: hard ceiling wins over the preset request.
+    assert main(['benchmark','run','--scenario',scenario,'--model','small','--db',db]) == 2
+    rejected = json.loads(capsys.readouterr().err)
+    assert rejected == {'error': {'code': 'RUN_CONFIG_INVALID',
+                                  'message': 'max_output_tokens exceeds model ceiling 3'}}
+
+    # CLI run --spec shares the same preflight.
+    spec = {'scenario_version':scenario, 'manifest':{'model':'small'}}
+    assert main(['run','--spec',json.dumps(spec),'--db',db]) == 2
+    assert json.loads(capsys.readouterr().err) == rejected
+
+    # API parity: same rejection before any paid call.
+    client = TestClient(create_app(RunService(SQLiteRunStore(db)).store, resources))
+    response = client.post('/api/v1/runs', json=spec)
+    assert response.status_code == 422, response.text
+    assert response.json()['error'] == rejected['error']
+
+    # Profile parameters are defaults: they may sit below the preset and are then overridden.
+    assert main(['benchmark','run','--scenario',scenario,'--model','default-only','--db',db]) == 0
+    run = json.loads(capsys.readouterr().out)
+    assert run['manifest']['provider']['parameters']['max_output_tokens'] == 1024
+    assert run['manifest']['provider']['max_output_tokens'] == 2048
 
 
 def test_restart_skips_durable_results_and_preserves_stop_marker(tmp_path):
