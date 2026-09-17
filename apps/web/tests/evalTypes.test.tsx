@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { BatchMonitor } from "../src/components/BatchMonitor";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
+import { gridCells } from "../src/evalTypes/gsm8k/grid";
 import { Gsm8kOperate } from "../src/evalTypes/gsm8k/Gsm8kOperate";
 import { RunsOverviewPage } from "../src/pages/RunsOverviewPage";
 
@@ -171,5 +173,58 @@ describe("Gsm8kOperate", () => {
           version: "2",
         })
       ));
+  });
+});
+
+describe("gridCells", () => {
+  it("由 scores 推导格子状态，无分为未跑", () => {
+    const run = {
+      case_ids: ["c1", "c2", "c3"],
+      scores: [
+        { case_id: "c1", outcome: "correct", passed: true },
+        { case_id: "c2", outcome: "wrong", passed: false },
+      ],
+    } as any;
+    expect(gridCells(run)).toEqual([
+      { caseId: "c1", state: "pass" },
+      { caseId: "c2", state: "fail" },
+      { caseId: "c3", state: "pending" },
+    ]);
+  });
+});
+
+describe("BatchMonitor", () => {
+  it("全部终态后显示对比入口与单个结果链接", async () => {
+    clientMocks.getRun.mockImplementation(async (id: string) => ({
+      id, scenario_version: "gsm8k-test-smoke@1", status: "completed", model: id,
+      case_ids: ["c1"], cases: [{ case_id: "c1", result: {} }], scores: [],
+    }));
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/monitor"]}>
+        <BatchMonitor
+          runIds={["run-42", "run-43"]}
+          resultPath={(id) => `/gsm8k/runs/${id}/result`}
+          comparePath="/gsm8k/compare?runs=run-42,run-43"
+        />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    const compare = await screen.findByRole("link", { name: /查看对比结果/ });
+    expect(compare.getAttribute("href")).toBe("/gsm8k/compare?runs=run-42,run-43");
+    fireEvent.click(screen.getByRole("link", { name: "run-42" }));
+    expect(screen.getByTestId("location").textContent).toBe("/gsm8k/runs/run-42/result");
+  });
+
+  it("排队中显示 Worker 提示", async () => {
+    clientMocks.getRun.mockResolvedValue({
+      id: "run-45", scenario_version: "gsm8k-test-smoke@1", status: "queued", model: "m",
+      case_ids: ["c1"], cases: [], scores: [],
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/monitor"]}>
+        <BatchMonitor runIds={["run-45"]} resultPath={(id) => `/gsm8k/runs/${id}/result`} />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/等待 Worker 领取/)).toBeTruthy();
   });
 });
