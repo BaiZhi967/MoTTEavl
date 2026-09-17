@@ -1,19 +1,18 @@
-import * as Tabs from "@radix-ui/react-tabs";
-import { ActivityIcon, PlayIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
+import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import { ActivityIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
 import { RunsPage } from "./pages/RunsPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 
-const TABS = [
-  { id: "runs", label: "运行", icon: PlayIcon },
-  { id: "benchmarks", label: "测试集", icon: StackIcon },
-  { id: "providers", label: "Provider 与模型", icon: PlugIcon },
-  { id: "harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
+const GENERAL_NAV = [
+  { to: "/runs", label: "运行", icon: StackIcon },
+  { to: "/providers", label: "Provider 与模型", icon: PlugIcon },
+  { to: "/harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
 ] as const;
 
 export default function App() {
   return (
-    <Tabs.Root defaultValue="runs" orientation="vertical" className="app-shell">
+    <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <h1>
@@ -22,29 +21,28 @@ export default function App() {
           </h1>
           <p>评测控制台</p>
         </div>
-        <Tabs.List className="side-nav" aria-label="主导航">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <Tabs.Trigger key={id} value={id} className="tab">
+        <nav className="side-nav" aria-label="主导航">
+          <p className="nav-group-label">评测类型</p>
+          {/* 类型入口由 evalTypes 注册表驱动，Task 5 填充 */}
+          <p className="nav-group-label">通用</p>
+          {GENERAL_NAV.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} className="tab">
               <Icon size={16} weight="bold" aria-hidden />
               <span>{label}</span>
-            </Tabs.Trigger>
+            </NavLink>
           ))}
-        </Tabs.List>
+        </nav>
       </aside>
       <div className="workbench">
-        <Tabs.Content value="runs">
-          <RunsPage />
-        </Tabs.Content>
-        <Tabs.Content value="benchmarks">
-          <BenchmarksPage />
-        </Tabs.Content>
-        <Tabs.Content value="providers">
-          <ProvidersPage />
-        </Tabs.Content>
-        <Tabs.Content value="harnesses">
-          <HarnessesPage />
-        </Tabs.Content>
+        <Routes>
+          <Route path="/" element={<Navigate to="/runs" replace />} />
+          <Route path="/runs" element={<RunsPage />} />
+          <Route path="/benchmarks" element={<BenchmarksPage />} />
+          <Route path="/providers" element={<ProvidersPage />} />
+          <Route path="/harnesses" element={<HarnessesPage />} />
+          <Route path="*" element={<Navigate to="/runs" replace />} />
+        </Routes>
       </div>
-    </Tabs.Root>
+    </div>
   );
 }
