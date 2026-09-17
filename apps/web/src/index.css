@@ -67,15 +67,18 @@ body {
 /* ---------- 应用骨架：左侧悬浮导航 + 右侧工作台 ---------- */
 
 .app-shell {
+  position: fixed;
+  inset: var(--space-none);
+  overflow: hidden;
   display: flex;
   gap: 16px;
-  height: 100dvh;
   padding: 16px;
   box-sizing: border-box;
   background: var(--bg-canvas);
 }
 
 .sidebar {
+  overflow-y: auto;
   flex: none;
   width: 216px;
   display: flex;
