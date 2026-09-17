@@ -12,6 +12,12 @@
 - **凭据**：本地凭据文件 `~/.motte/credentials.toml`（0600，`MOTTE_CREDENTIALS_PATH` 可覆盖；CLI `credentials set/list/remove` 与 Web API 管理——`PUT /api/v1/credentials/{profile}` 写入即弃、响应只回掩码，`GET /api/v1/credentials` 掩码列表）。解析优先级：显式传参 > 凭据文件 profile > 环境变量（`api_key_env`，回退兼容）。密钥本体绝不入库/入 trace。
 - 采样参数合并优先级：请求级 > manifest 级 > ModelProfile 档案默认值；全程经 registry strict 校验。
 
+## GSM8K-20 benchmark (offline implementation)
+
+`benchmark import` reads local official-format JSONL only; `benchmark run` and the ordinary API/CLI run creation share immutable scenario/dataset/provider preparation. GSM8K versions reject conflicting writes (HTTP 409); other resource upserts remain compatible. The preset pins first-20 selection, source/provenance hashes, prompt/scorer versions, `max_output_tokens=1024`, and `max_retries=0` (not a monetary cap). Provider-facing cases contain prompts only; gold stays in the evaluation snapshot.
+
+Benchmark runs use strict final-line Decimal scoring and a selected-case denominator. Failed runs retain partial scores, failed-call evidence and not-attempted rows; terminal benchmark rescore is offline. Generic raw-equality/replay behavior remains unchanged. Existing HTTP adapters share the prompt-only projection; synthetic fake-HTTP Worker tests verify the complete path, not official dataset authenticity or live model quality. See [GSM8K operator guide](../operations/gsm8k-smoke.md) for error policy, costs and restart limitations.
+
 ## Provider
 
 | Adapter | 状态 | 传输 | strict 预检 | 计量 | 价格/成本 | canonical 脱敏 |

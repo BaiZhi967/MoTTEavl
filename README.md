@@ -32,6 +32,18 @@ make install        # uv sync + pnpm install --frozen-lockfile
 - **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
 - **Optional services** (PostgreSQL, Redis, OTel collector): `docker compose -f infra/docker-compose.yml up -d`. Compose builds the `motteavl:local` image before starting API, migration, and Worker services.
 
+## GSM8K-20 smoke benchmark
+
+Import a locally obtained, pinned official-format test JSONL; no downloading or hand-built case list is required:
+
+```bash
+uv run python -m motte_cli benchmark import --file ./local-data/test.jsonl --name gsm8k-test --version 1 --revision YOUR_FULL_COMMIT_HASH --license MIT
+uv run python -m motte_cli benchmark run --scenario gsm8k-test-smoke@1 --model YOUR_MODEL_PROFILE_ID
+uv run python -m apps.worker.motte_worker --once
+```
+
+Import/preparation are offline; Worker execution can incur provider charges. The first 20 cases use a versioned strict Decimal scorer, explicit output-token limit and zero retries—not a monetary cap. See the [operator guide](docs/operations/gsm8k-smoke.md) for provenance, credentials, API parity, partial-failure reports and restart/rescore semantics. Repository fixtures are synthetic only.
+
 ## Environment variables
 
 Copy `.env.example` to `.env`. Variables actually read today: `MOTTE_STORAGE` (`sqlite` default, or `postgres` for production), `MOTTE_DB_PATH` (SQLite location), `MOTTE_PG_DSN`/`DATABASE_URL` (PostgreSQL DSN, `postgresql+asyncpg://` prefixes accepted), `ARTIFACT_ROOT` (artifact store). Migrations use Alembic: `uv run alembic upgrade head` / `uv run alembic downgrade -1`.
