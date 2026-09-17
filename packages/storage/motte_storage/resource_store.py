@@ -29,6 +29,28 @@ class UnknownResourceError(ValueError):
     pass
 
 
+class ResourceConflictError(ValueError):
+    """A benchmark resource version cannot be overwritten or deleted."""
+
+
+def _check_benchmark(table, record, existing=None):
+    if table not in ("dataset_versions", "scenario_versions"):
+        return
+    from motte_contracts.gsm8k import is_benchmark, validate_dataset, validate_scenario
+
+    if existing and (is_benchmark(existing) or is_benchmark(record)) and existing != record:
+        raise ResourceConflictError("benchmark version already exists with different content; use a new version")
+    if is_benchmark(record):
+        (validate_dataset if table == "dataset_versions" else validate_scenario)(record)
+
+
+def _check_delete(record):
+    from motte_contracts.gsm8k import is_benchmark
+
+    if record and is_benchmark(record):
+        raise ResourceConflictError("benchmark versions are immutable; use a new version")
+
+
 class _SQLiteResourceRepository:
     def __init__(self, path: str, table: str, key_fields: tuple[str, ...]) -> None:
         self._path = path
@@ -48,7 +70,13 @@ class _SQLiteResourceRepository:
 
     def put(self, record: dict[str, Any]) -> dict[str, Any]:
         values = [str(record[field]) for field in self._keys]
-        with closing(self._connect()) as connection:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            where = " AND ".join(f"{field} = ?" for field in self._keys)
+            existing = connection.execute(
+                f"SELECT payload FROM {self._table} WHERE {where}", values
+            ).fetchone()
+            _check_benchmark(self._table, record, json.loads(existing[0]) if existing else None)
             connection.execute(
                 f"INSERT OR REPLACE INTO {self._table}({', '.join(self._keys)}, payload) "
                 f"VALUES ({', '.join('?' for _ in range(len(self._keys) + 1))})",
@@ -73,7 +101,10 @@ class _SQLiteResourceRepository:
 
     def delete(self, *key: str) -> bool:
         where = " AND ".join(f"{field} = ?" for field in self._keys)
-        with closing(self._connect()) as connection:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(f"SELECT payload FROM {self._table} WHERE {where}", list(key)).fetchone()
+            _check_delete(json.loads(row[0]) if row else None)
             cursor = connection.execute(f"DELETE FROM {self._table} WHERE {where}", list(key))
             return cursor.rowcount > 0
 
@@ -97,6 +128,12 @@ class _PgResourceRepository:
         placeholders = ", ".join(["%s"] * (len(self._keys) + 1))
         with self._connect() as connection:
             with connection.cursor() as cursor:
+                # Serialize version checks including absent rows; no schema migration required.
+                cursor.execute(f"LOCK TABLE {self._table} IN SHARE ROW EXCLUSIVE MODE")
+                where = " AND ".join(f"{field} = %s" for field in self._keys)
+                cursor.execute(f"SELECT payload FROM {self._table} WHERE {where}", values)
+                existing = cursor.fetchone()
+                _check_benchmark(self._table, record, existing[0] if existing else None)
                 cursor.execute(
                     f"INSERT INTO {self._table}({fields}) VALUES ({placeholders}) "
                     f"ON CONFLICT ({', '.join(self._keys)}) DO UPDATE SET payload = EXCLUDED.payload",
@@ -125,17 +162,24 @@ class _PgResourceRepository:
         where = " AND ".join(f"{field} = %s" for field in self._keys)
         with self._connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute(f"LOCK TABLE {self._table} IN SHARE ROW EXCLUSIVE MODE")
+                cursor.execute(f"SELECT payload FROM {self._table} WHERE {where}", list(key))
+                row = cursor.fetchone()
+                _check_delete(row[0] if row else None)
                 cursor.execute(f"DELETE FROM {self._table} WHERE {where}", list(key))
                 return cursor.rowcount > 0
 
 
 class _InMemoryResourceRepository:
-    def __init__(self, key_fields: tuple[str, ...]) -> None:
+    def __init__(self, key_fields: tuple[str, ...], table: str) -> None:
         self._keys = key_fields
+        self._table = table
         self._rows: dict[tuple[str, ...], dict[str, Any]] = {}
 
     def put(self, record: dict[str, Any]) -> dict[str, Any]:
-        self._rows[tuple(str(record[field]) for field in self._keys)] = deepcopy(record)
+        key = tuple(str(record[field]) for field in self._keys)
+        _check_benchmark(self._table, record, self._rows.get(key))
+        self._rows[key] = deepcopy(record)
         return deepcopy(record)
 
     def get(self, *key: str) -> dict[str, Any] | None:
@@ -146,6 +190,8 @@ class _InMemoryResourceRepository:
         return [deepcopy(row) for _, row in sorted(self._rows.items())]
 
     def delete(self, *key: str) -> bool:
+        row = self._rows.get(tuple(str(value) for value in key))
+        _check_delete(row)
         return self._rows.pop(tuple(str(value) for value in key), None) is not None
 
 
@@ -186,7 +232,7 @@ def PostgresResourceStore(dsn: str) -> ResourceStore:
 
 
 def InMemoryResourceStore() -> ResourceStore:
-    def builder(_table: str, keys: tuple[str, ...]):
-        return _InMemoryResourceRepository(keys)
+    def builder(table: str, keys: tuple[str, ...]):
+        return _InMemoryResourceRepository(keys, table)
 
     return _build(builder)

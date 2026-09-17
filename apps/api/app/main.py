@@ -8,10 +8,10 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from motte_sdk.replay_run import ReplayProvider
-from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, resolve_manifest
+from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, prepare_run, resolve_manifest
 from motte_sdk.service import RunService, build_run_service
 from motte_storage.factory import create_resource_store
-from motte_storage.resource_store import InMemoryResourceStore
+from motte_storage.resource_store import InMemoryResourceStore, ResourceConflictError
 
 SSE_POLL_INTERVAL_SECONDS = 1.0
 
@@ -90,6 +90,10 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     application.state.run_service = service
     application.state.resource_store = resources
 
+    @application.exception_handler(ResourceConflictError)
+    async def resource_conflict(request, error):
+        return JSONResponse(status_code=409, content={"error": {"code": "RESOURCE_CONFLICT", "message": str(error)}})
+
     # ------------------------------------------------------------------ runs
 
     @application.get("/health")
@@ -137,7 +141,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 },
             )
         try:
-            manifest = resolve_manifest(manifest, resources)
+            manifest, case_ids = prepare_run(scenario, manifest, body.get("case_ids", []), resources)
         except ManifestResolutionError as error:
             return JSONResponse(
                 status_code=422,
@@ -147,7 +151,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             invalid = _validate_provider(manifest["provider"])
             if invalid is not None:
                 return invalid
-        return service.create_run(scenario, manifest, body.get("case_ids", []))
+        return service.create_run(scenario, manifest, case_ids)
 
     @application.get("/api/v1/runs")
     def list_runs(status: str | None = None):
@@ -258,7 +262,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             invalid = validate(body)
             if invalid is not None:
                 return invalid
-            return repository.put(body)
+            try:
+                return repository.put(body)
+            except ResourceConflictError:
+                raise
+            except ValueError as error:
+                return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
 
         if versioned:
             path = f"/api/v1/{name}/{{resource_name}}/{{version}}"
@@ -609,7 +618,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 def _build_report(run: dict[str, Any]) -> dict[str, Any]:
     cases = run.get("cases", [])
     scores = run.get("scores", [])
-    passed = sum(1 for score in scores if score.get("passed"))
+    benchmark = run.get("manifest", {}).get("benchmark_provenance")
     costs = [
         case["result"]["cost"]
         for case in cases
@@ -617,7 +626,7 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
     ]
     total_cost = sum(cost["total"] for cost in costs if cost.get("total") is not None)
     versions = sorted({cost["price_table_version"] for cost in costs if cost.get("price_table_version")})
-    return {
+    report = {
         "run_id": run["id"],
         "scenario_version": run.get("scenario_version"),
         "status": run["status"],
@@ -625,14 +634,35 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
         "summary": {
             "cases": len(cases),
             "scored": len(scores),
-            "passed": passed,
-            "failed": len(scores) - passed,
-            "pass_rate": round(passed / len(scores), 4) if scores else None,
+            "passed": sum(1 for score in scores if score.get("passed")),
+            "failed": sum(1 for score in scores if not score.get("passed")),
+            "pass_rate": round(sum(1 for score in scores if score.get("passed")) / len(scores), 4) if scores else None,
         },
         "cost": {"total": round(total_cost, 8) if total_cost else None, "price_table_versions": versions},
         "scores": scores,
         "cases": [{"case_id": case["case_id"], "result": case.get("result")} for case in cases],
     }
+    if benchmark:
+        # strict selected-case denominator + outcome/attempt/completion breakdown
+        report["benchmark"] = benchmark
+        from motte_sdk.benchmark import benchmark_scores
+        from motte_eval.gsm8k import aggregate_benchmark
+
+        scores = benchmark_scores(run, cases)
+        summary = aggregate_benchmark(scores, benchmark["selected_count"])
+        report["scores"] = scores
+        report["summary"].update(summary)
+        report["summary"].update(cases=summary["selected"], scored=summary["responded"],
+                                  passed=summary["correct"], failed=summary["selected"] - summary["correct"],
+                                  pass_rate=summary["accuracy"], denominator="selected_cases")
+        known = [cost["total"] for cost in costs if cost.get("total") is not None]
+        report["cost"].update(total=round(sum(known), 8) if known else None,
+                              known_cases=len(known), unknown_cases=summary["attempted"] - len(known))
+        usage = [c["result"].get("usage", {}) for c in cases if isinstance(c.get("result"), dict)]
+        report["usage"] = {key: sum(u[key] for u in usage if key in u)
+                           for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                           if any(key in u for u in usage)}
+    return report
 
 
 app = create_app()

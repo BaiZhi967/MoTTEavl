@@ -88,6 +88,10 @@ class RunService:
         if run["status"] in self.TERMINAL:
             raise ValueError("run is terminal")
         invoke = provider if provider is not None else self.provider
+        if run.get("manifest", {}).get("benchmark_provenance"):
+            if case_ids is not None and list(case_ids) != run["case_ids"]:
+                raise ValueError("benchmark selected case ids are immutable")
+            return self._execute_benchmark(run, invoke)
         ids = list(case_ids) if case_ids is not None else list(run.get("case_ids") or [])
         if ids and not run.get("case_ids"):
             run["case_ids"] = ids
@@ -136,12 +140,15 @@ class RunService:
             payload["reason"] = reason
         self.store.runs.save(run)
         self._emit(run_id, "cancelled", payload)
+        if run.get("manifest", {}).get("benchmark_provenance"):
+            self._finish_unattempted(run_id)
         return self._view(run_id)
 
     def rescore(self, run_id: str) -> dict[str, Any]:
         run = self._load(run_id)
-        if run["status"] != "completed":
-            raise ValueError("only completed runs can be rescored")
+        benchmark_terminal = run.get("manifest", {}).get("benchmark_provenance") and run["status"] in self.TERMINAL
+        if run["status"] != "completed" and not benchmark_terminal:
+            raise ValueError("only completed runs or terminal benchmarks can be rescored")
         scores = self._score_results(run_id, self.store.case_runs.list_for_run(run_id), emit_events=False)
         self.store.scores.replace_for_run(run_id, scores)
         run["rescored"] = True
@@ -159,6 +166,8 @@ class RunService:
         run.update({"status": "unsupported", "error": error})
         self.store.runs.save(run)
         self._emit(run_id, "unsupported", {"status": "unsupported", "error": run["error"]})
+        if run.get("manifest", {}).get("benchmark_provenance"):
+            self._finish_unattempted(run_id)
         return self._view(run_id)
 
     def mark_profile_stale(self, run_id: str, reason: str | None = None) -> dict[str, Any]:
@@ -208,6 +217,15 @@ class RunService:
         results: list[dict[str, Any]],
         emit_events: bool,
     ) -> list[dict[str, Any]]:
+        run = self._load(run_id)
+        if run.get("manifest", {}).get("benchmark_provenance"):
+            from motte_sdk.benchmark import benchmark_scores
+
+            scores = benchmark_scores(run, results)
+            if emit_events:
+                for score in scores:
+                    self._emit(run_id, "score", score)
+            return scores
         scores: list[dict[str, Any]] = []
         for entry in results:
             if "expected" in entry:
@@ -216,6 +234,66 @@ class RunService:
                 if emit_events:
                     self._emit(run_id, "score", {"case_id": entry["case_id"], "passed": passed})
         return scores
+
+    def _finish_unattempted(self, run_id):
+        run = self._load(run_id)
+        done = {r["case_id"] for r in self.store.case_runs.list_for_run(run_id)}
+        for case_id in run["case_ids"]:
+            if case_id not in done:
+                self.store.case_runs.upsert({"run_id": run_id, "case_id": case_id,
+                                            "outcome": "not_attempted", "result": None})
+        self.store.scores.replace_for_run(run_id, self._score_results(
+            run_id, self.store.case_runs.list_for_run(run_id), False))
+
+    def _execute_benchmark(self, run, invoke):
+        from motte_eval.gsm8k import CONTINUE_ERROR_CLASSES
+        from motte_provider.errors import classify_exception
+
+        run_id = run["id"]
+        if run["status"] == "queued":
+            self._transition(run_id, "preparing")
+        if self._load(run_id)["status"] != "running":
+            self._transition(run_id, "running")
+        rows = self.store.case_runs.list_for_run(run_id)
+        done = {row["case_id"] for row in rows}
+        # A durable stop marker in the failed case also survives a crash before
+        # final run status/scores are persisted.
+        stop = any(row.get("stop_run") for row in rows)
+        for case_id in run["case_ids"]:
+            if case_id in done:
+                continue
+            if self._load(run_id)["status"] == "cancelled":
+                return self.get_run(run_id)
+            if stop:
+                self.store.case_runs.upsert({"run_id": run_id, "case_id": case_id,
+                                            "outcome": "not_attempted", "result": None})
+                continue
+            try:
+                if invoke is None:
+                    raise ValueError("benchmark requires a provider")
+                result = invoke(case_id)
+            except Exception as error:
+                result = deepcopy(getattr(error, "evidence", None)) or {
+                    "error": {"class": classify_exception(error), "message": str(error)}}
+            error = result.get("error") if isinstance(result, dict) else None
+            stop = bool(error and error.get("class") not in CONTINUE_ERROR_CLASSES)
+            self.store.case_runs.upsert({"run_id": run_id, "case_id": case_id,
+                                        "result": result, "stop_run": stop})
+            self._emit(run_id, "case_call_failed" if error else "model_response",
+                       {"case_id": case_id, "result": result})
+        if self._load(run_id)["status"] == "cancelled":
+            return self.get_run(run_id)
+        self._transition(run_id, "collecting")
+        self._transition(run_id, "scoring")
+        rows = self.store.case_runs.list_for_run(run_id)
+        self.store.scores.replace_for_run(run_id, self._score_results(run_id, rows, True))
+        errors = [row["result"]["error"] for row in rows
+                  if isinstance(row.get("result"), dict) and row["result"].get("error")]
+        if errors:
+            current = self._load(run_id)
+            current["error"] = errors[0]
+            self.store.runs.save(current)
+        return self._transition(run_id, "failed" if errors else "completed")
 
     @staticmethod
     def _comparable(result: Any) -> Any:
