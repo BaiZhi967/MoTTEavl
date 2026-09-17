@@ -145,6 +145,22 @@ body {
   font-weight: 500;
 }
 
+.tab[aria-current="page"] {
+  background: var(--tone-neutral-bg);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.nav-group-label {
+  margin: 12px 8px 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.nav-group-label:first-child {
+  margin-top: 0;
+}
+
 .workbench {
   flex: 1;
   min-width: 0;
