@@ -3,6 +3,8 @@ import { ActivityIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-ic
 import { RunsPage } from "./pages/RunsPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
+import { EVAL_SUITES } from "./evalTypes/registry";
+import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
 
 const GENERAL_NAV = [
   { to: "/runs", label: "运行", icon: StackIcon },
@@ -23,7 +25,12 @@ export default function App() {
         </div>
         <nav className="side-nav" aria-label="主导航">
           <p className="nav-group-label">评测类型</p>
-          {/* 类型入口由 evalTypes 注册表驱动，Task 5 填充 */}
+          {EVAL_SUITES.map(({ id, label, icon: Icon }) => (
+            <NavLink key={id} to={`/${id}`} className="tab">
+              <Icon size={16} weight="bold" aria-hidden />
+              <span>{label}</span>
+            </NavLink>
+          ))}
           <p className="nav-group-label">通用</p>
           {GENERAL_NAV.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} className="tab">
@@ -40,6 +47,8 @@ export default function App() {
           <Route path="/benchmarks" element={<BenchmarksPage />} />
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
+          <Route path="/runs/:runId/monitor" element={<FallbackMonitorPage />} />
+          <Route path="/runs/:runId/result" element={<FallbackResultPage />} />
           <Route path="*" element={<Navigate to="/runs" replace />} />
         </Routes>
       </div>
