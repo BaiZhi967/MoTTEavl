@@ -5,11 +5,11 @@
 ## 资源关系与注册表（2026-09-15 起）
 
 - **ProviderConnection**（`providers` 资源）：怎么连——`kind`（协议）、`base_url`、`credentials`（凭据 profile 名，缺省与 name 相同）、传输参数（`timeout`/`max_retries`/`backoff_initial_ms`/`backoff_max_ms`）。不再携带 model/price_table（旧 payload 兼容读取）。
-- **ModelProfile**（`models` 资源）：调什么——`provider`（连接名，创建时校验存在）、`model`（API 模型字符串，缺省 = id）、采样参数默认值（`parameters`）与能力档案。
+- **ModelProfile**（`models` 资源）：调什么——`provider`（连接名，创建时校验存在）、`model`（API 模型字符串，缺省 = id）、采样参数默认值（`parameters`）与能力档案。资源 `put` 幂等覆盖，编辑即重新 PUT；Web 端测试调用 `POST /api/v1/models/{id}/test` 按连接解析密钥做一次最小真实调用（`max_output_tokens=16` 封顶费用，报告脱敏，与 CLI live-smoke 同一 envelope）。
 - **PriceTable**（`price_tables` 资源，`(model_id, version)` 版本化）：多少钱——Run 创建期解析：manifest 显式 `price_table_version` > 连接 legacy payload > 该模型最新版本（自然排序）。
 - Run manifest 引用解析（API 与 CLI 共用 `motte_sdk.resolve`）：`manifest.model` 引用 ModelProfile 时按其 `provider` 取连接；`manifest.provider` 也可以显式给连接名（须与档案一致，否则 422 `MODEL_PROVIDER_CONFLICT`）；inline dict 为 legacy 全量配置。展开结果以快照形式写入 run。
-- **适配器注册表**（`motte_provider.registry`）：新增 kind 只需 register 一个 `AdapterSpec`（validate/build/default_key_env/smoke_supported/connection_required_fields）；Worker 分发、API 预检、CLI live-smoke 的 kind 列表均派生自注册表。
-- **凭据**：本地凭据文件 `~/.motte/credentials.toml`（0600，`MOTTE_CREDENTIALS_PATH` 可覆盖；CLI `credentials set/list/remove` 管理）。解析优先级：显式传参 > 凭据文件 profile > 环境变量（`api_key_env`，回退兼容）。密钥本体绝不入库/入 trace。
+- **适配器注册表**（`motte_provider.registry`）：新增 kind 只需 register 一个 `AdapterSpec`（validate/build/default_key_env/smoke_supported/connection_required_fields）；Worker 分发、API 预检、CLI live-smoke 的 kind 列表均派生自注册表。Web 端 kind 目录 `GET /api/v1/provider_kinds` 同样派生自注册表（replay 等内部 kind 不暴露），附带中文说明与官方默认端点（`anthropic_messages` → `https://api.anthropic.com/v1`、`openai_responses` → `https://api.openai.com/v1`）。
+- **凭据**：本地凭据文件 `~/.motte/credentials.toml`（0600，`MOTTE_CREDENTIALS_PATH` 可覆盖；CLI `credentials set/list/remove` 与 Web API 管理——`PUT /api/v1/credentials/{profile}` 写入即弃、响应只回掩码，`GET /api/v1/credentials` 掩码列表）。解析优先级：显式传参 > 凭据文件 profile > 环境变量（`api_key_env`，回退兼容）。密钥本体绝不入库/入 trace。
 - 采样参数合并优先级：请求级 > manifest 级 > ModelProfile 档案默认值；全程经 registry strict 校验。
 
 ## Provider

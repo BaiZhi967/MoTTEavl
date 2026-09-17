@@ -31,6 +31,18 @@ def test_provider_crud_and_credential_rejection():
     assert client.get("/api/v1/providers/local-vllm").status_code == 404
 
 
+def test_provider_kind_catalog_lists_user_facing_kinds():
+    client, _ = client_with_resources()
+    payload = client.get("/api/v1/provider_kinds").json()
+    by_kind = {item["kind"]: item for item in payload["items"]}
+    assert set(by_kind) == {"openai_compatible", "anthropic_messages", "openai_responses"}
+    assert by_kind["anthropic_messages"]["default_base_url"] == "https://api.anthropic.com/v1"
+    assert by_kind["anthropic_messages"]["default_key_env"] == "ANTHROPIC_API_KEY"
+    assert by_kind["openai_responses"]["default_base_url"] == "https://api.openai.com/v1"
+    assert by_kind["openai_compatible"]["default_base_url"] is None
+    assert by_kind["openai_compatible"]["label"] == "OpenAI 兼容"
+
+
 def test_model_crud_validates_contract():
     client, _ = client_with_resources()
     invalid = client.post("/api/v1/models", json={"id": "m", "provider": "p"})

@@ -23,6 +23,26 @@ AGENT_CATALOG = [
 HARNESS_CATALOG = ["claude", "codex"]
 BUILTIN_SCENARIOS = {"replay@1", "json_extract@1", "direct-llm@1", "vision@1"}
 
+# kind 展示目录：协议能力来自 motte_provider 注册表，这里只补 UI 文案与官方默认端点
+# （base_url 与 request_path 由 transport 直接拼接，官方端点须含版本段）。
+PROVIDER_KIND_CATALOG = {
+    "openai_compatible": {
+        "label": "OpenAI 兼容",
+        "description": "任意兼容 Chat Completions 的端点（vLLM、Ollama、网关等）",
+        "default_base_url": None,
+    },
+    "anthropic_messages": {
+        "label": "Anthropic Messages",
+        "description": "Anthropic Messages API（官方或兼容端点）",
+        "default_base_url": "https://api.anthropic.com/v1",
+    },
+    "openai_responses": {
+        "label": "OpenAI Responses",
+        "description": "OpenAI Responses API（官方或兼容端点）",
+        "default_base_url": "https://api.openai.com/v1",
+    },
+}
+
 _FORBIDDEN_SECRET_FIELDS = ("api_key", "key", "token", "secret", "password", "authorization")
 
 
@@ -327,6 +347,133 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     _resource_routes("datasets", _validate_named_version, versioned=True)
     _resource_routes("scenarios", _validate_named_version, versioned=True)
     _resource_routes("price_tables", _validate_price_table, versioned=True)
+
+    @application.get("/api/v1/provider_kinds")
+    def list_provider_kinds():
+        """用户可创建的 provider kind 目录（注册表派生；replay 等内部 kind 不暴露）。"""
+        from motte_provider.config import registered_kinds
+        from motte_provider.registry import adapter_for
+
+        items = []
+        for kind in registered_kinds():
+            spec = adapter_for(kind)
+            if spec.provider_cls is None:
+                continue
+            catalog = PROVIDER_KIND_CATALOG.get(kind, {})
+            items.append(
+                {
+                    "kind": kind,
+                    "label": catalog.get("label", kind),
+                    "description": catalog.get("description", ""),
+                    "default_base_url": catalog.get("default_base_url"),
+                    "default_key_env": spec.default_key_env,
+                }
+            )
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/models/{model_id}/test")
+    def test_model(model_id: str, body: dict | None = None):
+        """对单个模型做一次最小真实调用（Web 版 live smoke，操作者显式触发）。
+
+        连接、密钥、模型名一次验证：密钥按凭据链解析、绝不进入响应；
+        max_output_tokens=16 封顶费用；报告复用 adapter envelope（已脱敏）。
+        """
+        from motte_contracts.messages import Message, ModelRequest
+        from motte_provider.base import ProviderCallError
+        from motte_provider.config import adapter_for
+        from motte_provider.credentials import resolve_api_key
+        from motte_provider.transport import HTTPTransport
+
+        profile = resources.models.get(model_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model not found")
+        connection = resources.providers.get(profile.get("provider") or "")
+        if connection is None:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "RESOURCE_NOT_FOUND", "message": f"provider not found: {profile.get('provider')}"}},
+            )
+        try:
+            spec = adapter_for(connection.get("kind"))
+        except ValueError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": str(error)}},
+            )
+        if spec.provider_cls is None or not spec.smoke_supported:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "PROVIDER_TEST_UNSUPPORTED", "message": f"kind 不支持测试调用: {connection.get('kind')}"}},
+            )
+        api_key = resolve_api_key(
+            connection.get("credentials") or connection.get("name"),
+            env_name=connection.get("api_key_env") or spec.default_key_env,
+        )
+        model = profile.get("model") or model_id
+        transport = HTTPTransport(connection.get("base_url", ""), api_key, **spec.transport_kwargs)
+        provider = spec.provider_cls(transport, model)
+        request = ModelRequest(
+            model=model,
+            messages=[Message(role="user", content=(body or {}).get("prompt") or "Reply with exactly: pong")],
+            max_output_tokens=16,
+        )
+        try:
+            envelope = provider.complete(request)
+        except ProviderCallError as error:
+            envelope = error.evidence
+        metering = envelope.get("metering") or {}
+        return {
+            "ok": envelope.get("error") is None,
+            "provider": connection.get("kind"),
+            "model": model,
+            "base_url": connection.get("base_url"),
+            "tested_at": datetime.now(UTC).isoformat(),
+            "latency_ms": metering.get("latency_ms"),
+            "attempts": metering.get("attempts"),
+            "retry_count": metering.get("retry_count"),
+            "usage": envelope.get("usage"),
+            "error": envelope.get("error"),
+        }
+
+    # ------------------------------------------------------------ 凭据
+
+    @application.get("/api/v1/credentials")
+    def list_credentials():
+        from motte_provider.credentials import load_credentials, mask
+
+        items = [
+            {
+                "profile": name,
+                "key_hint": mask(section["api_key"])
+                if isinstance(section.get("api_key"), str) and section["api_key"]
+                else "未配置",
+            }
+            for name, section in sorted(load_credentials().items())
+        ]
+        return {"items": items, "total": len(items)}
+
+    @application.put("/api/v1/credentials/{profile}")
+    def set_credential(profile: str, body: dict):
+        """Web 端写入凭据文件的唯一通道：密钥写后即弃（不落库），响应只回掩码。
+
+        与 CLI `credentials set` 等价，故不走 _reject_secret_fields（那是防明文入库的）。
+        """
+        from motte_provider.credentials import mask, save_api_key
+
+        api_key = body.get("api_key")
+        if not isinstance(api_key, str) or not api_key.strip():
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": "api_key is required"}},
+            )
+        try:
+            save_api_key(profile, api_key.strip())
+        except ValueError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
+            )
+        return {"profile": profile, "key_hint": mask(api_key.strip())}
 
     # ------------------------------------------------------------ 目录
 
