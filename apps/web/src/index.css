@@ -1089,3 +1089,84 @@ td.row-actions .link {
   gap: 12px;
   margin-top: 16px;
 }
+
+/* ---------- 批次过程与逐题格子 ---------- */
+
+.run-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.progress-bar {
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--tone-neutral-bg);
+  overflow: hidden;
+}
+
+.progress-fill {
+  display: block;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--tone-info-fg);
+}
+
+.batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.batch-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.batch-row:last-child {
+  border-bottom: none;
+}
+
+.batch-row-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.progress-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.grid-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.grid-cell-pass {
+  background: var(--tone-success-bg);
+  color: var(--tone-success-fg);
+  border: 1px solid var(--tone-success-fg);
+}
+
+.grid-cell-fail {
+  background: var(--tone-error-bg);
+  color: var(--tone-error-fg);
+  border: 1px solid var(--tone-error-fg);
+}
+
+.grid-cell-pending {
+  background: var(--tone-neutral-bg);
+  color: var(--text-faint);
+}
