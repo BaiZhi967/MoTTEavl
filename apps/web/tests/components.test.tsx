@@ -254,11 +254,99 @@ describe("ProvidersPage", () => {
     await waitFor(() => expect(clientMocks.updateModel).toHaveBeenCalled());
     expect(clientMocks.updateModel.mock.calls[0][0]).toBe("qwen2.5-7b");
     expect(clientMocks.updateModel.mock.calls[0][1]).toEqual({
+      model: null,
       capabilities: { text: true },
+      input_modalities: ["text"],
       context_window: 32768,
+      max_output_tokens: null,
       supports_tools: true,
       parameters: { temperature: 0.7, top_p: 0.9 },
+      reasoning: { supported: false, levels: [], default_level: null, control: null },
     });
+  });
+
+  it("最大输出 Token 兼容旧值并统一保存到顶层", async () => {
+    await renderWithProvider(PROVIDERS, [{
+      id: "legacy", provider: "local-vllm", capabilities: { text: true },
+      parameters: { max_output_tokens: 4096, seed: 7 },
+    }]);
+    fireEvent.click(screen.getByRole("button", { name: /编辑/ }));
+    expect((screen.getByLabelText("最大输出 Token") as HTMLInputElement).value).toBe("4096");
+    fill("最大输出 Token", "8192");
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(clientMocks.updateModel).toHaveBeenCalled());
+    expect(clientMocks.updateModel.mock.calls[0][1]).toMatchObject({ max_output_tokens: 8192, parameters: { seed: 7 } });
+    expect(clientMocks.updateModel.mock.calls[0][1].parameters).not.toHaveProperty("max_output_tokens");
+  });
+
+  it("清空限制和采样参数删除旧值但保留其他配置", async () => {
+    await renderWithProvider(PROVIDERS, [{
+      id: "clear", provider: "local-vllm", model: "old-api-name", capabilities: { custom: true },
+      context_window: 32000, max_output_tokens: 8192,
+      parameters: { max_output_tokens: 4096, temperature: 0.7, top_p: 0.9, seed: 7 },
+    }]);
+    fireEvent.click(screen.getByRole("button", { name: /编辑/ }));
+    expect((screen.getByLabelText("最大输出 Token") as HTMLInputElement).value).toBe("8192");
+    for (const label of [/API 模型名/, "上下文窗口", "最大输出 Token", /temperature/, /top_p/]) fill(label, "");
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(clientMocks.updateModel).toHaveBeenCalled());
+    expect(clientMocks.updateModel.mock.calls[0][1]).toMatchObject({
+      model: null, context_window: null, max_output_tokens: null, parameters: { seed: 7 }, capabilities: { custom: true },
+    });
+    expect(clientMocks.updateModel.mock.calls[0][1].parameters).toEqual({ seed: 7 });
+  });
+
+  it("创建模型保存多模态、能力和 CEL 推理映射", async () => {
+    await renderWithProvider();
+    fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
+    fill(/模型 ID/, "modern-model");
+    const text = screen.getByRole("switch", { name: "输入类型：文本" });
+    expect(text.getAttribute("aria-checked")).toBe("true");
+    expect(text.hasAttribute("disabled")).toBe(true);
+    for (const name of ["输入类型：图片", "输入类型：视频", "输入类型：PDF", "结构化输出", "原生联网搜索", "对话中系统消息", "启用推理等级映射"]) {
+      fireEvent.click(screen.getByRole("switch", { name }));
+    }
+    fill("可用推理等级", "low, medium, high");
+    fill("默认推理等级", "medium");
+    fill("CEL 表达式", '{"reasoning_effort": reasoningLevel}');
+    fill("最大输出 Token", "16384");
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+    await waitFor(() => expect(clientMocks.createModel).toHaveBeenCalled());
+    expect(clientMocks.createModel.mock.calls[0][0]).toMatchObject({
+      id: "modern-model", provider: "local-vllm", max_output_tokens: 16384,
+      input_modalities: ["text", "image", "video", "pdf"],
+      capabilities: { text: true, structured_output: true, native_search: true, system_messages: true },
+      reasoning: { supported: true, levels: ["low", "medium", "high"], default_level: "medium", control: '{"reasoning_effort": reasoningLevel}' },
+    });
+  });
+
+  it("推理配置回填，保存错误保留用户输入", async () => {
+    await renderWithProvider(PROVIDERS, [{
+      id: "reasoner", provider: "local-vllm", capabilities: { structured_output: true }, input_modalities: ["text", "image"],
+      reasoning: { supported: true, levels: ["low", "high"], default_level: "high", control: '{"reasoning_effort": reasoningLevel}' },
+    }]);
+    fireEvent.click(screen.getByRole("button", { name: /编辑/ }));
+    expect((screen.getByLabelText("默认推理等级") as HTMLSelectElement).value).toBe("high");
+    expect(screen.getByRole("switch", { name: "输入类型：图片" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "结构化输出" }).getAttribute("aria-checked")).toBe("true");
+    clientMocks.updateModel.mockRejectedValueOnce(new Error("CEL 表达式无效"));
+    fill("CEL 表达式", "invalid(");
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(await screen.findByText("Error: CEL 表达式无效")).toBeTruthy();
+    expect((screen.getByLabelText("CEL 表达式") as HTMLTextAreaElement).value).toBe("invalid(");
+    expect((screen.getByRole("button", { name: "保存修改" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("关闭推理映射清除默认等级以通过契约校验", async () => {
+    await renderWithProvider(PROVIDERS, [{
+      id: "reasoner", provider: "local-vllm", capabilities: {},
+      reasoning: { supported: true, levels: ["high"], default_level: "high", control: '{"reasoning_effort": reasoningLevel}' },
+    }]);
+    fireEvent.click(screen.getByRole("button", { name: /编辑/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "启用推理等级映射" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(clientMocks.updateModel).toHaveBeenCalled());
+    expect(clientMocks.updateModel.mock.calls[0][1].reasoning).toMatchObject({ supported: false, default_level: null });
   });
 
   it("模型行开关切换启用状态", async () => {

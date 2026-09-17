@@ -12,7 +12,7 @@ FAKE_KIND = "fake_smoke_test"
 class _FakeProvider:
     """模拟 HTTP adapter：只实现测试端点用到的构造与 complete。"""
 
-    def __init__(self, transport, model, parameters=None, price_table=None):
+    def __init__(self, transport, model, parameters=None, price_table=None, **kwargs):
         self.model = model
 
     def complete(self, request):

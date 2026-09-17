@@ -310,7 +310,11 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         try:
             from motte_contracts.model import ModelProfile
 
-            ModelProfile.model_validate(body)
+            profile = ModelProfile.model_validate(body)
+            normalized = profile.model_dump()
+            normalized["parameters"] = profile.parameters.model_dump(exclude_none=True)
+            body.clear()
+            body.update(normalized)
         except ValidationError as error:
             issue = error.errors()[-1]
             return JSONResponse(
@@ -477,22 +481,32 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 status_code=422,
                 content={"error": {"code": "PROVIDER_TEST_UNSUPPORTED", "message": f"kind 不支持测试调用: {connection.get('kind')}"}},
             )
-        api_key = resolve_api_key(
-            connection.get("credentials") or connection.get("name"),
-            env_name=connection.get("api_key_env") or spec.default_key_env,
-        )
-        model = profile.get("model") or model_id
-        transport = HTTPTransport(connection.get("base_url", ""), api_key, **spec.transport_kwargs)
-        provider = spec.provider_cls(transport, model)
-        request = ModelRequest(
-            model=model,
-            messages=[Message(role="user", content=(body or {}).get("prompt") or "Reply with exactly: pong")],
-            max_output_tokens=16,
-        )
+        from motte_provider.config import build_case_provider
+
         try:
+            manifest = {"model": model_id}
+            if "reasoning_level" in (body or {}):
+                manifest["reasoning_level"] = body["reasoning_level"]
+            config = resolve_manifest(manifest, resources)["provider"]
+            # Use the same snapshot/factory as real runs, but never exceed 16 output tokens.
+            bound = min(16, config.get("max_output_tokens") or 16)
+            config["parameters"] = {**(config.get("parameters") or {}), "max_output_tokens": bound}
+            config["max_output_tokens"] = bound
+            provider = build_case_provider(config).provider
+            model = provider.model
+            request = ModelRequest(
+                model=model,
+                messages=[Message(role="user", content=(body or {}).get("prompt") or "Reply with exactly: pong")],
+                max_output_tokens=bound,
+            )
             envelope = provider.complete(request)
         except ProviderCallError as error:
             envelope = error.evidence
+        except ValueError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "MODEL_CONFIG_INVALID", "message": str(error)}},
+            )
         metering = envelope.get("metering") or {}
         return {
             "ok": envelope.get("error") is None,

@@ -181,5 +181,8 @@ def build_case_provider(
         config["model"],
         parameters=config.get("parameters"),
         price_table=parse_price_table(config.get("price_table")),
+        max_output_tokens=config.get("max_output_tokens"),
+        reasoning=config.get("reasoning"),
+        reasoning_level=config.get("reasoning_level"),
     )
     return CaseDrivenProvider(provider, cases or {}, tools=tools)

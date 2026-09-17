@@ -20,7 +20,7 @@ class ModelRequest(Contract):
     system: str | None = None
     temperature: float | None = None
     top_p: float | None = None
-    max_output_tokens: int | None = None
+    max_output_tokens: int | None = Field(default=None, gt=0, strict=True)
     stop: str | list[str] | None = None
     seed: int | None = None
     tools: list[dict[str, Any]] = Field(default_factory=list)
