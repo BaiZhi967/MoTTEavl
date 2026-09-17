@@ -33,6 +33,7 @@
   --size-full: 100%;
   --border-width: 1px;
   --font-label: 13px;
+  --font-metric-value: 26px;
   --weight-semibold: 600;
 
   /* 字体 */
@@ -1199,7 +1200,7 @@ td.row-actions .link {
 
 .metric-value {
   margin: 0;
-  font-size: 26px;
+  font-size: var(--font-metric-value);
   font-weight: 600;
 }
 

@@ -60,7 +60,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | `--font-sans` | `"PingFang SC", "Microsoft YaHei", system-ui, sans-serif` | 中文优先系统栈；未来可自托管 Geist Sans，禁止引入 Inter / Roboto / Open Sans |
 | `--font-mono` | `ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace` | run ID、seq、版本号、JSON、数字 |
 
-字号阶梯：18 顶栏标题 / 15 面板标题（weight 600）/ 14 正文 / 13 表格与表单 / 12 徽章。
+字号阶梯：26 指标卡数值 / 18 顶栏标题 / 15 面板标题（weight 600）/ 14 正文 / 13 表格与表单 / 12 徽章。
 行高：正文 1.6，数据行 1.5。全局开启 `font-variant-numeric: tabular-nums`。
 
 ### 2.4 间距、圆角、边框

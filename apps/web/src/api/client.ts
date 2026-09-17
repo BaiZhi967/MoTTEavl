@@ -1,6 +1,9 @@
 export interface Score {
   case_id: string;
   passed: boolean;
+  outcome?: string;
+  attempted?: boolean;
+  responded?: boolean;
 }
 
 export interface CaseRun {

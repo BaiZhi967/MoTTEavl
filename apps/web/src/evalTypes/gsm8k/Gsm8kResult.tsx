@@ -44,29 +44,29 @@ export function Gsm8kResult() {
     { prompt: 0, completion: 0 },
   );
   const accuracy = scores.length > 0 ? Math.round((passed / scores.length) * 100) : null;
-  const attempted = scores.filter((score) => (score as any).attempted !== false).length;
+  const attempted = scores.filter((score) => (score.outcome ?? "correct") !== "not_attempted").length;
 
   const rows: DrillRow[] = (run.case_ids ?? []).map((caseId) => {
     const score = scores.find((item) => item.case_id === caseId);
-    const outcome = OUTCOME_LABELS[(score as any)?.outcome ?? ""] ?? { label: score?.passed ? "通过" : "未通过", tone: score?.passed ? "success" : "error" };
+    const outcome = OUTCOME_LABELS[score?.outcome ?? ""] ?? { label: score?.passed ? "通过" : "未通过", tone: score?.passed ? "success" : "error" };
     const datasetCase = snapshotCases?.find((item) => item.case_id === caseId);
     const result = (run.cases ?? []).find((item) => item.case_id === caseId)?.result;
     const question = datasetCase ? (datasetCase.input?.question ?? JSON.stringify(datasetCase.input)) : "（题面缺失）";
     const expected = datasetCase?.expected ?? "（期望缺失）";
     return {
       caseId,
-      outcomeLabel: outcome.tone === "neutral" ? outcome.label : outcome.label,
+      outcomeLabel: outcome.label,
       outcomeTone: outcome.tone,
       summary: outputText(result),
       detail: (
-        <div className="drill-detail">
+        <>
           <p><span className="field-label">题目</span>{question}</p>
           <p><span className="field-label">模型输出</span><span className="mono">{typeof result?.content === "string" ? result.content : JSON.stringify(result?.content ?? result)}</span></p>
           {result?.error && (
             <p><span className="field-label">失败原因</span><span className="fail">{result.error.class ? `${result.error.class}：` : ""}{result.error.message}</span></p>
           )}
           <p><span className="field-label">期望</span><span className="mono">{typeof expected === "string" ? expected : JSON.stringify(expected)}</span></p>
-        </div>
+        </>
       ),
     };
   });
@@ -92,7 +92,7 @@ export function Gsm8kResult() {
           { label: `accuracy · ${passed}/${scores.length}`, value: accuracy == null ? "—" : `${accuracy}%`, tone: "success" },
           { label: `tokens（输入 ${usage.prompt} + 输出 ${usage.completion}）`, value: String(usage.prompt + usage.completion), tone: "neutral" },
           { label: "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
-          { label: `口径（选中 ${run.case_ids?.length ?? 0} · 应答 ${attempted} · 正确 ${passed}）`, value: "", tone: "neutral" },
+          { label: `口径（选中 ${run.case_ids?.length ?? 0} · 应答 ${attempted}）`, value: `${passed}/${scores.length}`, tone: "neutral" },
         ]} />
         <CaseDrillTable rows={rows} />
       </section>
