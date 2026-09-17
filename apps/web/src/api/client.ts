@@ -38,6 +38,7 @@ export interface ModelRecord {
   capabilities: Record<string, any>;
   context_window?: number | null;
   supports_tools?: boolean;
+  parameters?: Record<string, number | null>;
 }
 
 export interface HarnessReport {
@@ -107,9 +108,57 @@ export const deleteProvider = (name: string) =>
 
 export const getModels = () => request<{ items: ModelRecord[] }>(`/api/v1/models`);
 export const createModel = (body: any) => request<ModelRecord>("/api/v1/models", jsonBody(body));
+
+// ---------------------------------------------------------------- model test
+
+export interface ModelTestResult {
+  ok: boolean;
+  provider: string;
+  model: string;
+  base_url?: string | null;
+  tested_at: string;
+  latency_ms?: number | null;
+  attempts?: number | null;
+  retry_count?: number | null;
+  usage?: Record<string, any> | null;
+  error?: { class?: string; message?: string } | null;
+}
+
+/** 单次最小真实调用（max_output_tokens=16），验证连接、密钥与模型名；报告已脱敏。 */
+export const testModel = (id: string) =>
+  request<ModelTestResult>(`/api/v1/models/${id}/test`, jsonBody({}));
 export const deleteModel = (id: string) => request<{ deleted: string }>(`/api/v1/models/${id}`, { method: "DELETE" });
 
 export const getScenarios = () => request<{ items: any[] }>(`/api/v1/scenarios`);
+
+// ---------------------------------------------------------------- provider kinds
+
+export interface ProviderKindMeta {
+  kind: string;
+  label: string;
+  description: string;
+  default_base_url: string | null;
+  default_key_env: string | null;
+}
+
+export const getProviderKinds = () =>
+  request<{ items: ProviderKindMeta[] }>(`/api/v1/provider_kinds`);
+
+// ---------------------------------------------------------------- credentials
+
+export interface CredentialSummary {
+  profile: string;
+  key_hint: string;
+}
+
+/** 写入服务器凭据文件（与 CLI credentials set 等价）；响应只回掩码，密钥不回显。 */
+export const setCredential = (profile: string, apiKey: string) =>
+  request<{ profile: string; key_hint: string }>(`/api/v1/credentials/${encodeURIComponent(profile)}`, {
+    method: "PUT",
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+
+export const getCredentials = () => request<{ items: CredentialSummary[] }>(`/api/v1/credentials`);
 export const createScenario = (body: any) => request<any>("/api/v1/scenarios", jsonBody(body));
 
 export const getAgents = () =>

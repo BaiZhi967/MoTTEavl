@@ -92,6 +92,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）——禁止两个内容面板 50/50 平分 |
 | 导航项 | 图标（Phosphor Bold 16px）+ 13px 文字，静默态次色，hover `--bg-subtle`，active `--tone-neutral-bg` + 主文字色 + 500 字重 |
 | 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
+| 行内反馈行 | 即时操作结果（如连通性测试）用 `colSpan` 整行嵌在目标行下方：`--bg-subtle` 底、12px、成功 `pass` / 失败 `fail` 前景色；进行中用 `--text-faint` 文案 |
 | 状态徽章 | pill（9999px）、12px、语义粉彩底 + 对应前景色 |
 | 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono；无内层滚动，由所在容器统一滚动 |
 | 表单 | label 13px 次色在控件上方；控件白底 1px 边框 6px 圆角；focus-visible 2px info 色描边 |
@@ -103,8 +104,11 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 键值展示 | `<dl class="kv">` 两列网格，dt 次色 |
 | 滑出面板（Dialog） | 富视图详情（如运行详情）用右侧滑出：`min(720px, 100vw - 280px)` 宽、左边框 1px、200ms 右滑入场；遮罩 `rgba(17,17,17,0.32)`；标题左侧、X 关闭按钮右侧 |
 | 下拉菜单（DropdownMenu） | 行操作收敛为 `···` 触发；白底 1px 边框 8px 圆角 + 极淡阴影 `0 4px 16px rgba(0,0,0,0.05)`；破坏性操作文字用 error 前景色 |
-| 下拉选择（Select） | Radix Select，trigger 与原生输入控件同规格（168px 起、1px 边框、6px 圆角），选中项右侧 Check 指示；简单过滤场景可用同款样式的原生 `<select>`（如时间线事件过滤） |
+| 下拉选择（Select） | Radix Select，trigger 与原生输入控件同规格（168px 起、1px 边框、6px 圆角），选中项右侧 Check 指示；简单过滤场景可用同款样式的原生 `<select>`（如时间线事件过滤、表单内固定选项的协议类型） |
 | 开关（Switch） | 32×18 pill，关闭态 `--tone-neutral-bg`，开启态 `--ink` 实色，thumb 200ms 位移 |
+| 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
+| kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
+| 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |
 
 ## 5. 图标
 

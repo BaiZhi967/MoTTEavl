@@ -305,10 +305,10 @@ button.link.danger {
   margin-bottom: 8px;
 }
 
-.provider-kind {
+/* kind 徽章搭在名称旁：借用状态徽章的 neutral pill，只补排版间距 */
+.kind-badge {
   margin-left: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-family: var(--font-mono);
 }
 
 .provider-meta {
@@ -330,6 +330,24 @@ button.link.danger {
   align-items: center;
   gap: 4px;
   font-family: var(--font-sans);
+}
+
+/* 更新密钥行：卡片内非 form 容器，控件走 .control 体系 */
+.key-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+}
+
+.key-edit .control {
+  flex: 1 1 180px;
+  margin-top: 0;
 }
 
 .model-add {
@@ -396,6 +414,24 @@ tbody tr:hover {
 
 td.row-actions {
   text-align: right;
+}
+
+td.row-actions .link {
+  margin-left: 12px;
+}
+
+/* 参数列与行内测试结果：mono 小字号、弱化展示 */
+.params-cell {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.test-result-row td {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  padding: 4px 8px;
 }
 
 /* ---------- 键值列表 ---------- */

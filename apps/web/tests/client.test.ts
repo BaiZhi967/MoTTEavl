@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelRun, createRun, getRuns } from "../src/api/client";
+import { cancelRun, createRun, getRuns, setCredential } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
   const spy = vi.fn(async () => ({
@@ -35,5 +35,15 @@ describe("api client", () => {
   it("非 2xx 抛出服务端错误信息", async () => {
     mockFetch(422, { error: { code: "CREDENTIALS_REJECTED", message: "凭据字段不接受明文存储" } });
     await expect(cancelRun("run-1", "原因")).rejects.toThrow("凭据字段不接受明文存储");
+  });
+
+  it("PUT setCredential 携带掩码路径与 api_key body", async () => {
+    const fetchMock = mockFetch(200, { profile: "local-vllm", key_hint: "sk-l...cdef" });
+    const saved = await setCredential("local-vllm", "sk-live-0123456789abcdef");
+    expect(saved.key_hint).toBe("sk-l...cdef");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/credentials/local-vllm");
+    expect((init as any).method).toBe("PUT");
+    expect(JSON.parse((init as any).body)).toEqual({ api_key: "sk-live-0123456789abcdef" });
   });
 });
