@@ -40,12 +40,9 @@ compose-config:
 
 check: lint test web-build web-test compose-config
 
-# 同时启动 API（:8000）与 Web（:5173，/api 代理到 8000）；Ctrl-C 一并停止
+# API 健康检查通过后启动 Web；监督子进程，Ctrl-C 仅清理本次启动的进程树
 dev:
-	@trap 'kill 0' EXIT; \
-	uv run uvicorn apps.api.app.main:app --reload --port 8000 & \
-	pnpm --dir apps/web dev & \
-	wait
+	uv run python -m apps.dev
 
 clean:
 	rm -rf .pytest_cache .ruff_cache
