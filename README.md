@@ -23,7 +23,7 @@ make install        # uv sync + pnpm install --frozen-lockfile
 | `make replay` | deterministic replay tests only |
 | `make web-build` | `pnpm --dir apps/web build` |
 | `make check` | lint + test + web build + compose config (same gates as CI) |
-| `make dev` | API + Web dev servers together (Ctrl-C stops both) |
+| `make dev` | Supervised API startup, then Web after API health is ready (Ctrl-C stops both) |
 
 ## Running locally
 
@@ -31,6 +31,20 @@ make install        # uv sync + pnpm install --frozen-lockfile
 - **Web**: `pnpm --dir apps/web dev` — Vite on `http://localhost:5173`, `/api` is proxied to the API on port 8000.
 - **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
 - **Optional services** (PostgreSQL, Redis, OTel collector): `docker compose -f infra/docker-compose.yml up -d`. Compose builds the `motteavl:local` image before starting API, migration, and Worker services.
+
+`make dev` (equivalently `uv run python -m apps.dev`) uses a Python standard-library
+supervisor on POSIX and native Windows; it does not use shell background jobs or
+`kill 0`. Both loopback ports **8000 and 5173 must be free** before startup. Existing
+listeners are never reused or stopped, and Vite cannot silently switch ports.
+The reloading API starts first; Web starts only after `/health` returns `{"status":"ok"}`
+with this launch's identity. Readiness has a **60-second deadline** with local-only
+HTTP probes (ignoring proxy environment variables). Startup errors/timeouts or either
+supervised child exiting stop the other server and return a nonzero status, with
+child output and diagnostics left visible. Ctrl-C stops only this launch's process
+trees (POSIX process groups / Windows Job Objects); Windows cleanup terminates those
+processes rather than promising graceful application shutdown. API reloads after
+initial startup may still briefly interrupt requests. No Worker or model calls are
+started by this command. The combined launcher binds Web to `http://127.0.0.1:5173`.
 
 ## GSM8K-20 smoke benchmark
 
