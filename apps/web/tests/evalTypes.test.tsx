@@ -124,7 +124,7 @@ describe("Gsm8kOperate", () => {
     expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-42,run-43");
   });
 
-  it("个别模型失败不阻塞整批，错误就地显示", async () => {
+  it("个别模型失败不阻塞整批，错误就地显示且提供批次入口", async () => {
     clientMocks.createBenchmarkRun
       .mockRejectedValueOnce(new Error("MODEL_DISABLED"))
       .mockResolvedValueOnce({ id: "run-44", status: "queued" });
@@ -138,7 +138,38 @@ describe("Gsm8kOperate", () => {
     fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
     fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
     fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
-    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-44"));
-    expect(screen.getByText(/MODEL_DISABLED/)).toBeTruthy();
+    expect(await screen.findByText(/MODEL_DISABLED/)).toBeTruthy();
+    expect(screen.getByTestId("location").textContent).toBe("/gsm8k");
+    expect(screen.getByText(/已创建 1 个运行/)).toBeTruthy();
+    const link = await screen.findByRole("link", { name: /查看批次进度/ });
+    expect(link.getAttribute("href")).toBe("/gsm8k/monitor?runs=run-44");
+  });
+
+  it("导入表单提交 revision / license / version", async () => {
+    clientMocks.getBenchmarkOverview.mockResolvedValue({ items: [], total: 0 });
+    clientMocks.importBenchmark.mockResolvedValue({
+      imported: "gsm8k-test@2",
+      scenario: "gsm8k-test-smoke@2",
+      cases: 20,
+      source_sha256: "s",
+      cases_sha256: "c",
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    const revision = await screen.findByLabelText(/官方仓库 commit/);
+    fireEvent.change(revision, { target: { value: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b" } });
+    fireEvent.change(screen.getByLabelText(/数据集版本/), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: /下载并导入/ }));
+    await waitFor(() =>
+      expect(clientMocks.importBenchmark).toHaveBeenCalledWith(
+        expect.objectContaining({
+          revision: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b",
+          license: "MIT",
+          version: "2",
+        })
+      ));
   });
 });

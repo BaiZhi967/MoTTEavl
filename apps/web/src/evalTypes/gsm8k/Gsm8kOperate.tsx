@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { DownloadSimpleIcon } from "@phosphor-icons/react";
 import {
   createBenchmarkRun, getBenchmarkOverview, getModels, importBenchmark,
@@ -17,9 +17,11 @@ export function Gsm8kOperate() {
   const [selected, setSelected] = useState<string[]>([]);
   const [revision, setRevision] = useState("");
   const [license, setLicense] = useState("MIT");
+  const [version, setVersion] = useState("1");
   const [importing, setImporting] = useState(false);
   const [running, setRunning] = useState(false);
   const [failures, setFailures] = useState<{ model: string; error: string }[]>([]);
+  const [launched, setLaunched] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -43,7 +45,7 @@ export function Gsm8kOperate() {
     setError("");
     setMessage("");
     try {
-      const payload = await importBenchmark({ revision: revision.trim(), license: license.trim() });
+      const payload = await importBenchmark({ revision: revision.trim(), license: license.trim(), version: version.trim() });
       setMessage(`已导入 ${payload.imported}（${payload.cases} 题）`);
       await refresh();
     } catch (e) {
@@ -56,6 +58,7 @@ export function Gsm8kOperate() {
   const doRun = async () => {
     setRunning(true);
     setFailures([]);
+    setLaunched([]);
     setError("");
     try {
       const created: string[] = [];
@@ -69,8 +72,13 @@ export function Gsm8kOperate() {
         }
       }
       setFailures(failed);
-      if (created.length > 0) {
+      if (created.length > 0 && failed.length === 0) {
         navigate(ROUTES.monitor(created));
+        return;
+      }
+      if (created.length > 0) {
+        // 混合成败：留在本页让失败就地可见，只给出批次入口。
+        setLaunched(created);
         return;
       }
       if (failed.length === 0) {
@@ -102,6 +110,10 @@ export function Gsm8kOperate() {
             <label>
               License
               <input value={license} onChange={(change) => setLicense(change.target.value)} />
+            </label>
+            <label>
+              数据集版本
+              <input value={version} onChange={(change) => setVersion(change.target.value)} />
             </label>
             <button type="submit" disabled={importing}>
               <DownloadSimpleIcon size={14} weight="bold" aria-hidden />
@@ -153,6 +165,12 @@ export function Gsm8kOperate() {
               <li key={failure.model} className="error">{failure.model}：{failure.error}</li>
             ))}
           </ul>
+        )}
+        {launched.length > 0 && (
+          <p>
+            已创建 {launched.length} 个运行 ·{" "}
+            <Link className="link" to={ROUTES.monitor(launched)}>查看批次进度</Link>
+          </p>
         )}
       </section>
     </div>
