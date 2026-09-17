@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { createRun, getModels, getRun, type ModelRecord, type RunRecord } from "../../api/client";
+import { createRun, getModels, getRun, modelLabel, type ModelRecord, type RunRecord } from "../../api/client";
 import { ModelPicker } from "../../components/ModelPicker";
 import { BatchMonitor } from "../../components/BatchMonitor";
 import { MetricCards } from "../../components/MetricCards";
@@ -196,7 +196,7 @@ export function DirectLlmResult() {
         <div className="panel-head"><h2 className="mono">运行 {runId} · 结果</h2></div>
         <MetricCards items={[
           { label: `通过 · ${passed}/${scores.length}`, value: scores.length > 0 ? `${Math.round((passed / scores.length) * 100)}%` : "—", tone: "success" },
-          { label: "模型", value: run.model ?? "—", tone: "neutral" },
+          { label: "模型", value: modelLabel(run) ?? "—", tone: "neutral" },
         ]} />
         <CaseDrillTable rows={rows} />
       </section>

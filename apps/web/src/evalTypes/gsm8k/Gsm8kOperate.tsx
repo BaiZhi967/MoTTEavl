@@ -55,7 +55,10 @@ export function Gsm8kOperate() {
     }
   };
 
+  const preset = overview?.items[0];
+
   const doRun = async () => {
+    if (!preset) return;
     setRunning(true);
     setFailures([]);
     setLaunched([]);
@@ -65,7 +68,7 @@ export function Gsm8kOperate() {
       const failed: { model: string; error: string }[] = [];
       for (const model of selected) {
         try {
-          const run = await createBenchmarkRun({ model });
+          const run = await createBenchmarkRun({ model, scenario: preset.scenario });
           created.push(run.id);
         } catch (e) {
           failed.push({ model, error: String(e) });
@@ -88,8 +91,6 @@ export function Gsm8kOperate() {
       setRunning(false);
     }
   };
-
-  const preset = overview?.items[0];
 
   return (
     <div className="page">

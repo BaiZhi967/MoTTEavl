@@ -76,6 +76,16 @@ export interface RunReport {
   scores: Score[];
 }
 
+/** 模型摘要：档案引用 > 展开快照 > inline provider 字段（镜像后端 _run_model_label）。
+ * 详情端点 GET /runs/{id} 不回顶层 model（仅列表端点回），须从 manifest 摘要。 */
+export function modelLabel(run: Pick<RunRecord, "manifest"> | null | undefined): string | null {
+  const manifest = run?.manifest;
+  if (typeof manifest?.model === "string" && manifest.model) return manifest.model;
+  const providerModel = manifest?.provider?.model;
+  if (typeof providerModel === "string" && providerModel) return providerModel;
+  return null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getReport, getRun, type RunRecord } from "../../api/client";
+import { getReport, getRun, modelLabel, type RunRecord } from "../../api/client";
 import { suiteRoutes } from "../registry";
 
 const ROUTES = suiteRoutes("gsm8k");
@@ -21,7 +21,7 @@ function collect(run: RunRecord, report: { cost?: { total?: number | null } } | 
   const tokens = (run.cases ?? []).reduce((sum, row) => sum + (row.result?.usage?.total_tokens ?? 0), 0);
   return {
     runId: run.id,
-    model: run.model ?? run.id,
+    model: modelLabel(run) ?? run.id,
     accuracy: scores.length > 0 ? Math.round((passed.length / scores.length) * 100) : null,
     tokens,
     cost: report?.cost?.total ?? null,
