@@ -59,7 +59,7 @@
 | 工具 | 版本 | 锁定位置 |
 |---|---|---|
 | Python | 3.12 | `.python-version` / CI |
-| uv | >=0.11.6,<0.12 | `pyproject.toml [tool.uv]` |
+| uv | >=0.11.6,<0.13 | `pyproject.toml [tool.uv]` |
 | Node | 24 | `.nvmrc` / `.node-version` |
 | pnpm | 9.15.0 | `package.json packageManager` |
 | TypeScript（web） | 5.9（openapi-typescript 尚不支持 TS7） | `apps/web/package.json` |
