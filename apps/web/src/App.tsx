@@ -1,7 +1,6 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import { ActivityIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
 import { RunsOverviewPage } from "./pages/RunsOverviewPage";
-import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 import { EVAL_SUITES } from "./evalTypes/registry";
 import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
@@ -48,9 +47,8 @@ export default function App() {
       </aside>
       <div className="workbench">
         <Routes>
-          <Route path="/" element={<Navigate to="/runs" replace />} />
+          <Route path="/" element={<Navigate to="/gsm8k" replace />} />
           <Route path="/runs" element={<RunsOverviewPage />} />
-          <Route path="/benchmarks" element={<BenchmarksPage />} />
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
           <Route path="/gsm8k" element={<Gsm8kOperate />} />
@@ -65,7 +63,7 @@ export default function App() {
           <Route path="/replay/runs/:runId/result" element={<ReplayResult />} />
           <Route path="/runs/:runId/monitor" element={<FallbackMonitorPage />} />
           <Route path="/runs/:runId/result" element={<FallbackResultPage />} />
-          <Route path="*" element={<Navigate to="/runs" replace />} />
+          <Route path="*" element={<Navigate to="/gsm8k" replace />} />
         </Routes>
       </div>
     </div>
