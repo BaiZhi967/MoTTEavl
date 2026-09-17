@@ -211,7 +211,10 @@ describe("BatchMonitor", () => {
     );
     const compare = await screen.findByRole("link", { name: /查看对比结果/ });
     expect(compare.getAttribute("href")).toBe("/gsm8k/compare?runs=run-42,run-43");
-    fireEvent.click(screen.getByRole("link", { name: "run-42" }));
+    const idToggle = screen.getByRole("button", { name: "run-42" });
+    fireEvent.click(idToggle);
+    expect(idToggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getAllByRole("link", { name: "结果" })[0]);
     expect(screen.getByTestId("location").textContent).toBe("/gsm8k/runs/run-42/result");
   });
 

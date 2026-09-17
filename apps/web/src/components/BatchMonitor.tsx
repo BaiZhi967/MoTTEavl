@@ -37,9 +37,9 @@ function BatchRow({ runId, resultPath, renderDetail }: {
   return (
     <li className="batch-row">
       <div className="batch-row-head">
-        <Link className="link" to={resultPath(runId)} onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
+        <button type="button" className="link" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
           {runId}
-        </Link>
+        </button>
         <span className="mono">{run?.model ?? "—"}</span>
         <StatusBadge status={current} />
         <RunProgress done={done} total={total} />
