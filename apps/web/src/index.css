@@ -1023,3 +1023,38 @@ td.row-actions .link {
     opacity: 0;
   }
 }
+
+/* ---------- ModelPicker（按 Provider 分组的多选清单） ---------- */
+
+.model-picker-group {
+  margin-bottom: 8px;
+}
+
+.model-picker-group .field-label {
+  margin-bottom: 4px;
+}
+
+.model-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.model-picker-item:hover {
+  background: var(--bg-subtle);
+}
+
+.model-picker-item[data-enabled="false"] .mono {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.model-picker-item input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--ink);
+}

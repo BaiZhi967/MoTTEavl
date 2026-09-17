@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
+import { ModelPicker } from "../src/components/ModelPicker";
 import { RunTimeline } from "../src/components/RunTimeline";
 import { ScoreTable } from "../src/components/ScoreTable";
 import { StatusBadge, statusLabel } from "../src/components/StatusBadge";
@@ -368,5 +369,37 @@ describe("ProvidersPage", () => {
     expect(await screen.findByText(/通过/)).toBeTruthy();
     expect(screen.getByText(/812ms/)).toBeTruthy();
     expect(await screen.findByLabelText("最近测试通过")).toBeTruthy();
+  });
+});
+
+describe("ModelPicker", () => {
+  const MODELS = [
+    { id: "glm-4.7", provider: "zhipu", capabilities: {}, context_window: 128000 },
+    { id: "qwen-max", provider: "zhipu", capabilities: {}, context_window: 32000 },
+    { id: "qwen2.5-7b", provider: "local-vllm", capabilities: {}, context_window: 32768 },
+    { id: "glm-4-air", provider: "zhipu", capabilities: {}, enabled: false },
+  ];
+
+  it("按 Provider 分组渲染并标注上下文与停用态", () => {
+    const onToggle = vi.fn();
+    render(<ModelPicker models={MODELS as any} selected={["qwen-max"]} onToggle={onToggle} />);
+    expect(screen.getByText("zhipu")).toBeTruthy();
+    expect(screen.getByText("local-vllm")).toBeTruthy();
+    expect(screen.getByText("128K")).toBeTruthy();
+    expect(screen.getByText("已停用")).toBeTruthy();
+    const disabled = screen.getByLabelText("选择模型 glm-4-air") as HTMLInputElement;
+    expect(disabled.disabled).toBe(true);
+  });
+
+  it("点击勾选触发 onToggle", () => {
+    const onToggle = vi.fn();
+    render(<ModelPicker models={MODELS as any} selected={[]} onToggle={onToggle} />);
+    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
+    expect(onToggle).toHaveBeenCalledWith("qwen-max");
+  });
+
+  it("空模型列表显示空状态", () => {
+    render(<ModelPicker models={[]} selected={[]} onToggle={vi.fn()} />);
+    expect(screen.getByText("暂无可用模型，先在 Provider 页注册")).toBeTruthy();
   });
 });
