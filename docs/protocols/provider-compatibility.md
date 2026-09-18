@@ -5,16 +5,16 @@
 ## 资源关系与注册表（2026-09-15 起）
 
 - **ProviderConnection**（`providers` 资源）：怎么连——`kind`（协议）、`base_url`、`credentials`（凭据 profile 名，缺省与 name 相同）、传输参数（`timeout`/`max_retries`/`backoff_initial_ms`/`backoff_max_ms`）。不再携带 model/price_table（旧 payload 兼容读取）。
-- **ModelProfile**（`models` 资源）：调什么——`provider`（连接名，创建时校验存在）、`model`（API 模型字符串，缺省 = id）、采样参数默认值（`parameters`）与能力档案。资源 `put` 幂等覆盖，编辑即重新 PUT；资源键允许自带路径分隔符（`Qwen/Qwen2.5-7B` 这类 id 整键路由，不按路径切分）。Web 端测试调用 `POST /api/v1/models/{id}/test` 按连接解析密钥做一次最小真实调用（`max_output_tokens=16` 封顶费用，报告脱敏，与 CLI live-smoke 同一 envelope）；网络层失败（DNS / 连接被拒 / TLS / 超时）的 `error.message` 点名主机并给出排查方向，原始异常原样附后。
+- **ModelProfile**（`models` 资源）：调什么，包括 `provider`（连接名）、`model`（API 模型字符串，缺省 = id）、身份策略/别名、采样参数和能力档案。新记录为 `draft`，只允许草稿 PUT；`POST /api/v1/models/{id}/publish` 固定 generation 与 profile hash，只有 `published` 可创建正式 Run；DELETE 转为 `deprecated`。资源键允许路径分隔符。`POST /api/v1/models/{id}/test` 可显式 smoke-test 草稿并做一次受限真实调用，报告脱敏。
 - **PriceTable**（`price_tables` 资源，`(model_id, version)` 版本化）：多少钱——Run 创建期解析：manifest 显式 `price_table_version` > 连接 legacy payload > 该模型最新版本（自然排序）。
-- Run manifest 引用解析（API 与 CLI 共用 `motte_sdk.resolve`）：`manifest.model` 引用 ModelProfile 时按其 `provider` 取连接；`manifest.provider` 也可以显式给连接名（须与档案一致，否则 422 `MODEL_PROVIDER_CONFLICT`）；inline dict 为 legacy 全量配置。展开结果以快照形式写入 run。
+- Run manifest 引用解析（API 与 CLI 共用 `motte_sdk.resolve`）：`manifest.model` 引用已发布 ModelProfile 时按其 `provider` 取连接；`manifest.provider` 也可以显式给连接名（须与档案一致，否则 422 `MODEL_PROVIDER_CONFLICT`）；inline dict 仅作 legacy 兼容。ResolvedManifest v2 固定 ExecutionBackend、evaluation/scorer、Provider adapter 实现版本，以及 ModelProfile/ProviderConnection generation、hash 和版本化资源快照。
 - **适配器注册表**（`motte_provider.registry`）：新增 kind 只需 register 一个 `AdapterSpec`（validate/build/default_key_env/smoke_supported/connection_required_fields）；Worker 分发、API 预检、CLI live-smoke 的 kind 列表均派生自注册表。Web 端 kind 目录 `GET /api/v1/provider_kinds` 同样派生自注册表（replay 等内部 kind 不暴露），附带中文说明与官方默认端点（`anthropic_messages` → `https://api.anthropic.com/v1`、`openai_responses` → `https://api.openai.com/v1`）。
 - **凭据**：本地凭据文件 `~/.motte/credentials.toml`（0600，`MOTTE_CREDENTIALS_PATH` 可覆盖；CLI `credentials set/list/remove` 与 Web API 管理——`PUT /api/v1/credentials/{profile}` 写入即弃、响应只回掩码，`GET /api/v1/credentials` 掩码列表）。解析优先级：显式传参 > 凭据文件 profile > 环境变量（`api_key_env`，回退兼容）。密钥本体绝不入库/入 trace。
 - 采样参数合并优先级：请求级 > manifest 级 > ModelProfile 档案默认值；全程经 registry strict 校验。
 
 ## GSM8K-20 benchmark (offline implementation)
 
-`benchmark import` reads local official-format JSONL only; `benchmark run` and the ordinary API/CLI run creation share immutable scenario/dataset/provider preparation. GSM8K versions reject conflicting writes (HTTP 409); other resource upserts remain compatible. The preset pins first-20 selection, source/provenance hashes, prompt/scorer versions, `max_output_tokens=1024`, and `max_retries=0` (not a monetary cap). Provider-facing cases contain prompts only; gold stays in the evaluation snapshot.
+`benchmark import` reads local official-format JSONL only; `benchmark run` and ordinary API/CLI run creation share immutable scenario/dataset/provider preparation. Dataset、Scenario 与 PriceTable 的每个版本都是 insert-only；冲突写入或删除已发布版本返回 HTTP 409。The preset pins first-20 selection, source/provenance hashes, prompt/scorer versions, `max_output_tokens=1024`, and `max_retries=0` (not a monetary cap). Provider-facing cases contain prompts only; gold stays in the evaluation snapshot.
 
 Benchmark runs use strict final-line Decimal scoring and a selected-case denominator. Failed runs retain partial scores, failed-call evidence and not-attempted rows; terminal benchmark rescore is offline. Generic raw-equality/replay behavior remains unchanged. Existing HTTP adapters share the prompt-only projection; synthetic fake-HTTP Worker tests verify the complete path, not official dataset authenticity or live model quality. See [GSM8K operator guide](../operations/gsm8k-smoke.md) for error policy, costs and restart limitations.
 
@@ -35,22 +35,23 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 - **tool_calls**：canonical `[{id, name, arguments(JSON 字符串)}]`；请求侧 canonical 工具定义为 OpenAI chat 形状（`{type: function, function: {name, description, parameters}}`），各适配器自行转换（Anthropic `{name, description, input_schema}`、Responses 扁平 function 形状）；工具回合历史（assistant `tool_calls` / tool 消息）双向映射。
 - **错误映射**：HTTP 状态码分类之外，尽力解析错误体 `error.type`（OpenAI/Anthropic 通行形状）精化 `auth`/`rate_limit`/`server`/`timeout` 分类；Anthropic 529（overloaded）可重试。
 - **公共流程**：`BaseHTTPProvider` 持有 complete 全流程与 envelope（计量/成本快照/脱敏/ProviderCallError 证据），适配器只实现请求构造与响应归一化。
+- **模型身份**：envelope 分别保存 `requested_model`、`reported_model`、`resolved_model_identity`、原始 evidence、策略和结论。策略为 `report_only` / `require_reported` / `require_match`，alias 只来自版本化 ModelProfile，不做通用字符串裁剪。
 - **尚未接入**：流式（SSE）、GET probe（如 `/models`）、真实端点 live smoke 记录。
 
 ## Agent
 
 | 运行时 | 状态 | 协议 | 验证 |
 |---|---|---|---|
-| `builtin-react` | ✅ 完整 | 文本 JSON 动作协议（tool/final），observation 回灌，步数预算，全程事件 | 离线测试（fake complete） |
-| `pi` | ⚠️ bridge v0.1.0 / 协议 v1 | NDJSON 双向（probe→version，prompt→started/output/finished，malformed→error），当前为确定性 echo | Node 自测 + Python 驱动测试；真实 Pi runtime 待接入 |
+| `builtin-react` | 协议实现；Run backend 未接通 | 文本 JSON 动作协议（tool/final），observation 回灌，步数预算，全程事件 | 离线 runtime 测试；API `execution_ready=false` |
+| `pi` | 协议桩 v0.1.0 / v1；执行不可用 | 严格 JSONL probe；默认 prompt 返回 `PI_BACKEND_UNAVAILABLE`，不 echo、不执行输入 | Node 自测 + Python malformed/timeout/process-tree 测试；API `execution_ready=false` |
 
 ## Harness
 
 | Harness | 状态 | probe | 传输 | 验证 |
 |---|---|---|---|---|
-| `claude-cli` | ⚠️ CLI 通道（Linux/WSL2） | `claude --version` + 安装检测（路径/来源/版本） | `claude -p <prompt> --output-format json` | Linux fake binary 全流程；Windows 进程适配仍需补齐 |
-| `codex-cli` | ⚠️ CLI 通道（Linux/WSL2） | `codex --version` + 安装检测 | `codex exec --json` | Linux fake binary 全流程；app-server JSON-RPC 与 Windows 进程适配待接入 |
-| `inspect` | 🚧 dry-run 占位 | — | — | Inspect Task/Solver/Scorer 映射待接入 |
+| `claude-cli` | 本机 probe；Run backend 未接通 | `claude --version` + 安装检测（路径/来源/版本） | 预留 CLI 通道 | 目录报告 `protocol_ready` 与 `execution_ready=false` |
+| `codex-cli` | 本机 probe；Run backend 未接通 | `codex --version` + 安装检测 | 预留 CLI/app-server 通道 | 目录报告 `protocol_ready` 与 `execution_ready=false` |
+| `inspect` | dry-run 占位 | — | — | Inspect Task/Solver/Scorer 映射待接入 |
 
 ## Sandbox
 
@@ -70,6 +71,6 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 | pnpm | 9.15.0 | `package.json packageManager` |
 | TypeScript（web） | 5.9（openapi-typescript 尚不支持 TS7） | `apps/web/package.json` |
 | pi-bridge | 0.1.0 / 协议 v1 | `bridges/pi/package.json` |
-| 迁移 | alembic 1.20 / 当前 head `0001_initial` | `alembic.ini` / `migrations/versions/` |
+| 迁移 | alembic 1.20 / 当前 head `0002_platform_integrity` | `alembic.ini` / `migrations/versions/` |
 
 更新本矩阵的时机：新增/变更 Provider、Agent、Harness、bridge 协议或工具链版本时，随同一提交更新。

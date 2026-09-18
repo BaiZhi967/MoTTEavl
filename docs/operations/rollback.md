@@ -26,14 +26,14 @@ DATABASE_URL=... uv run alembic downgrade 0001_initial   # 回退到指定版本
 ```
 
 注意：
-- downgrade 会 DROP 对应表，执行前确认备份存在且可恢复；
+- 从 `0002_platform_integrity` downgrade 会删除 CaseAttempt、ScoringPass/ScoreSet、RunCommand 和 Run revision 证据，执行前确认备份存在且可恢复；
 - 新版本若只是加表/加列，通常可以不回 schema（旧代码忽略新表）；改动列语义时才必须回退；
 - 回退后跑 `uv run pytest -q -m "not live"` 验证兼容。
 
 ## 4. 重启与验证
 
 ```
-make worker &                     # Worker 会 recover_interrupted() 接管中间态 Run
+make worker &                     # 单 Worker 取得锁后恢复；不确定调用进入 needs_review
 uv run uvicorn apps.api.app.main:app --port 8000 &
 uv run python -m motte_cli doctor
 ```

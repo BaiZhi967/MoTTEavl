@@ -269,14 +269,16 @@ existing token fields. Per-case envelopes remain available for metering and inco
 total is not the cost of a fully executed selection.
 
 `POST /api/v1/runs/{id}/rescore` works for completed or terminal benchmark runs and never calls a provider. It
-uses the pinned snapshot/scorer version, replaces score rows, and does not change execution evidence/status.
-Legacy non-benchmark rescore still requires completed status.
+uses the pinned snapshot/scorer version, appends an immutable ScoringPass/score set, and moves only the Run's
+`current_scoring_pass_id`; old passes remain selectable from the report API. Legacy non-benchmark rescore still
+requires completed status.
 
-Restart resumes interrupted runs, skips durably stored case results, and respects a durable systemic-stop
-marker even if the process died before persisting final scores/status. A process crash **after a remote call
-but before local case persistence may repeat that call**: this is not exactly-once billing. `retry` creates a
-new run with the same immutable snapshot and re-executes the selection; it may incur new charges. Do not run
-recovery concurrently with a healthy Worker.
+Restart skips durably stored case results and respects a durable systemic-stop marker. Each external call is
+persisted as a CaseAttempt before dispatch. If the process dies while an attempt is `dispatching`, the outcome
+may already exist remotely; recovery marks the attempt `indeterminate` and the Run `needs_review` instead of
+automatically repeating the paid call. `retry` is an explicit operator action that creates a child Run with the
+same immutable snapshot and may incur new charges. The execution lock prevents concurrent recovery by a second
+Worker.
 
 ## Offline verification
 
