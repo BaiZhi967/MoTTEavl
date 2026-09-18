@@ -33,21 +33,22 @@ class ResourceConflictError(ValueError):
     """A benchmark resource version cannot be overwritten or deleted."""
 
 
-def _check_benchmark(table, record, existing=None):
+def _check_managed(table, record, existing=None):
+    """已登记套件（GSM8K / Direct LLM）的数据集与场景版本不可变，且必须通过各自契约校验。"""
     if table not in ("dataset_versions", "scenario_versions"):
         return
-    from motte_contracts.gsm8k import is_benchmark, validate_dataset, validate_scenario
+    from motte_contracts.suites import is_managed, validate_dataset, validate_scenario
 
-    if existing and (is_benchmark(existing) or is_benchmark(record)) and existing != record:
+    if existing and (is_managed(existing) or is_managed(record)) and existing != record:
         raise ResourceConflictError("benchmark version already exists with different content; use a new version")
-    if is_benchmark(record):
+    if is_managed(record):
         (validate_dataset if table == "dataset_versions" else validate_scenario)(record)
 
 
 def _check_delete(record):
-    from motte_contracts.gsm8k import is_benchmark
+    from motte_contracts.suites import is_managed
 
-    if record and is_benchmark(record):
+    if record and is_managed(record):
         raise ResourceConflictError("benchmark versions are immutable; use a new version")
 
 
@@ -76,7 +77,7 @@ class _SQLiteResourceRepository:
             existing = connection.execute(
                 f"SELECT payload FROM {self._table} WHERE {where}", values
             ).fetchone()
-            _check_benchmark(self._table, record, json.loads(existing[0]) if existing else None)
+            _check_managed(self._table, record, json.loads(existing[0]) if existing else None)
             connection.execute(
                 f"INSERT OR REPLACE INTO {self._table}({', '.join(self._keys)}, payload) "
                 f"VALUES ({', '.join('?' for _ in range(len(self._keys) + 1))})",
@@ -133,7 +134,7 @@ class _PgResourceRepository:
                 where = " AND ".join(f"{field} = %s" for field in self._keys)
                 cursor.execute(f"SELECT payload FROM {self._table} WHERE {where}", values)
                 existing = cursor.fetchone()
-                _check_benchmark(self._table, record, existing[0] if existing else None)
+                _check_managed(self._table, record, existing[0] if existing else None)
                 cursor.execute(
                     f"INSERT INTO {self._table}({fields}) VALUES ({placeholders}) "
                     f"ON CONFLICT ({', '.join(self._keys)}) DO UPDATE SET payload = EXCLUDED.payload",
@@ -178,7 +179,7 @@ class _InMemoryResourceRepository:
 
     def put(self, record: dict[str, Any]) -> dict[str, Any]:
         key = tuple(str(record[field]) for field in self._keys)
-        _check_benchmark(self._table, record, self._rows.get(key))
+        _check_managed(self._table, record, self._rows.get(key))
         self._rows[key] = deepcopy(record)
         return deepcopy(record)
 

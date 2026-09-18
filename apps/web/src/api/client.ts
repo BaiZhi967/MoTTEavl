@@ -4,6 +4,12 @@ export interface Score {
   outcome?: string;
   attempted?: boolean;
   responded?: boolean;
+  /** 本题是否有期望答案；false 表示不判定，不进 accuracy 分母（Direct LLM）。 */
+  judged?: boolean;
+  /** 本题生效的评分器（Direct LLM）：exact / contains / regex。 */
+  scorer?: string;
+  scorer_version?: string;
+  error_class?: string;
 }
 
 export interface CaseRun {
@@ -71,8 +77,19 @@ export interface RunReport {
   scenario_version: string;
   status: string;
   generated_at: string;
-  summary: { cases: number; scored: number; passed: number; failed: number; pass_rate: number | null };
-  cost: { total: number | null; price_table_versions: string[] };
+  summary: {
+    cases: number; scored: number; passed: number; failed: number; pass_rate: number | null;
+    /** 套件口径的严格聚合（GSM8K：selected_cases 分母；Direct LLM：judged_cases 分母）。 */
+    selected?: number; judged?: number; denominator?: string;
+    correct?: number; wrong_answer?: number; no_expectation?: number; call_failed?: number;
+    not_attempted?: number; parser_failure?: number; attempted?: number; responded?: number;
+    completion?: number | null; attempt_rate?: number | null; scorer_version?: string;
+  };
+  cost: {
+    total: number | null; price_table_versions: string[];
+    known_cases?: number; unknown_cases?: number;
+  };
+  usage?: Record<string, number>;
   scores: Score[];
 }
 
@@ -247,6 +264,89 @@ export const createBenchmarkRun = (body: {
   model: string; scenario?: string; parameters?: Record<string, number>;
   reasoning_level?: string; case_selection?: CaseSelectionRequest;
 }) => request<RunRecord>("/api/v1/benchmarks/gsm8k/runs", jsonBody(body));
+
+// ---------------------------------------------------------------- direct llm
+
+export interface DirectLlmPreset {
+  scenario: string;
+  dataset: string;
+  suite: string;
+  /** 数据集级 eval 描述：scorer / scorer_version / prompt_version / selected_count 等。 */
+  eval?: Record<string, any>;
+  provenance?: Record<string, any>;
+  cases: number;
+  runs: BenchmarkRunProgress[];
+}
+
+export interface DirectLlmOverview {
+  items: DirectLlmPreset[];
+  total: number;
+}
+
+export interface DirectLlmBuiltin {
+  id: string;
+  label: string;
+  description: string;
+  scorer: string;
+  source: string;
+  /** false 表示样例文件缺失或损坏，错误原因见 error。 */
+  importable: boolean;
+  cases?: number | null;
+  error?: string;
+}
+
+export interface DirectLlmCase {
+  case_id: string;
+  input: string;
+  /** null = 本题没有期望答案，评分记为「无判定」。 */
+  expected: string | null;
+  scorer: string;
+  source_line?: number | null;
+}
+
+export interface DirectLlmCasePage {
+  dataset: string;
+  total: number;
+  dataset_total: number;
+  offset: number;
+  limit: number;
+  query: string;
+  items: DirectLlmCase[];
+}
+
+export interface DirectLlmImportReceipt {
+  imported: string; scenario: string; suite: string; scorer: string; cases: number;
+  source: string; source_sha256: string; cases_sha256: string;
+}
+
+export const getDirectLlmOverview = () =>
+  request<DirectLlmOverview>(`/api/v1/benchmarks/direct-llm`);
+
+/** 仓库内置样例清单（含题数与可导入性），供操作页一键导入。 */
+export const getDirectLlmBuiltins = () =>
+  request<{ items: DirectLlmBuiltin[]; total: number }>(`/api/v1/benchmarks/direct-llm/builtins`);
+
+/** 分页浏览数据集题目（只读；运行级子集由 createDirectLlmRun 的 case_selection 决定）。 */
+export const getDirectLlmCases = (params: {
+  dataset: string; offset?: number; limit?: number; query?: string;
+}) => {
+  const search = new URLSearchParams({ dataset: params.dataset });
+  if (params.offset) search.set("offset", String(params.offset));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.query) search.set("query", params.query);
+  return request<DirectLlmCasePage>(`/api/v1/benchmarks/direct-llm/cases?${search.toString()}`);
+};
+
+/** 导入一份 JSONL：`content`（本地粘贴/上传正文）与 `builtin`（内置样例 id）二选一。 */
+export const importDirectLlm = (body: {
+  content?: string; builtin?: string; name?: string; version?: string;
+  license?: string; scorer?: string; source?: string;
+}) => request<DirectLlmImportReceipt>("/api/v1/benchmarks/direct-llm/import", jsonBody(body));
+
+export const createDirectLlmRun = (body: {
+  model: string; scenario?: string; parameters?: Record<string, number>;
+  reasoning_level?: string; case_selection?: CaseSelectionRequest;
+}) => request<RunRecord>("/api/v1/benchmarks/direct-llm/runs", jsonBody(body));
 
 // ---------------------------------------------------------------- provider kinds
 

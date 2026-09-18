@@ -128,10 +128,12 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
 | kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
 | 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |
-| 类型操作页卡片 | `.operate-grid` / `.operate-card`：flex 换行布局、1px 边框 8px 圆角白卡（GSM8K 操作页为数据集 / 题目 / 模型 / 参数 / 下载并导入五卡）；卡内分节用 `.embed-title`，不套第二层卡片；卡内数据集选择与表单内的范围选择用原生 `<select class="control">`（与过滤控件同规格，选项为固定枚举） |
+| 类型操作页卡片 | `.operate-grid` / `.operate-card`：flex 换行布局、1px 边框 8px 圆角白卡（GSM8K 为数据集 / 题目 / 模型 / 参数 / 下载并导入五卡；Direct LLM 为数据集 / 题目 / 模型 / 跑测参数 / 内置样例 / 导入本地 JSONL 六卡）；卡内分节用 `.embed-title`，不套第二层卡片；卡内数据集选择与表单内的范围选择用原生 `<select class="control">`（与过滤控件同规格，选项为固定枚举） |
 | 卡片内字段 | `.operate-card` 内的 `label` 与 `input/select/textarea` 与 `form` 内同规格（13px 次色 label、白底 1px 边框 6px 圆角控件），禁止浏览器默认外观裸奔 |
 | 卡片内高级设置 | `.disclosure`（`<details>`）：默认收起，summary 13px 600 主文字色 + pointer；展开后才是次级表单字段，间距走 `--space-sm` |
-| 题目清单页 | 沿用通用表格规范（Case 用 mono、期望答案用 mono、行 hover `--bg-subtle`）；首列原生 checkbox 做多选，工具栏用 `.inline-field`（数据集下拉 / 搜索 / 全选本页 / 清空 / 已选题数），底部 `.actions` 放翻页与「用所选 N 题发起跑测」 |
+| 本地文件选择 | 全部走「标准按钮 + 隐藏 `<input type="file" hidden>`」模式（按钮点击触发 `ref.click()`），文件名用 `.hint .mono` 行内回显；**禁止把原生 file 控件直接暴露在表单里**（原生外观无法与 token 体系对齐）。多行输入用 `<textarea class="mono">` |
+| 判定词汇（结果页 / 对比页） | 每种套件的结果页各自声明 outcome 词汇与语气，唯一来源是对应页面文件里的 `OUTCOME_LABELS`：GSM8K 为 答对 / 答错 / 解析失败 / 调用失败 / 未尝试（`src/evalTypes/gsm8k/Gsm8kResult.tsx`）；Direct LLM 为 通过 / 不通过 / 无判定 / 调用失败 / 未尝试（`src/evalTypes/directllm/DirectLlmResult.tsx`）。语气只允许 success / error / neutral 三档，禁止自造色 |
+| 题目清单页 | 沿用通用表格规范（Case 用 mono、期望答案用 mono、行 hover `--bg-subtle`）；首列原生 checkbox 做多选，工具栏用 `.inline-field`（数据集下拉 / 搜索 / 全选本页 / 清空 / 已选题数），底部 `.actions` 放翻页与「用所选 N 题发起…」；Direct LLM 额外展示每题生效的评分器列 |
 | 步进与批次行 | `.batch-row-head`：run ID link + mono 模型名 + 状态徽章 + `RunProgress`（x/N 进度条）+ 操作区；排队提示用 `.hint` |
 | 逐题格子 | `.progress-grid`（`auto-fill` 28px 格）+ `.grid-cell-pass/fail/pending`：语义粉彩底 + 对应前景/描边（pass/fail 用语义 token，pending 用 neutral 底 + `--text-faint`），禁止新色 |
 | 指标卡 | `.metric-cards` / `.metric-card`：flex 换行、内容居中、26px mono 数值、12px 次色标签；success / error 语气只染数值色 |

@@ -1,22 +1,12 @@
-"""Offline benchmark import and immutable preparation shared by API/CLI."""
+"""GSM8K benchmark import and immutable preparation shared by API/CLI."""
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
-from motte_contracts.gsm8k import (build_prompt, scenario_for, scenario_name,
+from motte_contracts.gsm8k import (SUITE, build_prompt, scenario_for, scenario_name,
                                    validate_dataset, validate_scenario)
-
-
-def next_dataset_version(record: dict[str, Any], resources: Any) -> str:
-    """自动版本号：同内容已存在则复用其版本（重复导入保持幂等），否则取下一个数字空号。"""
-    known = [dataset for dataset in resources.datasets.list() if dataset.get("name") == record["name"]]
-    for dataset in known:
-        if dataset.get("cases_sha256") == record["cases_sha256"]:
-            return str(dataset["version"])
-    numeric = [int(dataset["version"]) for dataset in known
-               if isinstance(dataset.get("version"), str) and dataset["version"].isdigit()]
-    return str(max(numeric, default=0) + 1)
+from motte_sdk.datasets import next_dataset_version  # noqa: F401  （历史导入点，保持可用）
 
 
 def persist_benchmark_dataset(record: dict[str, Any], scope: str, resources: Any,
@@ -84,6 +74,9 @@ def resolve_benchmark_manifest(scenario: dict[str, Any], manifest: dict[str, Any
     resolved["benchmark_snapshot"] = {"scenario": deepcopy(scenario), "dataset": deepcopy(dataset)}
     resolved["benchmark_provenance"] = {
         **deepcopy(dataset["benchmark"]), **deepcopy(dataset["provenance"]),
+        # 套件判别字段：Direct LLM 运行同样带 benchmark_provenance，路由/评分靠它区分。
+        # 旧运行没有该字段，消费方需按 gsm8k 兼容（见 motte_contracts.suites.suite_of_run）。
+        "suite": SUITE,
         "dataset": scenario["dataset"], "cases_sha256": dataset["cases_sha256"],
         "scenario": f"{scenario['name']}@{scenario['version']}",
         RUN_SELECTION_KEY: run_selection,

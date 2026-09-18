@@ -9,7 +9,11 @@ import { Gsm8kCompare } from "./evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kMonitor } from "./evalTypes/gsm8k/Gsm8kMonitor";
 import { Gsm8kResult } from "./evalTypes/gsm8k/Gsm8kResult";
-import { DirectLlmOperate, DirectLlmMonitor, DirectLlmResult } from "./evalTypes/directllm/DirectLlmPages";
+import { DirectLlmCases } from "./evalTypes/directllm/DirectLlmCases";
+import { DirectLlmCompare } from "./evalTypes/directllm/DirectLlmCompare";
+import { DirectLlmMonitor } from "./evalTypes/directllm/DirectLlmMonitor";
+import { DirectLlmOperate } from "./evalTypes/directllm/DirectLlmOperate";
+import { DirectLlmResult } from "./evalTypes/directllm/DirectLlmResult";
 import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
 
 const GENERAL_NAV = [
@@ -58,8 +62,10 @@ export default function App() {
           <Route path="/gsm8k/runs/:runId/result" element={<Gsm8kResult />} />
           <Route path="/gsm8k/compare" element={<Gsm8kCompare />} />
           <Route path="/direct-llm" element={<DirectLlmOperate />} />
+          <Route path="/direct-llm/cases" element={<DirectLlmCases />} />
           <Route path="/direct-llm/monitor" element={<DirectLlmMonitor />} />
           <Route path="/direct-llm/runs/:runId/result" element={<DirectLlmResult />} />
+          <Route path="/direct-llm/compare" element={<DirectLlmCompare />} />
           <Route path="/replay" element={<ReplayOperate />} />
           <Route path="/replay/monitor" element={<ReplayMonitor />} />
           <Route path="/replay/runs/:runId/result" element={<ReplayResult />} />

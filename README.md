@@ -29,7 +29,7 @@ make install        # uv sync + pnpm install --frozen-lockfile
 
 - **API**: `uv run uvicorn apps.api.app.main:app --reload --port 8000` (or just `make dev`). Reads `MOTTE_DB_PATH` (default `./var/runs.db`, SQLite).
 - **Web**: `pnpm --dir apps/web dev` — Vite on `http://localhost:5173`, `/api` is proxied to the API on port 8000.
-- **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Progress is emitted as one-line JSON objects to **stderr** (run claim, lifecycle, per-case ordinal/total, duration, safe token/cost/retry summaries, and final counts); stdout stays available for scripts. Use `--quiet` to suppress progress output. Logs intentionally omit prompts, gold answers, response content, provider payloads, and credentials. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
+- **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Progress is emitted as one-line JSON objects to **stderr** (run claim, lifecycle, per-case ordinal/total, duration, safe token/cost/retry summaries, and final counts); stdout stays available for scripts. Use `--quiet` to suppress progress output. Ctrl-C stops the polling loop cleanly: no traceback, a final `worker_stopped` line on stderr, and exit status **130** (runs interrupted mid-flight stay in an intermediate status and are requeued as `queued` by the next worker start). Logs intentionally omit prompts, gold answers, response content, provider payloads, and credentials. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
 - **Optional services** (PostgreSQL, Redis, OTel collector): `docker compose -f infra/docker-compose.yml up -d`. Compose builds the `motteavl:local` image before starting API, migration, and Worker services.
 
 `make dev` (equivalently `uv run python -m apps.dev`) uses a Python standard-library
@@ -82,6 +82,34 @@ paid call per selected case per model in sequence. Both scopes use a versioned s
 explicit output-token limit and zero retries—not a monetary cap. See the [operator guide](docs/operations/gsm8k-smoke.md)
 for provenance, scopes, credentials, API parity, partial-failure reports and restart/rescore semantics.
 Repository fixtures are synthetic only, and the test suite is isolated from `var/runs.db`.
+
+## Direct LLM evaluation (generic direct calls)
+
+Direct LLM is the generic counterpart of GSM8K: the case input *is* the prompt (sent verbatim, no suite
+suffix), the answer is judged by a deterministic, versioned scorer, and the same run/report/restart
+machinery applies. The only structural difference is where data comes from—there is no upstream, so
+datasets are imported from local JSONL (three small samples also ship in `datasets/direct-llm/`):
+
+```bash
+uv run python -m motte_cli direct-llm builtins
+uv run python -m motte_cli direct-llm import --builtin direct-llm-classify
+uv run python -m motte_cli direct-llm import --file ./my-set.jsonl --name my-set --scorer regex
+uv run python -m motte_cli direct-llm run --scenario direct-llm-classify@1 --model YOUR_MODEL_PROFILE_ID
+uv run python -m apps.worker.motte_worker --once
+```
+
+Each JSONL line is `{"input"|"prompt", "expected"?, "scorer"?, "case_id"?}`; the whole file is validated at
+import and frozen into an immutable `name@version` (scenario name equals dataset name). Scoring is
+`exact` / `contains` / `regex`, overridable per case. **Cases without an `expected` answer are recorded as
+`no_expectation` and stay out of the accuracy denominator**, so the report always states its denominator
+(`judged_cases` here, `selected_cases` for GSM8K). Unlike the GSM8K presets, the 1024-token output budget is
+a run-level default here: `--max-output-tokens` can lower it, never above the model profile's ceiling.
+
+The console (`/direct-llm`) mirrors the GSM8K suite with five pages: operate (dataset / cases / models /
+parameters / builtin samples / local JSONL import), a 题目 page (`/direct-llm/cases`), the batch monitor, a
+result page and a multi-model compare page. See the
+[operator guide](docs/operations/direct-llm.md) and the
+[sample dataset README](datasets/direct-llm/README.md).
 
 ## Environment variables
 

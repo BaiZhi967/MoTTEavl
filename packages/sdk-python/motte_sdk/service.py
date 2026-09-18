@@ -261,9 +261,9 @@ class RunService:
     ) -> list[dict[str, Any]]:
         run = self._load(run_id)
         if run.get("manifest", {}).get("benchmark_provenance"):
-            from motte_sdk.benchmark import benchmark_scores
+            from motte_sdk.suites import managed_scores
 
-            scores = benchmark_scores(run, results)
+            scores = managed_scores(run, results)
             if emit_events:
                 for score in scores:
                     self._emit(run_id, "score", score)
@@ -288,7 +288,7 @@ class RunService:
             run_id, self.store.case_runs.list_for_run(run_id), False))
 
     def _execute_benchmark(self, run, invoke):
-        from motte_eval.gsm8k import CONTINUE_ERROR_CLASSES
+        from motte_eval.execution import CONTINUE_ERROR_CLASSES
         from motte_provider.errors import classify_exception
 
         run_id = run["id"]

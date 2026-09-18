@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BatchMonitor } from "../src/components/BatchMonitor";
-import { DirectLlmOperate, DirectLlmResult } from "../src/evalTypes/directllm/DirectLlmPages";
+import { DirectLlmCases } from "../src/evalTypes/directllm/DirectLlmCases";
+import { DirectLlmCompare } from "../src/evalTypes/directllm/DirectLlmCompare";
+import { DirectLlmMonitor } from "../src/evalTypes/directllm/DirectLlmMonitor";
+import { DirectLlmOperate } from "../src/evalTypes/directllm/DirectLlmOperate";
+import { DirectLlmResult } from "../src/evalTypes/directllm/DirectLlmResult";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
 import { gridCells } from "../src/evalTypes/gsm8k/grid";
 import { Gsm8kCases } from "../src/evalTypes/gsm8k/Gsm8kCases";
@@ -25,6 +29,11 @@ const clientMocks = vi.hoisted(() => ({
   importBenchmark: vi.fn(),
   createBenchmarkRun: vi.fn(),
   getBenchmarkCases: vi.fn(),
+  getDirectLlmOverview: vi.fn(),
+  getDirectLlmBuiltins: vi.fn(),
+  getDirectLlmCases: vi.fn(),
+  importDirectLlm: vi.fn(),
+  createDirectLlmRun: vi.fn(),
   getModels: vi.fn(),
   subscribeRunEvents: vi.fn(() => () => undefined),
 }));
@@ -702,47 +711,222 @@ describe("Gsm8kCompare", () => {
   });
 });
 
+const DIRECT_PRESET = {
+  scenario: "direct-llm-classify@1",
+  dataset: "direct-llm-classify@1",
+  suite: "direct-llm",
+  eval: {
+    suite: "direct-llm", scorer: "contains", scorer_version: "direct-llm-answer-v1",
+    prompt_version: "direct-llm-verbatim-v1", selected_count: 3, max_output_tokens: 1024,
+    max_retries: 0,
+  },
+  provenance: { source: "builtin:direct-llm-classify", license: "internal-sample" },
+  cases: 3,
+  runs: [],
+};
+
+const DIRECT_BUILTIN = {
+  id: "direct-llm-classify", label: "四分类打标（contains）",
+  description: "把工单分到 billing/technical/account/other，输出含标签即通过。",
+  scorer: "contains", source: "builtin:direct-llm-classify", importable: true, cases: 8,
+};
+
+const REASONING_MODEL = {
+  id: "glm-4.7", provider: "zhipu", capabilities: {},
+  reasoning: { supported: true, levels: ["low", "high"], default_level: "high", control: "{}" },
+};
+
+function directRun(overrides: Record<string, any> = {}) {
+  return {
+    id: "run-51", scenario_version: "direct-llm-classify@1", status: "completed",
+    manifest: {
+      model: "glm-4.7",
+      benchmark_provenance: {
+        suite: "direct-llm", scorer: "contains", scorer_version: "direct-llm-answer-v1",
+        selected_count: 3, run_selection: { mode: "all", count: 3, seed: null },
+      },
+      benchmark_snapshot: {
+        dataset: {
+          cases: [
+            { case_id: "case-1", input: "工单 1：重复扣费", expected: "billing", metadata: { source_line: 1 } },
+            { case_id: "case-2", input: "工单 2：报表乱码", expected: "technical", metadata: { source_line: 2 } },
+            { case_id: "case-3", input: "工单 3：开放问题", metadata: { source_line: 3 } },
+          ],
+        },
+      },
+    },
+    case_ids: ["case-1", "case-2", "case-3"],
+    cases: [
+      { case_id: "case-1", result: { content: "billing" } },
+      { case_id: "case-2", result: { content: "other" } },
+    ],
+    scores: [
+      { case_id: "case-1", passed: true, outcome: "correct", judged: true, scorer: "contains" },
+      { case_id: "case-2", passed: false, outcome: "wrong_answer", judged: true, scorer: "contains" },
+      { case_id: "case-3", passed: false, outcome: "no_expectation", judged: false, scorer: "contains" },
+    ],
+    ...overrides,
+  };
+}
+
 describe("DirectLlmOperate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clientMocks.getModels.mockResolvedValue({
-      items: [
-        { id: "glm-4.7", provider: "zhipu", capabilities: {}, reasoning: { supported: true, levels: ["low", "high"], default_level: "high", control: "{}" } },
-      ],
+      items: [REASONING_MODEL, { id: "qwen-max", provider: "zhipu", capabilities: {} }],
     });
+    clientMocks.getDirectLlmOverview.mockResolvedValue({ items: [DIRECT_PRESET], total: 1 });
+    clientMocks.getDirectLlmBuiltins.mockResolvedValue({ items: [DIRECT_BUILTIN], total: 1 });
   });
 
-  it("选模型填 case 后按 manifest.model 创建并跳批次过程页", async () => {
-    clientMocks.createRun.mockResolvedValue({ id: "run-51", status: "queued" });
+  it("展示 pinned 数据集与评分器，选模型后按 manifest.model 创建并跳批次过程页", async () => {
+    clientMocks.createDirectLlmRun.mockResolvedValue({ id: "run-51", status: "queued" });
     render(
       <MemoryRouter initialEntries={["/direct-llm"]}>
         <DirectLlmOperate />
         <LocationProbe />
       </MemoryRouter>
     );
+    expect(await screen.findByText("direct-llm-classify@1", { selector: ".mono" })).toBeTruthy();
+    expect(screen.getByText(/3 题 · contains（输出包含期望串）/)).toBeTruthy();
+    expect(screen.getByText(/来源 builtin:direct-llm-classify/)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
+    await waitFor(() => expect(clientMocks.createDirectLlmRun).toHaveBeenCalledWith({
+      model: "glm-4.7",
+      scenario: "direct-llm-classify@1",
+      case_selection: { mode: "all" },
+    }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent)
+      .toBe("/direct-llm/monitor?runs=run-51"));
+  });
+
+  it("随机子集与跑测参数一起进 manifest", async () => {
+    clientMocks.createDirectLlmRun.mockResolvedValue({ id: "run-52", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
     await screen.findByLabelText("选择模型 glm-4.7");
     fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
-    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1, case-2" } });
+    fireEvent.change(screen.getByLabelText("本次运行题目"), { target: { value: "random" } });
+    fireEvent.change(screen.getByLabelText("随机题数"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("随机种子（写进运行快照，可复现）"),
+      { target: { value: "deadbeef" } });
+    fireEvent.change(screen.getByLabelText("temperature"), { target: { value: "0.3" } });
+    fireEvent.change(screen.getByLabelText("max_output_tokens"), { target: { value: "256" } });
+    fireEvent.change(screen.getByLabelText(/思考强度/), { target: { value: "low" } });
     fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
-    await waitFor(() => expect(clientMocks.createRun).toHaveBeenCalledWith({
-      scenario_version: "direct-llm@1",
-      manifest: { model: "glm-4.7" },
-      case_ids: ["case-1", "case-2"],
+    await waitFor(() => expect(clientMocks.createDirectLlmRun).toHaveBeenCalledWith({
+      model: "glm-4.7",
+      scenario: "direct-llm-classify@1",
+      case_selection: { mode: "random", count: 2, seed: "deadbeef" },
+      parameters: { temperature: 0.3, max_output_tokens: 256 },
+      reasoning_level: "low",
     }));
-    /* createRun 断言通过时 promise 可能尚未落地，跳转需另行等待 */
-    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/direct-llm/monitor?runs=run-51"));
+  });
+
+  it("思考强度按模型各自记录，不支持推理的模型不带该字段", async () => {
+    clientMocks.createDirectLlmRun.mockResolvedValue({ id: "run-53", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("选择模型 glm-4.7");
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.change(screen.getByLabelText(/思考强度/), { target: { value: "low" } });
+    /* 加入第二个不声明推理能力的模型：批次里只有 glm-4.7 带 low */
+    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
+    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
+    await waitFor(() => expect(clientMocks.createDirectLlmRun).toHaveBeenCalledTimes(2));
+    const byModel = new Map(clientMocks.createDirectLlmRun.mock.calls
+      .map((call) => [call[0].model, call[0]]));
+    expect(byModel.get("glm-4.7")!.reasoning_level).toBe("low");
+    expect(byModel.get("qwen-max")!.reasoning_level).toBeUndefined();
+    /* 取消勾选 glm-4.7 后，它的强度不会跟着别的模型走 */
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    clientMocks.createDirectLlmRun.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
+    await waitFor(() => expect(clientMocks.createDirectLlmRun).toHaveBeenCalledTimes(1));
+    expect(clientMocks.createDirectLlmRun.mock.calls[0][0].reasoning_level).toBeUndefined();
+  });
+
+  it("导入内置样例后就地提示回执并切到新场景", async () => {
+    clientMocks.importDirectLlm.mockResolvedValue({
+      imported: "direct-llm-classify@1", scenario: "direct-llm-classify@1", suite: "direct-llm",
+      scorer: "contains", cases: 8, source: "builtin:direct-llm-classify",
+      source_sha256: "a".repeat(64), cases_sha256: "b".repeat(64),
+    });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("内置样例");
+    fireEvent.click(screen.getByRole("button", { name: "导入所选样例" }));
+    await waitFor(() => expect(clientMocks.importDirectLlm).toHaveBeenCalledWith({
+      builtin: "direct-llm-classify", version: "",
+    }));
+    expect(await screen.findByText(/已导入 direct-llm-classify@1 · .* · 8 题/)).toBeTruthy();
+  });
+
+  it("粘贴 JSONL 导入时提交内容与高级设置", async () => {
+    clientMocks.importDirectLlm.mockResolvedValue({
+      imported: "my-set@1", scenario: "my-set@1", suite: "direct-llm", scorer: "regex",
+      cases: 2, source: "manual", source_sha256: "a".repeat(64), cases_sha256: "b".repeat(64),
+    });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("JSONL 内容");
+    fireEvent.change(screen.getByLabelText("JSONL 内容"), {
+      target: { value: '{"input": "1+1=?", "expected": "2"}' },
+    });
+    fireEvent.change(screen.getByLabelText("数据集名"), { target: { value: "my-set" } });
+    fireEvent.change(screen.getByLabelText("默认评分器"), { target: { value: "regex" } });
+    fireEvent.change(screen.getByLabelText("来源标记"), { target: { value: "manual" } });
+    fireEvent.click(screen.getByRole("button", { name: "导入 JSONL" }));
+    await waitFor(() => expect(clientMocks.importDirectLlm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '{"input": "1+1=?", "expected": "2"}',
+        name: "my-set", scorer: "regex", source: "manual", license: "internal-sample",
+      }),
+    ));
+    expect(await screen.findByText(/已导入 my-set@1/)).toBeTruthy();
+  });
+
+  it("导入失败就地报错，不影响其它卡片", async () => {
+    clientMocks.importDirectLlm.mockRejectedValue(new Error("invalid JSON at source line 2"));
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
+    await screen.findByLabelText("内置样例");
+    fireEvent.click(screen.getByRole("button", { name: "导入所选样例" }));
+    expect(await screen.findByText(/invalid JSON at source line 2/)).toBeTruthy();
+  });
+
+  it("没有数据集时禁用发起并提示导入", async () => {
+    clientMocks.getDirectLlmOverview.mockResolvedValue({ items: [], total: 0 });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm"]}>
+        <DirectLlmOperate />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/尚未导入数据集/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: /发起评测/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("个别模型失败不阻塞整批，错误就地显示且提供批次入口", async () => {
-    clientMocks.getModels.mockResolvedValue({
-      items: [
-        { id: "glm-4.7", provider: "zhipu", capabilities: {} },
-        { id: "qwen-max", provider: "zhipu", capabilities: {} },
-      ],
-    });
-    clientMocks.createRun
+    clientMocks.createDirectLlmRun
       .mockRejectedValueOnce(new Error("MODEL_DISABLED"))
-      .mockResolvedValueOnce({ id: "run-52", status: "queued" });
+      .mockResolvedValueOnce({ id: "run-55", status: "queued" });
     render(
       <MemoryRouter initialEntries={["/direct-llm"]}>
         <DirectLlmOperate />
@@ -752,63 +936,215 @@ describe("DirectLlmOperate", () => {
     await screen.findByLabelText("选择模型 glm-4.7");
     fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
     fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
-    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1" } });
     fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
     expect(await screen.findByText(/MODEL_DISABLED/)).toBeTruthy();
     expect(screen.getByTestId("location").textContent).toBe("/direct-llm");
-    expect(screen.getByText(/已创建 1 个运行/)).toBeTruthy();
     const link = await screen.findByRole("link", { name: /查看批次进度/ });
-    expect(link.getAttribute("href")).toBe("/direct-llm/monitor?runs=run-52");
+    expect(link.getAttribute("href")).toBe("/direct-llm/monitor?runs=run-55");
   });
+});
 
-  it("多选时隐藏的推理等级下拉值不随批生效", async () => {
-    clientMocks.getModels.mockResolvedValue({
+describe("DirectLlmCases", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    clientMocks.getDirectLlmOverview.mockResolvedValue({ items: [DIRECT_PRESET], total: 1 });
+    clientMocks.getDirectLlmCases.mockResolvedValue({
+      dataset: "direct-llm-classify@1", total: 3, dataset_total: 3, offset: 0, limit: 25, query: "",
       items: [
-        { id: "glm-4.7", provider: "zhipu", capabilities: {}, reasoning: { supported: true, levels: ["low", "high"], default_level: "high", control: "{}" } },
-        { id: "qwen-max", provider: "zhipu", capabilities: {} },
+        { case_id: "case-1", input: "工单 1：重复扣费", expected: "billing", scorer: "contains", source_line: 1 },
+        { case_id: "case-2", input: "工单 2：报表乱码", expected: "technical", scorer: "contains", source_line: 2 },
+        { case_id: "case-3", input: "工单 3：开放问题", expected: null, scorer: "exact", source_line: 3 },
       ],
     });
-    clientMocks.createRun.mockResolvedValue({ id: "run-53", status: "queued" });
+  });
+
+  it("浏览题目并勾选后带着选择回到操作页", async () => {
     render(
-      <MemoryRouter initialEntries={["/direct-llm"]}>
-        <DirectLlmOperate />
+      <MemoryRouter initialEntries={["/direct-llm/cases"]}>
+        <DirectLlmCases />
+        <LocationProbe />
       </MemoryRouter>
     );
-    await screen.findByLabelText("选择模型 glm-4.7");
-    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
-    fireEvent.change(screen.getByLabelText(/推理等级/), { target: { value: "low" } });
-    /* 加入第二个模型后下拉隐藏，此前的 low 不应写进任一 manifest */
-    fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
-    fireEvent.change(screen.getByLabelText("Case 列表（逗号分隔）"), { target: { value: "case-1" } });
-    fireEvent.click(screen.getByRole("button", { name: /发起评测/ }));
-    await waitFor(() => expect(clientMocks.createRun).toHaveBeenCalledTimes(2));
-    for (const call of clientMocks.createRun.mock.calls) {
-      expect(call[0].manifest.reasoning_level).toBeUndefined();
-    }
+    expect(await screen.findByText("工单 1：重复扣费")).toBeTruthy();
+    /* 没有 expected 的题显式标注为无判定 */
+    expect(screen.getByText("（无判定）")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("选择 case-2"));
+    fireEvent.click(screen.getByRole("button", { name: /用所选 1 题发起评测/ }));
+    expect(screen.getByTestId("location").textContent).toBe("/direct-llm");
+    expect(JSON.parse(sessionStorage.getItem("motte.direct-llm.case-selection")!)).toEqual({
+      dataset: "direct-llm-classify@1", caseIds: ["case-2"],
+    });
+  });
+
+  it("粘贴 case id 合并去重，未知 id 交由服务端拒绝", async () => {
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/cases"]}>
+        <DirectLlmCases />
+      </MemoryRouter>
+    );
+    await screen.findByText("工单 1：重复扣费");
+    fireEvent.change(screen.getByLabelText("粘贴 case ID"), {
+      target: { value: "case-1, case-9 case-1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "加入" }));
+    expect(await screen.findByText(/已加入 2 个 id/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /用所选 2 题发起评测/ }));
+    expect(JSON.parse(sessionStorage.getItem("motte.direct-llm.case-selection")!).caseIds)
+      .toEqual(["case-1", "case-9"]);
+  });
+
+  it("搜索把关键词交给服务端并从第一页重查", async () => {
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/cases"]}>
+        <DirectLlmCases />
+      </MemoryRouter>
+    );
+    await screen.findByText("工单 1：重复扣费");
+    fireEvent.change(screen.getByLabelText("搜索题目关键词"), { target: { value: "报表" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(clientMocks.getDirectLlmCases).toHaveBeenLastCalledWith({
+      dataset: "direct-llm-classify@1", offset: 0, limit: 25, query: "报表",
+    }));
+  });
+});
+
+describe("DirectLlmMonitor", () => {
+  it("逐题格子按 outcome 着色并附运行时间线", async () => {
+    clientMocks.getRun.mockResolvedValue(directRun());
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/monitor?runs=run-51"]}>
+        <DirectLlmMonitor />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("运行过程")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "run-51" }));
+    await waitFor(() => expect(document.querySelectorAll(".grid-cell").length).toBe(3));
   });
 });
 
 describe("DirectLlmResult", () => {
-  it("期望对比钻取，模型列从 manifest 摘要", async () => {
-    clientMocks.getRun.mockResolvedValue({
-      id: "run-51", scenario_version: "direct-llm@1", status: "completed",
-      manifest: { model: "glm-4.7" },
-      case_ids: ["case-1"],
-      cases: [{ case_id: "case-1", result: { content: "42" }, expected: 42 }],
-      scores: [{ case_id: "case-1", passed: false }],
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clientMocks.getReport.mockResolvedValue({
+      run_id: "run-51", scenario_version: "direct-llm-classify@1", status: "completed",
+      generated_at: "2026-09-20T00:00:00Z",
+      summary: { cases: 3, scored: 2, passed: 1, failed: 2, pass_rate: 0.5, judged: 2 },
+      cost: { total: 0.0015, price_table_versions: ["v1"] },
+      scores: [],
     });
+  });
+
+  it("通过率用判定题数做分母，无判定单独计数", async () => {
+    clientMocks.getRun.mockResolvedValue(directRun());
     render(
       <MemoryRouter initialEntries={["/direct-llm/runs/run-51/result"]}>
         <DirectLlmResult />
       </MemoryRouter>
     );
-    await waitFor(() => expect(screen.getByText("case-1")).toBeTruthy());
+    expect(await screen.findByText(/通过率 · 1\/2/)).toBeTruthy();
+    expect(screen.getByText("50%", { selector: ".metric-value" })).toBeTruthy();
+    expect(screen.getByText(/判定题数（选中 3 · 无判定 1）/)).toBeTruthy();
     expect(screen.getByText("glm-4.7", { selector: ".metric-value" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "case-1" }));
-    expect(screen.getByText(/期望/)).toBeTruthy();
+    expect(screen.getByText("¥0.0015", { selector: ".metric-value" })).toBeTruthy();
+    expect(screen.getByText("通过")).toBeTruthy();
+    expect(screen.getByText("不通过")).toBeTruthy();
+    expect(screen.getByText("无判定")).toBeTruthy();
+  });
+
+  it("钻取显示题面、输出、期望与生效评分器", async () => {
+    clientMocks.getRun.mockResolvedValue(directRun());
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/runs/run-51/result"]}>
+        <DirectLlmResult />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByText("case-3")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /case-3/ }));
+    const detail = document.querySelector(".drill-detail") as HTMLElement;
+    expect(within(detail).getByText("工单 3：开放问题")).toBeTruthy();
+    expect(within(detail).getByText("（无判定）")).toBeTruthy();
+    expect(within(detail).getByText("评分器")).toBeTruthy();
+    /* 无判定题也照常显示它生效的评分器（数据集默认 contains） */
+    expect(within(detail).getByText("contains")).toBeTruthy();
+  });
+
+  it("failure 信封的调用失败行给出脱敏错误类", async () => {
+    clientMocks.getRun.mockResolvedValue(directRun({
+      status: "failed",
+      cases: [{ case_id: "case-1", result: { error: { class: "auth", message: "denied" } } }],
+      scores: [{ case_id: "case-1", passed: false, outcome: "call_failed", judged: true, scorer: "contains" }],
+      error: { class: "auth", message: "denied" },
+    }));
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/runs/run-51/result"]}>
+        <DirectLlmResult />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("调用失败")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /case-1/ }));
+    expect(screen.getByText(/auth：denied/)).toBeTruthy();
   });
 });
 
+describe("DirectLlmCompare", () => {
+  it("按判定题数比较通过率与共同不通过，并可逐题下钻", async () => {
+    const other = directRun({
+      id: "run-52",
+      manifest: {
+        model: "qwen-max",
+        benchmark_provenance: { suite: "direct-llm", scorer: "contains" },
+        benchmark_snapshot: directRun().manifest.benchmark_snapshot,
+      },
+      cases: [
+        { case_id: "case-1", result: { content: "other" } },
+        { case_id: "case-2", result: { content: "billing" } },
+      ],
+      scores: [
+        { case_id: "case-1", passed: false, outcome: "wrong_answer", judged: true, scorer: "contains" },
+        { case_id: "case-2", passed: false, outcome: "wrong_answer", judged: true, scorer: "contains" },
+        { case_id: "case-3", passed: false, outcome: "no_expectation", judged: false, scorer: "contains" },
+      ],
+    });
+    clientMocks.getRun.mockImplementation(async (id: string) =>
+      id === "run-52" ? other : directRun());
+    clientMocks.getReport.mockResolvedValue({
+      cost: { total: 0.002, price_table_versions: ["v1"] },
+      summary: { cases: 3, scored: 2, passed: 2, failed: 1, pass_rate: 0.5 },
+      scores: [],
+    });
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/compare?runs=run-51,run-52"]}>
+        <DirectLlmCompare />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Direct LLM · 多模型对比")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("glm-4.7")).toBeTruthy());
+    /* glm-4.7 判 2 题对 1 题（50%），qwen-max 判 2 题全错（0%）；不判定的 case-3 不进分母 */
+    expect(screen.getByText("50%")).toBeTruthy();
+    expect(screen.getByText("0%")).toBeTruthy();
+    const shared = screen.getByText("共同不通过").closest("tr")!;
+    expect(shared.textContent).toContain("case-2");
+    expect(shared.textContent).not.toContain("case-3");
+    fireEvent.click(screen.getByRole("button", { name: "case-1" }));
+    const detail = document.querySelector(".drill-detail") as HTMLElement;
+    expect(within(detail).getByText("工单 1：重复扣费")).toBeTruthy();
+    /* 「billing」既是期望答案也是 glm-4.7 的输出；qwen-max 的输出并排展示在下面 */
+    expect(within(detail).getAllByText("billing")).toHaveLength(2);
+    expect(within(detail).getByText("other")).toBeTruthy();
+  });
+
+  it("缺少 runs 参数时不崩溃", async () => {
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/compare"]}>
+        <DirectLlmCompare />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Direct LLM · 多模型对比")).toBeTruthy();
+    expect(screen.getByText("无")).toBeTruthy();
+    expect(screen.getByText("无").getAttribute("colspan")).toBe("1");
+  });
+});
 describe("ReplayOperate", () => {
   it("手写 Manifest 作为 inline provider 创建运行", async () => {
     clientMocks.createRun.mockResolvedValue({ id: "run-61", status: "queued" });

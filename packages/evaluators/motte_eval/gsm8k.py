@@ -3,9 +3,7 @@ from typing import Any
 
 from motte_contracts.gsm8k import SCORER_VERSION, final_number
 
-# No automatic retries. Transient/individual failures continue; auth, client
-# (bad model/endpoint/request), config, protocol and unknown errors stop the run.
-CONTINUE_ERROR_CLASSES = frozenset({"rate_limit", "server", "timeout", "network"})
+from .execution import CONTINUE_ERROR_CLASSES  # noqa: F401  （套件无关，调用点仍从这里导入）
 
 
 def score_benchmark_case(result: Any, expected: Any) -> dict[str, Any]:

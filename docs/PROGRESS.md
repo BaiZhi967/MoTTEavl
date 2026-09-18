@@ -157,3 +157,22 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 ## 下一阶段
 
 当前修复与接入顺序见 [`superpowers/plans/2026-09-15-next-phase-task-plan.md`](superpowers/plans/2026-09-15-next-phase-task-plan.md)：Direct LLM 可复核链路 → 生产镜像 → 真实协议与 Harness → Evaluator/Inspect → 并发、类型和发布质量。
+
+## Direct LLM 评测接入（2026-09-20）
+
+参考 GSM8K 评测，把 Direct LLM 从「前端空壳」补齐为完整纵向切片。接入前的实际状态：`/direct-llm` 操作页只把 `case_ids` 发给 `POST /api/v1/runs`，而 `manifest.cases`（题面 → prompt 的映射）没有任何来源，`CaseDrivenProvider.invoke` 必然 `KeyError`，因此该套件此前无法真正跑通。
+
+| Task | 内容 |
+| --- | --- |
+| C1 契约 | `motte_contracts/direct_llm.py`：本地 JSONL 整份校验并冻结成不可变 `数据集名@版本`（记录用顶层 `eval` 键做套件判定）、三种评分器（`exact`/`contains`/`regex`，正则在导入期编译校验）、`no_expectation` 语义；抽出共享 `motte_contracts/selection.py`（运行级题目选择）与 `motte_contracts/suites.py`（套件分发的单一来源） |
+| C2 评分 | `motte_eval/direct_llm.py`：判定分母 = `judged`（`correct + wrong_answer + call_failed`），无期望的题不进分母；`CONTINUE_ERROR_CLASSES` 提取为套件无关的 `motte_eval/execution.py` |
+| C3 SDK | `motte_sdk/direct_llm.py`（导入落库、内置样例注册表、创建期展开、评分、`GET .../builtins` 数据源）与 `motte_sdk/suites.py`（manifest 展开 / 评分 / 聚合分发，`resolve.py`、`service.py`、报告链路不再写 `if suite == ...`） |
+| C4 数据 | `datasets/direct-llm/`：`direct-llm-exact-answer`(8) / `direct-llm-classify`(8) / `direct-llm-json-extract`(7) 三份内置样例 + 目录 README；`MOTTE_BUILTIN_DATASET_DIR` 可覆盖，目录缺失时结构化报错 |
+| C5 API | `GET /benchmarks/direct-llm`、`GET .../builtins`、`POST .../import`、`GET .../cases`、`POST .../runs`；`_build_report` 改为套件分发聚合，新增 `_direct_llm_accuracy`（judged 分母） |
+| C6 CLI | `motte direct-llm builtins / list / import (--builtin\|--file) / run`，stdout 始终单行 JSON；显式传入的空值不再静默回落默认值 |
+| C7 Web | Direct LLM 拆成操作 / 题目 / 过程 / 结果 / 对比五页（对齐 GSM8K），共享 `evalTypes/selection.ts` 与 `evalTypes/grid.ts`；注册表改用 `provenance.suite` 判别套件（旧运行回落 gsm8k） |
+| C8 文档 | `docs/operations/direct-llm.md`、`datasets/direct-llm/README.md`、DESIGN.md 组件条款、eval type suite 设计文档第 15 节接入记录 |
+
+验收门核对：契约 28 + 评分器 19 + SDK 16 + API 14 + CLI 11 + 运行时 7 个新测试全绿；Web 97 passed；`uv run ruff check .` 与 `uv run mypy packages/contracts` 零问题；`pnpm --dir apps/web build` 通过。既有 GSM8K 行为不变（`benchmark` 记录键、`is_benchmark`、评分口径、报告 summary 字段全部原样），仅新增 `benchmark_provenance.suite` 判别字段。
+
+已记录的范围裁剪：Web 不做字符级 diff 高亮；题目页粘贴的 case id 由服务端在发起时校验（分页下客户端拿不到全量 id）；导入不引入 multipart（本地文件由浏览器读成文本放进 JSON body）。
