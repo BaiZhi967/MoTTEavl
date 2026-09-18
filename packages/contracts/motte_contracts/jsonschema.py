@@ -1,32 +1,38 @@
+"""Standalone JSON schemas for the public contracts and status enumerations."""
+from __future__ import annotations
+
+from enum import Enum
 from typing import Any
 
-from .messages import ModelRequest, ModelResponse, StreamEvent
-from .model import ModelProfile, ReasoningProfile, ParameterProfile
-from .scenario import ScenarioSpec, Case
-from .run import Run, CaseRun, ResolvedManifest
-from .events import TraceEvent
-from .evidence import Artifact, Observation, Score
-from .dataset import DatasetVersion
+from pydantic import TypeAdapter
 
-_PUBLIC = [
-    ModelRequest,
-    ModelResponse,
-    StreamEvent,
-    ModelProfile,
-    ReasoningProfile,
-    ParameterProfile,
-    ScenarioSpec,
-    Case,
-    Run,
-    CaseRun,
-    ResolvedManifest,
-    TraceEvent,
-    Artifact,
-    Observation,
-    Score,
-    DatasetVersion,
-]
+from .dataset import DatasetVersion
+from .errors import ContractError, ErrorEnvelope, ExecutionError
+from .events import TraceEvent
+from .evidence import Artifact, Observation, Score, ScoreSet, ScoringPass
+from .messages import Contract, ModelRequest, ModelResponse, StreamEvent
+from .model import (IdentityEvidence, IdentityPolicy, IdentityResult, IdentityVerdict,
+                    ModelProfile, ParameterProfile, ReasoningProfile)
+from .report import ReportCase, ReportCost, ReportSummary, RunReport
+from .run import (AttemptStatus, CaseAttempt, CaseRun, EvaluationDescriptor,
+                  ExecutionSpec, ResolvedManifest, Run, RunCommand, RunCommandStatus,
+                  RunStatus)
+from .scenario import Case, ScenarioSpec
+
+_PUBLIC: tuple[type[Contract], ...] = (
+    ModelRequest, ModelResponse, StreamEvent, ModelProfile, ReasoningProfile,
+    ParameterProfile, IdentityEvidence, IdentityResult, ScenarioSpec, Case,
+    Run, CaseRun, CaseAttempt, ExecutionSpec, EvaluationDescriptor, ResolvedManifest,
+    RunCommand, TraceEvent, Artifact, Observation, Score, ScoringPass, ScoreSet,
+    ReportCase, ReportCost, ReportSummary, RunReport, ContractError,
+    ExecutionError, ErrorEnvelope, DatasetVersion,
+)
+_ENUMS: tuple[type[Enum], ...] = (
+    RunStatus, AttemptStatus, RunCommandStatus, IdentityPolicy, IdentityVerdict,
+)
 
 
 def dump_json_schema() -> dict[str, Any]:
-    return {c.__name__: c.model_json_schema() for c in _PUBLIC}  # type: ignore[attr-defined]
+    schemas: dict[str, Any] = {contract.__name__: contract.model_json_schema() for contract in _PUBLIC}
+    schemas.update({enum.__name__: TypeAdapter(enum).json_schema() for enum in _ENUMS})
+    return schemas
