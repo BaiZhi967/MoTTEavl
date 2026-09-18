@@ -103,7 +103,7 @@ export function Gsm8kResult() {
         )}
         {selection && <p className="hint">本次题目：{selection}</p>}
         <MetricCards items={[
-          { label: `accuracy · ${passed}/${scores.length}`, value: accuracy == null ? "—" : `${accuracy}%`, tone: "success" },
+          { label: `accuracy · ${passed}/${scores.length}`, value: accuracy == null ? "—" : `${accuracy}%`, tone: run.status === "completed" ? "success" : "neutral" },
           { label: `tokens（输入 ${usage.prompt} + 输出 ${usage.completion}）`, value: String(usage.prompt + usage.completion), tone: "neutral" },
           { label: priceTable ? `成本 · pt ${priceTable}` : "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
           { label: `口径（选中 ${run.case_ids?.length ?? 0} · 应答 ${attempted}）`, value: `${passed}/${scores.length}`, tone: "neutral" },

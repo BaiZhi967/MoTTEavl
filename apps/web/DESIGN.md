@@ -136,7 +136,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 题目清单页 | 沿用通用表格规范（Case 用 mono、期望答案用 mono、行 hover `--bg-subtle`）；首列原生 checkbox 做多选，工具栏用 `.inline-field`（数据集下拉 / 搜索 / 全选本页 / 清空 / 已选题数），底部 `.actions` 放翻页与「用所选 N 题发起…」；Direct LLM 额外展示每题生效的评分器列 |
 | 步进与批次行 | `.batch-row-head`：run ID link + mono 模型名 + 状态徽章 + `RunProgress`（x/N 进度条）+ 操作区；排队提示用 `.hint` |
 | 逐题格子 | `.progress-grid`（`auto-fill` 28px 格）+ `.grid-cell-pass/fail/pending`：语义粉彩底 + 对应前景/描边（pass/fail 用语义 token，pending 用 neutral 底 + `--text-faint`），禁止新色 |
-| 指标卡 | `.metric-cards` / `.metric-card`：flex 换行、内容居中、26px mono 数值、12px 次色标签；success / error 语气只染数值色 |
+| 指标卡 | `.metric-cards` / `.metric-card`：flex 换行、内容居中、26px mono 数值、12px 次色标签；success / error 语气只染数值色；指标语气跟随运行整体状态，仅 completed 用 success，失败/取消等终态降为 neutral |
 | 钻取行 | `.drill-detail`：3px 左语气条 + `--bg-subtle` 底、6px 圆角右侧；字段前缀用 `.field-label` |
 | 对比页 | 模型列 × 指标行表格沿用通用表格规范；`.compare-case-list` 逐题下钻用 link 按钮 + `.drill-detail` |
 
