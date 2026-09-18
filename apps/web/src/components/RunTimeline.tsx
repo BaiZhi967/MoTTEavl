@@ -3,16 +3,23 @@ import type { TraceEvent } from "../api/client";
 import { eventLabel, eventTone } from "./statusMeta";
 
 function summarize(event: TraceEvent): string {
+  const payload: Record<string, any> = event.payload ?? (event as unknown as Record<string, any>);
   switch (event.type) {
     case "model_response":
-      return `case=${event.case_id}`;
+      return `case=${payload.case_id}`;
+    case "case_call_failed":
+      return `case=${payload.case_id}`;
     case "score":
-      return `case=${event.case_id} ${event.passed ? "通过" : "未通过"}`;
+      return `case=${payload.case_id} ${payload.passed ? "通过" : "未通过"}`;
     case "cancelled":
-      return event.reason ? `原因：${event.reason}` : "";
+      return payload.reason ? `原因：${payload.reason}` : "";
+    case "scoring_pass_created":
+      return [payload.scorer_id, payload.scorer_version].filter(Boolean).join(" @ ");
+    case "needs_review":
+      return Array.isArray(payload.attempt_ids) ? `不确定调用 ${payload.attempt_ids.length} 个` : "";
     case "failed":
     case "unsupported":
-      return event.error ? `${event.error.code ?? event.error.type ?? ""} ${event.error.message ?? ""}`.trim() : "";
+      return payload.error ? `${payload.error.code ?? payload.error.type ?? ""} ${payload.error.message ?? ""}`.trim() : "";
     default:
       return "";
   }

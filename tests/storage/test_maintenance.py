@@ -16,7 +16,9 @@ def _populate(db_path):
 def test_backup_and_restore_roundtrip_preserves_runs_and_events(tmp_path):
     db = tmp_path / "runs.db"
     run = _populate(db)
-    RunService(SQLiteRunStore(db)).execute(run["id"])
+    RunService(
+        SQLiteRunStore(db), provider=ReplayProvider({"case-1": {"output": "ok"}}).invoke
+    ).execute(run["id"])
 
     backup_dir = tmp_path / "backups"
     manifest = backup_sqlite(db, backup_dir)
@@ -28,7 +30,10 @@ def test_backup_and_restore_roundtrip_preserves_runs_and_events(tmp_path):
     assert restored["database"] == str(restored_db)
     service = RunService(SQLiteRunStore(restored_db))
     assert service.get_run(run["id"])["status"] == "completed"
-    assert len(service.events(run["id"])) == 7  # 无期望值的单 case：7 个状态/响应事件
+    events = service.events(run["id"])
+    assert len(events) == 8
+    assert [item["seq"] for item in events] == list(range(1, 9))
+    assert any(item["type"] == "scoring_pass_created" for item in events)
 
 
 def test_restore_uses_latest_backup(tmp_path):

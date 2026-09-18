@@ -102,17 +102,15 @@ def test_model_test_missing_resources():
     assert rejected.json()["error"]["code"] == "PROVIDER_TEST_UNSUPPORTED"
 
 
-def test_model_update_overwrites_profile():
+def test_model_draft_update_uses_explicit_put():
     client = client_with_store()
     _seed(client)
-    updated = client.post("/api/v1/models", json={
-        "id": "fake-model",
-        "provider": "fake",
+    updated = client.put("/api/v1/models/fake-model", json={
         "capabilities": {"text": True},
         "parameters": {"temperature": 0.2, "top_p": 0.9, "max_output_tokens": 4096},
         "context_window": 131072,
     })
-    assert updated.status_code == 201
+    assert updated.status_code == 200
     stored = client.get("/api/v1/models/fake-model").json()
     assert stored["parameters"]["temperature"] == 0.2
     assert stored["context_window"] == 131072

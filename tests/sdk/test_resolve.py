@@ -4,6 +4,7 @@ import pytest
 from motte_sdk.resolve import (
     ManifestResolutionError,
     find_secret_paths,
+    prepare_run,
     resolve_manifest,
     validate_resolved_manifest,
 )
@@ -147,7 +148,9 @@ def test_inline_provider_passes_through_and_input_not_mutated(resources):
     inline = {"kind": "openai_compatible", "base_url": "https://x.test", "model": "m"}
     manifest = {"provider": dict(inline)}
     resolved = resolve_manifest(manifest, resources)
-    assert resolved["provider"] == inline
+    assert {key: resolved["provider"][key] for key in inline} == inline
+    assert resolved["provider"]["implementation_version"] == "1"
+    assert resolved["provider"]["adapter_version"] == "1"
     assert manifest["provider"] == inline
 
 
@@ -166,3 +169,38 @@ def test_find_secret_paths_is_recursive():
         "$.manifest.nested[0].api_key",
         "$.manifest.x-api-key",
     }
+
+
+def test_prepare_run_pins_execution_backend(resources):
+    resolved, case_ids = prepare_run("replay@1", {}, ["case-1"], resources)
+    assert case_ids == ["case-1"]
+    assert resolved["execution"]["backend_id"] == "replay"
+    assert resolved["execution"]["capabilities"]["safe_to_repeat"] is True
+
+
+def test_prepare_run_rejects_unconnected_runtime_fields(resources):
+    with pytest.raises(ManifestResolutionError) as raised:
+        prepare_run(
+            "replay@1",
+            {"agent": "pi", "provider": {"kind": "replay", "fixture": {}}},
+            ["case-1"],
+            resources,
+        )
+    assert raised.value.code == "EXECUTION_BACKEND_UNSUPPORTED"
+
+
+def test_model_identity_and_resource_hashes_are_snapshotted(resources):
+    profile = resources.models.get("gpt-4o-mini")
+    resources.models.put({
+        **profile,
+        "identity_policy": "require_match",
+        "identity_aliases": {"gpt-4o-mini-2024-07-18": "gpt-4o-mini-2024-07-18"},
+        "identity_alias_version": "aliases-v1",
+    })
+    resolved = resolve_manifest({"model": "gpt-4o-mini"}, resources)
+    provider = resolved["provider"]
+    assert provider["identity_policy"] == "require_match"
+    assert provider["model_profile_id"] == "gpt-4o-mini"
+    assert provider["adapter_id"] == "openai_compatible"
+    assert provider["adapter_version"]
+    assert resolved["resource_snapshots"]["model_profile"]["content_hash"].startswith("sha256:")

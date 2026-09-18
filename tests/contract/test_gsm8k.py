@@ -75,12 +75,16 @@ def test_benchmark_versions_immutable_generic_resources_still_upsert(tmp_path, b
     store.scenarios.put(scenario)
     with pytest.raises(ResourceConflictError):
         store.scenarios.put({**scenario,'dataset':'other@1'})
-    store.datasets.put({'name':'generic','version':'1','anything':1})
-    store.datasets.put({'name':'generic','version':'1','anything':2})
-    assert store.datasets.get('generic','1')['anything'] == 2
-    store.datasets.put({'name':'other','version':'1','benchmark':{'id':'other-benchmark'}})
-    store.datasets.put({'name':'other','version':'1','benchmark':{'id':'other-benchmark'},'anything':2})
-    assert store.datasets.delete('other','1') is True
+    generic = {'name':'generic','version':'1','anything':1}
+    assert store.datasets.put(generic) == store.datasets.put(generic)
+    with pytest.raises(ResourceConflictError):
+        store.datasets.put({'name':'generic','version':'1','anything':2})
+    other = {'name':'other','version':'1','benchmark':{'id':'other-benchmark'}}
+    store.datasets.put(other)
+    with pytest.raises(ResourceConflictError):
+        store.datasets.put({**other, 'anything':2})
+    with pytest.raises(ResourceConflictError):
+        store.datasets.delete('other','1')
     invalid = deepcopy(record)
     invalid['version'] = '2'
     invalid['cases'][1]['case_id'] = invalid['cases'][0]['case_id']

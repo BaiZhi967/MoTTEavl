@@ -47,7 +47,8 @@ def _build_replay(config: dict[str, Any], manifest: dict[str, Any]):
     # lazy import：provider-runtime 不在模块级依赖 motte_sdk（sdk 也不依赖本包，方向安全）
     from motte_sdk.replay_run import ReplayProvider
 
-    return ReplayProvider(config.get("fixture") or {})
+    fixture = config.get("fixture") or (manifest or {}).get("replay_fixture") or {}
+    return ReplayProvider(fixture)
 
 
 def _build_http(config: dict[str, Any], manifest: dict[str, Any]):
@@ -61,6 +62,7 @@ def _build_http(config: dict[str, Any], manifest: dict[str, Any]):
 
 register(AdapterSpec(
     kind="openai_compatible",
+    implementation_version=OpenAICompatibleProvider.IMPLEMENTATION_VERSION,
     validate=_validate_openai_compatible,
     build=_build_http,
     default_key_env="OPENAI_API_KEY",
@@ -70,6 +72,7 @@ register(AdapterSpec(
 ))
 register(AdapterSpec(
     kind="anthropic_messages",
+    implementation_version=AnthropicMessagesProvider.IMPLEMENTATION_VERSION,
     validate=_validate_anthropic,
     build=_build_http,
     default_key_env="ANTHROPIC_API_KEY",
@@ -80,6 +83,7 @@ register(AdapterSpec(
 ))
 register(AdapterSpec(
     kind="openai_responses",
+    implementation_version=OpenAIResponsesProvider.IMPLEMENTATION_VERSION,
     validate=_validate_responses,
     build=_build_http,
     default_key_env="OPENAI_API_KEY",
@@ -89,6 +93,7 @@ register(AdapterSpec(
 ))
 register(AdapterSpec(
     kind="replay",
+    implementation_version="1",
     validate=_validate_replay,
     build=_build_replay,
 ))
@@ -104,7 +109,12 @@ def validate_provider_config(config: dict[str, Any]) -> None:
     kind = config.get("kind")
     if not isinstance(kind, str) or not kind:
         raise ValueError("provider config requires kind")
-    adapter_for(kind).validate(config)
+    spec = adapter_for(kind)
+    pinned_version = config.get("implementation_version")
+    if pinned_version is not None and pinned_version != spec.implementation_version:
+        raise ValueError(f"provider adapter version mismatch for {kind}: "
+                         f"expected {pinned_version!r}, installed {spec.implementation_version!r}")
+    spec.validate(config)
 
 
 def build_provider(config: dict[str, Any], manifest: dict[str, Any] | None = None):
@@ -184,5 +194,8 @@ def build_case_provider(
         max_output_tokens=config.get("max_output_tokens"),
         reasoning=config.get("reasoning"),
         reasoning_level=config.get("reasoning_level"),
+        identity_policy=config.get("identity_policy", "report_only"),
+        identity_aliases=config.get("identity_aliases"),
+        identity_alias_version=config.get("identity_alias_version"),
     )
     return CaseDrivenProvider(provider, cases or {}, tools=tools)

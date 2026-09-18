@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { ModelPicker } from "../src/components/ModelPicker";
+import { RunAuditSummary } from "../src/components/RunAuditSummary";
 import { RunTimeline } from "../src/components/RunTimeline";
 import { ScoreTable } from "../src/components/ScoreTable";
 import { StatusBadge, statusLabel } from "../src/components/StatusBadge";
-import { ProvidersPage } from "../src/pages/ResourcesPage";
+import { HarnessesPage, ProvidersPage } from "../src/pages/ResourcesPage";
 
 const clientMocks = vi.hoisted(() => ({
   getProviders: vi.fn(async () => ({ items: [] })),
@@ -24,6 +25,7 @@ const clientMocks = vi.hoisted(() => ({
   deleteProvider: vi.fn(),
   createModel: vi.fn(async (body: any) => body),
   updateModel: vi.fn(async (id: string, body: any) => ({ id, ...body })),
+  publishModel: vi.fn(async (id: string) => ({ id, lifecycle: "published" })),
   deleteModel: vi.fn(),
   testModel: vi.fn(async (id: string) => ({
     ok: true,
@@ -35,8 +37,8 @@ const clientMocks = vi.hoisted(() => ({
     retry_count: 0,
     usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
   })),
-  getAgents: vi.fn(),
-  getHarnesses: vi.fn(),
+  getAgents: vi.fn(async () => ({ items: [] })),
+  getHarnesses: vi.fn(async () => ({ items: [] })),
 }));
 
 vi.mock("../src/api/client", () => clientMocks);
@@ -57,9 +59,37 @@ describe("StatusBadge", () => {
     expect(statusLabel("queued")).toBe("排队中");
     expect(statusLabel("completed")).toBe("已完成");
     expect(statusLabel("profile_stale")).toBe("配置过期");
+    expect(statusLabel("needs_review")).toBe("需人工复核");
     expect(statusLabel("whatever")).toBe("whatever");
     render(<StatusBadge status="running" />);
     expect(screen.getByText("运行中")).toBeTruthy();
+  });
+});
+
+describe("RunAuditSummary", () => {
+  it("显示固定的执行、评测、身份和评分批次", () => {
+    render(<RunAuditSummary run={{
+      id: "run-1",
+      schema_version: 2,
+      revision: 9,
+      scenario_version: "direct-llm@1",
+      status: "completed",
+      current_scoring_pass_id: "pass-1",
+      scoring_pass: { id: "pass-1", scorer_id: "exact", scorer_version: "2", source: "rescore" },
+      manifest: {
+        execution: { backend_id: "direct-llm", backend_version: "1" },
+        evaluation: { adapter_id: "direct-llm", adapter_version: "1", scorer_id: "exact", scorer_version: "2" },
+        provider: { adapter_id: "openai_responses", adapter_version: "1" },
+      },
+      cases: [{ case_id: "case-1", result: {
+        requested_model: "requested", reported_model: "reported", resolved_model_identity: "reported",
+        identity_policy: "require_match", identity_policy_result: "mismatch", policy_passed: false,
+      } }],
+    }} />);
+    expect(screen.getAllByText("direct-llm@1")).toHaveLength(2);
+    expect(screen.getByText("pass-1 · rescore")).toBeTruthy();
+    expect(screen.getByText(/requested → reported/)).toBeTruthy();
+    expect(screen.getByText("require_match · 未通过")).toBeTruthy();
   });
 });
 
@@ -91,6 +121,24 @@ describe("ScoreTable", () => {
     expect(screen.getByText(/共 2 项，通过 1，未通过 1/)).toBeTruthy();
     expect(screen.getByText("case-1")).toBeTruthy();
     expect(screen.getByText("未通过")).toBeTruthy();
+  });
+});
+
+describe("HarnessesPage", () => {
+  it("区分本机可运行、协议就绪与评测执行就绪", async () => {
+    clientMocks.getHarnesses.mockResolvedValueOnce({ items: [{
+      name: "codex-cli", binary: "codex", installed: true, version: "1", source: "path",
+      path: "/bin/codex", runnable: true, protocol_ready: true, execution_ready: false,
+    }] });
+    clientMocks.getAgents.mockResolvedValueOnce({ items: [{
+      id: "pi", kind: "bridge", description: "protocol v1",
+      protocol_ready: true, execution_ready: false,
+    }] });
+    render(<HarnessesPage />);
+    expect(await screen.findByText("codex-cli")).toBeTruthy();
+    expect(screen.getAllByText("评测执行就绪")).toHaveLength(2);
+    expect(screen.getByText("pi")).toBeTruthy();
+    expect(screen.getAllByText("否").length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -350,6 +398,15 @@ describe("ProvidersPage", () => {
     expect(clientMocks.updateModel.mock.calls[0][1].reasoning).toMatchObject({ supported: false, default_level: null });
   });
 
+  it("草稿模型显式发布", async () => {
+    await renderWithProvider(PROVIDERS, [
+      { id: "qwen2.5-7b", provider: "local-vllm", lifecycle: "draft", generation: 1, capabilities: { text: true } },
+    ]);
+    expect(screen.getByText("草稿 · g1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "发布" }));
+    await waitFor(() => expect(clientMocks.publishModel).toHaveBeenCalledWith("qwen2.5-7b"));
+  });
+
   it("模型行开关切换启用状态", async () => {
     await renderWithProvider(PROVIDERS, [
       { id: "qwen2.5-7b", provider: "local-vllm", capabilities: { text: true } },
@@ -378,6 +435,7 @@ describe("ModelPicker", () => {
     { id: "qwen-max", provider: "zhipu", capabilities: {}, context_window: 32000 },
     { id: "qwen2.5-7b", provider: "local-vllm", capabilities: {}, context_window: 32768 },
     { id: "glm-4-air", provider: "zhipu", capabilities: {}, enabled: false },
+    { id: "draft-model", provider: "zhipu", capabilities: {}, lifecycle: "draft" },
   ];
 
   it("按 Provider 分组渲染并标注上下文与停用态", () => {
@@ -389,6 +447,8 @@ describe("ModelPicker", () => {
     expect(screen.getByText("已停用")).toBeTruthy();
     const disabled = screen.getByLabelText("选择模型 glm-4-air") as HTMLInputElement;
     expect(disabled.disabled).toBe(true);
+    expect((screen.getByLabelText("选择模型 draft-model") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText("草稿")).toBeTruthy();
   });
 
   it("点击勾选触发 onToggle", () => {

@@ -9,10 +9,11 @@ from motte_storage.postgres import UnsupportedStorageError, normalize_dsn
 from motte_storage.run_store import RunStore
 
 VERSION_FILE = MIGRATIONS_DIR / "versions" / "0001_initial.py"
+INTEGRITY_VERSION_FILE = MIGRATIONS_DIR / "versions" / "0002_platform_integrity.py"
 
 
-def _load_version_module():
-    spec = importlib.util.spec_from_file_location("v0001", VERSION_FILE)
+def _load_version_module(version_file=VERSION_FILE):
+    spec = importlib.util.spec_from_file_location(version_file.stem, version_file)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -28,7 +29,7 @@ def test_dsn_is_validated_and_normalized():
 
 
 def test_alembic_revision_chain_is_linear_and_complete():
-    assert revision_ids() == ["0001_initial"]
+    assert revision_ids() == ["0001_initial", "0002_platform_integrity"]
     config = alembic_config("postgresql://user@localhost/db")
     assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)
     assert "postgresql+psycopg://" in config.get_main_option("sqlalchemy.url")
@@ -57,6 +58,21 @@ def test_initial_migration_covers_all_entities_with_downgrade():
     assert Path(VERSION_FILE).exists()
 
 
+def test_integrity_migration_preserves_legacy_tables_and_adds_audit_entities():
+    module = _load_version_module(INTEGRITY_VERSION_FILE)
+    assert module.down_revision == "0001_initial"
+    sql = "\n".join(module.UP_STATEMENTS)
+    drops = "\n".join(module.DOWN_STATEMENTS)
+    assert "ALTER TABLE runs ADD COLUMN revision" in sql
+    assert "ALTER TABLE runs DROP COLUMN IF EXISTS revision" in drops
+    for table in ("case_attempts", "scoring_passes", "score_sets", "run_commands"):
+        assert f"CREATE TABLE {table}" in sql
+        assert f"DROP TABLE IF EXISTS {table}" in drops
+    assert "UNIQUE (run_id, case_id, attempt_no)" in sql
+    assert "PRIMARY KEY (scoring_pass_id, case_id)" in sql
+    assert "DROP TABLE IF EXISTS scores" not in drops
+
+
 def test_factory_selects_backend(monkeypatch, tmp_path):
     store = create_run_store(tmp_path / "runs.db", storage="sqlite")
     assert isinstance(store, RunStore) and not hasattr(store, "dsn")
@@ -66,8 +82,13 @@ def test_factory_selects_backend(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MOTTE_STORAGE", "postgres")
     monkeypatch.setenv("MOTTE_PG_DSN", "postgresql+asyncpg://u@localhost/motte")
-    with pytest.raises(Exception, match="psycopg|connect|hostname|Operational|DNS"):
-        create_run_store(migrate=True)  # 本地无 PG 服务时失败路径明确
+
+    def unavailable(_dsn):
+        raise OSError("psycopg connect unavailable")
+
+    monkeypatch.setattr("motte_storage.postgres.upgrade_migrations", unavailable)
+    with pytest.raises(OSError, match="psycopg connect unavailable"):
+        create_run_store(migrate=True)
     monkeypatch.delenv("MOTTE_PG_DSN")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(ValueError, match="MOTTE_PG_DSN"):

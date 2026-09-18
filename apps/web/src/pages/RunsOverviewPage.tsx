@@ -8,8 +8,8 @@ import { StatusBadge } from "../components/StatusBadge";
 import { STATUS_ORDER, statusLabel } from "../components/statusMeta";
 import { EVAL_SUITES, suiteForRun, suiteRoutes } from "../evalTypes/registry";
 
-const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "unsupported", "profile_stale"];
-const RETRYABLE_STATUSES = ["failed", "cancelled", "unsupported", "profile_stale"];
+const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
+const RETRYABLE_STATUSES = ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
 
 function typeLabel(run: RunRecord): string {
   return suiteForRun(run)?.label ?? "通用";

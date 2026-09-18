@@ -28,9 +28,13 @@ def _harness_installations() -> dict:
         from motte_agent.pi import PiAgentRuntime
 
         runtime = PiAgentRuntime()
+        transport_available = runtime.available()
+        probe = runtime.probe() if transport_available else None
         reports["pi-bridge"] = {
             "name": "pi-bridge",
-            "installed": runtime.available(),
+            "installed": bool(probe and probe["execution_ready"]),
+            "execution_ready": bool(probe and probe["execution_ready"]),
+            "transport_available": transport_available,
             "detail": f"node={runtime._node is not None}, bridge={runtime.bridge_path}",
         }
     except Exception as error:  # agent 包异常时 doctor 不失败
@@ -122,6 +126,38 @@ def _build_parser() -> argparse.ArgumentParser:
     bench_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     bench_run.add_argument("--json", action="store_true")
 
+    direct = sub.add_parser("direct-llm", help="Direct LLM 通用直连评测（导入 JSONL 数据集，创建运行）")
+    direct_sub = direct.add_subparsers(dest="direct_command", required=True)
+    direct_builtins = direct_sub.add_parser("builtins", help="列出仓库内置的样例数据集")
+    direct_builtins.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    direct_list = direct_sub.add_parser("list", help="列出已导入的 Direct LLM 数据集")
+    direct_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    direct_import = direct_sub.add_parser("import", help="导入一份 Direct LLM JSONL（内置样例或本地文件）")
+    origin = direct_import.add_mutually_exclusive_group(required=True)
+    origin.add_argument("--builtin", help="内置样例 id，见 `direct-llm builtins`")
+    origin.add_argument("--file", help="本地 JSONL 路径")
+    direct_import.add_argument("--name", help="数据集名（默认：内置 id，或 local-jsonl 导入的 direct-llm-custom）")
+    direct_import.add_argument("--version", help="数据集版本（省略=自动：同内容复用，否则下一个空号）")
+    direct_import.add_argument("--license", dest="license_id", default="internal-sample")
+    direct_import.add_argument("--scorer", help="数据集默认评分器：exact / contains / regex（默认 exact）")
+    direct_import.add_argument("--source", help="来源标记，写进 provenance（默认跟 --builtin / local-jsonl）")
+    direct_import.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    direct_run = direct_sub.add_parser("run", help="创建 Direct LLM queued Run（由 Worker 执行）")
+    direct_run.add_argument("--scenario", required=True,
+                            help="数据集场景引用，如 direct-llm-classify@1（场景名=数据集名）")
+    direct_selection = direct_run.add_mutually_exclusive_group(required=True)
+    direct_selection.add_argument("--provider", help="provider connection name or provider object JSON/@file")
+    direct_selection.add_argument("--model", help="model profile resource id")
+    direct_subset = direct_run.add_mutually_exclusive_group()
+    direct_subset.add_argument("--case-ids", help="只跑指定题目：逗号分隔的 case id")
+    direct_subset.add_argument("--random", type=int, dest="random_count", metavar="N",
+                               help="随机抽 N 题（种子写进运行快照，可复现）")
+    direct_run.add_argument("--seed", help="随机种子（8-64 位十六进制，省略则生成并记录）")
+    direct_run.add_argument("--temperature", type=float, help="采样温度（省略=模型档案默认值）")
+    direct_run.add_argument("--max-output-tokens", type=int, dest="max_output_tokens",
+                            help="本次输出上限，省略=数据集预设 1024，且不得超模型上限")
+    direct_run.add_argument("--reasoning-level", help="该模型的思考强度等级（需模型档案声明支持）")
+    direct_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
     restore = sub.add_parser("restore", help="从最新备份恢复（先停 API 与 Worker）")
     restore.add_argument("--source", required=True, help="备份目录")
@@ -140,6 +176,110 @@ def _service(args):
     from motte_storage.run_store import SQLiteRunStore
 
     return RunService(SQLiteRunStore(args.db)) if args.db else build_run_service()
+
+
+def _error(code: str, message: str) -> int:
+    print(json.dumps({"error": {"code": code, "message": message}}, ensure_ascii=False),
+          file=sys.stderr)
+    return 2
+
+
+def _direct_llm_command(args) -> int:
+    """`motte direct-llm`：内置样例 / 本地 JSONL 的导入、清单与运行创建（stdout 始终是 JSON）。"""
+    from motte_contracts.direct_llm import SUITE, is_scenario
+    from motte_sdk.direct_llm import (BuiltinUnavailable, builtin_catalog, import_builtin_dataset,
+                                      import_direct_llm_split)
+    from motte_storage.resource_store import ResourceConflictError
+
+    if args.direct_command == "builtins":
+        items = builtin_catalog()
+        print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+        return 0
+
+    if args.direct_command == "list":
+        resources = _resources(args)
+        items = []
+        for scenario in sorted(resources.scenarios.list(), key=lambda s: str(s.get("name"))):
+            if not is_scenario(scenario):
+                continue
+            name, _, version = str(scenario.get("dataset", "")).rpartition("@")
+            dataset = resources.datasets.get(name, version)
+            if dataset is None:
+                continue
+            items.append({"scenario": f"{scenario['name']}@{scenario['version']}",
+                          "dataset": scenario["dataset"],
+                          "suite": SUITE,
+                          "scorer": (dataset.get("eval") or {}).get("scorer"),
+                          "cases": len(dataset.get("cases") or ()),
+                          "source": (dataset.get("provenance") or {}).get("source")})
+        print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+        return 0
+
+    if args.direct_command == "import":
+        try:
+            if args.builtin:
+                receipt = import_builtin_dataset(
+                    args.builtin, resources=_resources(args), name=args.name, version=args.version,
+                    license_id=args.license_id, scorer=args.scorer)
+            else:
+                with open(args.file, "rb") as handle:
+                    raw = handle.read()
+                receipt = import_direct_llm_split(
+                    raw, name=args.name or "direct-llm-custom", version=args.version,
+                    license_id=args.license_id, scorer=args.scorer,
+                    source=args.source or "local-jsonl", resources=_resources(args))
+        except BuiltinUnavailable as error:
+            return _error("BUILTIN_UNAVAILABLE", str(error))
+        except OSError as error:
+            return _error("SOURCE_UNAVAILABLE", f"cannot read source file: {error}")
+        except ValueError as error:
+            code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+            return _error(code, str(error))
+        print(json.dumps(receipt, ensure_ascii=False))
+        return 0
+
+    from motte_sdk.resolve import ManifestResolutionError, prepare_run
+
+    name, _, version = args.scenario.rpartition("@")
+    scenario = _resources(args).scenarios.get(name, version)
+    if scenario is None:
+        return _error("SCENARIO_NOT_FOUND", f"scenario not found: {args.scenario}")
+    if args.model:
+        requested: dict = {"model": args.model}
+    else:
+        requested = {"provider": _load_json(args.provider) if args.provider.startswith(("{", "@"))
+                     else args.provider}
+    try:
+        if args.case_ids is not None:
+            ids = [item.strip() for item in args.case_ids.replace("，", ",").split(",") if item.strip()]
+            if not ids:
+                raise ValueError("--case-ids 不能为空")
+            requested["case_selection"] = {"mode": "ids", "case_ids": ids}
+        elif args.random_count is not None:
+            requested["case_selection"] = {"mode": "random", "count": args.random_count}
+            if args.seed:
+                requested["case_selection"]["seed"] = args.seed
+        elif args.seed:
+            raise ValueError("--seed 只与 --random 搭配使用")
+        parameters = {}
+        if args.temperature is not None:
+            parameters["temperature"] = args.temperature
+        if args.max_output_tokens is not None:
+            parameters["max_output_tokens"] = args.max_output_tokens
+        if parameters:
+            requested["parameters"] = parameters
+        if args.reasoning_level:
+            requested["reasoning_level"] = args.reasoning_level
+        manifest, case_ids = prepare_run(args.scenario, requested, [], _resources(args))
+    except ManifestResolutionError as error:
+        return _error(error.code, str(error))
+    except ValueError as error:
+        return _error("CONTRACT_INVALID", str(error))
+    run = _service(args).create_run(
+        args.scenario, manifest, case_ids, requested_manifest=requested
+    )
+    print(json.dumps(run, ensure_ascii=False))
+    return 0
 
 
 def _resources(args):
@@ -173,7 +313,8 @@ def main(argv=None):
 
         spec = _load_json(args.spec)
         service = _service(args)
-        manifest = spec.get("manifest", {})
+        requested_manifest = spec.get("manifest", {})
+        manifest = requested_manifest
         try:
             manifest, case_ids = prepare_run(spec.get("scenario_version", "default@1"), manifest, spec.get("case_ids", []), _resources(args))
         except ManifestResolutionError as error:
@@ -183,17 +324,45 @@ def main(argv=None):
             spec.get("scenario_version", "default@1"),
             manifest,
             case_ids,
+            requested_manifest=requested_manifest,
         )
         print(json.dumps(run, ensure_ascii=False))
         return 0
 
     if args.command == "replay":
         fixture = _load_json(args.fixture)
-        from motte_sdk.replay_run import ReplayProvider
+        from motte_sdk.dispatcher import RunDispatcher
+        from motte_sdk.execution_lock import WorkerAlreadyRunning, worker_execution_lock
+        from motte_sdk.resolve import find_secret_paths
 
+        if find_secret_paths(fixture):
+            return _error("CREDENTIALS_REJECTED", "replay fixtures cannot contain credential fields")
+        if not isinstance(fixture, dict) or not fixture or any(
+            not isinstance(case_id, str) or not case_id
+            or not isinstance(item, dict) or "output" not in item
+            for case_id, item in fixture.items()
+        ):
+            return _error(
+                "REPLAY_FIXTURE_INVALID",
+                "replay fixture must contain object cases with output fields",
+            )
         service = _service(args)
-        run = service.create_run(args.scenario, {}, case_ids=list(fixture))
-        result = service.execute(run["id"], provider=ReplayProvider(fixture).invoke)
+        manifest = {
+            "provider": {"kind": "replay", "fixture": fixture},
+            "execution": {
+                "backend_id": "replay",
+                "backend_version": "1",
+                "capabilities": {"interactive": False, "safe_to_repeat": True},
+            },
+        }
+        try:
+            with worker_execution_lock(args.db):
+                run = service.create_run(
+                    args.scenario, manifest, case_ids=list(fixture), requested_manifest=manifest
+                )
+                result = RunDispatcher(service).dispatch(run["id"])
+        except WorkerAlreadyRunning as error:
+            return _error("EXECUTOR_LOCKED", str(error))
         print(json.dumps(result, ensure_ascii=False))
         return 0
 
@@ -304,9 +473,14 @@ def main(argv=None):
             print(json.dumps({"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
                              ensure_ascii=False), file=sys.stderr)
             return 2
-        run = _service(args).create_run(args.scenario, manifest, case_ids)
+        run = _service(args).create_run(
+            args.scenario, manifest, case_ids, requested_manifest=requested
+        )
         print(json.dumps(run, ensure_ascii=False))
         return 0
+
+    if args.command == "direct-llm":
+        return _direct_llm_command(args)
 
     if args.command == "credentials":
         from motte_provider import credentials as store
