@@ -54,6 +54,15 @@ def test_resolve_execution_pins_replay_backend_and_builds_handle():
     assert handle.invoke("c1") == "ok"
 
 
+def test_replay_backend_rejects_conflicting_persisted_fixtures():
+    manifest = resolve_execution("replay@1", {
+        "provider": {"kind": "replay", "fixture": {"a": {"output": 1}}},
+    })
+    manifest["replay_fixture"] = {"a": {"output": 2}}
+    with pytest.raises(ExecutionBackendError, match="must match"):
+        build_execution_handle({"manifest": manifest})
+
+
 def test_runtime_fields_never_fall_back_to_plain_provider():
     with pytest.raises(ExecutionBackendError) as raised:
         resolve_execution(

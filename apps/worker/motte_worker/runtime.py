@@ -13,6 +13,7 @@ from motte_sdk.dispatcher import RunDispatcher
 from motte_sdk.execution_backends import backend_for, build_execution_handle, legacy_execution
 from motte_sdk.execution_lock import worker_execution_lock
 from motte_sdk.service import RunService
+from motte_storage.integrity import RunConflictError
 
 from .reporting import WorkerReporter
 
@@ -62,8 +63,25 @@ class WorkerLoop:
         store = self.service.store
         interrupted = {"preparing", "running", "collecting", "scoring"}
         for run in store.runs.list():
+            attempts = store.attempts.list_for_run(run["id"])
+            prepared = [item for item in attempts if item.get("status") == "prepared"]
+            for attempt in prepared:
+                try:
+                    store.attempts.transition(
+                        attempt["id"],
+                        expected_revision=attempt["revision"],
+                        expected_status="prepared",
+                        status="failed",
+                        changes={
+                            "finished_at": datetime.now(UTC).isoformat(),
+                            "error": {"code": "PREPARED_ATTEMPT_RECOVERED"},
+                        },
+                    )
+                except RunConflictError:
+                    # Another executor completed the preparation while recovery scanned it.
+                    pass
             uncertain = [
-                item for item in store.attempts.list_for_run(run["id"])
+                item for item in attempts
                 if item.get("status") in {"dispatching", "indeterminate"}
             ]
             if not uncertain:
@@ -78,9 +96,15 @@ class WorkerLoop:
                 if not isinstance(manifest.get("execution"), dict):
                     manifest = legacy_execution(run)
                 descriptor = manifest["execution"]
-                safe_to_repeat = backend_for(
-                    descriptor["backend_id"], descriptor["backend_version"]
-                ).capabilities.get("safe_to_repeat", False)
+                backend_for(descriptor["backend_id"], descriptor["backend_version"])
+                persisted_capabilities = descriptor.get("capabilities")
+                if isinstance(persisted_capabilities, dict) and "safe_to_repeat" in persisted_capabilities:
+                    safe_to_repeat = persisted_capabilities["safe_to_repeat"] is True
+                else:
+                    # Legacy manifests have no pinned capability snapshot.
+                    safe_to_repeat = backend_for(
+                        descriptor["backend_id"], descriptor["backend_version"]
+                    ).capabilities.get("safe_to_repeat", False)
             except (KeyError, ValueError):
                 safe_to_repeat = False
             if safe_to_repeat:
@@ -134,6 +158,12 @@ class WorkerLoop:
     def claim_and_execute(self, run_id: str | None = None) -> dict | None:
         """Claim and dispatch one Run through the shared backend path."""
         with self._execution_guard():
+            return self._claim_and_execute_unlocked(run_id)
+
+    def run_once(self, run_id: str | None = None) -> dict | None:
+        """Recover and execute while holding the guard for the actual store."""
+        with self._execution_guard():
+            self._recover_interrupted_unlocked()
             return self._claim_and_execute_unlocked(run_id)
 
     def _claim_and_execute_unlocked(self, run_id: str | None = None) -> dict | None:

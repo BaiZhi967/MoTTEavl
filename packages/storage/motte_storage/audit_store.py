@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+from datetime import UTC, datetime
 from copy import deepcopy
 from threading import RLock
 from typing import Any
@@ -17,6 +18,7 @@ from .integrity import (
     new_record,
     next_run,
     stored_run,
+    validate_case_rows,
     validate_event,
     validate_scores,
 )
@@ -78,6 +80,43 @@ class SQLiteAttempts:
                 )
         except sqlite3.IntegrityError as error:
             raise RunConflictError("attempt id or attempt_no already exists") from error
+        return deepcopy(stored)
+
+    def dispatch(
+        self, attempt_id: str, *, expected_revision: int,
+        run_id: str, expected_run_revision: int, expected_run_status: str,
+    ) -> dict[str, Any]:
+        with closing(_connect(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run_row = connection.execute(
+                "SELECT payload, revision FROM runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if run_row is None or run_row[1] != expected_run_revision:
+                raise RunConflictError(f"run revision or status changed: {run_id}")
+            run = stored_run(json.loads(run_row[0]), run_row[1])
+            if run.get("status") != expected_run_status or run.get("cancellation"):
+                raise RunConflictError(f"run is no longer dispatchable: {run_id}")
+            row = connection.execute(
+                "SELECT payload FROM case_attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise RunConflictError(f"attempt missing: {attempt_id}")
+            current_attempt = json.loads(row[0])
+            if current_attempt.get("run_id") != run_id:
+                raise RunConflictError(f"attempt belongs to another run: {attempt_id}")
+            stored = advance_record(
+                current_attempt, expected_revision=expected_revision,
+                expected_status="prepared", status="dispatching",
+                changes={"dispatched_at": datetime.now(UTC).isoformat()},
+                transitions=ATTEMPT_TRANSITIONS,
+            )
+            if connection.execute(
+                "UPDATE case_attempts SET payload = ?, status = ?, revision = ? "
+                "WHERE id = ? AND status = 'prepared' AND revision = ?",
+                (json.dumps(stored, sort_keys=True), "dispatching", stored["revision"],
+                 attempt_id, expected_revision),
+            ).rowcount != 1:
+                raise RunConflictError(f"attempt revision or status changed: {attempt_id}")
         return deepcopy(stored)
 
     def get(self, attempt_id: str) -> dict[str, Any] | None:
@@ -260,9 +299,15 @@ class SQLiteScoringPasses:
         run_changes: dict[str, Any] | None = None,
         terminal_event: dict[str, Any] | None = None,
         score_events: list[dict[str, Any]] | None = None,
+        require_no_open_attempts: bool = False,
+        case_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         stored = _pass_record(record)
         rows = validate_scores(scores)
+        bound_case_rows = validate_case_rows(case_rows, stored["run_id"])
+        if any(score.get("scoring_pass_id") not in (None, stored["id"]) for score in rows):
+            raise ValueError("score belongs to a different scoring pass")
+        stored["scores"] = deepcopy(rows)
         pending = validate_event(event, stored["run_id"])
         pending_scores = [
             validate_event(item, stored["run_id"]) for item in (score_events or [])
@@ -288,6 +333,12 @@ class SQLiteScoringPasses:
                     run = stored_run(json.loads(run_row[0]), run_row[1])
                     if run.get("status") != expected_run_status:
                         raise RunConflictError("run status changed during scoring")
+                    if require_no_open_attempts and connection.execute(
+                        "SELECT 1 FROM case_attempts WHERE run_id = ? "
+                        "AND status IN ('prepared', 'dispatching', 'indeterminate') LIMIT 1",
+                        (stored["run_id"],),
+                    ).fetchone() is not None:
+                        raise RunConflictError("run has an open case attempt")
                     updated_run = next_run(
                         {
                             **run,
@@ -296,6 +347,24 @@ class SQLiteScoringPasses:
                             "status": final_status or run["status"],
                         },
                         expected_run_revision,
+                    )
+                for case_row in bound_case_rows:
+                    if connection.execute(
+                        "SELECT 1 FROM case_runs WHERE run_id = ? AND case_id = ?",
+                        (stored["run_id"], case_row["case_id"]),
+                    ).fetchone() is not None:
+                        raise RunConflictError(
+                            f"case row appeared during terminalization: {case_row['case_id']}"
+                        )
+                    ordinal = connection.execute(
+                        "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM case_runs WHERE run_id = ?",
+                        (stored["run_id"],),
+                    ).fetchone()[0]
+                    connection.execute(
+                        "INSERT INTO case_runs(run_id, case_id, ordinal, payload) "
+                        "VALUES (?, ?, ?, ?)",
+                        (stored["run_id"], case_row["case_id"], ordinal,
+                         json.dumps(case_row, sort_keys=True)),
                     )
                 connection.execute(
                     "INSERT INTO scoring_passes(id, run_id, payload) VALUES (?, ?, ?)",
@@ -477,6 +546,30 @@ class MemoryAttempts:
             self._rows[stored["id"]] = deepcopy(stored)
         return deepcopy(stored)
 
+    def dispatch(
+        self, attempt_id: str, *, expected_revision: int,
+        run_id: str, expected_run_revision: int, expected_run_status: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            run = self._runs.get(run_id)
+            if (
+                run is None or run["revision"] != expected_run_revision
+                or run.get("status") != expected_run_status or run.get("cancellation")
+            ):
+                raise RunConflictError(f"run is no longer dispatchable: {run_id}")
+            if attempt_id not in self._rows:
+                raise RunConflictError(f"attempt missing: {attempt_id}")
+            if self._rows[attempt_id].get("run_id") != run_id:
+                raise RunConflictError(f"attempt belongs to another run: {attempt_id}")
+            stored = advance_record(
+                self._rows[attempt_id], expected_revision=expected_revision,
+                expected_status="prepared", status="dispatching",
+                changes={"dispatched_at": datetime.now(UTC).isoformat()},
+                transitions=ATTEMPT_TRANSITIONS,
+            )
+            self._rows[attempt_id] = deepcopy(stored)
+            return deepcopy(stored)
+
     def get(self, attempt_id: str) -> dict[str, Any] | None:
         with self._lock:
             return deepcopy(self._rows.get(attempt_id))
@@ -593,11 +686,16 @@ class MemoryAttempts:
 
 
 class MemoryScoringPasses:
-    def __init__(self, runs: Any, events: Any, score_sets: MemoryScoreSets, lock: RLock) -> None:
+    def __init__(
+        self, runs: Any, events: Any, score_sets: MemoryScoreSets, attempts: Any,
+        cases: Any, lock: RLock
+    ) -> None:
         self._passes: dict[str, dict[str, Any]] = {}
         self._runs = runs
         self._events = events
         self._score_sets = score_sets
+        self._attempts = attempts
+        self._cases = cases
         self._lock = lock
 
     def append(
@@ -607,9 +705,15 @@ class MemoryScoringPasses:
         run_changes: dict[str, Any] | None = None,
         terminal_event: dict[str, Any] | None = None,
         score_events: list[dict[str, Any]] | None = None,
+        require_no_open_attempts: bool = False,
+        case_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         stored = _pass_record(record)
         rows = validate_scores(scores)
+        bound_case_rows = validate_case_rows(case_rows, stored["run_id"])
+        if any(score.get("scoring_pass_id") not in (None, stored["id"]) for score in rows):
+            raise ValueError("score belongs to a different scoring pass")
+        stored["scores"] = deepcopy(rows)
         pending = validate_event(event, stored["run_id"])
         pending_scores = [
             validate_event(item, stored["run_id"]) for item in (score_events or [])
@@ -631,6 +735,8 @@ class MemoryScoringPasses:
                 or current["status"] != expected_run_status
             ):
                 raise RunConflictError("run revision or status changed during scoring")
+            if require_no_open_attempts and self._attempts.list_open(stored["run_id"]):
+                raise RunConflictError("run has an open case attempt")
             updated_run = None
             if expected_run_revision is not None:
                 updated_run = next_run(
@@ -642,6 +748,12 @@ class MemoryScoringPasses:
                     },
                     expected_run_revision,
                 )
+            for case_row in bound_case_rows:
+                if self._cases.get(stored["run_id"], case_row["case_id"]) is not None:
+                    raise RunConflictError(
+                        f"case row appeared during terminalization: {case_row['case_id']}"
+                    )
+                self._cases.upsert(deepcopy(case_row))
             self._passes[stored["id"]] = deepcopy(stored)
             self._score_sets._sets[stored["id"]] = rows
             if updated_run is not None:

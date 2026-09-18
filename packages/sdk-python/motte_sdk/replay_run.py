@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 
+NO_EXPECTATION = object()
+
+
 class ReplayProvider:
     def __init__(self, fixture: dict[str, dict[str, Any]]) -> None:
         self.fixture = fixture
@@ -13,7 +16,7 @@ class ReplayProvider:
         return self.fixture[case_id]["output"]
 
     def expected_for(self, case_id: str) -> Any:
-        return self.fixture.get(case_id, {}).get("expected")
+        return self.fixture.get(case_id, {}).get("expected", NO_EXPECTATION)
 
 
 def run_replay(run_id: str, cases: dict[str, dict[str, Any]], provider: ReplayProvider) -> dict[str, Any]:
@@ -23,7 +26,7 @@ def run_replay(run_id: str, cases: dict[str, dict[str, Any]], provider: ReplayPr
         trace.append({"run_id": run_id, "type": "case_started", "case_id": case_id})
         output = provider.invoke(case_id)
         trace.append({"run_id": run_id, "type": "model_response", "case_id": case_id, "output": output})
-        passed = output == case.get("expected")
+        passed = output == case["expected"] if "expected" in case else None
         scores.append({"case_id": case_id, "passed": passed})
         trace.append({"run_id": run_id, "type": "score", "case_id": case_id, "passed": passed})
     trace.append({"run_id": run_id, "type": "completed"})

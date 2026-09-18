@@ -213,6 +213,11 @@ def _validate_direct(manifest: dict[str, Any]) -> None:
         raise ExecutionBackendError(
             "PROVIDER_CONFIG_INVALID", "direct-llm backend requires manifest.provider.kind"
         )
+    if "replay_fixture" in manifest and provider.get("kind") != "replay":
+        raise ExecutionBackendError(
+            "EXECUTION_BACKEND_CONFLICT",
+            "replay_fixture requires a replay provider",
+        )
 
 
 def _build_direct(run: dict[str, Any]) -> ExecutionHandle:
@@ -253,21 +258,22 @@ def resolve_replay_case_ids(
             "REPLAY_FIXTURE_CONFLICT", "provider.fixture and replay_fixture must match"
         )
     fixture = manifest_fixture if has_manifest_fixture else provider_fixture
-    if (
-        not isinstance(fixture, dict)
-        or not fixture
-        or any(
-            not isinstance(case_id, str)
-            or not case_id
-            or not isinstance(item, dict)
-            or "output" not in item
-            for case_id, item in fixture.items()
-        )
-    ):
+    if not isinstance(fixture, dict) or not fixture:
         raise ExecutionBackendError(
             "REPLAY_FIXTURE_INVALID",
             "replay fixture must contain non-empty object cases with output fields",
         )
+    try:
+        from motte_contracts.run import ReplayCase
+        for case_id, item in fixture.items():
+            if not isinstance(case_id, str) or not case_id:
+                raise ValueError("case IDs must be nonempty strings")
+            ReplayCase.model_validate(item)
+    except Exception as error:
+        raise ExecutionBackendError(
+            "REPLAY_FIXTURE_INVALID",
+            "replay fixture cases must match the ReplayCase contract",
+        ) from error
     selected = list(case_ids or fixture)
     missing = [case_id for case_id in selected if case_id not in fixture]
     if missing:
@@ -287,6 +293,8 @@ def _validate_replay(manifest: dict[str, Any]) -> None:
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_CONFLICT", "replay backend cannot use a non-replay provider"
         )
+    if (isinstance(provider, dict) and "fixture" in provider) or "replay_fixture" in manifest:
+        resolve_replay_case_ids(manifest)
 
 
 def _build_replay(run: dict[str, Any]) -> ExecutionHandle:
