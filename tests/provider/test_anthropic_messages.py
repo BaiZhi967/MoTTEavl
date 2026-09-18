@@ -81,6 +81,10 @@ def test_request_body_puts_system_top_level_and_requires_max_tokens():
     assert body["messages"] == [{"role": "user", "content": "hello"}]
     assert "messages" in body and all("system" not in m or m["role"] == "user" for m in body["messages"])
     assert envelope["provider"] == "anthropic_messages"
+    assert envelope["requested_model"] == "claude-sonnet-4-5"
+    assert envelope["reported_model"] == "claude-sonnet-4-5-20250929"
+    assert envelope["resolved_model_identity"] is None
+    assert envelope["identity_policy_result"] == "mismatch"
 
 
 def test_request_body_converts_tools_and_tool_choice():

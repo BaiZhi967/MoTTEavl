@@ -29,6 +29,7 @@ _API_NAMES = {
 
 class OpenAIResponsesProvider(BaseHTTPProvider):
     kind = "openai_responses"
+    IMPLEMENTATION_VERSION = "1"
     request_path = "/responses"
     SUPPORTED_PARAMETERS = SUPPORTED_PARAMETERS
     _API_NAMES = _API_NAMES
@@ -116,7 +117,7 @@ class OpenAIResponsesProvider(BaseHTTPProvider):
             reasoning_tokens=output_details.get("reasoning_tokens"),
         )
         return ModelResponse(
-            model=data.get("model", ""),
+            model=data["model"] if isinstance(data.get("model"), str) else "",
             content="".join(texts),
             finish_reason=self._finish_reason(data),
             usage=canonical_usage,

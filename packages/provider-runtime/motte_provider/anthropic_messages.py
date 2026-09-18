@@ -40,6 +40,7 @@ _TOOL_CHOICE_MAP = {
 
 class AnthropicMessagesProvider(BaseHTTPProvider):
     kind = "anthropic_messages"
+    IMPLEMENTATION_VERSION = "1"
     request_path = "/messages"
     SUPPORTED_PARAMETERS = SUPPORTED_PARAMETERS
     _API_NAMES = _API_NAMES
@@ -116,7 +117,7 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
             cache_creation_input_tokens=_cache_creation_tokens(usage),
         )
         return ModelResponse(
-            model=data.get("model", ""),
+            model=data["model"] if isinstance(data.get("model"), str) else "",
             content="".join(texts),
             finish_reason=normalize_finish_reason(data.get("stop_reason")),
             usage=canonical_usage,
