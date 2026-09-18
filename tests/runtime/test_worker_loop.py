@@ -61,6 +61,22 @@ def test_claim_is_exclusive_between_polls(tmp_path):
     assert store.runs.claim_next_queued() is None
 
 
+def test_worker_recovers_prepared_attempt_before_requeue(tmp_path):
+    path = tmp_path / "prepared.db"
+    service = RunService(SQLiteRunStore(path))
+    run = service.create_run("replay@1", REPLAY_MANIFEST, case_ids=["case-1"])
+    claimed = service.store.runs.claim(run["id"])
+    prepared = service.store.attempts.begin(
+        {"run_id": run["id"], "case_id": "case-1", "attempt_no": 1},
+        expected_run_revision=claimed["revision"], expected_run_status="preparing",
+    )
+
+    worker = WorkerLoop(RunService(SQLiteRunStore(path)))
+    assert worker.recover_interrupted() == [run["id"]]
+    assert worker.service.store.attempts.get(prepared["id"])["status"] == "failed"
+    assert worker.claim_and_execute(run["id"])["status"] == "completed"
+
+
 def test_worker_recovers_interrupted_run_after_restart(tmp_path):
     path = tmp_path / "runs.db"
     service = RunService(SQLiteRunStore(path))

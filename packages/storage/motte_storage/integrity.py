@@ -92,6 +92,21 @@ def advance_record(
     return {**deepcopy(current), **deepcopy(changes), "status": status, "revision": expected_revision + 1}
 
 
+def validate_case_rows(rows: list[dict[str, Any]] | None, run_id: str) -> list[dict[str, Any]]:
+    bound: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict) or row.get("run_id") != run_id:
+            raise ValueError("case row must match the scoring pass run_id")
+        if not isinstance(row.get("case_id"), str) or not row["case_id"]:
+            raise ValueError("case row needs a nonempty case_id")
+        if row["case_id"] in seen:
+            raise ValueError("case rows need distinct case_id values")
+        seen.add(row["case_id"])
+        bound.append(deepcopy(row))
+    return bound
+
+
 def validate_scores(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from pydantic import ValidationError
     from motte_contracts.evidence import Score

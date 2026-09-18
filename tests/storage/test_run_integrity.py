@@ -124,6 +124,19 @@ def test_attempt_is_revisioned_and_completion_persists_case_and_event(store):
         store.attempts.complete(attempt["id"], expected_revision=2, case_run=result)
 
 
+def test_attempt_dispatch_rejects_cross_run_binding(store):
+    run_a = store.runs.create({"id": "run-dispatch-a", "status": "preparing"})
+    run_b = store.runs.create({"id": "run-dispatch-b", "status": "preparing"})
+    attempt = store.attempts.begin({"run_id": run_a["id"], "case_id": "a"})
+    with pytest.raises(RunConflictError, match="another run"):
+        store.attempts.dispatch(
+            attempt["id"], expected_revision=attempt["revision"],
+            run_id=run_b["id"], expected_run_revision=run_b["revision"],
+            expected_run_status=run_b["status"],
+        )
+    assert store.attempts.get(attempt["id"])["status"] == "prepared"
+
+
 def test_attempt_recovery_marks_only_dispatching_indeterminate(store):
     store.runs.create({"id": "run-recover", "status": "running"})
     a = store.attempts.begin({"run_id": "run-recover", "case_id": "a"})
@@ -198,6 +211,8 @@ def test_scoring_passes_are_immutable_and_current_tracks_revision(store):
         True, False, True
     ]
     assert store.scores.list_for_run(run["id"]) == [{"case_id": "a", "passed": True}]
+    canonical = store.scoring_passes.get("pass-3")
+    assert canonical["scores"] == [{"case_id": "a", "passed": True}]
     with pytest.raises(RunConflictError):
         store.scoring_passes.append({"id": "pass-2", "run_id": run["id"]},
                                     [{"case_id": "a", "passed": True}])

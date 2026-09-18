@@ -12,6 +12,29 @@ def test_build_run_service_honors_motte_db_path(tmp_path, monkeypatch):
     assert reopened.get_run(created["id"])["status"] == "queued"
 
 
+def test_execute_rejects_case_ids_that_replace_persisted_selection():
+    service = RunService(InMemoryRunStore())
+    run = service.create_run("replay@1", {}, case_ids=["selected"])
+    with pytest.raises(ValueError, match="selected case ids are immutable"):
+        service.execute(run["id"], ["other"], provider=lambda _case_id: {"output": 1})
+    assert service.get_run(run["id"])["status"] == "queued"
+
+
+def test_callable_provider_object_with_expected_for_completes_without_unbound_receiver():
+    class Provider:
+        def __call__(self, _case_id):
+            return {"output": 1}
+
+        def expected_for(self, _case_id):
+            return None
+
+    service = RunService(InMemoryRunStore())
+    run = service.create_run("replay@1", {}, case_ids=["case-1"])
+    result = service.execute(run["id"], provider=Provider())
+    assert result["status"] == "completed"
+    assert result["scores"] == []
+
+
 def test_execute_emits_full_lifecycle_events(tmp_path):
     fixture = {
         "case-1": {"output": {"n": 1}, "expected": {"n": 1}},
@@ -53,6 +76,26 @@ def test_scoring_rejects_case_ids_outside_run_selection(monkeypatch):
     assert service.store.scoring_passes.list_for_run(run["id"]) == []
 
 
+def test_scoring_rejects_aggregate_counts_outside_selected_cases(monkeypatch):
+    from motte_sdk import benchmark_plugins
+
+    service = RunService(InMemoryRunStore())
+    run = service.create_run(
+        "custom@1", {"benchmark_provenance": {"suite": "custom"}},
+        case_ids=["case-1"],
+    )
+    monkeypatch.setattr(
+        benchmark_plugins,
+        "aggregate_with_plugin",
+        lambda _run, _scores: {"selected": 1, "correct": 2, "accuracy": None},
+    )
+    with pytest.raises(ValueError, match="exceed selected"):
+        service._append_scoring_pass(
+            run["id"], [{"case_id": "case-1", "passed": True}], source="test"
+        )
+    assert service.store.scoring_passes.list_for_run(run["id"]) == []
+
+
 def test_scoring_rejects_plugin_owned_scoring_pass_binding(monkeypatch):
     service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {}, case_ids=["case-1"])
@@ -65,6 +108,26 @@ def test_scoring_rejects_plugin_owned_scoring_pass_binding(monkeypatch):
     assert result["status"] == "failed"
     assert "assigned by the scoring pass" in result["error"]["message"]
     assert service.store.scoring_passes.list_for_run(run["id"]) == []
+
+
+def test_terminal_benchmark_falls_back_when_plugin_returns_malformed_scores(monkeypatch):
+    service = RunService(InMemoryRunStore())
+    run = service.create_run(
+        "gsm8k@1",
+        {"benchmark_provenance": {"suite": "gsm8k"}},
+        case_ids=["case-1"],
+    )
+    monkeypatch.setattr(service, "_score_results", lambda *_args, **_kwargs: [None])
+
+    result = service.cancel(run["id"], reason="operator request")
+
+    assert result["status"] == "cancelled"
+    assert result["scores"] == [{
+        "case_id": "case-1", "passed": None, "details": {"code": "SCORING_UNAVAILABLE"}
+    }]
+    assert result["cases"] == [{
+        "run_id": run["id"], "case_id": "case-1", "outcome": "not_attempted", "result": None
+    }]
 
 
 def test_scoring_failure_is_terminal_and_does_not_leave_run_in_scoring(monkeypatch):

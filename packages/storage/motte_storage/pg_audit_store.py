@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.errors import UniqueViolation
@@ -16,6 +17,7 @@ from .integrity import (
     new_record,
     next_run,
     stored_run,
+    validate_case_rows,
     validate_event,
     validate_scores,
 )
@@ -72,6 +74,45 @@ class PgAttempts:
                     )
         except UniqueViolation as error:
             raise RunConflictError("attempt id or attempt_no already exists") from error
+        return deepcopy(stored)
+
+    def dispatch(
+        self, attempt_id: str, *, expected_revision: int,
+        run_id: str, expected_run_revision: int, expected_run_status: str,
+    ) -> dict[str, Any]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload, revision FROM runs WHERE id = %s FOR UPDATE", (run_id,)
+                )
+                run_row = cursor.fetchone()
+                if run_row is None or run_row[1] != expected_run_revision:
+                    raise RunConflictError(f"run revision or status changed: {run_id}")
+                run = stored_run(run_row[0], run_row[1])
+                if run.get("status") != expected_run_status or run.get("cancellation"):
+                    raise RunConflictError(f"run is no longer dispatchable: {run_id}")
+                cursor.execute(
+                    "SELECT payload FROM case_attempts WHERE id = %s FOR UPDATE", (attempt_id,)
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RunConflictError(f"attempt missing: {attempt_id}")
+                current_attempt = row[0]
+                if current_attempt.get("run_id") != run_id:
+                    raise RunConflictError(f"attempt belongs to another run: {attempt_id}")
+                stored = advance_record(
+                    current_attempt, expected_revision=expected_revision,
+                    expected_status="prepared", status="dispatching",
+                    changes={"dispatched_at": datetime.now(UTC).isoformat()},
+                    transitions=ATTEMPT_TRANSITIONS,
+                )
+                cursor.execute(
+                    "UPDATE case_attempts SET payload = %s, status = %s, revision = %s "
+                    "WHERE id = %s AND status = 'prepared' AND revision = %s",
+                    (Json(stored), "dispatching", stored["revision"], attempt_id, expected_revision),
+                )
+                if cursor.rowcount != 1:
+                    raise RunConflictError(f"attempt revision or status changed: {attempt_id}")
         return deepcopy(stored)
 
     def get(self, attempt_id: str) -> dict[str, Any] | None:
@@ -260,9 +301,15 @@ class PgScoringPasses:
         run_changes: dict[str, Any] | None = None,
         terminal_event: dict[str, Any] | None = None,
         score_events: list[dict[str, Any]] | None = None,
+        require_no_open_attempts: bool = False,
+        case_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         stored = _pass_record(record)
         rows = validate_scores(scores)
+        bound_case_rows = validate_case_rows(case_rows, stored["run_id"])
+        if any(score.get("scoring_pass_id") not in (None, stored["id"]) for score in rows):
+            raise ValueError("score belongs to a different scoring pass")
+        stored["scores"] = deepcopy(rows)
         pending = validate_event(event, stored["run_id"])
         pending_scores = [
             validate_event(item, stored["run_id"]) for item in (score_events or [])
@@ -290,6 +337,15 @@ class PgScoringPasses:
                         run = stored_run(run_row[0], run_row[1])
                         if run.get("status") != expected_run_status:
                             raise RunConflictError("run status changed during scoring")
+                        if require_no_open_attempts:
+                            cursor.execute(
+                                "SELECT 1 FROM case_attempts WHERE run_id = %s "
+                                "AND status IN ('prepared', 'dispatching', 'indeterminate') "
+                                "LIMIT 1 FOR UPDATE",
+                                (stored["run_id"],),
+                            )
+                            if cursor.fetchone() is not None:
+                                raise RunConflictError("run has an open case attempt")
                         updated_run = next_run(
                             {
                                 **run,
@@ -299,6 +355,29 @@ class PgScoringPasses:
                             },
                             expected_run_revision,
                         )
+                    for case_row in bound_case_rows:
+                        cursor.execute(
+                            "SELECT 1 FROM case_runs WHERE run_id = %s AND case_id = %s FOR UPDATE",
+                            (stored["run_id"], case_row["case_id"]),
+                        )
+                        if cursor.fetchone() is not None:
+                            raise RunConflictError(
+                                f"case row appeared during terminalization: {case_row['case_id']}"
+                            )
+                        cursor.execute(
+                            "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM case_runs WHERE run_id = %s",
+                            (stored["run_id"],),
+                        )
+                        ordinal = cursor.fetchone()[0]
+                        cursor.execute(
+                            "INSERT INTO case_runs(run_id, case_id, ordinal, payload) "
+                            "VALUES (%s, %s, %s, %s) ON CONFLICT (run_id, case_id) DO NOTHING",
+                            (stored["run_id"], case_row["case_id"], ordinal, Json(case_row)),
+                        )
+                        if cursor.rowcount != 1:
+                            raise RunConflictError(
+                                f"case row appeared during terminalization: {case_row['case_id']}"
+                            )
                     cursor.execute(
                         "INSERT INTO scoring_passes(id, run_id, payload) VALUES (%s, %s, %s)",
                         (stored["id"], stored["run_id"], Json(stored)),

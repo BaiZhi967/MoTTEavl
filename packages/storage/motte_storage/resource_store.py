@@ -35,6 +35,11 @@ class ResourceConflictError(ValueError):
 VERSIONED_TABLES = frozenset({"price_tables", "dataset_versions", "scenario_versions"})
 
 
+def _validate_client_record(record: dict[str, Any]) -> None:
+    if "_deleted" in record:
+        raise ValueError("_deleted is reserved for repository tombstones")
+
+
 def _validate_managed(table: str, record: dict[str, Any]) -> None:
     """Keep managed suite schema checks independent of version immutability."""
     if table not in ("dataset_versions", "scenario_versions"):
@@ -54,16 +59,35 @@ def _check_version(table: str, existing: dict[str, Any] | None,
     return True
 
 
+def _is_tombstone(record: dict[str, Any] | None) -> bool:
+    return bool(record and record.get("_deleted") is True)
+
+
+def _visible(record: dict[str, Any] | None) -> dict[str, Any] | None:
+    return None if _is_tombstone(record) else record
+
+
 def _check_mutation(
     table: str, existing: dict[str, Any] | None, record: dict[str, Any],
     expected_generation: int | None,
 ) -> bool:
     if expected_generation is not None:
         if expected_generation == 0:
-            if existing is not None:
+            if existing is not None and not _is_tombstone(existing):
                 raise ResourceConflictError("resource already exists")
-        elif existing is None or existing.get("generation", 1) != expected_generation:
+            required_generation = (
+                int(existing.get("generation", 1)) + 1 if _is_tombstone(existing) else 1
+            )
+            if _is_tombstone(existing) and record.get("generation", 1) == 1:
+                record["generation"] = required_generation
+            if record.get("generation", 1) != required_generation:
+                raise ResourceConflictError("resource generation must advance monotonically")
+        elif existing is None or _is_tombstone(existing) or existing.get(
+            "generation", 1
+        ) != expected_generation:
             raise ResourceConflictError("resource generation changed")
+        elif record.get("generation") != expected_generation + 1:
+            raise ResourceConflictError("resource generation must advance monotonically")
     if table != "model_profiles" or existing is None:
         return False
     lifecycle = existing.get("lifecycle", "draft")
@@ -109,6 +133,8 @@ class _SQLiteResourceRepository:
     def put(
         self, record: dict[str, Any], *, expected_generation: int | None = None
     ) -> dict[str, Any]:
+        record = deepcopy(record)
+        _validate_client_record(record)
         _validate_managed(self._table, record)
         values = [str(record[field]) for field in self._keys]
         with closing(self._connect()) as connection, connection:
@@ -136,14 +162,14 @@ class _SQLiteResourceRepository:
             row = connection.execute(
                 f"SELECT payload FROM {self._table} WHERE {where}", list(key)
             ).fetchone()
-        return json.loads(row[0]) if row else None
+        return _visible(json.loads(row[0])) if row else None
 
     def list(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 f"SELECT payload FROM {self._table} ORDER BY {', '.join(self._keys)}"
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+        return [record for row in rows if (record := _visible(json.loads(row[0]))) is not None]
 
     def delete(self, *key: str, expected_generation: int | None = None) -> bool:
         where = " AND ".join(f"{field} = ?" for field in self._keys)
@@ -155,11 +181,17 @@ class _SQLiteResourceRepository:
                 "generation", 1
             ) != expected_generation:
                 raise ResourceConflictError("resource generation changed")
+            if current is None or _is_tombstone(current):
+                return False
             _check_delete(self._table, current)
             if self._table in VERSIONED_TABLES:
                 return False
-            cursor = connection.execute(f"DELETE FROM {self._table} WHERE {where}", list(key))
-            return cursor.rowcount > 0
+            tombstone = {**current, "_deleted": True}
+            connection.execute(
+                f"UPDATE {self._table} SET payload = ? WHERE {where}",
+                [json.dumps(tombstone, sort_keys=True), *list(key)],
+            )
+            return True
 
 
 class _PgResourceRepository:
@@ -178,6 +210,8 @@ class _PgResourceRepository:
     ) -> dict[str, Any]:
         from psycopg.types.json import Json
 
+        record = deepcopy(record)
+        _validate_client_record(record)
         _validate_managed(self._table, record)
         values = [str(record[field]) for field in self._keys]
         fields = ", ".join([*self._keys, "payload"])
@@ -200,6 +234,7 @@ class _PgResourceRepository:
                         raise ResourceConflictError("resource version vanished while inserting")
                     _check_version(self._table, existing[0], record)
                     return deepcopy(existing[0])
+                where = " AND ".join(f"{field} = %s" for field in self._keys)
                 if expected_generation == 0:
                     cursor.execute(
                         f"INSERT INTO {self._table}({fields}) VALUES ({placeholders}) "
@@ -208,7 +243,20 @@ class _PgResourceRepository:
                     )
                     inserted = cursor.fetchone()
                     if inserted:
+                        _check_mutation(self._table, None, record, expected_generation)
                         return deepcopy(inserted[0])
+                    cursor.execute(
+                        f"SELECT payload FROM {self._table} WHERE {where} FOR UPDATE", values
+                    )
+                    existing = cursor.fetchone()
+                    existing_record = existing[0] if existing else None
+                    if _is_tombstone(existing_record):
+                        _check_mutation(self._table, existing_record, record, expected_generation)
+                        cursor.execute(
+                            f"UPDATE {self._table} SET payload = %s WHERE {where}",
+                            [Json(record), *values],
+                        )
+                        return deepcopy(record)
                     raise ResourceConflictError("resource already exists")
                 where = " AND ".join(f"{field} = %s" for field in self._keys)
                 cursor.execute(
@@ -233,7 +281,7 @@ class _PgResourceRepository:
             with connection.cursor() as cursor:
                 cursor.execute(f"SELECT payload FROM {self._table} WHERE {where}", list(key))
                 row = cursor.fetchone()
-        return deepcopy(row[0]) if row else None
+        return deepcopy(_visible(row[0])) if row and _visible(row[0]) is not None else None
 
     def list(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -242,7 +290,10 @@ class _PgResourceRepository:
                     f"SELECT payload FROM {self._table} ORDER BY {', '.join(self._keys)}"
                 )
                 rows = cursor.fetchall()
-        return [deepcopy(row[0]) for row in rows]
+        return [
+            deepcopy(record) for row in rows
+            if (record := _visible(row[0])) is not None
+        ]
 
     def delete(self, *key: str, expected_generation: int | None = None) -> bool:
         where = " AND ".join(f"{field} = %s" for field in self._keys)
@@ -257,10 +308,18 @@ class _PgResourceRepository:
                     "generation", 1
                 ) != expected_generation:
                     raise ResourceConflictError("resource generation changed")
+                if current is None or _is_tombstone(current):
+                    return False
                 _check_delete(self._table, current)
                 if self._table in VERSIONED_TABLES:
                     return False
-                cursor.execute(f"DELETE FROM {self._table} WHERE {where}", list(key))
+                from psycopg.types.json import Json
+
+                tombstone = {**current, "_deleted": True}
+                cursor.execute(
+                    f"UPDATE {self._table} SET payload = %s WHERE {where}",
+                    [Json(tombstone), *list(key)],
+                )
                 return cursor.rowcount > 0
 
 
@@ -274,6 +333,8 @@ class _InMemoryResourceRepository:
     def put(
         self, record: dict[str, Any], *, expected_generation: int | None = None
     ) -> dict[str, Any]:
+        record = deepcopy(record)
+        _validate_client_record(record)
         _validate_managed(self._table, record)
         key = tuple(str(record[field]) for field in self._keys)
         with self._lock:
@@ -287,11 +348,13 @@ class _InMemoryResourceRepository:
 
     def get(self, *key: str) -> dict[str, Any] | None:
         with self._lock:
-            return deepcopy(self._rows.get(tuple(str(value) for value in key)))
+            return deepcopy(_visible(self._rows.get(tuple(str(value) for value in key))))
 
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
-            return deepcopy([row for _, row in sorted(self._rows.items())])
+            return deepcopy([
+                row for _, row in sorted(self._rows.items()) if not _is_tombstone(row)
+            ])
 
     def delete(self, *key: str, expected_generation: int | None = None) -> bool:
         lookup = tuple(str(value) for value in key)
@@ -301,8 +364,13 @@ class _InMemoryResourceRepository:
                 "generation", 1
             ) != expected_generation:
                 raise ResourceConflictError("resource generation changed")
+            if current is None or _is_tombstone(current):
+                return False
             _check_delete(self._table, current)
-            return self._rows.pop(lookup, None) is not None
+            if self._table in VERSIONED_TABLES:
+                return False
+            self._rows[lookup] = {**current, "_deleted": True}
+            return True
 
 
 @dataclass

@@ -147,7 +147,14 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
     try:
         managed = plugin_for_scenario(scenario) is not None
         if managed:
-            manifest = resolve_managed_manifest(scenario, manifest, resources)
+            try:
+                manifest = resolve_managed_manifest(scenario, manifest, resources)
+            except (ManifestResolutionError, ValueError):
+                raise
+            except Exception as error:
+                raise ManifestResolutionError(
+                    "PLUGIN_PREPARE_FAILED", f"benchmark plugin preparation failed: {error}"
+                ) from error
         elif CASE_SELECTION_KEY in manifest:
             raise ManifestResolutionError(
                 "RUN_CONFIG_INVALID",

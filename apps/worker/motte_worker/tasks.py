@@ -3,7 +3,6 @@ from pathlib import Path
 from motte_sdk.service import RunService, build_run_service
 from motte_storage.run_store import SQLiteRunStore
 
-from .coordination import worker_execution_lock
 from .reporting import WorkerReporter
 from .runtime import WorkerLoop
 
@@ -30,9 +29,7 @@ def configure_service(path=None) -> None:
 def get_worker() -> WorkerLoop:
     global _worker
     if _worker is None:
-        _worker = WorkerLoop(
-            get_service(), reporter=WorkerReporter(enabled=False), execution_lock_held=True
-        )
+        _worker = WorkerLoop(get_service(), reporter=WorkerReporter(enabled=False))
     return _worker
 
 
@@ -45,10 +42,8 @@ def execute_run(run_id, cases=()):
         raise ValueError("task case ids must match the persisted run selection")
     if run["status"] in RunService.TERMINAL:
         return run
-    with worker_execution_lock(_db_path):
-        worker = get_worker()
-        worker.recover_interrupted()
-        result = worker.claim_and_execute(run_id)
+    worker = get_worker()
+    result = worker.run_once(run_id)
     if result is None:
         raise ValueError(f"run is not queued: {run_id}")
     return result

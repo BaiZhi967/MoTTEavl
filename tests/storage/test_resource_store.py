@@ -121,3 +121,36 @@ def test_mutable_create_only_put_and_delete_use_generation_cas(tmp_path, backend
     with pytest.raises(ResourceConflictError, match="generation changed"):
         store.providers.delete("provider", expected_generation=1)
     assert store.providers.get("provider")["base_url"] == "https://three.test"
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_resource_store_rejects_client_tombstone_sentinel(tmp_path, backend):
+    store = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "reserved-tombstone.db"
+    )
+    with pytest.raises(ValueError, match="reserved"):
+        store.scenarios.put({
+            "name": "hidden", "version": "1", "cases": [], "_deleted": True,
+        })
+    assert store.scenarios.get("hidden", "1") is None
+
+
+def test_mutable_generation_rejects_reuse_and_preserves_delete_recreate_incarnation():
+    store = InMemoryResourceStore()
+    first = store.providers.put(
+        {"name": "provider", "kind": "openai_compatible", "base_url": "https://one.test"},
+        expected_generation=0,
+    )
+    with pytest.raises(ResourceConflictError, match="monotonically"):
+        store.providers.put({**first, "base_url": "https://two.test", "generation": 99}, expected_generation=1)
+    assert store.providers.delete("provider", expected_generation=1) is True
+    recreated = store.providers.put(
+        {"name": "provider", "kind": "openai_compatible", "base_url": "https://three.test"},
+        expected_generation=0,
+    )
+    assert recreated["generation"] == 2
+    with pytest.raises(ResourceConflictError, match="generation changed"):
+        store.providers.put(
+            {**first, "base_url": "https://stale.test", "generation": 2},
+            expected_generation=1,
+        )

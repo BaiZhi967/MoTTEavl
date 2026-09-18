@@ -6,7 +6,7 @@ import argparse
 from motte_sdk.service import RunService
 from motte_storage.run_store import SQLiteRunStore
 
-from .coordination import WorkerAlreadyRunning, worker_execution_lock
+from .coordination import WorkerAlreadyRunning
 from .reporting import WorkerReporter
 from .runtime import WorkerLoop
 from .tasks import get_service
@@ -20,18 +20,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quiet", action="store_true", help="关闭 Worker stderr 进度日志")
     args = parser.parse_args(argv)
 
-    service = RunService(SQLiteRunStore(args.db)) if args.db is not None else get_service()
+    service = get_service() if args.db is None else RunService(SQLiteRunStore(args.db))
     reporter = WorkerReporter(enabled=not args.quiet)
-    loop = WorkerLoop(service, reporter=reporter, execution_lock_held=True)
+    loop = WorkerLoop(service, reporter=reporter)
     try:
-        # 锁必须先于恢复扫描获取；否则第二个健康 Worker 会把第一个的中间态 Run 重排队。
-        with worker_execution_lock(args.db):
-            loop.recover_interrupted()
-            if args.once:
-                while loop.claim_and_execute() is not None:
-                    pass
-                return 0
-            loop.run_forever(poll_interval=args.poll_interval, recover=False)
+        if args.once:
+            while loop.run_once() is not None:
+                pass
+            return 0
+        loop.run_forever(poll_interval=args.poll_interval, recover=True)
     except WorkerAlreadyRunning as error:
         reporter.emit("worker_start_refused", reason="executor_lock_held", message=str(error))
         return 75

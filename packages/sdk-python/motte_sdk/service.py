@@ -87,6 +87,13 @@ class RunService:
         selected = list(case_ids)
         if len(selected) != len(set(selected)):
             raise ValueError("case_ids must be unique")
+        if scenario_version.startswith("replay@") or (
+            isinstance(manifest.get("execution"), dict)
+            and manifest["execution"].get("backend_id") == "replay"
+        ):
+            from .execution_backends import resolve_replay_case_ids
+
+            selected = resolve_replay_case_ids(manifest, selected)
         run_id = f"run-{uuid4().hex}"
         now = datetime.now(UTC).isoformat()
         run: dict[str, Any] = {
@@ -131,11 +138,14 @@ class RunService:
         if run["status"] not in {"queued", "preparing"}:
             raise RunConflictError("run must be atomically claimed before execution")
         invoke = provider if provider is not None else self.provider
+        requested_case_ids = list(case_ids) if case_ids is not None else None
         if run.get("manifest", {}).get("benchmark_provenance"):
-            if case_ids is not None and list(case_ids) != run["case_ids"]:
+            if requested_case_ids is not None and requested_case_ids != run["case_ids"]:
                 raise ValueError("benchmark selected case ids are immutable")
             return self._execute_benchmark(run, invoke)
-        ids = list(case_ids) if case_ids is not None else list(run.get("case_ids") or [])
+        if requested_case_ids is not None and run.get("case_ids") and requested_case_ids != run["case_ids"]:
+            raise ValueError("selected case ids are immutable")
+        ids = requested_case_ids if requested_case_ids is not None else list(run.get("case_ids") or [])
         if ids and not run.get("case_ids"):
             expected_revision = run["revision"]
             run["case_ids"] = ids
@@ -167,7 +177,13 @@ class RunService:
                     "ordinal": ordinal, "total": total,
                 })
                 started = perf_counter()
-                attempt = self._begin_case_attempt(self._load(run_id), case_id)
+                try:
+                    attempt = self._begin_case_attempt(self._load(run_id), case_id)
+                except RunConflictError:
+                    cancelled = self._honor_cancellation(run_id)
+                    if cancelled is not None:
+                        return cancelled
+                    raise
                 try:
                     if invoke is None:
                         raise ValueError("execution backend did not provide an invoke hook")
@@ -187,10 +203,15 @@ class RunService:
                         "outcome": "call_failed", "error_class": getattr(error, "error_class", None)
                         or type(error).__name__,
                     })
+                    cancelled = self._honor_cancellation(run_id)
+                    if cancelled is not None:
+                        return cancelled
                     raise
                 expected = self._expected_for(invoke, expectations, case_id)
                 entry = {"run_id": run_id, "case_id": case_id, "result": result}
-                if expected is not None:
+                from .replay_run import NO_EXPECTATION
+
+                if expected is not NO_EXPECTATION:
                     entry["expected"] = expected
                 self._complete_case_attempt(attempt, entry, failed=False)
                 self._notify_progress({
@@ -260,12 +281,25 @@ class RunService:
             return self._view(run_id)
         changes = {"cancellation": cancellation} if cancellation else {}
         if run.get("manifest", {}).get("benchmark_provenance"):
-            self._finish_unattempted(
-                run_id,
-                final_status="cancelled",
-                final_changes=changes,
-                terminal_event_payload={"reason": reason} if reason is not None else {},
-            )
+            try:
+                self._finish_unattempted(
+                    run_id,
+                    final_status="cancelled",
+                    final_changes=changes,
+                    terminal_event_payload={"reason": reason} if reason is not None else {},
+                )
+            except RunConflictError:
+                # A claim won the no-open-attempts race; leave a durable request for
+                # the executor to settle after its in-flight attempt closes.
+                current = self._load(run_id)
+                if current["status"] in self.TERMINAL:
+                    return self._view(run_id)
+                cancellation["requested_at"] = datetime.now(UTC).isoformat()
+                self.store.runs.update(
+                    {**current, "cancellation": cancellation, "updated_at": cancellation["requested_at"]},
+                    expected_revision=current["revision"], expected_status=current["status"],
+                    event={"run_id": run_id, "type": "cancellation_requested", "status": current["status"]},
+                )
         else:
             self._transition(
                 run_id,
@@ -375,6 +409,10 @@ class RunService:
         final_status: str | None = None, final_error: dict[str, Any] | None = None,
         final_changes: dict[str, Any] | None = None,
         terminal_event_payload: dict[str, Any] | None = None,
+        require_no_open_attempts: bool = False,
+        skip_aggregate: bool = False,
+        allow_aggregate_failure: bool = False,
+        case_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         run = self._load(run_id)
         evaluation = (run.get("manifest") or {}).get("evaluation") or {}
@@ -411,12 +449,73 @@ class RunService:
         ).encode("utf-8")
         passed = sum(score.get("passed") is True for score in scores)
         aggregate = None
-        if provenance:
+        if provenance and not skip_aggregate:
             from .benchmark_plugins import aggregate_with_plugin
 
-            aggregate = aggregate_with_plugin(run, scores)
-            if not isinstance(aggregate, dict):
-                raise ValueError("benchmark aggregate must be an object")
+            try:
+                aggregate = aggregate_with_plugin(run, scores)
+                if not isinstance(aggregate, dict):
+                    raise ValueError("benchmark aggregate must be an object")
+                from motte_contracts.report import ReportSummary
+
+                recognized = {
+                    key: value for key, value in aggregate.items()
+                    if key in ReportSummary.model_fields and key != "aggregate"
+                }
+                ReportSummary.model_validate({
+                    "cases": recognized.get("cases", len(scores)),
+                    "scored": recognized.get("scored", len(scores)),
+                    "passed": recognized.get("passed", sum(
+                        score.get("passed") is True for score in scores
+                    )),
+                    "failed": recognized.get("failed", sum(
+                        score.get("passed") is False for score in scores
+                    )),
+                    **recognized,
+                })
+                selected = recognized.get("selected")
+                if selected is not None:
+                    if selected != len(run.get("case_ids") or []):
+                        raise ValueError("benchmark aggregate selected count does not match the run")
+                    outcome_keys = (
+                        "correct", "wrong_answer", "no_expectation", "parse_failure",
+                        "call_failed", "not_attempted",
+                    )
+                    counts = [recognized[key] for key in outcome_keys if recognized.get(key) is not None]
+                    if any(count > selected for count in counts) or sum(counts) > selected:
+                        raise ValueError("benchmark aggregate outcome counts exceed selected cases")
+                    attempted = recognized.get("attempted")
+                    responded = recognized.get("responded")
+                    not_attempted = recognized.get("not_attempted")
+                    if attempted is not None and attempted > selected:
+                        raise ValueError("benchmark aggregate attempted count exceeds selected cases")
+                    if responded is not None and (
+                        responded > selected or attempted is not None and responded > attempted
+                    ):
+                        raise ValueError("benchmark aggregate responded count is inconsistent")
+                    if attempted is not None and not_attempted is not None and (
+                        attempted + not_attempted > selected
+                    ):
+                        raise ValueError("benchmark aggregate attempt counts exceed selected cases")
+            except Exception as error:
+                if not allow_aggregate_failure:
+                    raise
+                aggregate = None
+                aggregate_details = {"error_type": type(error).__name__}
+                if final_error:
+                    final_error = {
+                        **final_error,
+                        "details": {
+                            **(final_error.get("details") or {}),
+                            "aggregate_error": aggregate_details,
+                        },
+                    }
+                else:
+                    final_error = {
+                        "code": "AGGREGATE_UNAVAILABLE",
+                        "message": "terminal run aggregate could not be computed",
+                        "details": aggregate_details,
+                    }
         pass_id = f"pass-{uuid4().hex}"
         record = {
             "id": pass_id,
@@ -470,9 +569,15 @@ class RunService:
                 **deepcopy(terminal_event_payload or {}),
                 **({"error": deepcopy(final_error)} if final_error is not None else {}),
             } if final_status is not None else None,
+            require_no_open_attempts=require_no_open_attempts,
+            case_rows=case_rows,
         )
-        # Legacy readers use scores; the append-only pass remains the source of truth.
-        self.store.scores.replace_for_run(run_id, scores)
+        # The append-only pass is authoritative. A compatibility mirror failure must not
+        # make an already committed pass look unsuccessful to callers.
+        try:
+            self.store.scores.replace_for_run(run_id, scores)
+        except Exception:
+            pass
         for event in self.store.events.list_after(run_id, last_seq):
             self._notify_event(event)
         return stored
@@ -516,13 +621,26 @@ class RunService:
             "idempotency_key": f"{run['id']}:{case_id}:{len(previous) + 1}",
             "prepared_at": now,
         }, expected_run_revision=run["revision"], expected_run_status=run["status"])
-        return self.store.attempts.transition(
-            attempt["id"],
-            expected_revision=attempt["revision"],
-            expected_status="prepared",
-            status="dispatching",
-            changes={"dispatched_at": datetime.now(UTC).isoformat()},
-        )
+        try:
+            return self.store.attempts.dispatch(
+                attempt["id"],
+                expected_revision=attempt["revision"],
+                run_id=run["id"],
+                expected_run_revision=run["revision"],
+                expected_run_status=run["status"],
+            )
+        except RunConflictError:
+            current = self.store.attempts.get(attempt["id"])
+            if current is not None and current.get("status") == "prepared":
+                self.store.attempts.transition(
+                    attempt["id"], expected_revision=current["revision"],
+                    expected_status="prepared", status="failed",
+                    changes={
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "error": {"code": "DISPATCH_ABORTED"},
+                    },
+                )
+            raise
 
     def _complete_case_attempt(
         self,
@@ -558,26 +676,94 @@ class RunService:
         terminal_event_payload: dict[str, Any] | None = None,
     ) -> None:
         run = self._load(run_id)
-        done = {r["case_id"] for r in self.store.case_runs.list_for_run(run_id)}
+        existing_rows = self.store.case_runs.list_for_run(run_id)
+        done = {row["case_id"] for row in existing_rows}
         open_case_ids = {
             attempt["case_id"] for attempt in self.store.attempts.list_open(run_id)
         }
-        for case_id in run["case_ids"]:
-            if case_id not in done and case_id not in open_case_ids:
-                self.store.case_runs.upsert({"run_id": run_id, "case_id": case_id,
-                                            "outcome": "not_attempted", "result": None})
-        scores = self._score_results(
-            run_id, self.store.case_runs.list_for_run(run_id), False
-        )
-        self._append_scoring_pass(
-            run_id,
-            scores,
-            source="terminal-unattempted",
-            final_status=final_status,
-            final_error=final_error,
-            final_changes=final_changes,
-            terminal_event_payload=terminal_event_payload,
-        )
+        synthetic_rows = [
+            {"run_id": run_id, "case_id": case_id, "outcome": "not_attempted", "result": None}
+            for case_id in run["case_ids"]
+            if case_id not in done and case_id not in open_case_ids
+        ]
+        rows = existing_rows + synthetic_rows
+        scoring_error: Exception | None = None
+        try:
+            scores = self._score_results(run_id, rows, False)
+        except Exception as error:
+            scoring_error = error
+            scores = [
+                {
+                    "case_id": row["case_id"],
+                    "passed": None,
+                    "details": {
+                        "code": "SCORING_UNAVAILABLE",
+                        "error": str(error),
+                    },
+                }
+                for row in rows
+            ]
+        effective_error = deepcopy(final_error)
+        if scoring_error is not None:
+            scoring_details = {"error_type": type(scoring_error).__name__}
+            if effective_error:
+                effective_error = {
+                    **effective_error,
+                    "details": {
+                        **(effective_error.get("details") or {}),
+                        "scoring_error": scoring_details,
+                    },
+                }
+            else:
+                effective_error = {
+                    "code": "SCORING_UNAVAILABLE",
+                    "message": "terminal run could not be fully scored",
+                    "details": scoring_details,
+                }
+        append_args = {
+            "source": "terminal-unattempted",
+            "final_status": final_status,
+            "final_error": effective_error,
+            "final_changes": final_changes,
+            "terminal_event_payload": terminal_event_payload,
+            "require_no_open_attempts": True,
+            "allow_aggregate_failure": True,
+            "case_rows": synthetic_rows,
+        }
+        try:
+            self._append_scoring_pass(run_id, scores, **append_args)
+        except Exception as error:
+            if isinstance(error, RunConflictError):
+                raise
+            # A malformed plugin result must not veto cancellation/unsupported
+            # terminalization. Persist a valid unjudged evidence set instead.
+            fallback: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for row in rows:
+                case_id = row.get("case_id")
+                if isinstance(case_id, str) and case_id and case_id not in seen:
+                    seen.add(case_id)
+                    fallback.append({
+                        "case_id": case_id,
+                        "passed": None,
+                        "details": {"code": "SCORING_UNAVAILABLE"},
+                    })
+            fallback_details = {"error_type": type(error).__name__}
+            if effective_error:
+                append_args["final_error"] = {
+                    **effective_error,
+                    "details": {
+                        **(effective_error.get("details") or {}),
+                        "scoring_error": fallback_details,
+                    },
+                }
+            else:
+                append_args["final_error"] = {
+                    "code": "SCORING_UNAVAILABLE",
+                    "message": "terminal run could not be fully scored",
+                    "details": fallback_details,
+                }
+            self._append_scoring_pass(run_id, fallback, **append_args)
 
     def _execute_benchmark(self, run, invoke):
         from motte_eval.execution import CONTINUE_ERROR_CLASSES
@@ -617,7 +803,13 @@ class RunService:
                 "ordinal": ordinal, "total": total,
             })
             started = perf_counter()
-            attempt = self._begin_case_attempt(self._load(run_id), case_id)
+            try:
+                attempt = self._begin_case_attempt(self._load(run_id), case_id)
+            except RunConflictError:
+                cancelled = self._honor_cancellation(run_id)
+                if cancelled is not None:
+                    return cancelled
+                raise
             try:
                 if invoke is None:
                     raise ValueError("benchmark requires an execution backend invoke hook")
@@ -764,15 +956,25 @@ class RunService:
         expectations: dict[str, Any] | None,
         case_id: str,
     ) -> Any:
+        from .replay_run import NO_EXPECTATION
+
         if expectations is not None:
-            return expectations.get(case_id)
+            return expectations.get(case_id, NO_EXPECTATION)
+        receiver = getattr(invoke, "__self__", None)
         expected_for = getattr(invoke, "expected_for", None)
         if not callable(expected_for):
-            receiver = getattr(invoke, "__self__", None)
             expected_for = getattr(receiver, "expected_for", None)
         if callable(expected_for):
-            return expected_for(case_id)
-        return None
+            value = expected_for(case_id)
+            fixture = getattr(invoke, "fixture", None)
+            if not isinstance(fixture, dict):
+                fixture = getattr(receiver, "fixture", None)
+            if value is None and not (
+                isinstance(fixture, dict) and "expected" in fixture.get(case_id, {})
+            ):
+                return NO_EXPECTATION
+            return value
+        return NO_EXPECTATION
 
     @staticmethod
     def _result_summary(result: Any) -> dict[str, Any]:

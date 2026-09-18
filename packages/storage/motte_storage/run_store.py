@@ -595,13 +595,14 @@ def InMemoryRunStore() -> RunStore:
     runs = _InMemoryRuns(events, lock)
     cases = _InMemoryCaseRuns(lock)
     score_sets = MemoryScoreSets(lock)
+    attempts = MemoryAttempts(runs, cases, events, lock)
     return RunStore(
         runs=runs,
         case_runs=cases,
         events=events,
         scores=_InMemoryScores(lock),
-        attempts=MemoryAttempts(runs, cases, events, lock),
-        scoring_passes=MemoryScoringPasses(runs, events, score_sets, lock),
+        attempts=attempts,
+        scoring_passes=MemoryScoringPasses(runs, events, score_sets, attempts, cases, lock),
         score_sets=score_sets,
         commands=MemoryCommands(lock),
     )
