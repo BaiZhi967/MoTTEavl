@@ -22,10 +22,12 @@ import {
   getModels,
   getProviderKinds,
   getProviders,
+  publishModel,
   setCredential,
   testModel,
   updateModel,
   updateProvider,
+  type AgentReport,
   type CredentialSummary,
   type HarnessReport,
   type ModelRecord,
@@ -468,6 +470,16 @@ function ProviderDetail({
     }
   };
 
+  const publishModelProfile = async (id: string) => {
+    setError("");
+    try {
+      await publishModel(id);
+      await onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const saveKey = async () => {
     setError("");
     try {
@@ -640,11 +652,16 @@ function ProviderDetail({
             const summary = parameterSummary({ ...model.parameters, max_output_tokens: model.max_output_tokens ?? model.parameters?.max_output_tokens ?? null });
             const context = formatContext(model.context_window);
             const test = tests[model.id];
+            const lifecycle = model.lifecycle ?? "draft";
+            const lifecycleLabel = lifecycle === "draft" ? "草稿" : lifecycle === "published" ? "已发布" : "已弃用";
             return (
               <li key={model.id} className="model-item">
                 <div className="model-row">
                   <div className="model-main">
                     <span className="mono model-id">{model.id}</span>
+                    <span className={`status-badge model-badge ${lifecycle === "published" ? "status-tone-success" : lifecycle === "deprecated" ? "status-tone-warning" : "status-tone-neutral"}`}>
+                      {lifecycleLabel} · g{model.generation ?? 1}
+                    </span>
                     {context && <span className="status-badge status-tone-neutral model-badge">{context}</span>}
                     {model.supports_tools && (
                       <span className="status-badge status-tone-neutral model-badge">工具</span>
@@ -657,20 +674,30 @@ function ProviderDetail({
                       checked={model.enabled !== false}
                       onCheckedChange={(next) => void toggleModel(model, next)}
                       aria-label={`启用 ${model.id}`}
+                      disabled={lifecycle !== "draft"}
                     >
                       <Switch.Thumb className="switch-thumb" />
                     </Switch.Root>
-                    <button type="button" className="link" onClick={() => void runTest(model.id)}>
+                    <button type="button" className="link" onClick={() => void runTest(model.id)} disabled={lifecycle === "deprecated"}>
                       <PlayIcon size={14} weight="bold" aria-hidden />
                       测试
                     </button>
-                    <button type="button" className="link" onClick={() => startEdit(model)}>
-                      <PencilSimpleIcon size={14} weight="bold" aria-hidden />
-                      编辑
-                    </button>
-                    <button type="button" className="link danger" onClick={() => void removeModel(model.id)}>
-                      删除
-                    </button>
+                    {lifecycle === "draft" && (
+                      <>
+                        <button type="button" className="link" onClick={() => startEdit(model)}>
+                          <PencilSimpleIcon size={14} weight="bold" aria-hidden />
+                          编辑
+                        </button>
+                        <button type="button" className="link" onClick={() => void publishModelProfile(model.id)}>
+                          发布
+                        </button>
+                      </>
+                    )}
+                    {lifecycle !== "deprecated" && (
+                      <button type="button" className="link danger" onClick={() => void removeModel(model.id)}>
+                        弃用
+                      </button>
+                    )}
                   </div>
                 </div>
                 {test && (
@@ -851,7 +878,7 @@ function ProviderDetail({
 
 export function HarnessesPage() {
   const [harnesses, setHarnesses] = useState<HarnessReport[]>([]);
-  const [agents, setAgents] = useState<{ id: string; kind: string; description: string }[]>([]);
+  const [agents, setAgents] = useState<AgentReport[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -870,8 +897,9 @@ export function HarnessesPage() {
               <th>Harness</th>
               <th>已安装</th>
               <th>版本</th>
-              <th>安装来源</th>
-              <th>可执行</th>
+              <th>本机可运行</th>
+              <th>协议就绪</th>
+              <th>评测执行就绪</th>
             </tr>
           </thead>
           <tbody>
@@ -879,9 +907,10 @@ export function HarnessesPage() {
               <tr key={harness.name}>
                 <td>{harness.name}</td>
                 <td className={harness.installed ? "pass" : "fail"}>{harness.installed ? "是" : "否"}</td>
-                <td>{harness.version ?? "—"}</td>
-                <td>{harness.source ?? "—"}</td>
+                <td className="mono">{harness.version ?? "—"}</td>
                 <td className={harness.runnable ? "pass" : "fail"}>{harness.runnable ? "是" : "否"}</td>
+                <td className={harness.protocol_ready ? "pass" : "fail"}>{harness.protocol_ready ? "是" : "否"}</td>
+                <td className={harness.execution_ready ? "pass" : "fail"}>{harness.execution_ready ? "是" : "否"}</td>
               </tr>
             ))}
           </tbody>
@@ -889,13 +918,22 @@ export function HarnessesPage() {
       </section>
       <section className="panel">
         <h2>Agent 运行时</h2>
-        <ul>
-          {agents.map((agent) => (
-            <li key={agent.id}>
-              <strong>{agent.id}</strong>（{agent.kind}）：{agent.description}
-            </li>
-          ))}
-        </ul>
+        <table>
+          <thead>
+            <tr><th>Agent</th><th>类型</th><th>协议就绪</th><th>评测执行就绪</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            {agents.map((agent) => (
+              <tr key={agent.id}>
+                <td className="mono">{agent.id}</td>
+                <td className="mono">{agent.kind}</td>
+                <td className={agent.protocol_ready ? "pass" : "fail"}>{agent.protocol_ready ? "是" : "否"}</td>
+                <td className={agent.execution_ready ? "pass" : "fail"}>{agent.execution_ready ? "是" : "否"}</td>
+                <td>{agent.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
     </div>
   );

@@ -4,6 +4,7 @@ import { getReport, getRun, modelLabel, rescoreRun, type RunRecord } from "../..
 import { MetricCards } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { StatusBadge } from "../../components/StatusBadge";
+import { RunAuditSummary } from "../../components/RunAuditSummary";
 import { runSelectionLabel } from "../selection";
 import { scorerShort } from "./presets";
 
@@ -119,6 +120,7 @@ export function DirectLlmResult() {
           { label: priceTable ? `成本 · pt ${priceTable}` : "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
           { label: "模型", value: modelLabel(run) ?? "—", tone: "neutral" },
         ]} />
+        <RunAuditSummary run={run} />
         <CaseDrillTable rows={rows} />
       </section>
     </div>

@@ -1,36 +1,29 @@
-export interface Score {
-  case_id: string;
-  passed: boolean;
-  outcome?: string;
-  attempted?: boolean;
-  responded?: boolean;
-  /** 本题是否有期望答案；false 表示不判定，不进 accuracy 分母（Direct LLM）。 */
-  judged?: boolean;
-  /** 本题生效的评分器（Direct LLM）：exact / contains / regex。 */
-  scorer?: string;
-  scorer_version?: string;
-  error_class?: string;
-}
+import type { components } from "./schema";
 
-export interface CaseRun {
-  case_id: string;
+type GeneratedScore = components["schemas"]["Score"];
+type GeneratedCaseRun = components["schemas"]["CaseRun"];
+type GeneratedRun = components["schemas"]["Run"];
+
+export type Score = GeneratedScore;
+
+export type CaseRun = Omit<GeneratedCaseRun, "result" | "expected"> & {
   result: any;
   expected?: any;
-}
+};
 
-export interface RunRecord {
-  id: string;
-  scenario_version: string;
+/** Core fields come from generated OpenAPI; JSON payloads stay open for suite plugins. */
+export type RunRecord = Omit<
+  GeneratedRun,
+  "status" | "manifest" | "requested_manifest" | "cases" | "scores" | "cancellation" | "error"
+> & {
   status: string;
   manifest?: any;
-  case_ids?: string[];
+  requested_manifest?: any;
   cases?: CaseRun[];
   scores?: Score[];
-  model?: string | null;
-  parent_run_id?: string;
   cancellation?: { reason?: string };
   error?: any;
-}
+};
 
 export interface ProviderRecord {
   name: string;
@@ -47,6 +40,11 @@ export interface ModelRecord {
   provider: string;
   model?: string | null;
   enabled?: boolean;
+  generation?: number;
+  lifecycle?: "draft" | "published" | "deprecated";
+  profile_hash?: string | null;
+  published_at?: string | null;
+  deprecated_at?: string | null;
   capabilities: Record<string, any>;
   context_window?: number | null;
   max_output_tokens?: number | null;
@@ -69,29 +67,20 @@ export interface HarnessReport {
   source: string | null;
   path: string | null;
   runnable: boolean;
+  protocol_ready?: boolean;
+  execution_ready?: boolean;
   error?: string | null;
 }
 
-export interface RunReport {
-  run_id: string;
-  scenario_version: string;
-  status: string;
-  generated_at: string;
-  summary: {
-    cases: number; scored: number; passed: number; failed: number; pass_rate: number | null;
-    /** 套件口径的严格聚合（GSM8K：selected_cases 分母；Direct LLM：judged_cases 分母）。 */
-    selected?: number; judged?: number; denominator?: string;
-    correct?: number; wrong_answer?: number; no_expectation?: number; call_failed?: number;
-    not_attempted?: number; parser_failure?: number; attempted?: number; responded?: number;
-    completion?: number | null; attempt_rate?: number | null; scorer_version?: string;
-  };
-  cost: {
-    total: number | null; price_table_versions: string[];
-    known_cases?: number; unknown_cases?: number;
-  };
-  usage?: Record<string, number>;
-  scores: Score[];
+export interface AgentReport {
+  id: string;
+  kind: string;
+  description: string;
+  protocol_ready: boolean;
+  execution_ready: boolean;
 }
+
+export type RunReport = components["schemas"]["RunReport"];
 
 /** 模型摘要：档案引用 > 展开快照 > inline provider 字段（镜像后端 _run_model_label）。
  * 详情端点 GET /runs/{id} 不回顶层 model（仅列表端点回），须从 manifest 摘要。 */
@@ -161,6 +150,8 @@ export const createModel = (body: any) => request<ModelRecord>("/api/v1/models",
 /** 读-改-写更新模型档案（合并式，保留未提及字段）；id / provider 不可变。 */
 export const updateModel = (id: string, body: Partial<ModelRecord>) =>
   request<ModelRecord>(`/api/v1/models/${id}`, jsonRequest("PUT", body));
+export const publishModel = (id: string) =>
+  request<ModelRecord>(`/api/v1/models/${id}/publish`, jsonBody({}));
 
 // ---------------------------------------------------------------- model test
 
@@ -180,7 +171,7 @@ export interface ModelTestResult {
 /** 单次最小真实调用（max_output_tokens=16），验证连接、密钥与模型名；报告已脱敏。 */
 export const testModel = (id: string) =>
   request<ModelTestResult>(`/api/v1/models/${id}/test`, jsonBody({}));
-export const deleteModel = (id: string) => request<{ deleted: string }>(`/api/v1/models/${id}`, { method: "DELETE" });
+export const deleteModel = (id: string) => request<{ deprecated: string }>(`/api/v1/models/${id}`, { method: "DELETE" });
 
 export const getScenarios = () => request<{ items: any[] }>(`/api/v1/scenarios`);
 
@@ -379,16 +370,21 @@ export const getCredentials = () => request<{ items: CredentialSummary[] }>(`/ap
 export const createScenario = (body: any) => request<any>("/api/v1/scenarios", jsonBody(body));
 
 export const getAgents = () =>
-  request<{ items: { id: string; kind: string; description: string }[] }>(`/api/v1/agents`);
+  request<{ items: AgentReport[] }>(`/api/v1/agents`);
 export const getHarnesses = () => request<{ items: HarnessReport[] }>(`/api/v1/harnesses`);
 
 // ---------------------------------------------------------------- SSE
 
 export interface TraceEvent {
+  protocol?: "motte.trace";
+  schema_version?: number;
   run_id: string;
   seq: number;
   type: string;
-  [key: string]: any;
+  payload?: Record<string, any>;
+  span_id?: string | null;
+  parent_span_id?: string | null;
+  recorded_at?: string | null;
 }
 
 /** 订阅运行事件流；浏览器重连时自动携带 Last-Event-ID，服务端按 seq 续传。 */

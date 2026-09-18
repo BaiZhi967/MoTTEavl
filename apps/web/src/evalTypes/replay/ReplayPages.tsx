@@ -4,6 +4,7 @@ import { createRun, getRun, type RunRecord } from "../../api/client";
 import { BatchMonitor } from "../../components/BatchMonitor";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { RunTimeline } from "../../components/RunTimeline";
+import { RunAuditSummary } from "../../components/RunAuditSummary";
 import { useRunEvents } from "../../hooks/useRunEvents";
 import { suiteRoutes } from "../registry";
 
@@ -111,6 +112,7 @@ export function ReplayResult() {
       <section className="panel detail">
         <div className="panel-head"><h2 className="mono">运行 {runId} · 结果</h2></div>
         <p className="summary">共 {scores.length} 项，一致 {passed}，不一致 {scores.length - passed}</p>
+        <RunAuditSummary run={run} />
         <CaseDrillTable rows={rows} />
       </section>
     </div>

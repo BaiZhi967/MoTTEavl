@@ -85,7 +85,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 
 ## 3. 状态语义（唯一映射来源：`src/components/statusMeta.ts`）
 
-9 种运行状态收敛为 5 种语气，**全站（徽章、时间线、过滤下拉）只从这一张表取值**：
+10 种运行状态收敛为 5 种语气，**全站（徽章、时间线、过滤下拉）只从这一张表取值**：
 
 | 状态 | 语气 |
 |---|---|
@@ -93,7 +93,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | `preparing`、`running`、`collecting`、`scoring` | info（进行中） |
 | `completed` | success |
 | `failed` | error |
-| `unsupported`、`profile_stale` | warning（环境 / 配置问题，可修复） |
+| `unsupported`、`profile_stale`、`needs_review` | warning（环境 / 配置或调用结果不确定，需人工处理） |
 
 规则：新增状态时先在 `statusMeta.ts` 的 `STATUS_META` 登记语气与中文标签，
 徽章、时间线、过滤选项自动继承。**禁止在任何组件里手写状态颜色。**

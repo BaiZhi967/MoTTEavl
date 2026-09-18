@@ -25,7 +25,9 @@ function collect(run: RunRecord, report: { cost?: { total?: number | null } } | 
     accuracy: scores.length > 0 ? Math.round((passed.length / scores.length) * 100) : null,
     tokens,
     cost: report?.cost?.total ?? null,
-    failedCases: scores.filter((score) => !score.passed).map((score) => score.case_id),
+    failedCases: scores
+      .filter((score) => !score.passed && typeof score.case_id === "string")
+      .map((score) => score.case_id as string),
     run,
   };
 }
