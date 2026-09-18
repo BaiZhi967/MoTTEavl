@@ -30,4 +30,10 @@ describe("全局样式完整性", () => {
     expect(css.match(/\.actions\s*\{/g)).toHaveLength(1);
     expect(css.match(/\.run-progress\s*\{/g)).toHaveLength(1);
   });
+
+  it("操作卡不强行等高", () => {
+    const start = css.indexOf(".operate-grid {");
+    const end = css.indexOf(".operate-card {");
+    expect(css.slice(start, end)).toContain("align-items: flex-start");
+  });
 });

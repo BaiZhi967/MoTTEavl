@@ -1102,7 +1102,7 @@ td.row-actions .link {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  align-items: stretch;
+  align-items: flex-start;
 }
 
 .operate-card {
