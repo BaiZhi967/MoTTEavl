@@ -11,4 +11,14 @@ describe("全局样式完整性", () => {
   it("冗余的局部 box-sizing 已收敛到全局一条", () => {
     expect(css.match(/box-sizing:\s*border-box/g)).toHaveLength(1);
   });
+
+  it("导航链接无下划线", () => {
+    const tabStart = css.indexOf(".tab {");
+    const tabEnd = css.indexOf(".tab:hover");
+    expect(css.slice(tabStart, tabEnd)).toContain("text-decoration: none");
+  });
+
+  it("[hidden] 不被作者样式（display:block）复活", () => {
+    expect(css).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
+  });
 });
