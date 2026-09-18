@@ -176,3 +176,12 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 验收门核对：契约 28 + 评分器 19 + SDK 16 + API 14 + CLI 11 + 运行时 7 个新测试全绿；Web 97 passed；`uv run ruff check .` 与 `uv run mypy packages/contracts` 零问题；`pnpm --dir apps/web build` 通过。既有 GSM8K 行为不变（`benchmark` 记录键、`is_benchmark`、评分口径、报告 summary 字段全部原样），仅新增 `benchmark_provenance.suite` 判别字段。
 
 已记录的范围裁剪：Web 不做字符级 diff 高亮；题目页粘贴的 case id 由服务端在发起时校验（分页下客户端拿不到全量 id）；导入不引入 multipart（本地文件由浏览器读成文本放进 JSON body）。
+
+## Worker Ctrl-C 处理补完（2026-09-20）
+
+`README.md` 的 Worker 条目此前已写明「Ctrl-C 干净停止：无 traceback、stderr 最后一行 `worker_stopped`、退出码 130，中间态 Run 由下次启动回收」，但对应实现一直留在工作树里未提交（见上一节 D 组提交的说明），即文档描述了尚未落库的行为。本次补齐：
+
+- `apps/worker/motte_worker/__main__.py`：把 `recover_interrupted()` 与执行循环包进同一个 `try`，捕获 `KeyboardInterrupt` → 输出 `worker_stopped{reason:"interrupted"}` 并返回 130（与 `apps/dev.py` 同一约定）；长轮询与 `--once` 两条路径共用该处理。
+- `tests/runtime/test_worker_loop.py`：新增 4 个测试——空队列 `--once` 静默退出、`--quiet` 抑制进度日志、中断后退出码 130 且 Run 停在 `preparing` 无 case 落库（下次启动回收为 `queued` 并跑完）、`--once` 路径的中断一致性。
+
+验证：`uv run pytest -q tests/runtime/test_worker_loop.py`（9 passed）、全量 `465+4` passed / 8 skipped、`uv run ruff check .` 与 `uv run mypy packages/contracts` 零问题。
