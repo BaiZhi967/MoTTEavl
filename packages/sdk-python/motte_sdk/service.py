@@ -473,30 +473,32 @@ class RunService:
                     )),
                     **recognized,
                 })
+                selected_count = len(selected_case_ids)
                 selected = recognized.get("selected")
-                if selected is not None:
-                    if selected != len(run.get("case_ids") or []):
-                        raise ValueError("benchmark aggregate selected count does not match the run")
-                    outcome_keys = (
-                        "correct", "wrong_answer", "no_expectation", "parse_failure",
-                        "call_failed", "not_attempted",
-                    )
-                    counts = [recognized[key] for key in outcome_keys if recognized.get(key) is not None]
-                    if any(count > selected for count in counts) or sum(counts) > selected:
-                        raise ValueError("benchmark aggregate outcome counts exceed selected cases")
-                    attempted = recognized.get("attempted")
-                    responded = recognized.get("responded")
-                    not_attempted = recognized.get("not_attempted")
-                    if attempted is not None and attempted > selected:
-                        raise ValueError("benchmark aggregate attempted count exceeds selected cases")
-                    if responded is not None and (
-                        responded > selected or attempted is not None and responded > attempted
-                    ):
-                        raise ValueError("benchmark aggregate responded count is inconsistent")
-                    if attempted is not None and not_attempted is not None and (
-                        attempted + not_attempted > selected
-                    ):
-                        raise ValueError("benchmark aggregate attempt counts exceed selected cases")
+                if selected is not None and selected != selected_count:
+                    raise ValueError("benchmark aggregate selected count does not match the run")
+                outcome_keys = (
+                    "correct", "wrong_answer", "no_expectation", "parse_failure",
+                    "call_failed", "not_attempted",
+                )
+                counts = [
+                    recognized[key] for key in outcome_keys if recognized.get(key) is not None
+                ]
+                if any(count > selected_count for count in counts) or sum(counts) > selected_count:
+                    raise ValueError("benchmark aggregate outcome counts exceed selected cases")
+                attempted = recognized.get("attempted")
+                responded = recognized.get("responded")
+                not_attempted = recognized.get("not_attempted")
+                if attempted is not None and attempted > selected_count:
+                    raise ValueError("benchmark aggregate attempted count exceeds selected cases")
+                if responded is not None and (
+                    responded > selected_count or attempted is not None and responded > attempted
+                ):
+                    raise ValueError("benchmark aggregate responded count is inconsistent")
+                if attempted is not None and not_attempted is not None and (
+                    attempted + not_attempted > selected_count
+                ):
+                    raise ValueError("benchmark aggregate attempt counts exceed selected cases")
             except Exception as error:
                 if not allow_aggregate_failure:
                     raise

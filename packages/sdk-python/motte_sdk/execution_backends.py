@@ -213,10 +213,12 @@ def _validate_direct(manifest: dict[str, Any]) -> None:
         raise ExecutionBackendError(
             "PROVIDER_CONFIG_INVALID", "direct-llm backend requires manifest.provider.kind"
         )
-    if "replay_fixture" in manifest and provider.get("kind") != "replay":
+    if provider.get("kind") != "replay" and (
+        "fixture" in provider or "replay_fixture" in manifest
+    ):
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_CONFLICT",
-            "replay_fixture requires a replay provider",
+            "replay fixtures require a replay provider",
         )
 
 

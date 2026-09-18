@@ -177,7 +177,12 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
         resolved = resolve_execution(scenario_version, resolved, scenario=scenario)
         from motte_sdk.execution_backends import resolve_replay_case_ids
 
-        ids = resolve_replay_case_ids(resolved, ids)
+        execution = resolved.get("execution") or {}
+        provider = resolved.get("provider") or {}
+        if execution.get("backend_id") == "replay" or (
+            isinstance(provider, dict) and provider.get("kind") == "replay"
+        ):
+            ids = resolve_replay_case_ids(resolved, ids)
         validate_resolved_manifest(resolved)
     except ManifestResolutionError:
         raise

@@ -198,4 +198,4 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 - SSE 使用严格 `TraceEvent` envelope 并保留旧事件读取兼容；Web 生成类型、nullable Score、retry child 跟踪、模型身份聚合和审计快照已同步。
 - Pi v1 bridge 支持旧 peer 可选字段、LF/CRLF framing、有界 stdout/stderr、进程树清理和超时回收；不宣称未实现的实时能力。
 
-验证：`uv run pytest -q -m "not live"`（618 passed，10 skipped）；`pnpm --dir apps/web test`（101 passed）；`pnpm --dir apps/web build`；`pnpm --dir apps/web exec tsc --noEmit`；`uv run pytest -q tests/protocol/test_pi_bridge_hardening.py`（14 passed）；OpenAPI live schema 与 `api/openapi.json` 一致。真实 Provider、Celery broker、PostgreSQL 服务和付费 live smoke 仍需由操作者在目标环境显式执行。
+验证：`uv run pytest -q -m "not live"`（620 passed，10 skipped）；`pnpm --dir apps/web test`（101 passed）；`pnpm --dir apps/web build`；`pnpm --dir apps/web exec tsc --noEmit`；`uv run pytest -q tests/protocol/test_pi_bridge_hardening.py`（14 passed）；OpenAPI live schema 与 `api/openapi.json` 一致。真实 Provider、Celery broker、PostgreSQL 服务和付费 live smoke 仍需由操作者在目标环境显式执行。
