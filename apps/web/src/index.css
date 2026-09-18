@@ -779,6 +779,12 @@ td.row-actions .link {
   font-family: var(--font-mono);
 }
 
+.event .time {
+  min-width: 110px;
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+
 .event .type {
   color: var(--text-primary);
   font-weight: 500;
