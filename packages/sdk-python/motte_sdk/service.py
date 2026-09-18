@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 RUN_STATES = (
@@ -47,9 +48,24 @@ class RunService:
 
     TERMINAL = {"completed", "failed", "cancelled", "unsupported", "profile_stale"}
 
-    def __init__(self, store: Any, provider: Callable[[str], Any] | None = None) -> None:
+    def __init__(
+        self,
+        store: Any,
+        provider: Callable[[str], Any] | None = None,
+        *,
+        event_observer: Callable[[dict[str, Any]], None] | None = None,
+        progress_observer: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.store = store
         self.provider = provider
+        self._event_observers = [event_observer] if event_observer is not None else []
+        self._progress_observers = [progress_observer] if progress_observer is not None else []
+
+    def add_event_observer(self, observer: Callable[[dict[str, Any]], None]) -> None:
+        self._event_observers.append(observer)
+
+    def add_progress_observer(self, observer: Callable[[dict[str, Any]], None]) -> None:
+        self._progress_observers.append(observer)
 
     def create_run(
         self,
@@ -105,19 +121,45 @@ class RunService:
         if self._load(run_id)["status"] != "running":
             self._transition(run_id, "running")
         done = {row["case_id"] for row in self.store.case_runs.list_for_run(run_id)}
+        total = len(ids)
         try:
-            for case_id in ids:
+            for ordinal, case_id in enumerate(ids, 1):
                 if case_id in done:
+                    self._notify_progress({
+                        "event": "case_skipped", "run_id": run_id, "case_id": case_id,
+                        "ordinal": ordinal, "total": total, "reason": "already_persisted",
+                    })
                     continue
                 if self._load(run_id)["status"] == "cancelled":
                     return self.get_run(run_id)
-                result = invoke(case_id) if invoke is not None else {"case_id": case_id}
+                self._notify_progress({
+                    "event": "case_started", "run_id": run_id, "case_id": case_id,
+                    "ordinal": ordinal, "total": total,
+                })
+                started = perf_counter()
+                try:
+                    result = invoke(case_id) if invoke is not None else {"case_id": case_id}
+                except Exception as error:
+                    self._notify_progress({
+                        "event": "case_finished", "run_id": run_id, "case_id": case_id,
+                        "ordinal": ordinal, "total": total,
+                        "duration_ms": round((perf_counter() - started) * 1000, 3),
+                        "outcome": "call_failed", "error_class": getattr(error, "error_class", None)
+                        or type(error).__name__,
+                    })
+                    raise
                 expected = self._expected_for(invoke, expectations, case_id)
                 entry: dict[str, Any] = {"run_id": run_id, "case_id": case_id, "result": result}
                 if expected is not None:
                     entry["expected"] = expected
                 self.store.case_runs.upsert(entry)
                 self._emit(run_id, "model_response", {"case_id": case_id, "result": result})
+                self._notify_progress({
+                    "event": "case_finished", "run_id": run_id, "case_id": case_id,
+                    "ordinal": ordinal, "total": total,
+                    "duration_ms": round((perf_counter() - started) * 1000, 3),
+                    "outcome": "responded", **self._result_summary(result),
+                })
         except Exception as error:
             return self._fail(run_id, error)
         if self._load(run_id)["status"] == "cancelled":
@@ -259,15 +301,29 @@ class RunService:
         # A durable stop marker in the failed case also survives a crash before
         # final run status/scores are persisted.
         stop = any(row.get("stop_run") for row in rows)
-        for case_id in run["case_ids"]:
+        total = len(run["case_ids"])
+        for ordinal, case_id in enumerate(run["case_ids"], 1):
             if case_id in done:
+                self._notify_progress({
+                    "event": "case_skipped", "run_id": run_id, "case_id": case_id,
+                    "ordinal": ordinal, "total": total, "reason": "already_persisted",
+                })
                 continue
             if self._load(run_id)["status"] == "cancelled":
                 return self.get_run(run_id)
             if stop:
                 self.store.case_runs.upsert({"run_id": run_id, "case_id": case_id,
                                             "outcome": "not_attempted", "result": None})
+                self._notify_progress({
+                    "event": "case_skipped", "run_id": run_id, "case_id": case_id,
+                    "ordinal": ordinal, "total": total, "reason": "run_stopped",
+                })
                 continue
+            self._notify_progress({
+                "event": "case_started", "run_id": run_id, "case_id": case_id,
+                "ordinal": ordinal, "total": total,
+            })
+            started = perf_counter()
             try:
                 if invoke is None:
                     raise ValueError("benchmark requires a provider")
@@ -281,6 +337,13 @@ class RunService:
                                         "result": result, "stop_run": stop})
             self._emit(run_id, "case_call_failed" if error else "model_response",
                        {"case_id": case_id, "result": result})
+            self._notify_progress({
+                "event": "case_finished", "run_id": run_id, "case_id": case_id,
+                "ordinal": ordinal, "total": total,
+                "duration_ms": round((perf_counter() - started) * 1000, 3),
+                "outcome": "call_failed" if error else "responded",
+                **self._result_summary(result),
+            })
         if self._load(run_id)["status"] == "cancelled":
             return self.get_run(run_id)
         self._transition(run_id, "collecting")
@@ -341,5 +404,47 @@ class RunService:
             return expected_for(case_id)
         return None
 
+    @staticmethod
+    def _result_summary(result: Any) -> dict[str, Any]:
+        if not isinstance(result, dict):
+            return {}
+        summary: dict[str, Any] = {}
+        metering = result.get("metering")
+        if isinstance(metering, dict):
+            for key in ("latency_ms", "attempts", "retry_count", "error_class"):
+                value = metering.get(key)
+                if isinstance(value, (int, float, str)) or value is None:
+                    summary[key] = value
+        usage = result.get("usage")
+        if isinstance(usage, dict):
+            for source, target in (("prompt_tokens", "prompt_tokens"),
+                                   ("completion_tokens", "completion_tokens"),
+                                   ("total_tokens", "total_tokens")):
+                value = usage.get(source)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    summary[target] = value
+        cost = result.get("cost")
+        if isinstance(cost, dict):
+            if isinstance(cost.get("total"), (int, float)) and not isinstance(cost.get("total"), bool):
+                summary["cost_total"] = cost["total"]
+            if isinstance(cost.get("price_table_version"), str):
+                summary["price_table_version"] = cost["price_table_version"]
+        error = result.get("error")
+        if isinstance(error, dict) and isinstance(error.get("class"), str):
+            summary["error_class"] = error["class"]
+        return summary
+
+    def _notify_progress(self, progress: dict[str, Any]) -> None:
+        for observer in tuple(self._progress_observers):
+            try:
+                observer(deepcopy(progress))
+            except Exception:
+                pass
+
     def _emit(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        self.store.events.append({"run_id": run_id, "type": event_type, **payload})
+        stored = self.store.events.append({"run_id": run_id, "type": event_type, **payload})
+        for observer in tuple(self._event_observers):
+            try:
+                observer(deepcopy(stored))
+            except Exception:
+                pass
