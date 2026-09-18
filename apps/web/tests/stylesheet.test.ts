@@ -36,4 +36,9 @@ describe("全局样式完整性", () => {
     const end = css.indexOf(".operate-card {");
     expect(css.slice(start, end)).toContain("align-items: flex-start");
   });
+
+  it("主按钮由 .primary 语义类驱动", () => {
+    expect(css).toContain("button.primary {");
+    expect(css).not.toContain('button[type="submit"]');
+  });
 });

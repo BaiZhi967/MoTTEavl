@@ -58,7 +58,7 @@ export function ReplayOperate() {
           <textarea className="mono" rows={6} value={manifest} onChange={(change) => setManifest(change.target.value)}
             placeholder='{"provider":{"kind":"replay","fixture":{…}}}' />
         </label>
-        <button type="button" onClick={submit}>创建回放</button>
+        <button type="button" className="primary" onClick={submit}>创建回放</button>
         <p className="hint">回放不产生模型费用；fixture 与期望在 Manifest 或 replay 接口中提供。</p>
       </section>
     </div>

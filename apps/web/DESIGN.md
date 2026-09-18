@@ -117,7 +117,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 表单 | label 13px 次色在控件上方；控件白底 1px 边框 6px 圆角；focus-visible 2px info 色描边（`.operate-card` 内的字段同规格，见「卡片内字段」） |
 | 行内过滤控件 | 表单体系之外的控件用 `.control`（与表单控件同款）+ `.field-label` + `.inline-field`（label 与控件并排），禁止浏览器默认外观裸奔 |
 | 嵌入分节 | 已有卡片壳的容器（滑出面板等）内部分节用 `embedded` 组件 + `.embed-title`（14px 标题、无壳），禁止卡片套卡片 |
-| 按钮 | primary：`--ink` 实底白字，hover `--ink-hover`，active `scale(0.98)`；secondary：白底 1px 边框；link：文字按钮用 info 前景色 |
+| 按钮 | primary：`--ink` 实底白字，hover `--ink-hover`，active `scale(0.98)`；主动作用 `button.primary` 类显式声明，`type="submit"` 不再隐式获得主按钮外观；secondary：白底 1px 边框；link：文字按钮用 info 前景色 |
 | 空状态 | 居中、`--text-faint`，文案「暂无 X」 |
 | 错误提示 | 内联 alert：`--tone-error-bg` 底 + 前景色，禁止 `window.alert` |
 | 键值展示 | `<dl class="kv">` 两列网格，dt 次色 |
