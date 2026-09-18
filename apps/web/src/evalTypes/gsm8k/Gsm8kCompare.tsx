@@ -55,6 +55,8 @@ export function Gsm8kCompare() {
 
   const snapshotCases = (columns[0]?.run.manifest?.benchmark_snapshot?.dataset?.cases ?? []) as
     { case_id: string; input: any; expected: any }[];
+  /* 子集运行可以各选不同题目：题数不一致时 accuracy 不可直接横向比较。 */
+  const sizes = [...new Set(columns.map((column) => column.run.case_ids?.length ?? 0))];
 
   return (
     <div className="page">
@@ -62,6 +64,11 @@ export function Gsm8kCompare() {
         <div className="panel-head">
           <h2>GSM8K · 多模型对比</h2>
         </div>
+        {sizes.length > 1 && (
+          <p className="hint">
+            各列选中的题目数不同（{sizes.join(" / ")} 题），accuracy 不是同一题集上的比较。
+          </p>
+        )}
         <table>
           <thead>
             <tr>

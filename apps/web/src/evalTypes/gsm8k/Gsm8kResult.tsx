@@ -4,6 +4,7 @@ import { getReport, getRun, rescoreRun, type RunRecord } from "../../api/client"
 import { MetricCards } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { StatusBadge } from "../../components/StatusBadge";
+import { runSelectionLabel } from "./selection";
 
 /* 词汇表对齐真实 scorer（packages/evaluators/motte_eval/gsm8k.py）五种 outcome。 */
 const OUTCOME_LABELS: Record<string, { label: string; tone: "success" | "error" | "neutral" }> = {
@@ -54,6 +55,7 @@ export function Gsm8kResult() {
   );
   const accuracy = scores.length > 0 ? Math.round((passed / scores.length) * 100) : null;
   const attempted = scores.filter((score) => (score.outcome ?? "correct") !== "not_attempted").length;
+  const selection = runSelectionLabel(run.manifest?.benchmark_provenance);
 
   const rows: DrillRow[] = (run.case_ids ?? []).map((caseId) => {
     const score = scores.find((item) => item.case_id === caseId);
@@ -97,6 +99,7 @@ export function Gsm8kResult() {
             {run.error.code ?? run.error.type ?? ""} {run.error.message ?? ""}
           </p>
         )}
+        {selection && <p className="hint">本次题目：{selection}</p>}
         <MetricCards items={[
           { label: `accuracy · ${passed}/${scores.length}`, value: accuracy == null ? "—" : `${accuracy}%`, tone: "success" },
           { label: `tokens（输入 ${usage.prompt} + 输出 ${usage.completion}）`, value: String(usage.prompt + usage.completion), tone: "neutral" },
