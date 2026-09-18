@@ -414,7 +414,6 @@
           "attempt_rate": {
             "anyOf": [
               {
-                "maximum": 1.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -456,7 +455,6 @@
           "completion": {
             "anyOf": [
               {
-                "maximum": 1.0,
                 "minimum": 0.0,
                 "type": "number"
               },

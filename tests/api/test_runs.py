@@ -355,6 +355,25 @@ def test_profile_stale_retry_re_resolves_requested_resources():
     assert child.json()["manifest"]["resource_snapshots"]["provider_connection"]["generation"] == 2
 
 
+def test_replay_attachment_preserves_explicit_null_output_and_expectation():
+    from apps.worker.motte_worker.reporting import WorkerReporter
+    from apps.worker.motte_worker.runtime import WorkerLoop
+
+    client = TestClient(create_app(InMemoryRunStore()))
+    run = client.post("/api/v1/runs", json={
+        "scenario_version": "replay@1", "case_ids": ["null-case"],
+    }).json()
+    attached = client.post(f"/api/v1/runs/{run['id']}/replay", json={
+        "cases": {"null-case": {"output": None, "expected": None}},
+    })
+    assert attached.status_code == 202
+    result = WorkerLoop(
+        client.app.state.run_service, reporter=WorkerReporter(enabled=False)
+    ).claim_and_execute(run["id"])
+    assert result["status"] == "completed"
+    assert result["scores"] == [{"case_id": "null-case", "passed": True}]
+
+
 def test_explicit_top_level_replay_fixture_is_validated_and_selects_cases():
     from motte_storage.resource_store import InMemoryResourceStore
 
