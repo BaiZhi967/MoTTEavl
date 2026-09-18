@@ -84,21 +84,41 @@ def _build_parser() -> argparse.ArgumentParser:
     backup.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
     backup.add_argument("--artifacts-root", default=None, help="artifact 根目录（默认不备份工件）")
 
-    benchmark = sub.add_parser("benchmark", help="GSM8K-20 冒烟基准（导入数据集 / 创建运行）")
+    benchmark = sub.add_parser("benchmark", help="GSM8K 基准（下载 / 导入数据集，创建运行）")
     benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
+    from motte_contracts.gsm8k import SCOPES
+
+    scope_help = "full=源文件全部题目（默认）；smoke=源文件前 20 题"
+    bench_download = benchmark_sub.add_parser(
+        "download", help="下载官方 test split 并导入：默认解析官方最新 commit + 全量题目")
+    bench_download.add_argument("--revision", help="官方仓库 40 位 commit hash（省略=解析官方最新）")
+    bench_download.add_argument("--name", default="gsm8k-test", help="数据集名（默认 gsm8k-test）")
+    bench_download.add_argument("--version", help="数据集版本（省略=自动：同内容复用，否则下一个空号）")
+    bench_download.add_argument("--license", dest="license_id", default="MIT")
+    bench_download.add_argument("--scope", choices=SCOPES, default="full", help=scope_help)
+    bench_download.add_argument("--split", default="test", choices=("test",), help="官方 split（契约当前仅 test）")
+    bench_download.add_argument("--source-dir", help="源文件落盘目录，默认 MOTTE_DATASET_DIR 或 var/datasets/gsm8k")
+    bench_download.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     bench_import = benchmark_sub.add_parser("import", help="导入本地 official-format GSM8K JSONL（question/answer 两列）")
     bench_import.add_argument("--file", required=True, help="official-format test JSONL 路径")
-    bench_import.add_argument("--name", required=True)
-    bench_import.add_argument("--version", required=True)
+    bench_import.add_argument("--name", default="gsm8k-test", help="数据集名（默认 gsm8k-test）")
+    bench_import.add_argument("--version", help="数据集版本（省略=自动：同内容复用，否则下一个空号）")
     bench_import.add_argument("--revision", required=True, help="官方数据 pinned commit hash")
     bench_import.add_argument("--license", dest="license_id", required=True)
+    bench_import.add_argument("--scope", choices=SCOPES, default="full", help=scope_help)
     bench_import.add_argument("--synthetic", action="store_true", help="标记为合成冒烟数据（跳过 commit hash 校验）")
     bench_import.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     bench_run = benchmark_sub.add_parser("run", help="创建 benchmark queued Run（由 Worker 执行）")
-    bench_run.add_argument("--scenario", required=True, help="benchmark scenario 引用，如 gsm8k-20-smoke@1")
+    bench_run.add_argument("--scenario", required=True, help="benchmark scenario 引用，如 gsm8k-test-smoke@1 / gsm8k-test-full@1")
     selection = bench_run.add_mutually_exclusive_group(required=True)
     selection.add_argument("--provider", help="provider connection name or provider object JSON/@file (not a manifest)")
     selection.add_argument("--model", help="model profile resource id")
+    subset = bench_run.add_mutually_exclusive_group()
+    subset.add_argument("--case-ids", help="只跑指定题目：逗号分隔的 case id，如 gsm8k-test-0000,gsm8k-test-0042")
+    subset.add_argument("--random", type=int, dest="random_count", metavar="N",
+                        help="随机抽 N 题（种子写进运行快照，可复现）")
+    bench_run.add_argument("--seed", help="随机种子（8-64 位十六进制，省略则生成并记录）")
+    bench_run.add_argument("--reasoning-level", help="该模型的思考强度等级（需模型档案声明支持）")
     bench_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     bench_run.add_argument("--json", action="store_true")
 
@@ -207,29 +227,47 @@ def main(argv=None):
         return exit_code
 
     if args.command == "benchmark":
-        from motte_contracts.gsm8k import import_official_jsonl
+        from motte_sdk.benchmark import import_benchmark_split
         from motte_sdk.resolve import ManifestResolutionError, prepare_run
 
-        if args.benchmark_command == "import":
-            with open(args.file, "rb") as handle:
-                raw = handle.read()
-            record = import_official_jsonl(
-                raw, name=args.name, version=args.version, revision=args.revision,
-                license_id=args.license_id, synthetic=args.synthetic,
-            )
-            scenario = {
-                "name": f"{args.name}-smoke", "version": args.version,
-                "mode": "direct-llm", "benchmark": record["benchmark"],
-                "dataset": f"{args.name}@{args.version}",
-            }
-            resources = _resources(args)
-            resources.datasets.put(record)
-            resources.scenarios.put(scenario)
-            print(json.dumps({"imported": f"{args.name}@{args.version}",
-                              "scenario": f"{args.name}-smoke@{args.version}",
-                              "cases": len(record["cases"]),
-                              "source_sha256": record["provenance"]["source_sha256"],
-                              "cases_sha256": record["cases_sha256"]}, ensure_ascii=False))
+        if args.benchmark_command in ("import", "download"):
+            revision = (args.revision or "").strip()
+            if args.benchmark_command == "download":
+                from motte_sdk.gsm8k_source import (SourceUnavailable, fetch_official_jsonl,
+                                                    latest_revision, store_source_file)
+
+                try:
+                    revision = revision or latest_revision(split=args.split)
+                    raw = fetch_official_jsonl(revision, split=args.split)
+                except ValueError as error:
+                    print(json.dumps({"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
+                                     ensure_ascii=False), file=sys.stderr)
+                    return 2
+                except SourceUnavailable as error:
+                    print(json.dumps({"error": {"code": "SOURCE_UNAVAILABLE", "message": str(error)}},
+                                     ensure_ascii=False), file=sys.stderr)
+                    return 2
+                saved = store_source_file(raw, revision=revision, split=args.split,
+                                          directory=args.source_dir)
+                print(f"已下载 {args.split} split @ {revision[:7]}（{len(raw)} 字节）→ {saved}",
+                      file=sys.stderr)
+            else:
+                with open(args.file, "rb") as handle:
+                    raw = handle.read()
+            from motte_storage.resource_store import ResourceConflictError
+
+            try:
+                receipt = import_benchmark_split(
+                    raw, name=args.name, version=args.version, revision=revision,
+                    license_id=args.license_id, scope=args.scope, resources=_resources(args),
+                    synthetic=getattr(args, "synthetic", False),
+                )
+            except ValueError as error:
+                code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+                print(json.dumps({"error": {"code": code, "message": str(error)}},
+                                 ensure_ascii=False), file=sys.stderr)
+                return 2
+            print(json.dumps(receipt, ensure_ascii=False))
             return 0
         name, _, version = args.scenario.rpartition("@")
         scenario = _resources(args).scenarios.get(name, version)
@@ -244,9 +282,26 @@ def main(argv=None):
             provider_ref = _load_json(args.provider) if args.provider.startswith(("{", "@")) else args.provider
             requested = {"provider": provider_ref}
         try:
+            if args.case_ids is not None:
+                ids = [item.strip() for item in args.case_ids.replace("，", ",").split(",") if item.strip()]
+                if not ids:
+                    raise ValueError("--case-ids 不能为空")
+                requested["case_selection"] = {"mode": "ids", "case_ids": ids}
+            elif args.random_count is not None:
+                requested["case_selection"] = {"mode": "random", "count": args.random_count}
+                if args.seed:
+                    requested["case_selection"]["seed"] = args.seed
+            elif args.seed:
+                raise ValueError("--seed 只与 --random 搭配使用")
+            if args.reasoning_level:
+                requested["reasoning_level"] = args.reasoning_level
             manifest, case_ids = prepare_run(args.scenario, requested, [], _resources(args))
         except ManifestResolutionError as error:
             print(json.dumps({"error": {"code": error.code, "message": str(error)}},
+                             ensure_ascii=False), file=sys.stderr)
+            return 2
+        except ValueError as error:
+            print(json.dumps({"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
                              ensure_ascii=False), file=sys.stderr)
             return 2
         run = _service(args).create_run(args.scenario, manifest, case_ids)

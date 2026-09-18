@@ -12,12 +12,12 @@ def create_run(scenario_version: str, manifest: dict, case_ids=()):
 
 
 def import_benchmark_dataset(raw: bytes, *, name: str, version: str, revision: str,
-                             license_id: str, synthetic: bool = False):
+                             license_id: str, synthetic: bool = False, scope: str = "full"):
     """Validate official-format GSM8K JSONL and store it as an immutable version."""
     from motte_contracts.gsm8k import import_official_jsonl
 
     record = import_official_jsonl(raw, name=name, version=version, revision=revision,
-                                   license_id=license_id, synthetic=synthetic)
+                                   license_id=license_id, synthetic=synthetic, scope=scope)
     from motte_storage.factory import create_resource_store
 
     create_resource_store().datasets.put(record)
