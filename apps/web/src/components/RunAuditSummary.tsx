@@ -31,6 +31,24 @@ function shortHash(hash: unknown): string {
   return hash.length > 16 ? `${hash.slice(0, 12)}…` : hash;
 }
 
+/* 身份判定词汇（对齐 contracts 的 IdentityVerdict 五值；组件本地词汇表，同 OUTCOME_LABELS 模式）。 */
+const IDENTITY_VERDICT_LABELS: Record<string, string> = {
+  exact_match: "完全一致",
+  alias_match: "别名一致",
+  unreported: "未报告",
+  mismatch: "不一致",
+  not_evaluated: "未判定",
+};
+
+function verdictSummary(identities: Record<string, any>[]): string {
+  const values = [...new Set(identities
+    .map((identity) => identity.identity_policy_result)
+    .filter((value): value is string => typeof value === "string" && Boolean(value)))];
+  if (values.length === 0) return IDENTITY_VERDICT_LABELS.not_evaluated;
+  if (values.length === 1) return IDENTITY_VERDICT_LABELS[values[0]] ?? values[0];
+  return "多种判定";
+}
+
 export function RunAuditSummary({ run }: { run: RunRecord }) {
   const manifest = run.manifest ?? {};
   const execution = manifest.execution ?? {};
@@ -92,6 +110,7 @@ export function RunAuditSummary({ run }: { run: RunRecord }) {
                 : identities.some((item) => item.policy_passed === false)
                   ? " · 未通过"
                   : " · 未判定"}
+              {` · 判定 ${verdictSummary(identities)}`}
             </dd>
           </>
         )}

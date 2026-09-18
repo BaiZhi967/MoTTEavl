@@ -186,6 +186,7 @@ describe("Gsm8kOperate", () => {
       </MemoryRouter>
     );
     await screen.findByText("gsm8k-test-smoke@1");
+    expect(screen.getByRole("button", { name: /发起跑测/ }).className).toContain("primary");
     fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
     fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
     fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
@@ -856,6 +857,7 @@ describe("DirectLlmOperate", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("direct-llm-classify@1", { selector: ".mono" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /发起评测/ }).className).toContain("primary");
     expect(screen.getByText(/3 题 · contains（输出包含期望串）/)).toBeTruthy();
     expect(screen.getByText(/来源 builtin:direct-llm-classify/)).toBeTruthy();
 
@@ -1237,6 +1239,7 @@ describe("ReplayOperate", () => {
     fireEvent.change(screen.getByLabelText(/Manifest JSON/), {
       target: { value: '{"provider":{"kind":"replay","model":"fixture-model"}}' },
     });
+    expect(screen.getByRole("button", { name: /创建回放/ }).className).toContain("primary");
     fireEvent.click(screen.getByRole("button", { name: /创建回放/ }));
     await waitFor(() => expect(clientMocks.createRun).toHaveBeenCalledWith({
       scenario_version: "replay@1",
