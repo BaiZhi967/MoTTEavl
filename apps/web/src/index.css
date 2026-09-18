@@ -33,6 +33,7 @@
   --size-full: 100%;
   --border-width: 1px;
   --font-label: 13px;
+  --font-metric-value: 26px;
   --weight-semibold: 600;
 
   /* 字体 */
@@ -139,10 +140,20 @@ body {
   color: var(--text-primary);
 }
 
-.tab[data-state="active"] {
+.tab[aria-current="page"] {
   background: var(--tone-neutral-bg);
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.nav-group-label {
+  margin: 12px 8px 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.nav-group-label:first-child {
+  margin-top: 0;
 }
 
 .workbench {
@@ -296,6 +307,13 @@ button.link:hover {
 
 button.link.danger {
   color: var(--tone-error-fg);
+}
+
+/* 路由内链接（react-router Link）沿用 link 语气：info 前景色 */
+a.link {
+  color: var(--tone-info-fg);
+  font-size: 13px;
+  text-decoration: underline;
 }
 
 /* ---------- Provider master-detail（清单窄列 + 详情卡） ---------- */
@@ -1006,4 +1024,234 @@ td.row-actions .link {
     transform: translateX(24px);
     opacity: 0;
   }
+}
+
+/* ---------- ModelPicker（按 Provider 分组的多选清单） ---------- */
+
+.model-picker-group {
+  margin-bottom: 8px;
+}
+
+.model-picker-group .field-label {
+  margin-bottom: 4px;
+}
+
+.model-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.model-picker-item:hover {
+  background: var(--bg-subtle);
+}
+
+.model-picker-item[data-enabled="false"] .mono {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.model-picker-item input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+/* ---------- 类型操作页三卡布局 ---------- */
+
+.operate-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.operate-card {
+  flex: 1 1 280px;
+  min-width: 260px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+/* ---------- 批次过程与逐题格子 ---------- */
+
+.run-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.progress-bar {
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--tone-neutral-bg);
+  overflow: hidden;
+}
+
+.progress-fill {
+  display: block;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--tone-info-fg);
+}
+
+.batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.batch-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.batch-row:last-child {
+  border-bottom: none;
+}
+
+.batch-row-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.progress-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.grid-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.grid-cell-pass {
+  background: var(--tone-success-bg);
+  color: var(--tone-success-fg);
+  border: 1px solid var(--tone-success-fg);
+}
+
+.grid-cell-fail {
+  background: var(--tone-error-bg);
+  color: var(--tone-error-fg);
+  border: 1px solid var(--tone-error-fg);
+}
+
+.grid-cell-pending {
+  background: var(--tone-neutral-bg);
+  color: var(--text-faint);
+}
+
+/* ---------- 指标卡与钻取行 ---------- */
+
+.metric-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metric-card {
+  flex: 1 1 140px;
+  min-width: 130px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.metric-card[data-tone="success"] .metric-value {
+  color: var(--tone-success-fg);
+}
+
+.metric-card[data-tone="error"] .metric-value {
+  color: var(--tone-error-fg);
+}
+
+.metric-value {
+  margin: 0;
+  font-size: var(--font-metric-value);
+  font-weight: 600;
+}
+
+.metric-label {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.drill-detail {
+  border-left: 3px solid var(--tone-error-fg);
+  background: var(--bg-subtle);
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.drill-detail p {
+  margin: 4px 0;
+}
+
+.drill-detail .field-label {
+  margin-right: 8px;
+}
+
+/* ---------- 多模型对比：逐题下钻横排清单 ---------- */
+
+.compare-case-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compare-case-list li {
+  display: inline-block;
+}
+
+/* ---------- Direct LLM case 流式卡片 ---------- */
+
+.case-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.case-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--bg-subtle);
+  font-size: 13px;
+}
+
+.case-card p {
+  margin: 2px 0;
 }

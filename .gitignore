@@ -21,3 +21,6 @@ var/*.db-*
 
 # 测试集受控下载目录（官方数据集源文件）
 var/datasets/
+
+# 脑暴视觉伴侣会话产物
+.superpowers/

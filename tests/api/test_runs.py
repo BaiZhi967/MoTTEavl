@@ -269,3 +269,33 @@ def test_model_resource_requires_existing_provider():
     })
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+def test_list_runs_includes_model_summary():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    resources.providers.put({
+        "name": "local", "kind": "openai_compatible",
+        "base_url": "http://localhost:8001/v1",
+    })
+    resources.models.put({
+        "id": "qwen2.5-7b", "provider": "local", "capabilities": {},
+    })
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    model_run = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1",
+        "manifest": {"model": "qwen2.5-7b"},
+        "case_ids": ["case-1"],
+    }).json()
+    inline_run = client.post("/api/v1/runs", json={
+        "scenario_version": "replay@1",
+        "manifest": {"provider": {"kind": "replay", "model": "fixture-model"}},
+        "case_ids": ["case-1"],
+    }).json()
+    bare_run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
+
+    items = {run["id"]: run for run in client.get("/api/v1/runs").json()["items"]}
+    assert items[model_run["id"]]["model"] == "qwen2.5-7b"
+    assert items[inline_run["id"]]["model"] == "fixture-model"
+    assert items[bare_run["id"]]["model"] is None
