@@ -584,16 +584,6 @@ a.link {
   margin-bottom: var(--space-sm);
 }
 
-.run-progress {
-  margin: 0;
-}
-
-.run-progress td {
-  border-top: none;
-  padding: 2px 12px 2px 0;
-  font-size: 12px;
-}
-
 /* 更新密钥行：卡片内非 form 容器，控件走 .control 体系 */
 .key-edit {
   display: flex;
@@ -1037,8 +1027,10 @@ td.row-actions .link {
 
 .actions {
   display: flex;
-  gap: 8px;
-  margin: 8px 0;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
 }
 
 .summary {
@@ -1085,6 +1077,14 @@ td.row-actions .link {
   background: var(--bg-subtle);
 }
 
+/* 勾选框 + 模型 ID + 徽章必须同行：0-2-0 压过 .operate-card label（0-1-1）的 display:block，
+   并修正被强加的 12px label 下边距 */
+.operate-card .model-picker-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
 .model-picker-item[data-enabled="false"] .mono {
   color: var(--text-faint);
   text-decoration: line-through;
@@ -1111,13 +1111,6 @@ td.row-actions .link {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
-}
-
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 16px;
 }
 
 /* ---------- 批次过程与逐题格子 ---------- */
