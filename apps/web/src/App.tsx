@@ -1,19 +1,25 @@
-import * as Tabs from "@radix-ui/react-tabs";
-import { ActivityIcon, PlayIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
-import { RunsPage } from "./pages/RunsPage";
-import { BenchmarksPage } from "./pages/BenchmarksPage";
+import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import { ActivityIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
+import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
+import { EVAL_SUITES } from "./evalTypes/registry";
+import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
+import { Gsm8kCompare } from "./evalTypes/gsm8k/Gsm8kCompare";
+import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
+import { Gsm8kMonitor } from "./evalTypes/gsm8k/Gsm8kMonitor";
+import { Gsm8kResult } from "./evalTypes/gsm8k/Gsm8kResult";
+import { DirectLlmOperate, DirectLlmMonitor, DirectLlmResult } from "./evalTypes/directllm/DirectLlmPages";
+import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
 
-const TABS = [
-  { id: "runs", label: "运行", icon: PlayIcon },
-  { id: "benchmarks", label: "测试集", icon: StackIcon },
-  { id: "providers", label: "Provider 与模型", icon: PlugIcon },
-  { id: "harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
+const GENERAL_NAV = [
+  { to: "/runs", label: "运行", icon: StackIcon },
+  { to: "/providers", label: "Provider 与模型", icon: PlugIcon },
+  { to: "/harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
 ] as const;
 
 export default function App() {
   return (
-    <Tabs.Root defaultValue="runs" orientation="vertical" className="app-shell">
+    <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <h1>
@@ -22,29 +28,44 @@ export default function App() {
           </h1>
           <p>评测控制台</p>
         </div>
-        <Tabs.List className="side-nav" aria-label="主导航">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <Tabs.Trigger key={id} value={id} className="tab">
+        <nav className="side-nav" aria-label="主导航">
+          <p className="nav-group-label">评测类型</p>
+          {EVAL_SUITES.map(({ id, label, icon: Icon }) => (
+            <NavLink key={id} to={`/${id}`} className="tab">
               <Icon size={16} weight="bold" aria-hidden />
               <span>{label}</span>
-            </Tabs.Trigger>
+            </NavLink>
           ))}
-        </Tabs.List>
+          <p className="nav-group-label">通用</p>
+          {GENERAL_NAV.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} className="tab">
+              <Icon size={16} weight="bold" aria-hidden />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
       </aside>
       <div className="workbench">
-        <Tabs.Content value="runs">
-          <RunsPage />
-        </Tabs.Content>
-        <Tabs.Content value="benchmarks">
-          <BenchmarksPage />
-        </Tabs.Content>
-        <Tabs.Content value="providers">
-          <ProvidersPage />
-        </Tabs.Content>
-        <Tabs.Content value="harnesses">
-          <HarnessesPage />
-        </Tabs.Content>
+        <Routes>
+          <Route path="/" element={<Navigate to="/gsm8k" replace />} />
+          <Route path="/runs" element={<RunsOverviewPage />} />
+          <Route path="/providers" element={<ProvidersPage />} />
+          <Route path="/harnesses" element={<HarnessesPage />} />
+          <Route path="/gsm8k" element={<Gsm8kOperate />} />
+          <Route path="/gsm8k/monitor" element={<Gsm8kMonitor />} />
+          <Route path="/gsm8k/runs/:runId/result" element={<Gsm8kResult />} />
+          <Route path="/gsm8k/compare" element={<Gsm8kCompare />} />
+          <Route path="/direct-llm" element={<DirectLlmOperate />} />
+          <Route path="/direct-llm/monitor" element={<DirectLlmMonitor />} />
+          <Route path="/direct-llm/runs/:runId/result" element={<DirectLlmResult />} />
+          <Route path="/replay" element={<ReplayOperate />} />
+          <Route path="/replay/monitor" element={<ReplayMonitor />} />
+          <Route path="/replay/runs/:runId/result" element={<ReplayResult />} />
+          <Route path="/runs/:runId/monitor" element={<FallbackMonitorPage />} />
+          <Route path="/runs/:runId/result" element={<FallbackResultPage />} />
+          <Route path="*" element={<Navigate to="/gsm8k" replace />} />
+        </Routes>
       </div>
-    </Tabs.Root>
+    </div>
   );
 }

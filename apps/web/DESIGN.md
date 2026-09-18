@@ -60,7 +60,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | `--font-sans` | `"PingFang SC", "Microsoft YaHei", system-ui, sans-serif` | 中文优先系统栈；未来可自托管 Geist Sans，禁止引入 Inter / Roboto / Open Sans |
 | `--font-mono` | `ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace` | run ID、seq、版本号、JSON、数字 |
 
-字号阶梯：18 顶栏标题 / 15 面板标题（weight 600）/ 14 正文 / 13 表格与表单 / 12 徽章。
+字号阶梯：26 指标卡数值 / 18 顶栏标题 / 15 面板标题（weight 600）/ 14 正文 / 13 表格与表单 / 12 徽章。
 行高：正文 1.6，数据行 1.5。全局开启 `font-variant-numeric: tabular-nums`。
 
 ### 2.4 间距、圆角、边框
@@ -102,7 +102,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 
 | 组件 | 规范 |
 |---|---|
-| 应用骨架 | `.app-shell` 使用 fixed 定位与 `inset: var(--space-none)` 固定在视口内，外框不滚动；左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + Radix Tabs 垂直导航，图标 + 文字），不随右侧内容滚动，导航自身超高时内部滚动；右侧全屏工作台独立滚动（`.page` 通栏铺满工作台、不设最大宽度、禁止居中，padding 16/32） |
+| 应用骨架 | `.app-shell` 使用 fixed 定位与 `inset: var(--space-none)` 固定在视口内，外框不滚动；左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + 路由侧边栏，图标 + 文字，导航项由 react-router `NavLink` 驱动、active 态 `aria-current="page"` 同 Radix active 观感），分组标签「评测类型」「通用」用 `.nav-group-label`（11px `--text-faint`）；右侧全屏工作台独立滚动（`.page` 通栏铺满、padding 16/32） |
 | 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）；导航型清单列用 `.panel.list-panel`（240px 固定窄列）——禁止两个内容面板 50/50 平分 |
 | Provider 清单 | 列表头 `.panel-head`（15px 标题 + `icon-btn` 刷新 + link「添加」）；列表项 `.provider-item`（Phosphor Plug 16px + mono 名称 + 会话内测试状态点），选中态同导航 active（`--tone-neutral-bg` + 500 字重），禁用项名称弱化为 `--text-faint` |
 | 测试状态点 | `.state-dot`（8px 圆点）：只映射本次会话内真实测试结果（pass 用 success 前景色 / fail 用 error 前景色），无数据不渲染；禁止装饰性常亮 |
@@ -128,6 +128,12 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
 | kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
 | 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |
+| 类型操作页三卡 | `.operate-grid` / `.operate-card`：flex 换行布局、1px 边框 8px 圆角白卡；卡内分节用 `.embed-title`，不套第二层卡片 |
+| 步进与批次行 | `.batch-row-head`：run ID link + mono 模型名 + 状态徽章 + `RunProgress`（x/N 进度条）+ 操作区；排队提示用 `.hint` |
+| 逐题格子 | `.progress-grid`（`auto-fill` 28px 格）+ `.grid-cell-pass/fail/pending`：语义粉彩底 + 对应前景/描边（pass/fail 用语义 token，pending 用 neutral 底 + `--text-faint`），禁止新色 |
+| 指标卡 | `.metric-cards` / `.metric-card`：flex 换行、内容居中、26px mono 数值、12px 次色标签；success / error 语气只染数值色 |
+| 钻取行 | `.drill-detail`：3px 左语气条 + `--bg-subtle` 底、6px 圆角右侧；字段前缀用 `.field-label` |
+| 对比页 | 模型列 × 指标行表格沿用通用表格规范；`.compare-case-list` 逐题下钻用 link 按钮 + `.drill-detail` |
 
 ## 5. 图标
 
@@ -142,6 +148,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
   `@radix-ui/react-tabs`、`react-dialog`（滑出面板）、`react-dropdown-menu`（行操作菜单）、
   `react-select`（下拉选择）、`react-switch`（开关）；其余（tooltip、popover 等）按需加装，样式全部用本规范 token 手写
 - **禁止引入带视觉主见的组件库**（Ant Design、MUI、shadcn/ui 等），它们的默认外观会架空本规范
+- 路由用 react-router-dom（纯导航行为、无视觉输出），不违反「禁带视觉主见组件库」
 - 不引入 Tailwind；样式只写在 `index.css`（token + 既有类名体系）
 
 ## 7. 禁止清单

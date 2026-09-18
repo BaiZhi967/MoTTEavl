@@ -159,7 +159,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         runs = service.store.runs.list()
         if status is not None:
             runs = [run for run in runs if run.get("status") == status]
-        return {"items": runs, "total": len(runs)}
+        items = [{**run, "model": _run_model_label(run)} for run in runs]
+        return {"items": items, "total": len(items)}
 
     @application.get("/api/v1/runs/{run_id}")
     def get_run(run_id: str):
@@ -738,6 +739,17 @@ def _gsm8k_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = N
     rows = scores if scores is not None else (run.get("scores") or [])
     correct = sum(1 for score in rows if score.get("outcome") == "correct")
     return round(correct / 20, 4) if len(rows) == 20 else None
+
+
+def _run_model_label(run: dict[str, Any]) -> str | None:
+    """列表项模型摘要：模型档案引用 > 展开快照 > inline provider 字段。"""
+    manifest = run.get("manifest") or {}
+    if isinstance(manifest.get("model"), str):
+        return manifest["model"]
+    provider = manifest.get("provider")
+    if isinstance(provider, dict) and isinstance(provider.get("model"), str):
+        return provider["model"]
+    return None
 
 
 def _build_report(run: dict[str, Any]) -> dict[str, Any]:
