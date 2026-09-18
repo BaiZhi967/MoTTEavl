@@ -122,6 +122,42 @@ describe("RunsOverviewPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "run-31" }));
     expect(screen.getByTestId("location").textContent).toBe("/runs/run-31/result");
   });
+
+  it("运行中的 run 点击进过程页；长 ID 截断显示", async () => {
+    const longId = `run-${"a".repeat(36)}`;
+    clientMocks.getRuns.mockResolvedValue({
+      items: [
+        { id: longId, scenario_version: "direct-llm@1", status: "running", model: "m", case_ids: [], cases: [], scores: [] },
+      ],
+      total: 1,
+    });
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunsOverviewPage />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    const shortName = `run-${"a".repeat(9)}…${"a".repeat(4)}`;
+    fireEvent.click(await screen.findByRole("button", { name: shortName }));
+    expect(screen.getByTestId("location").textContent).toBe(`/direct-llm/monitor?runs=${longId}`);
+  });
+
+  it("「过程」入口对未知套件落到通用监控路由", async () => {
+    clientMocks.getRuns.mockResolvedValue({
+      items: [
+        { id: "run-31", scenario_version: "mystery@2", status: "completed", model: null, case_ids: [], cases: [], scores: [] },
+      ],
+      total: 1,
+    });
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <RunsOverviewPage />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "过程" }));
+    expect(screen.getByTestId("location").textContent).toBe("/runs/run-31/monitor");
+  });
 });
 
 describe("Gsm8kOperate", () => {
