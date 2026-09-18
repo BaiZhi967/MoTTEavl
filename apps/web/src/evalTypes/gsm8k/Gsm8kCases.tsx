@@ -194,7 +194,7 @@ export function Gsm8kCases() {
                     aria-label={`选择 ${item.case_id}`}
                   />
                 </td>
-                <td className="mono">{item.case_id}</td>
+                <td className="mono nowrap">{item.case_id}</td>
                 <td>{item.input}</td>
                 <td className="mono">{item.expected}</td>
               </tr>

@@ -110,7 +110,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 连接分节 | `.connection-form`：`.embed-title`「连接」+ `.connection-grid` 双列（协议 select + Base URL 输入，窄屏换行）；凭据 profile / 密钥 hint 用 `.kv` 只读；表单脏状态才显示「保存连接」 |
 | 模型紧凑行 | `.model-row`：mono ID + neutral pill 徽章（上下文格式化 256000→256K、1000000→1M；能力如「工具」）+ 参数摘要 12px mono 次色；行尾启用 Switch + link 操作（测试/编辑/删除）；行 hover `--bg-subtle`；测试结果用 `.model-test-result` 行内反馈（`--bg-subtle` 底、12px、pass/fail 前景色） |
 | 导航项 | 图标（Phosphor Bold 16px）+ 13px 文字，静默态次色，hover `--bg-subtle`，active `--tone-neutral-bg` + 主文字色 + 500 字重 |
-| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500、表头不换行；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
+| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500、表头不换行；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`，单值 ID 列加 `.nowrap` 防连字符折行；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
 | 行内反馈行 | 即时操作结果（如连通性测试）用 `colSpan` 整行嵌在目标行下方：`--bg-subtle` 底、12px、成功 `pass` / 失败 `fail` 前景色；进行中用 `--text-faint` 文案 |
 | 状态徽章 | pill（9999px）、12px、语义粉彩底 + 对应前景色 |
 | 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono，事件时间戳列（recorded_at，`MM-DD HH:mm:ss` mono `--text-faint`）；无内层滚动，由所在容器统一滚动 |
@@ -119,7 +119,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 嵌入分节 | 已有卡片壳的容器（滑出面板等）内部分节用 `embedded` 组件 + `.embed-title`（14px 标题、无壳），禁止卡片套卡片 |
 | 按钮 | primary：`--ink` 实底白字，hover `--ink-hover`，active `scale(0.98)`；主动作用 `button.primary` 类显式声明，`type="submit"` 不再隐式获得主按钮外观；secondary：白底 1px 边框；link：文字按钮用 info 前景色 |
 | 空状态 | 居中、`--text-faint`，文案「暂无 X」 |
-| 错误提示 | 内联 alert：`--tone-error-bg` 底 + 前景色，禁止 `window.alert` |
+| 错误提示 | 内联 alert：`--tone-error-bg` 底 + 前景色，禁止 `window.alert`；逐模型失败清单用 `.failure-list`（无原生列表样式） |
 | 键值展示 | `<dl class="kv">` 两列网格，dt 次色 |
 | 滑出面板（Dialog） | 富视图详情与创建表单（运行详情、创建 Provider）用右侧滑出：`min(720px, 100vw - 280px)` 宽、左边框 1px、200ms 右滑入场；遮罩 `rgba(17,17,17,0.32)`；标题左侧、X 关闭按钮右侧 |
 | 下拉菜单（DropdownMenu） | 行操作收敛为 `···` 触发；白底 1px 边框 8px 圆角 + 极淡阴影 `0 4px 16px rgba(0,0,0,0.05)`；破坏性操作文字用 error 前景色 |
