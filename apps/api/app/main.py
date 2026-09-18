@@ -13,6 +13,7 @@ from motte_contracts.compat import adapt_legacy_report, adapt_legacy_run, adapt_
 from motte_contracts.events import TraceEvent
 from motte_contracts.report import ReportSummary, RunReport
 from motte_contracts.run import Run, RunCommand
+from motte_sdk.execution_backends import legacy_execution
 from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, prepare_run, resolve_manifest
 from motte_sdk.service import RunService, build_run_service
 from motte_storage import RunConflictError
@@ -373,7 +374,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     )
     def replay_run(run_id: str, body: ReplayRunRequest):
         fixture = {
-            case_id: item.model_dump(mode="json", exclude_none=True)
+            case_id: item.model_dump(mode="json", exclude_unset=True)
             for case_id, item in body.cases.items()
         }
         rejected = _reject_secret_fields({"cases": fixture})
@@ -384,6 +385,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             if run["status"] != "queued":
                 raise ValueError("only queued runs can receive a replay fixture")
             manifest = deepcopy(run.get("manifest") or {})
+            if not isinstance(manifest.get("execution"), dict):
+                manifest = legacy_execution({**run, "manifest": manifest})
             execution = manifest.get("execution") or {}
             if execution.get("backend_id") != "replay":
                 raise ValueError("run is not configured for replay execution")
@@ -404,8 +407,6 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             if has_provider_fixture or has_manifest_fixture:
                 if existing_fixture != fixture:
                     raise ValueError("replay fixture is immutable once configured")
-                if has_provider_fixture:
-                    return service.get_run(run_id)
             selected = list(run.get("case_ids") or fixture)
             missing = [case_id for case_id in selected if case_id not in fixture]
             if missing:
@@ -506,7 +507,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
         @application.post(f"/api/v1/{name}", status_code=201)
         def create_item(body: dict):
-            server_managed = {
+            server_managed = {"_deleted"} | {
                 "providers": {"generation"},
                 "models": {
                     "generation", "lifecycle", "profile_hash", "published_at", "deprecated_at"

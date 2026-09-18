@@ -75,6 +75,12 @@ def test_server_managed_resource_fields_cannot_bypass_lifecycle():
     })
     assert forged_provider.status_code == 422
     assert forged_provider.json()["error"]["code"] == "SERVER_MANAGED_FIELD"
+    hidden_version = client.post("/api/v1/scenarios", json={
+        "name": "hidden", "version": "1", "cases": [], "_deleted": True,
+    })
+    assert hidden_version.status_code == 422
+    assert hidden_version.json()["error"]["code"] == "SERVER_MANAGED_FIELD"
+    assert store.scenarios.get("hidden", "1") is None
 
     client.post("/api/v1/providers", json={
         "name": "local-vllm", "kind": "openai_compatible",
