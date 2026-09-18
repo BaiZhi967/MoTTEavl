@@ -290,7 +290,7 @@ function CreateProviderDialog({
               API Key 会写入服务器凭据文件（0600），与 <code>python -m motte_cli credentials set {"<profile>"}</code> 等价
               {kindMeta?.default_key_env && <>；未填写时回退环境变量 <code>{kindMeta.default_key_env}</code></>}
             </p>
-            <button type="submit">创建</button>
+            <button type="submit" className="primary">创建</button>
             {error && <p className="error">{error}</p>}
           </form>
         </Dialog.Content>
@@ -633,7 +633,7 @@ function ProviderDetail({
           <dd className="mono">{credentialHint ?? "未配置"}</dd>
         </dl>
         {connectionDirty && (
-          <button type="submit" disabled={savingConnection}>
+          <button type="submit" className="primary" disabled={savingConnection}>
             保存连接
           </button>
         )}
@@ -859,7 +859,7 @@ function ProviderDetail({
           </label>
             </div>
           </details>
-          <button type="submit" disabled={savingModel}>{savingModel ? "保存中…" : editing ? "保存修改" : "注册"}</button>
+          <button type="submit" className="primary" disabled={savingModel}>{savingModel ? "保存中…" : editing ? "保存修改" : "注册"}</button>
           <button
             type="button"
             onClick={() => {

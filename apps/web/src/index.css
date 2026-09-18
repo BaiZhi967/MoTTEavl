@@ -297,13 +297,14 @@ button:disabled {
   transform: none;
 }
 
-button[type="submit"] {
+/* 主动作显式声明（语义驱动）；type=submit 不再自动获得主按钮外观 */
+button.primary {
   background: var(--ink);
   border-color: var(--ink);
   color: #ffffff;
 }
 
-button[type="submit"]:hover {
+button.primary:hover {
   background: var(--ink-hover);
   border-color: var(--ink-hover);
 }

@@ -352,6 +352,7 @@ export function Gsm8kOperate() {
         <div className="actions">
           <button
             type="button"
+            className="primary"
             onClick={() => void doRun()}
             disabled={running || selected.length === 0 || !preset || runSize <= 0}
           >
