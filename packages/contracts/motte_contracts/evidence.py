@@ -62,6 +62,7 @@ class ScoringPass(Contract):
     scorer_id: str
     scorer_version: str
     created_at: datetime | None = None
+    source: str | None = None
     source_run_revision: int | None = Field(default=None, ge=0, strict=True)
     source_snapshot_hash: str | None = None
     previous_pass_id: str | None = None

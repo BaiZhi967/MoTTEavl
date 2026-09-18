@@ -97,6 +97,12 @@ class ParameterProfile(Contract):
         return v
 
 
+class ResourceLifecycle(str, Enum):
+    draft = "draft"
+    published = "published"
+    deprecated = "deprecated"
+
+
 class ModelProfile(Contract):
     id: str
     provider: str
@@ -116,6 +122,10 @@ class ModelProfile(Contract):
     parameters: ParameterProfile = Field(default_factory=ParameterProfile)
     provenance: dict[str, Any] = Field(default_factory=dict)
     profile_hash: str | None = None
+    generation: int = Field(default=1, ge=1, strict=True)
+    lifecycle: ResourceLifecycle = ResourceLifecycle.draft
+    published_at: str | None = None
+    deprecated_at: str | None = None
 
     @model_validator(mode="after")
     def validate_identity_aliases(self) -> ModelProfile:
@@ -124,6 +134,16 @@ class ModelProfile(Contract):
         if any(not alias.strip() or not canonical.strip()
                for alias, canonical in self.identity_aliases.items()):
             raise ValueError("identity_aliases must map non-empty model names")
+        if self.lifecycle == ResourceLifecycle.draft and (
+            self.published_at is not None or self.deprecated_at is not None
+        ):
+            raise ValueError("draft model profiles cannot have lifecycle timestamps")
+        if self.lifecycle == ResourceLifecycle.published and (
+            self.published_at is None or self.deprecated_at is not None
+        ):
+            raise ValueError("published model profiles require published_at and cannot be deprecated")
+        if self.lifecycle == ResourceLifecycle.deprecated and self.deprecated_at is None:
+            raise ValueError("deprecated model profiles require deprecated_at")
         return self
 
     @field_validator("input_modalities")

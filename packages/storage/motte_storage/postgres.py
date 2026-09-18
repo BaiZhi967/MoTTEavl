@@ -14,7 +14,7 @@ from psycopg import connect
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 
-from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event
+from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event, validate_scores
 from .migrations import upgrade as upgrade_migrations
 from .run_store import INTERRUPTED_STATES, RunStore
 
@@ -298,6 +298,7 @@ class _PgScores:
         self._dsn = dsn
 
     def replace_for_run(self, run_id: str, scores: list[dict[str, Any]]) -> None:
+        scores = validate_scores(scores)
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("DELETE FROM scores WHERE run_id = %s", (run_id,))

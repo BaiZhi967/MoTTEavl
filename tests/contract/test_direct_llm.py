@@ -190,13 +190,16 @@ def test_managed_versions_are_immutable_while_generic_records_still_upsert(tmp_p
     store.scenarios.put(scenario)
     with pytest.raises(ResourceConflictError):
         store.scenarios.put({**scenario, "dataset": "other@1"})
-    # 未登记套件的记录（含未知 benchmark/eval id）仍然按普通资源 upsert/删除
-    store.datasets.put({"name": "generic", "version": "1", "anything": 1})
-    store.datasets.put({"name": "generic", "version": "1", "anything": 2})
-    assert store.datasets.get("generic", "1")["anything"] == 2
-    store.datasets.put({"name": "other", "version": "1",
-                        EVAL_KEY: {**record[EVAL_KEY], "suite": "other-suite"}})
-    assert store.datasets.delete("other", "1") is True
+    # 所有版本化资源都 insert-only；不能用未知 suite 绕过不可变语义。
+    generic = {"name": "generic", "version": "1", "anything": 1}
+    assert store.datasets.put(generic) == store.datasets.put(generic)
+    with pytest.raises(ResourceConflictError):
+        store.datasets.put({"name": "generic", "version": "1", "anything": 2})
+    other = {"name": "other", "version": "1",
+             EVAL_KEY: {**record[EVAL_KEY], "suite": "other-suite"}}
+    store.datasets.put(other)
+    with pytest.raises(ResourceConflictError):
+        store.datasets.delete("other", "1")
 
 
 def test_suite_dispatch_recognizes_both_suites():
@@ -223,8 +226,9 @@ def test_suite_of_run_uses_the_snapshot_and_defaults_to_gsm8k():
     assert suites.suite_of_run({"manifest": {"benchmark_provenance": {"selected_count": 3}}}) == "gsm8k"
     assert suites.suite_of_run(
         {"manifest": {"benchmark_provenance": {"suite": SUITE}}}) == SUITE
-    assert suites.suite_of_run(
-        {"manifest": {"benchmark_provenance": {"suite": "unknown"}}}) == "gsm8k"
+    with pytest.raises(ValueError, match="unsupported explicit eval suite"):
+        suites.suite_of_run(
+            {"manifest": {"benchmark_provenance": {"suite": "unknown"}}})
 
 
 def test_gsm8k_provenance_carries_an_explicit_suite_marker():

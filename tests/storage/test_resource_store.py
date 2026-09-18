@@ -93,3 +93,31 @@ def test_version_collision_is_atomic_under_concurrency(tmp_path, backend):
         outcomes = list(pool.map(write, (1, 2)))
     assert sum(item is None for item in outcomes) == 1
     assert [row for row in outcomes if row is not None] == store.price_tables.list()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_mutable_create_only_put_and_delete_use_generation_cas(tmp_path, backend):
+    store = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "mutable-cas.db"
+    )
+    first = {"name": "provider", "kind": "openai_compatible", "base_url": "https://one.test"}
+
+    def create(value):
+        try:
+            return store.providers.put(
+                {**first, "base_url": value}, expected_generation=0
+            )
+        except ResourceConflictError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(create, ("https://one.test", "https://two.test")))
+    assert sum(item is None for item in outcomes) == 1
+    current = store.providers.get("provider")
+    assert current in [item for item in outcomes if item is not None]
+
+    updated = {**current, "base_url": "https://three.test", "generation": 2}
+    store.providers.put(updated, expected_generation=1)
+    with pytest.raises(ResourceConflictError, match="generation changed"):
+        store.providers.delete("provider", expected_generation=1)
+    assert store.providers.get("provider")["base_url"] == "https://three.test"

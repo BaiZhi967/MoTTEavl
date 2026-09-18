@@ -54,10 +54,12 @@ def suite_of_run(run: dict[str, Any]) -> str | None:
     provenance = (run.get("manifest") or {}).get(PROVENANCE_KEY)
     if not isinstance(provenance, dict):
         return None
+    if "suite" not in provenance:
+        return gsm8k.SUITE
     suite = provenance.get("suite")
     if suite in SUITES:
         return str(suite)
-    return gsm8k.SUITE
+    raise ValueError(f"unsupported explicit eval suite: {suite!r}")
 
 
 def validate_dataset(record: dict[str, Any]) -> None:

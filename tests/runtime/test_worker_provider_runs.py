@@ -87,7 +87,7 @@ def test_worker_rejects_run_without_provider_instead_of_fabricating_result(tmp_p
 
     result = WorkerLoop(RunService(SQLiteRunStore(tmp_path / "runs.db"))).claim_and_execute()
     assert result["status"] == "unsupported"
-    assert result["error"]["code"] == "PROVIDER_CONFIG_INVALID"
+    assert result["error"]["code"] == "EXECUTION_BACKEND_REQUIRED"
     assert result["cases"] == []
 
 

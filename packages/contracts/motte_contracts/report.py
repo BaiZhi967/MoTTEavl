@@ -16,6 +16,7 @@ class ReportSummary(Contract):
     scored: int = Field(ge=0, strict=True)
     passed: int = Field(ge=0, strict=True)
     failed: int = Field(ge=0, strict=True)
+    unjudged: int | None = Field(default=None, ge=0, strict=True)
     pass_rate: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     selected: int | None = Field(default=None, ge=0, strict=True)
     judged: int | None = Field(default=None, ge=0, strict=True)
@@ -32,6 +33,7 @@ class ReportSummary(Contract):
     attempt_rate: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     accuracy: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     scorer_version: str | None = None
+    aggregate: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReportCost(Contract):
