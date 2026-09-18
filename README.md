@@ -46,17 +46,42 @@ processes rather than promising graceful application shutdown. API reloads after
 initial startup may still briefly interrupt requests. No Worker or model calls are
 started by this command. The combined launcher binds Web to `http://127.0.0.1:5173`.
 
-## GSM8K-20 smoke benchmark
+## GSM8K benchmark (smoke / full)
 
-Import a locally obtained, pinned official-format test JSONL; no downloading or hand-built case list is required:
+Two scopes come from the same pinned official `test.jsonl`: **smoke** takes the first 20 rows (preset
+`gsm8k-20`), **full** takes every row of the test split (preset `gsm8k-full`, row count pinned into the
+dataset at import). Download the latest full dataset in one command (the commit is resolved to a fixed sha
+and recorded; `--revision`/`--scope`/`--version` refine it):
 
 ```bash
-uv run python -m motte_cli benchmark import --file ./local-data/test.jsonl --name gsm8k-test --version 1 --revision YOUR_FULL_COMMIT_HASH --license MIT
-uv run python -m motte_cli benchmark run --scenario gsm8k-test-smoke@1 --model YOUR_MODEL_PROFILE_ID
+uv run python -m motte_cli benchmark download --license MIT
+uv run python -m motte_cli benchmark run --scenario gsm8k-test-full@1 --model YOUR_MODEL_PROFILE_ID
 uv run python -m apps.worker.motte_worker --once
 ```
 
-Import/preparation are offline; Worker execution can incur provider charges. The first 20 cases use a versioned strict Decimal scorer, explicit output-token limit and zero retries—not a monetary cap. See the [operator guide](docs/operations/gsm8k-smoke.md) for provenance, credentials, API parity, partial-failure reports and restart/rescore semantics. Repository fixtures are synthetic only.
+```bash
+uv run python -m motte_cli benchmark import --file ./local-data/test.jsonl \
+  --revision YOUR_FULL_40_CHARACTER_COMMIT_HASH --license MIT --scope full
+```
+
+The console (`/gsm8k`) has the same one-click download button plus an 高级设置 disclosure for scope, pinned
+commit, dataset name/version and license; the server stores the raw source under `var/datasets/gsm8k/` before
+creating an immutable dataset plus scenario (`gsm8k-test-smoke@1` / `gsm8k-test-full@1`). An omitted version
+reuses the version holding the same cases (repeat downloads stay idempotent) and otherwise takes the next free
+number, so the two scopes coexist without conflicts. The run card lets you choose which dataset to run.
+
+Each run can narrow the dataset to a subset and pick a reasoning strength: `--case-ids a,b`, `--random N
+[--seed HEX]` (the seed is recorded, so a random subset is reproducible) and `--reasoning-level LEVEL`. The
+console exposes the same controls, plus a 题目 page (`/gsm8k/cases`) to browse every question of a dataset,
+search it, tick cases and send that selection into the next run. Reports always divide by the cases that run
+actually selected; note the preset pins `max_output_tokens=1024`, so a high reasoning level can spend the whole
+budget on thinking and leave an empty answer.
+
+Download/import/preparation are offline; Worker execution can incur provider charges, and a full run is one
+paid call per selected case per model in sequence. Both scopes use a versioned strict Decimal scorer, an
+explicit output-token limit and zero retries—not a monetary cap. See the [operator guide](docs/operations/gsm8k-smoke.md)
+for provenance, scopes, credentials, API parity, partial-failure reports and restart/rescore semantics.
+Repository fixtures are synthetic only, and the test suite is isolated from `var/runs.db`.
 
 ## Environment variables
 

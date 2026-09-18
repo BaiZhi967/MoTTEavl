@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -614,12 +613,14 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         registry[record["name"]] = record
         return record
 
-    # ------------------------------------------------- GSM8K 冒烟基准（测试集管理 + 跑测）
+    # ------------------------------------------------- GSM8K 基准（测试集管理 + 跑测）
 
     @application.get("/api/v1/benchmarks/gsm8k")
     def gsm8k_overview():
+        from motte_contracts.gsm8k import is_benchmark_scenario, scope_of
+
         presets = []
-        scenarios = [s for s in resources.scenarios.list() if str(s.get("name", "")).endswith("-smoke")]
+        scenarios = [s for s in resources.scenarios.list() if is_benchmark_scenario(s.get("name"))]
         for scenario in scenarios:
             dataset_name, _, dataset_version = str(scenario.get("dataset", "")).rpartition("@")
             dataset = resources.datasets.get(dataset_name, dataset_version)
@@ -631,6 +632,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             presets.append({
                 "scenario": f"{scenario['name']}@{scenario['version']}",
                 "dataset": scenario["dataset"],
+                "scope": scope_of(dataset),
                 "benchmark": dataset.get("benchmark"),
                 "provenance": {k: v for k, v in dataset.get("provenance", {}).items() if k != "synthetic"}
                               | {"synthetic": dataset.get("provenance", {}).get("synthetic", False)},
@@ -641,80 +643,96 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             })
         return {"items": presets, "total": len(presets)}
 
+    def _invalid(message: str) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID",
+                                                                "message": message}})
+
     @application.post("/api/v1/benchmarks/gsm8k/import", status_code=201)
     def gsm8k_import(body: dict):
-        """从官方仓库 pinned revision 下载 test.jsonl 并导入（幂等；重复版本冲突返回 409）。"""
+        """从官方仓库下载 test split 并导入，默认「最新全量」。
+
+        省略 revision 时先解析官方仓库中该数据文件的最新 commit，再按该固定 revision 下载并
+        落盘（provenance 记录的就是解析出的 sha，不是浮动分支）。scope=full 取整个 split，
+        scope=smoke 取前 20 题，题数记入不可变数据集。省略 version 时自动选版本：同内容复用
+        （重复导入幂等），否则取下一个空号。同 name@version 内容不同返回 409。
+        """
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        from motte_contracts.gsm8k import preset_for
+        from motte_sdk.benchmark import import_benchmark_split
+        from motte_sdk.gsm8k_source import (SourceUnavailable, fetch_official_jsonl,
+                                            latest_revision, store_source_file)
+        from motte_storage.resource_store import ResourceConflictError
+
         revision, license_id = body.get("revision"), body.get("license")
-        if not isinstance(revision, str) or not isinstance(license_id, str) or not revision or not license_id:
-            return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID",
-                                                                    "message": "revision (40-char commit) and license are required"}})
-        if _reject_secret_fields(body) is not None:
-            return _reject_secret_fields(body)
+        scope = body.get("scope") or "full"
+        if revision is not None and not isinstance(revision, str):
+            return _invalid("revision must be a 40-character commit hash string")
+        if not isinstance(license_id, str) or not license_id:
+            return _invalid("license is required")
+        try:
+            preset_for(scope)
+        except ValueError as error:
+            return _invalid(str(error))
         name = body.get("name") or "gsm8k-test"
-        version = str(body.get("version") or "1")
-        url = f"https://raw.githubusercontent.com/openai/grade-school-math/{revision}/grade_school_math/data/test.jsonl"
+        version = str(body.get("version") or "").strip() or None
         try:
-            import urllib.request
-
-            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=30) as response:
-                if response.status != 200:
-                    return JSONResponse(status_code=502, content={"error": {"code": "SOURCE_UNAVAILABLE",
-                                                                            "message": f"source returned HTTP {response.status}"}})
-                raw = response.read()
+            revision = (revision or "").strip() or latest_revision()
+            raw = fetch_official_jsonl(revision)
         except ValueError as error:
-            return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
-        except OSError as error:
+            return _invalid(str(error))
+        except SourceUnavailable as error:
             return JSONResponse(status_code=502, content={"error": {"code": "SOURCE_UNAVAILABLE",
-                                                                    "message": f"download failed: {error}"}})
-        _store_source_file(revision, raw)
-        record = _import_gsm8k(raw, name=name, version=version, revision=revision, license_id=license_id)
-        if isinstance(record, JSONResponse):
-            return record
-        return _persist_gsm8k(record)
-
-    def _store_source_file(revision: str, raw: bytes) -> None:
-        from pathlib import Path
-
-        directory = Path(os.environ.get("MOTTE_DATASET_DIR", "var/datasets/gsm8k"))
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"test-{revision}.jsonl").write_bytes(raw)
-
-    def _import_gsm8k(raw: bytes, *, name, version, revision, license_id):
-        from motte_contracts.gsm8k import import_official_jsonl
-
+                                                                    "message": str(error)}})
+        store_source_file(raw, revision=revision)
         try:
-            return import_official_jsonl(raw, name=name, version=version, revision=revision, license_id=license_id)
+            return import_benchmark_split(raw, name=name, version=version, revision=revision,
+                                          license_id=license_id, scope=scope, resources=resources)
         except ValueError as error:
-            return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
+            code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+            status = 409 if isinstance(error, ResourceConflictError) else 422
+            return JSONResponse(status_code=status, content={"error": {"code": code, "message": str(error)}})
 
-    def _persist_gsm8k(record):
-        scenario = {
-            "name": f"{record['name']}-smoke", "version": record["version"],
-            "mode": "direct-llm", "benchmark": record["benchmark"],
-            "dataset": f"{record['name']}@{record['version']}",
-        }
-        existing = resources.datasets.get(record["name"], record["version"])
-        if existing is not None and existing.get("cases_sha256") != record["cases_sha256"]:
-            return JSONResponse(status_code=409, content={"error": {"code": "RESOURCE_CONFLICT",
-                                                                    "message": "dataset version exists with different content; use a new version"}})
-        existing_scenario = resources.scenarios.get(scenario["name"], scenario["version"])
-        if existing_scenario is not None and existing_scenario != scenario:
-            return JSONResponse(status_code=409, content={"error": {"code": "RESOURCE_CONFLICT",
-                                                                    "message": "scenario version exists with different content; use a new version"}})
-        resources.datasets.put(record)
-        resources.scenarios.put(scenario)
-        return {"imported": f"{record['name']}@{record['version']}",
-                "scenario": f"{scenario['name']}@{scenario['version']}",
-                "cases": len(record["cases"]),
-                "source_sha256": record["provenance"]["source_sha256"],
-                "cases_sha256": record["cases_sha256"]}
+    @application.get("/api/v1/benchmarks/gsm8k/cases")
+    def gsm8k_cases(dataset: str, offset: int = 0, limit: int = 50, query: str = ""):
+        """分页浏览某个数据集版本的题目（控制台「题目」页用）：题面、期望答案、源文件行号。
+
+        数据集本身不可变，这里只读；运行级的题目子集由跑测接口的 case_selection 决定。
+        """
+        name, _, version = str(dataset).rpartition("@")
+        record = resources.datasets.get(name, version)
+        if record is None:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "DATASET_NOT_FOUND", "message": f"dataset not found: {dataset}"}})
+        cases = record.get("cases") or []
+        needle = (query or "").strip().lower()
+        matched = [case for case in cases
+                   if not needle or needle in str(case.get("input", "")).lower()
+                   or needle in str(case.get("case_id", "")).lower()]
+        start = max(0, offset)
+        size = min(max(1, limit), 200)
+        items = [{"case_id": case["case_id"], "input": case["input"], "expected": case["expected"],
+                  "source_line": (case.get("metadata") or {}).get("source_line")}
+                 for case in matched[start:start + size]]
+        return {"dataset": dataset, "total": len(matched), "dataset_total": len(cases),
+                "offset": start, "limit": size, "query": query or "", "items": items}
 
     @application.post("/api/v1/benchmarks/gsm8k/runs", status_code=202)
     def gsm8k_run(body: dict):
         rejected = _reject_secret_fields(body)
         if rejected is not None:
             return rejected
-        scenario = body.get("scenario") or (f"{(body.get('dataset_name') or 'gsm8k-test')}-smoke@{body.get('dataset_version') or '1'}")
+        from motte_contracts.gsm8k import CASE_SELECTION_KEY
+        # 省略 scenario 时默认全量数据集（与导入的默认 scope 一致）；控制台始终显式传场景。
+        scenario = body.get("scenario") or (
+            f"{(body.get('dataset_name') or 'gsm8k-test')}-{body.get('scope') or 'full'}"
+            f"@{body.get('dataset_version') or '1'}")
+        scenario_name, _, scenario_version = scenario.rpartition("@")
+        if resources.scenarios.get(scenario_name, scenario_version) is None:
+            # 缺失场景必须显式失败：否则 prepare_run 会退化成一条无题的通用 run。
+            return JSONResponse(status_code=422, content={"error": {"code": "SCENARIO_NOT_FOUND",
+                                                                    "message": f"benchmark scenario not found: {scenario}"}})
         model = body.get("model")
         if not isinstance(model, str) or not model:
             return JSONResponse(status_code=422, content={"error": {"code": "MODEL_REQUIRED",
@@ -726,6 +744,13 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID",
                                                                         "message": "parameters must be an object"}})
             manifest["parameters"] = parameters
+        reasoning_level = body.get("reasoning_level")
+        if reasoning_level is not None:
+            if not isinstance(reasoning_level, str) or not reasoning_level:
+                return _invalid("reasoning_level must be a non-empty string")
+            manifest["reasoning_level"] = reasoning_level
+        if body.get(CASE_SELECTION_KEY) is not None:
+            manifest[CASE_SELECTION_KEY] = body[CASE_SELECTION_KEY]
         try:
             prepared, case_ids = prepare_run(scenario, manifest, [], resources)
         except ManifestResolutionError as error:
@@ -736,9 +761,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
 
 def _gsm8k_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = None) -> float | None:
+    """分母取运行自己选中的题数（子集运行按子集算，旧运行回落到数据集级 selected_count）。"""
+    from motte_contracts.gsm8k import run_selected_count
+
     rows = scores if scores is not None else (run.get("scores") or [])
+    selected = run_selected_count((run.get("manifest") or {}).get("benchmark_provenance"))
+    if selected is None or len(rows) != selected:
+        return None
     correct = sum(1 for score in rows if score.get("outcome") == "correct")
-    return round(correct / 20, 4) if len(rows) == 20 else None
+    return round(correct / selected, 4)
 
 
 def _run_model_label(run: dict[str, Any]) -> str | None:
@@ -753,6 +784,8 @@ def _run_model_label(run: dict[str, Any]) -> str | None:
 
 
 def _build_report(run: dict[str, Any]) -> dict[str, Any]:
+    from motte_contracts.gsm8k import run_selected_count
+
     cases = run.get("cases", [])
     scores = run.get("scores", [])
     benchmark = run.get("manifest", {}).get("benchmark_provenance")
@@ -786,7 +819,7 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
         from motte_eval.gsm8k import aggregate_benchmark
 
         scores = benchmark_scores(run, cases)
-        summary = aggregate_benchmark(scores, benchmark["selected_count"])
+        summary = aggregate_benchmark(scores, run_selected_count(benchmark))
         report["scores"] = scores
         report["summary"].update(summary)
         report["summary"].update(cases=summary["selected"], scored=summary["responded"],

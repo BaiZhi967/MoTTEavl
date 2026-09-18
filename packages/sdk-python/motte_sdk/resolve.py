@@ -93,13 +93,21 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
     try:
         if benchmark:
             manifest = resolve_benchmark_manifest(scenario, manifest, resources)
+        else:
+            from motte_contracts.gsm8k import CASE_SELECTION_KEY
+
+            if CASE_SELECTION_KEY in manifest:
+                raise ManifestResolutionError(
+                    "RUN_CONFIG_INVALID",
+                    f"{CASE_SELECTION_KEY} is only supported for benchmark scenarios")
         resolved = resolve_manifest(manifest, resources)
         ids = list(case_ids or [])
         if benchmark:
-            selected = list(manifest["cases"])
-            if ids and ids != selected:
-                raise ValueError("benchmark case selection is fixed by the preset")
-            ids = selected
+            if ids:
+                # 子集改由 manifest.case_selection 声明，避免两条并行的选择通道。
+                raise ValueError(
+                    "benchmark case selection goes through manifest.case_selection, not case_ids")
+            ids = list(manifest["cases"])
             provider = resolved.get("provider")
             if not isinstance(provider, dict):
                 raise ValueError("benchmark requires a provider or model resource")
