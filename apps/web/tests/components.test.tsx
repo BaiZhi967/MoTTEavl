@@ -88,8 +88,25 @@ describe("RunAuditSummary", () => {
     }} />);
     expect(screen.getAllByText("direct-llm@1")).toHaveLength(2);
     expect(screen.getByText("pass-1 · rescore")).toBeTruthy();
-    expect(screen.getByText(/requested → reported/)).toBeTruthy();
+    expect(screen.getByText(/请求 requested · 报告 reported · 实际 reported/)).toBeTruthy();
     expect(screen.getByText("require_match · 未通过")).toBeTruthy();
+  });
+
+  it("长哈希截断为 12 位并以 title 保留全量", () => {
+    const hash = "b".repeat(64);
+    render(<RunAuditSummary run={{
+      id: "run-2",
+      schema_version: 2,
+      revision: 1,
+      scenario_version: "direct-llm@1",
+      status: "completed",
+      manifest: {
+        resource_snapshots: { model_profile: { id: "m", generation: 2, lifecycle: "published", content_hash: hash } },
+      },
+      cases: [],
+    } as any} />);
+    const cell = screen.getByTitle(hash);
+    expect(cell.textContent).toContain(`${"b".repeat(12)}…`);
   });
 });
 

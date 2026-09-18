@@ -17,16 +17,18 @@ function identityResults(run: RunRecord): Record<string, any>[] {
     ));
 }
 
-function identityLabel(identities: Record<string, any>[]): string {
-  const labels = identities.map((identity) => [
-    identity.requested_model,
-    identity.reported_model,
-    identity.resolved_model_identity,
-  ].filter((value) => typeof value === "string" && value).join(" → ") || "未报告");
-  const uniqueLabels = [...new Set(labels)];
-  const verdicts = new Set(identities.map((item) => item.identity_policy_result).filter(Boolean));
-  const verdict = verdicts.size === 1 ? [...verdicts][0] : verdicts.size > 1 ? "多种结果" : "not_evaluated";
-  return `${uniqueLabels.join(" | ")} · ${verdict}${identities.length > 1 ? ` · ${identities.length} cases` : ""}`;
+function fieldSummary(identities: Record<string, any>[], key: string): string {
+  const values = [...new Set(identities
+    .map((identity) => identity[key])
+    .filter((value): value is string => typeof value === "string" && Boolean(value)))];
+  if (values.length === 0) return "未报告";
+  if (values.length === 1) return values[0];
+  return `${values.length} 种取值`;
+}
+
+function shortHash(hash: unknown): string {
+  if (typeof hash !== "string" || !hash) return "—";
+  return hash.length > 16 ? `${hash.slice(0, 12)}…` : hash;
 }
 
 export function RunAuditSummary({ run }: { run: RunRecord }) {
@@ -59,19 +61,27 @@ export function RunAuditSummary({ run }: { run: RunRecord }) {
         {modelSnapshot.id && (
           <>
             <dt>ModelProfile 快照</dt>
-            <dd className="mono">{modelSnapshot.id} · g{modelSnapshot.generation ?? 1} · {modelSnapshot.lifecycle ?? "legacy"} · {modelSnapshot.profile_hash ?? modelSnapshot.content_hash}</dd>
+            <dd className="mono" title={typeof (modelSnapshot.profile_hash ?? modelSnapshot.content_hash) === "string"
+              ? String(modelSnapshot.profile_hash ?? modelSnapshot.content_hash) : undefined}>
+              {modelSnapshot.id} · g{modelSnapshot.generation ?? 1} · {modelSnapshot.lifecycle ?? "legacy"} · {shortHash(modelSnapshot.profile_hash ?? modelSnapshot.content_hash)}
+            </dd>
           </>
         )}
         {providerSnapshot.name && (
           <>
             <dt>Provider 快照</dt>
-            <dd className="mono">{providerSnapshot.name} · g{providerSnapshot.generation ?? 1} · {providerSnapshot.content_hash}</dd>
+            <dd className="mono" title={typeof providerSnapshot.content_hash === "string" ? providerSnapshot.content_hash : undefined}>
+              {providerSnapshot.name} · g{providerSnapshot.generation ?? 1} · {shortHash(providerSnapshot.content_hash)}
+            </dd>
           </>
         )}
         {identities.length > 0 && (
           <>
             <dt>模型身份</dt>
-            <dd className="mono">{identityLabel(identities)}</dd>
+            <dd className="mono">
+              请求 {fieldSummary(identities, "requested_model")} · 报告 {fieldSummary(identities, "reported_model")} · 实际 {fieldSummary(identities, "resolved_model_identity")}
+              {identities.length > 1 ? ` · ${identities.length} cases` : ""}
+            </dd>
             <dt>身份策略</dt>
             <dd className="mono">
               {new Set(identities.map((item) => item.identity_policy ?? "report_only")).size === 1
