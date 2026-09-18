@@ -128,7 +128,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
 | kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
 | 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |
-| 类型操作页卡片 | `.operate-grid` / `.operate-card`：flex 换行布局、1px 边框 8px 圆角白卡（GSM8K 为数据集 / 题目 / 模型 / 参数 / 下载并导入五卡；Direct LLM 为数据集 / 题目 / 模型 / 跑测参数 / 内置样例 / 导入本地 JSONL 六卡）；卡内分节用 `.embed-title`，不套第二层卡片；卡内数据集选择与表单内的范围选择用原生 `<select class="control">`（与过滤控件同规格，选项为固定枚举） |
+| 类型操作页卡片 | `.operate-grid` / `.operate-card`：flex 换行布局、1px 边框 8px 圆角白卡（GSM8K 为数据集 / 题目 / 模型 / 参数 / 下载并导入五卡；Direct LLM 为数据集 / 题目 / 模型 / 跑测参数 / 内置样例 / 导入本地 JSONL 六卡）；卡内分节用 `.embed-title`，不套第二层卡片；卡内数据集选择与表单内的范围选择用原生 `<select class="control">`（与过滤控件同规格，选项为固定枚举）；卡片顶对齐、高度随内容，不强行等高 |
 | 卡片内字段 | `.operate-card` 内的 `label` 与 `input/select/textarea` 与 `form` 内同规格（13px 次色 label、白底 1px 边框 6px 圆角控件），禁止浏览器默认外观裸奔 |
 | 卡片内高级设置 | `.disclosure`（`<details>`）：默认收起，summary 13px 600 主文字色 + pointer；展开后才是次级表单字段，间距走 `--space-sm` |
 | 本地文件选择 | 全部走「标准按钮 + 隐藏 `<input type="file" hidden>`」模式（按钮点击触发 `ref.click()`），文件名用 `.hint .mono` 行内回显；**禁止把原生 file 控件直接暴露在表单里**（原生外观无法与 token 体系对齐）。多行输入用 `<textarea class="mono">` |
