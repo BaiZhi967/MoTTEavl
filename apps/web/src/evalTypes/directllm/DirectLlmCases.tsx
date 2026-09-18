@@ -184,7 +184,7 @@ export function DirectLlmCases() {
                     aria-label={`选择 ${item.case_id}`}
                   />
                 </td>
-                <td className="mono">{item.case_id}</td>
+                <td className="mono nowrap">{item.case_id}</td>
                 <td>{item.input}</td>
                 <td className="mono">{item.expected ?? "（无判定）"}</td>
                 <td className="mono">{scorerShort(item.scorer)}</td>

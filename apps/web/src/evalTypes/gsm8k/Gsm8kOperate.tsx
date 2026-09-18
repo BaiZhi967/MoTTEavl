@@ -155,7 +155,7 @@ export function Gsm8kOperate() {
 
         <div className="operate-grid">
           <div className="operate-card">
-            <h3 className="embed-title">数据集（pinned）</h3>
+            <h3 className="embed-title">数据集（版本固定）</h3>
             {preset ? (
               <>
                 {presets.length > 1 && (
@@ -361,7 +361,7 @@ export function Gsm8kOperate() {
           <span className="hint">真实调用 · 产生费用 · 发起后自动进入过程页</span>
         </div>
         {failures.length > 0 && (
-          <ul>
+          <ul className="failure-list">
             {failures.map((failure) => (
               <li key={failure.model} className="error">{failure.model}：{failure.error}</li>
             ))}

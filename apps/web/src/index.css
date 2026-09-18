@@ -720,6 +720,11 @@ td.row-actions .link {
   margin-left: 12px;
 }
 
+/* 单值 ID 列不折行（case id 的连字符不是断行点） */
+.nowrap {
+  white-space: nowrap;
+}
+
 /* ---------- 键值列表 ---------- */
 
 .kv {
@@ -1030,6 +1035,16 @@ td.row-actions .link {
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 13px;
+}
+
+/* 逐模型失败列表：贴近主动作行，清掉原生列表样式 */
+.failure-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .hint {
