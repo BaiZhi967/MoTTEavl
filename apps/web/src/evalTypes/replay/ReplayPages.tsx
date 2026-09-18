@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createRun, getRun, type RunRecord } from "../../api/client";
 import { BatchMonitor } from "../../components/BatchMonitor";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
@@ -110,7 +110,10 @@ export function ReplayResult() {
   return (
     <div className="page">
       <section className="panel detail">
-        <div className="panel-head"><h2 className="mono">运行 {runId} · 结果</h2></div>
+        <div className="panel-head">
+          <h2 className="mono">运行 {runId} · 结果</h2>
+          <div className="panel-head-actions"><Link className="link" to="/runs">返回总览</Link></div>
+        </div>
         <p className="summary">共 {scores.length} 项，一致 {passed}，不一致 {scores.length - passed}</p>
         <RunAuditSummary run={run} />
         <CaseDrillTable rows={rows} />

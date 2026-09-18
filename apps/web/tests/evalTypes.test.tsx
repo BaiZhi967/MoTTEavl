@@ -751,9 +751,7 @@ describe("Gsm8kCompare", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("GSM8K · 多模型对比")).toBeTruthy();
-    expect(screen.getByText("无")).toBeTruthy();
-    /* 空列时 colSpan 至少为 1，避免渲染 colspan="0" */
-    expect(screen.getByText("无").getAttribute("colspan")).toBe("1");
+    expect(await screen.findByText(/暂无可对比运行/)).toBeTruthy();
   });
 });
 
@@ -1187,8 +1185,7 @@ describe("DirectLlmCompare", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText("Direct LLM · 多模型对比")).toBeTruthy();
-    expect(screen.getByText("无")).toBeTruthy();
-    expect(screen.getByText("无").getAttribute("colspan")).toBe("1");
+    expect(await screen.findByText(/暂无可对比运行/)).toBeTruthy();
   });
 });
 describe("ReplayOperate", () => {

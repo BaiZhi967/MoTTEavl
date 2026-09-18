@@ -45,6 +45,20 @@ export function Gsm8kCompare() {
       .catch((e) => setError(String(e)));
   }, [runIds.join(",")]);
 
+  if (runIds.length === 0) {
+    return (
+      <div className="page">
+        <section className="panel detail">
+          <div className="panel-head"><h2>GSM8K · 多模型对比</h2></div>
+          <p className="empty">
+            暂无可对比运行。对比入口在批次过程页（全部运行到终态后出现「查看对比结果」），
+            也可从 <Link className="link" to="/runs">运行总览</Link> 回看单次结果。
+          </p>
+        </section>
+      </div>
+    );
+  }
+
   if (error) return <div className="page"><section className="panel detail"><p className="error">{error}</p></section></div>;
   if (!columns) return <div className="page"><section className="panel detail"><p className="empty">加载中</p></section></div>;
 

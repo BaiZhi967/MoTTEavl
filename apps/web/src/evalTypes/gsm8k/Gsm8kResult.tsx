@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { getReport, getRun, rescoreRun, type RunRecord } from "../../api/client";
 import { MetricCards } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
@@ -89,6 +89,7 @@ export function Gsm8kResult() {
         <div className="panel-head">
           <h2 className="mono">运行 {runId} · 结果</h2>
           <div className="panel-head-actions">
+            <Link className="link" to="/runs">返回总览</Link>
             <StatusBadge status={run.status} />
             <button type="button" onClick={async () => { try { await rescoreRun(runId); setRun(await getRun(runId)); } catch (e) { setError(String(e)); } }}>
               重新评分
