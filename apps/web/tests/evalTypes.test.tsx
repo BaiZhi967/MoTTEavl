@@ -610,6 +610,16 @@ describe("BatchMonitor", () => {
     );
     expect(await screen.findByText(/等待 Worker 领取/)).toBeTruthy();
   });
+
+  it("未指定运行时给出引导空状态", async () => {
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/monitor"]}>
+        <BatchMonitor runIds={[]} resultPath={(id) => `/gsm8k/runs/${id}/result`} />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/未指定运行/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "运行总览" })).toBeTruthy();
+  });
 });
 
 const GSM8K_RUN = {
