@@ -14,6 +14,13 @@ REPLAY_MANIFEST = {
 }
 
 
+def _stderr_events(capsys):
+    """Worker 进度日志：stderr 上一行一个 JSON 对象。"""
+    import json
+
+    return [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()]
+
+
 def test_worker_executes_replay_run_created_by_api(tmp_path):
     path = tmp_path / "runs.db"
     service = RunService(SQLiteRunStore(path))
@@ -101,3 +108,70 @@ def test_celery_task_executes_run(tmp_path):
     configure_service(path)
     result = execute_run_task.run(run["id"], ["case-1"])
     assert result["status"] == "completed"
+
+
+def test_worker_once_on_empty_queue_is_silent(tmp_path, capsys):
+    """空队列不刷屏：--once 处理完就退出，stdout/stderr 都不写。"""
+    from apps.worker.motte_worker.__main__ import main
+
+    assert main(["--db", str(tmp_path / "runs.db"), "--once"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_worker_quiet_suppresses_progress_log(tmp_path, capsys):
+    from apps.worker.motte_worker.__main__ import main
+
+    path = tmp_path / "runs.db"
+    RunService(SQLiteRunStore(path)).create_run("replay@1", REPLAY_MANIFEST, case_ids=["case-1"])
+    assert main(["--db", str(path), "--once", "--quiet"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_worker_interrupt_returns_130_and_leaves_the_run_recoverable(tmp_path, capsys, monkeypatch):
+    """Ctrl-C 是正常停止方式：退出码 130、无 traceback，中间态 Run 留给下次启动回收。"""
+    from apps.worker.motte_worker import runtime as worker_runtime
+    from apps.worker.motte_worker.__main__ import main
+
+    path = tmp_path / "runs.db"
+    run = RunService(SQLiteRunStore(path)).create_run(
+        "replay@1", REPLAY_MANIFEST, case_ids=["case-1", "case-2"])
+
+    def interrupted(_run):
+        # 真实路径：Ctrl-C 落在某一题的调用中间，Run 已被抢占为 preparing
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(worker_runtime, "provider_for_run", interrupted)
+    assert main(["--db", str(path)]) == 130
+    events = _stderr_events(capsys)
+    assert events[-1] == {"component": "worker", "event": "worker_stopped",
+                          "reason": "interrupted"}
+    # 没有落任何 case 结果，Run 停在中间态
+    store = RunService(SQLiteRunStore(path)).store
+    assert store.runs.get(run["id"])["status"] == "preparing"
+    assert store.case_runs.list_for_run(run["id"]) == []
+
+    # 下次启动把它回收为 queued 并跑完（不再抛异常）
+    monkeypatch.undo()
+    assert main(["--db", str(path), "--once"]) == 0
+    finished = RunService(SQLiteRunStore(path)).store
+    assert finished.runs.get(run["id"])["status"] == "completed"
+    assert len(finished.case_runs.list_for_run(run["id"])) == 2
+    assert [row["case_id"] for row in finished.case_runs.list_for_run(run["id"])] == [
+        "case-1", "case-2"]
+
+
+def test_worker_interrupt_during_once_also_returns_130(tmp_path, capsys, monkeypatch):
+    """--once 与长轮询共用同一段 try：两条路径的中断处理必须一致。"""
+    from apps.worker.motte_worker import runtime as worker_runtime
+    from apps.worker.motte_worker.__main__ import main
+
+    def interrupted(_run):
+        raise KeyboardInterrupt
+
+    path = tmp_path / "runs.db"
+    RunService(SQLiteRunStore(path)).create_run("replay@1", REPLAY_MANIFEST, case_ids=["case-1"])
+    monkeypatch.setattr(worker_runtime, "provider_for_run", interrupted)
+    assert main(["--db", str(path), "--once"]) == 130
+    assert _stderr_events(capsys)[-1]["reason"] == "interrupted"
