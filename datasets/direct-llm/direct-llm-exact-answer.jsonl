@@ -1,0 +1,8 @@
+{"input": "中国的首都是哪座城市？只回答城市名，不要标点或解释。", "expected": "北京"}
+{"input": "水的化学式是什么？只回答化学式，不要解释。", "expected": "H2O"}
+{"input": "一年有多少个月？只回答阿拉伯数字。", "expected": "12"}
+{"input": "太阳系中体积最大的行星是哪一颗？只回答中文名称。", "expected": "木星"}
+{"input": "二进制 1011 对应的十进制是多少？只回答数字。", "expected": "11"}
+{"input": "HTTP 状态码 404 的语义名称是什么？只回答英文短语，首字母大写。", "expected": "Not Found"}
+{"input": "What is the capital of France? Answer with the city name only.", "expected": "Paris"}
+{"input": "化学元素 Fe 的中文名称是什么？只回答名称。", "expected": "铁"}

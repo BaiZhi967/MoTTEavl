@@ -21,6 +21,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/benchmarks/direct-llm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Direct Llm Overview */
+        get: operations["direct_llm_overview_api_v1_benchmarks_direct_llm_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/direct-llm/builtins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Direct Llm Builtins
+         * @description 仓库内置样例数据集清单（含实际题数），供控制台一键导入。
+         */
+        get: operations["direct_llm_builtins_api_v1_benchmarks_direct_llm_builtins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/direct-llm/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Direct Llm Cases
+         * @description 分页浏览某个数据集的题目（控制台「题目」页用）：题面、期望答案、生效评分器、源文件行号。
+         */
+        get: operations["direct_llm_cases_api_v1_benchmarks_direct_llm_cases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/direct-llm/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Direct Llm Import
+         * @description 导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。
+         *
+         *     ``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file
+         *     时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。
+         *     省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。
+         *     同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。
+         */
+        post: operations["direct_llm_import_api_v1_benchmarks_direct_llm_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/direct-llm/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Direct Llm Run */
+        post: operations["direct_llm_run_api_v1_benchmarks_direct_llm_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/benchmarks/gsm8k": {
         parameters: {
             query?: never;
@@ -30,6 +129,28 @@ export interface paths {
         };
         /** Gsm8K Overview */
         get: operations["gsm8k_overview_api_v1_benchmarks_gsm8k_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/gsm8k/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gsm8K Cases
+         * @description 分页浏览某个数据集版本的题目（控制台「题目」页用）：题面、期望答案、源文件行号。
+         *
+         *     数据集本身不可变，这里只读；运行级的题目子集由跑测接口的 case_selection 决定。
+         */
+        get: operations["gsm8k_cases_api_v1_benchmarks_gsm8k_cases_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -49,7 +170,12 @@ export interface paths {
         put?: never;
         /**
          * Gsm8K Import
-         * @description 从官方仓库 pinned revision 下载 test.jsonl 并导入（幂等；重复版本冲突返回 409）。
+         * @description 从官方仓库下载 test split 并导入，默认「最新全量」。
+         *
+         *     省略 revision 时先解析官方仓库中该数据文件的最新 commit，再按该固定 revision 下载并
+         *     落盘（provenance 记录的就是解析出的 sha，不是浮动分支）。scope=full 取整个 split，
+         *     scope=smoke 取前 20 题，题数记入不可变数据集。省略 version 时自动选版本：同内容复用
+         *     （重复导入幂等），否则取下一个空号。同 name@version 内容不同返回 409。
          */
         post: operations["gsm8k_import_api_v1_benchmarks_gsm8k_import_post"];
         delete?: never;
@@ -628,6 +754,150 @@ export interface operations {
             };
         };
     };
+    direct_llm_overview_api_v1_benchmarks_direct_llm_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    direct_llm_builtins_api_v1_benchmarks_direct_llm_builtins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    direct_llm_cases_api_v1_benchmarks_direct_llm_cases_get: {
+        parameters: {
+            query: {
+                dataset: string;
+                offset?: number;
+                limit?: number;
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    direct_llm_import_api_v1_benchmarks_direct_llm_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    direct_llm_run_api_v1_benchmarks_direct_llm_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     gsm8k_overview_api_v1_benchmarks_gsm8k_get: {
         parameters: {
             query?: never;
@@ -644,6 +914,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    gsm8k_cases_api_v1_benchmarks_gsm8k_cases_get: {
+        parameters: {
+            query: {
+                dataset: string;
+                offset?: number;
+                limit?: number;
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

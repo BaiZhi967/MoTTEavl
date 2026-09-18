@@ -757,6 +757,167 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return JSONResponse(status_code=422, content={"error": {"code": error.code, "message": str(error)}})
         return service.create_run(scenario, prepared, case_ids)
 
+    # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
+
+    @application.get("/api/v1/benchmarks/direct-llm")
+    def direct_llm_overview():
+        from motte_contracts.direct_llm import EVAL_KEY, SUITE, is_scenario
+
+        presets = []
+        scenarios = [s for s in resources.scenarios.list() if is_scenario(s)]
+        for scenario in sorted(scenarios, key=lambda s: str(s.get("name"))):
+            dataset_name, _, dataset_version = str(scenario.get("dataset", "")).rpartition("@")
+            dataset = resources.datasets.get(dataset_name, dataset_version)
+            if dataset is None:
+                continue
+            runs = [run for run in service.store.runs.list()
+                    if run.get("scenario_version") == f"{scenario['name']}@{scenario['version']}"]
+            runs.sort(key=lambda run: run.get("created_at") or "", reverse=True)
+            presets.append({
+                "scenario": f"{scenario['name']}@{scenario['version']}",
+                "dataset": scenario["dataset"],
+                "suite": SUITE,
+                "eval": dataset.get(EVAL_KEY),
+                "provenance": dict(dataset.get("provenance") or {}),
+                "cases": len(dataset.get("cases", ())),
+                "runs": [{"id": run["id"], "status": run["status"], "created_at": run.get("created_at"),
+                          "accuracy": _direct_llm_accuracy(run, service.store.scores.list_for_run(run["id"]))}
+                         for run in runs[:10]],
+            })
+        return {"items": presets, "total": len(presets)}
+
+    @application.get("/api/v1/benchmarks/direct-llm/builtins")
+    def direct_llm_builtins():
+        """仓库内置样例数据集清单（含实际题数），供控制台一键导入。"""
+        from motte_sdk.direct_llm import builtin_catalog
+
+        items = builtin_catalog()
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/benchmarks/direct-llm/import", status_code=201)
+    def direct_llm_import(body: dict):
+        """导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。
+
+        ``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file
+        时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。
+        省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。
+        同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。
+        """
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        from motte_sdk.direct_llm import (BUILTIN_LICENSE, BuiltinUnavailable,
+                                          import_builtin_dataset, import_direct_llm_split)
+
+        content, builtin = body.get("content"), body.get("builtin")
+        if (content is None) == (builtin is None):
+            return _invalid("exactly one of content (JSONL text) or builtin (dataset id) is required")
+        if content is not None and not isinstance(content, str):
+            return _invalid("content must be a JSONL string")
+
+        def _text(key: str, default: str | None = None) -> str | None:
+            """缺席才用默认值；显式传入的空串/非字符串一律拒绝（静默兜底会掩盖客户端 bug）。"""
+            value = body.get(key)
+            if value is None:
+                return default
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{key} must be a non-empty string")
+            return value.strip()
+
+        # version 是唯一「留空=自动」有明确语义的字段（与 GSM8K 导入一致），因此空串合法。
+        raw_version = body.get("version")
+        if raw_version is not None and not isinstance(raw_version, str):
+            return _invalid("version must be a string")
+        version = (raw_version or "").strip() or None
+        try:
+            # 三个字段的默认值都非空，因此 `or ""` 只用于收窄类型，不会真的兜底成空串。
+            name = _text("name", builtin or "direct-llm-custom") or ""
+            license_id = _text("license", BUILTIN_LICENSE) or ""
+            scorer = _text("scorer")
+            source = _text("source")
+        except ValueError as error:
+            return _invalid(str(error))
+        try:
+            if builtin is not None:
+                if not isinstance(builtin, str) or not builtin.strip():
+                    return _invalid("builtin must be a builtin dataset id")
+                return import_builtin_dataset(builtin.strip(), resources=resources, name=name,
+                                              version=version, license_id=license_id,
+                                              scorer=scorer)
+            return import_direct_llm_split(content.encode("utf-8"), name=name, version=version,
+                                           license_id=license_id, scorer=scorer,
+                                           source=source or "local-jsonl", resources=resources)
+        except BuiltinUnavailable as error:
+            return JSONResponse(status_code=404, content={"error": {"code": "BUILTIN_UNAVAILABLE",
+                                                                     "message": str(error)}})
+        except ValueError as error:
+            code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+            status = 409 if isinstance(error, ResourceConflictError) else 422
+            return JSONResponse(status_code=status, content={"error": {"code": code, "message": str(error)}})
+
+    @application.get("/api/v1/benchmarks/direct-llm/cases")
+    def direct_llm_cases(dataset: str, offset: int = 0, limit: int = 50, query: str = ""):
+        """分页浏览某个数据集的题目（控制台「题目」页用）：题面、期望答案、生效评分器、源文件行号。"""
+        from motte_contracts.direct_llm import effective_scorers
+
+        name, _, version = str(dataset).rpartition("@")
+        record = resources.datasets.get(name, version)
+        if record is None:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "DATASET_NOT_FOUND", "message": f"dataset not found: {dataset}"}})
+        cases = record.get("cases") or []
+        scorers = effective_scorers(record)
+        needle = (query or "").strip().lower()
+        matched = [case for case in cases
+                   if not needle or needle in str(case.get("input", "")).lower()
+                   or needle in str(case.get("case_id", "")).lower()]
+        start = max(0, offset)
+        size = min(max(1, limit), 200)
+        items = [{"case_id": case["case_id"], "input": case["input"],
+                  "expected": case.get("expected"), "scorer": scorers.get(case["case_id"]),
+                  "source_line": (case.get("metadata") or {}).get("source_line")}
+                 for case in matched[start:start + size]]
+        return {"dataset": dataset, "total": len(matched), "dataset_total": len(cases),
+                "offset": start, "limit": size, "query": query or "", "items": items}
+
+    @application.post("/api/v1/benchmarks/direct-llm/runs", status_code=202)
+    def direct_llm_run(body: dict):
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        from motte_contracts.selection import CASE_SELECTION_KEY
+
+        # 省略 scenario 时按数据集名@版本推导（场景名与数据集名一致，见 direct_llm.scenario_for）。
+        scenario = body.get("scenario") or (
+            f"{body.get('dataset_name') or 'direct-llm-custom'}@{body.get('dataset_version') or '1'}")
+        scenario_name, _, scenario_version = scenario.rpartition("@")
+        if resources.scenarios.get(scenario_name, scenario_version) is None:
+            # 缺失场景必须显式失败：否则 prepare_run 会退化成一条无题的通用 run。
+            return JSONResponse(status_code=422, content={"error": {"code": "SCENARIO_NOT_FOUND",
+                                                                    "message": f"direct-llm scenario not found: {scenario}"}})
+        model = body.get("model")
+        if not isinstance(model, str) or not model:
+            return JSONResponse(status_code=422, content={"error": {"code": "MODEL_REQUIRED",
+                                                                    "message": "model profile id is required"}})
+        manifest: dict[str, Any] = {"model": model}
+        parameters = body.get("parameters")
+        if parameters is not None:
+            if not isinstance(parameters, dict):
+                return _invalid("parameters must be an object")
+            manifest["parameters"] = parameters
+        reasoning_level = body.get("reasoning_level")
+        if reasoning_level is not None:
+            if not isinstance(reasoning_level, str) or not reasoning_level:
+                return _invalid("reasoning_level must be a non-empty string")
+            manifest["reasoning_level"] = reasoning_level
+        if body.get(CASE_SELECTION_KEY) is not None:
+            manifest[CASE_SELECTION_KEY] = body[CASE_SELECTION_KEY]
+        try:
+            prepared, case_ids = prepare_run(scenario, manifest, [], resources)
+        except ManifestResolutionError as error:
+            return JSONResponse(status_code=422, content={"error": {"code": error.code, "message": str(error)}})
+        return service.create_run(scenario, prepared, case_ids)
+
     return application
 
 
@@ -770,6 +931,21 @@ def _gsm8k_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = N
         return None
     correct = sum(1 for score in rows if score.get("outcome") == "correct")
     return round(correct / selected, 4)
+
+
+def _direct_llm_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = None) -> float | None:
+    """分母取本次运行里「声明了期望」的题数（judged）：无期望的题不判对错也不进分母。"""
+    from motte_contracts.selection import run_selected_count
+
+    rows = scores if scores is not None else (run.get("scores") or [])
+    selected = run_selected_count((run.get("manifest") or {}).get("benchmark_provenance"))
+    if selected is None or len(rows) != selected:
+        return None
+    judged = sum(1 for score in rows if score.get("judged"))
+    if judged == 0:
+        return None
+    correct = sum(1 for score in rows if score.get("outcome") == "correct")
+    return round(correct / judged, 4)
 
 
 def _run_model_label(run: dict[str, Any]) -> str | None:
@@ -813,18 +989,17 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
         "cases": [{"case_id": case["case_id"], "result": case.get("result")} for case in cases],
     }
     if benchmark:
-        # strict selected-case denominator + outcome/attempt/completion breakdown
+        # 套件口径的严格聚合（分母与 outcome 词汇由套件决定，见 motte_sdk.suites）
         report["benchmark"] = benchmark
-        from motte_sdk.benchmark import benchmark_scores
-        from motte_eval.gsm8k import aggregate_benchmark
+        from motte_sdk.suites import managed_aggregate, managed_scores
 
-        scores = benchmark_scores(run, cases)
-        summary = aggregate_benchmark(scores, run_selected_count(benchmark))
+        scores = managed_scores(run, cases)
+        summary = managed_aggregate(run, scores)
         report["scores"] = scores
         report["summary"].update(summary)
         report["summary"].update(cases=summary["selected"], scored=summary["responded"],
                                   passed=summary["correct"], failed=summary["selected"] - summary["correct"],
-                                  pass_rate=summary["accuracy"], denominator="selected_cases")
+                                  pass_rate=summary["accuracy"])
         known = [cost["total"] for cost in costs if cost.get("total") is not None]
         report["cost"].update(total=round(sum(known), 8) if known else None,
                               known_cases=len(known), unknown_cases=summary["attempted"] - len(known))

@@ -23,19 +23,33 @@ export function suiteRoutes(id: string) {
   };
 }
 
+/**
+ * 运行快照里的套件判别字段。GSM8K 与 Direct LLM 的运行都带 benchmark_provenance，
+ * 唯一的区分依据是 provenance.suite；该字段之前落库的旧运行没有，按 gsm8k 兼容。
+ */
+function provenanceSuite(run: RunLike): string | null {
+  const suite = run.manifest?.benchmark_provenance?.suite;
+  return typeof suite === "string" ? suite : null;
+}
+
 const GSM8K_SUITE: EvalTypeSuite = {
   id: "gsm8k",
   label: "GSM8K 数学评测",
   icon: CalculatorIcon,
-  matchRun: (run) =>
-    /^gsm8k.*@\d+$/.test(run.scenario_version) || Boolean(run.manifest?.benchmark_provenance),
+  matchRun: (run) => {
+    const suite = provenanceSuite(run);
+    if (suite !== null) return suite === "gsm8k";
+    // 旧运行（无 suite 字段）：场景名或 benchmark_provenance 存在即归 GSM8K
+    return /^gsm8k.*@\d+$/.test(run.scenario_version) || Boolean(run.manifest?.benchmark_provenance);
+  },
 };
 
 const DIRECT_LLM_SUITE: EvalTypeSuite = {
   id: "direct-llm",
   label: "Direct LLM 评测",
   icon: ChatTextIcon,
-  matchRun: (run) => run.scenario_version.startsWith("direct-llm@"),
+  matchRun: (run) => provenanceSuite(run) === "direct-llm"
+    || (provenanceSuite(run) === null && /^direct-llm([@-]).*/.test(run.scenario_version)),
 };
 
 const REPLAY_SUITE: EvalTypeSuite = {

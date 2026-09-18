@@ -78,6 +78,184 @@
         "summary": "List Agents"
       }
     },
+    "/api/v1/benchmarks/direct-llm": {
+      "get": {
+        "operationId": "direct_llm_overview_api_v1_benchmarks_direct_llm_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Direct Llm Overview"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/builtins": {
+      "get": {
+        "description": "仓库内置样例数据集清单（含实际题数），供控制台一键导入。",
+        "operationId": "direct_llm_builtins_api_v1_benchmarks_direct_llm_builtins_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Direct Llm Builtins"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/cases": {
+      "get": {
+        "description": "分页浏览某个数据集的题目（控制台「题目」页用）：题面、期望答案、生效评分器、源文件行号。",
+        "operationId": "direct_llm_cases_api_v1_benchmarks_direct_llm_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset",
+            "required": true,
+            "schema": {
+              "title": "Dataset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Cases"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/import": {
+      "post": {
+        "description": "导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。\n\n``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file\n时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。\n省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。\n同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。",
+        "operationId": "direct_llm_import_api_v1_benchmarks_direct_llm_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Import"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/runs": {
+      "post": {
+        "operationId": "direct_llm_run_api_v1_benchmarks_direct_llm_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Run"
+      }
+    },
     "/api/v1/benchmarks/gsm8k": {
       "get": {
         "operationId": "gsm8k_overview_api_v1_benchmarks_gsm8k_get",
@@ -94,9 +272,77 @@
         "summary": "Gsm8K Overview"
       }
     },
+    "/api/v1/benchmarks/gsm8k/cases": {
+      "get": {
+        "description": "分页浏览某个数据集版本的题目（控制台「题目」页用）：题面、期望答案、源文件行号。\n\n数据集本身不可变，这里只读；运行级的题目子集由跑测接口的 case_selection 决定。",
+        "operationId": "gsm8k_cases_api_v1_benchmarks_gsm8k_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset",
+            "required": true,
+            "schema": {
+              "title": "Dataset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gsm8K Cases"
+      }
+    },
     "/api/v1/benchmarks/gsm8k/import": {
       "post": {
-        "description": "从官方仓库 pinned revision 下载 test.jsonl 并导入（幂等；重复版本冲突返回 409）。",
+        "description": "从官方仓库下载 test split 并导入，默认「最新全量」。\n\n省略 revision 时先解析官方仓库中该数据文件的最新 commit，再按该固定 revision 下载并\n落盘（provenance 记录的就是解析出的 sha，不是浮动分支）。scope=full 取整个 split，\nscope=smoke 取前 20 题，题数记入不可变数据集。省略 version 时自动选版本：同内容复用\n（重复导入幂等），否则取下一个空号。同 name@version 内容不同返回 409。",
         "operationId": "gsm8k_import_api_v1_benchmarks_gsm8k_import_post",
         "requestBody": {
           "content": {

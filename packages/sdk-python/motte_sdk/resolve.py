@@ -79,30 +79,27 @@ def resolve_manifest(manifest: dict[str, Any], resources: Any) -> dict[str, Any]
 
 def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resources: Any):
     """Shared creation preflight; benchmark resources expand once, never in Worker."""
-    from motte_contracts.gsm8k import is_benchmark
-    from motte_sdk.benchmark import resolve_benchmark_manifest
+    from motte_contracts import suites as contract_suites
+    from motte_sdk.suites import CASE_SELECTION_KEY, resolve_managed_manifest
 
     manifest = deepcopy(manifest or {})
     if find_secret_paths(manifest):
         raise ManifestResolutionError("CREDENTIALS_REJECTED", "plaintext credentials are not accepted")
-    if any(k in manifest for k in ("benchmark_snapshot", "benchmark_provenance", "benchmark_cases")):
+    if contract_suites.RESERVED_KEYS.intersection(manifest):
         raise ManifestResolutionError("SNAPSHOT_RESERVED", "benchmark snapshots are generated at creation")
     name, sep, version = scenario_version.rpartition("@")
     scenario = resources.scenarios.get(name, version) if sep else None
-    benchmark = scenario is not None and is_benchmark(scenario)
+    managed = scenario is not None and contract_suites.is_managed(scenario)
     try:
-        if benchmark:
-            manifest = resolve_benchmark_manifest(scenario, manifest, resources)
-        else:
-            from motte_contracts.gsm8k import CASE_SELECTION_KEY
-
-            if CASE_SELECTION_KEY in manifest:
-                raise ManifestResolutionError(
-                    "RUN_CONFIG_INVALID",
-                    f"{CASE_SELECTION_KEY} is only supported for benchmark scenarios")
+        if managed:
+            manifest = resolve_managed_manifest(scenario, manifest, resources)
+        elif CASE_SELECTION_KEY in manifest:
+            raise ManifestResolutionError(
+                "RUN_CONFIG_INVALID",
+                f"{CASE_SELECTION_KEY} is only supported for benchmark scenarios")
         resolved = resolve_manifest(manifest, resources)
         ids = list(case_ids or [])
-        if benchmark:
+        if managed:
             if ids:
                 # 子集改由 manifest.case_selection 声明，避免两条并行的选择通道。
                 raise ValueError(

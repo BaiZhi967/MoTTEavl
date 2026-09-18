@@ -1,0 +1,8 @@
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「同一笔订单被扣了两次费用。」", "expected": "billing"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「导出的报表用 Excel 打开后是乱码。」", "expected": "technical"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「我想修改注册时填写的手机号。」", "expected": "account"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「你们公司总部在哪个城市？」", "expected": "other"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「发票抬头写错了，需要作废重开。」", "expected": "billing"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「调用开放接口一直返回 502，重试多次都一样。」", "expected": "technical"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「忘记了登录密码，需要重置。」", "expected": "account"}
+{"input": "把下面的工单分类为 billing、technical、account、other 之一，只回答标签本身：\n「能否提供一份产品介绍文档？」", "expected": "other"}
