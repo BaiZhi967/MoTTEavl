@@ -13,6 +13,7 @@
 
 - [安装](operations/install.md)
 - [升级](operations/upgrade.md)
+- [平台完整性升级与运行说明](operations/platform-integrity.md)
 - [备份与恢复](operations/backup-restore.md)
 - [版本回退](operations/rollback.md)
 - [GSM8K 基准操作指南](operations/gsm8k-smoke.md)

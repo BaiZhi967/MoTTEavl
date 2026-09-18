@@ -144,9 +144,10 @@ Direct LLM 允许本次运行覆盖（省略即数据集预设 1024），且仍�
   认证、客户端（端点/模型写错）、配置、协议与未知错误停跑，剩余题目记为 `not_attempted`。
 - 任一题失败会让最终 run 落 `failed`，但已成功应答的题照常评分。取消在 Worker 前生效则零调用。
 - `GET /api/v1/runs/{id}/report` 对终态运行也给结论（分母＝本次选中题数中的 `judged`），
-  成本保留 price_table 版本与已知/未知题数；`POST /api/v1/runs/{id}/rescore` 不调用模型。
-- 重启跳过已持久化的题并尊重持久化的系统性停跑标记；**远程调用后、本地落库前崩溃可能重复该次调用**，
-  这不是 exactly-once 计费。`retry` 用同一份不可变快照创建子 run，可能产生新费用。
+  成本保留 price_table 版本与已知/未知题数；`rescore` 不调用模型，而是追加新的 ScoringPass。
+- 重启跳过已持久化的题并尊重持久化的系统性停跑标记。若 CaseAttempt 停在 `dispatching`，远端结果
+  不确定，恢复会转为 `indeterminate` 并把 Run 标为 `needs_review`，不会自动重复付费调用。
+  `retry` 是显式操作，用同一份不可变快照创建子 Run，可能产生新费用。
 
 ## 离线验证
 

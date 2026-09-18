@@ -185,3 +185,17 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 - `tests/runtime/test_worker_loop.py`：新增 4 个测试——空队列 `--once` 静默退出、`--quiet` 抑制进度日志、中断后退出码 130 且 Run 停在 `preparing` 无 case 落库（下次启动回收为 `queued` 并跑完）、`--once` 路径的中断一致性。
 
 验证：`uv run pytest -q tests/runtime/test_worker_loop.py`（9 passed）、全量 `465+4` passed / 8 skipped、`uv run ruff check .` 与 `uv run mypy packages/contracts` 零问题。
+
+## 平台完整性加固（2026-09-18）
+
+本轮把 Run 执行、审计、资源快照、插件、API、Worker、Pi bridge 与 Web 合同收敛为可恢复的持久化边界：
+
+- Run/CaseAttempt 使用 revision/status CAS；provider 调用后的持久化不确定性进入 `needs_review`，安全 replay 可恢复；取消请求在 open attempt 结束后统一 settling。
+- ScoringPass 与 score set 原子落盘，包含终态、终端事件和完整 benchmark aggregate；历史报告只读取选定 pass 的快照，不在 GET 时重跑可变插件。
+- Provider/Model generation 更新与 create-if-absent 具备并发保护；已发布 ModelProfile、数据集、场景和价格表保持不可变；PostgreSQL 更新/删除使用行锁。
+- Dispatcher、WorkerLoop、Celery 和 CLI 共用锁与 claim 语义；重复投递、进程恢复和 provider 错误均幂等处理。
+- Replay fixture 有严格的 `ReplayCase` 合同，profile-stale retry 保留资源引用与随机选择快照；BenchmarkPlugin 的准备、评分和 aggregate 错误均映射为结构化配置/终态错误。
+- SSE 使用严格 `TraceEvent` envelope 并保留旧事件读取兼容；Web 生成类型、nullable Score、retry child 跟踪、模型身份聚合和审计快照已同步。
+- Pi v1 bridge 支持旧 peer 可选字段、LF/CRLF framing、有界 stdout/stderr、进程树清理和超时回收；不宣称未实现的实时能力。
+
+验证：`uv run pytest -q -m "not live"`（618 passed，10 skipped）；`pnpm --dir apps/web test`（101 passed）；`pnpm --dir apps/web build`；`pnpm --dir apps/web exec tsc --noEmit`；`uv run pytest -q tests/protocol/test_pi_bridge_hardening.py`（14 passed）；OpenAPI live schema 与 `api/openapi.json` 一致。真实 Provider、Celery broker、PostgreSQL 服务和付费 live smoke 仍需由操作者在目标环境显式执行。
