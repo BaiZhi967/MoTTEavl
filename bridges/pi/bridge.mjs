@@ -1,53 +1,98 @@
 #!/usr/bin/env node
 /**
- * Pi bridge：MoTTEavl 与 Pi Agent 之间的版本化 JSONL 桥接进程。
+ * Versioned JSONL protocol stub for a future Pi execution backend.
  *
- * 协议 v1（与 motte_agent/protocol.py 对齐，逐行 JSON）：
- *   入站 {"type":"probe"}                        -> {"type":"version","version":"0.1.0","protocol":"v1"}
- *   入站 {"type":"prompt","id":..,"text":..}      -> {"type":"started","id"}
- *                                                 -> {"type":"output","id","text"}
- *                                                 -> {"type":"finished","id","status":"completed"}
- *   非法行                                       -> {"type":"error","error":"malformed protocol message"}
- *
- * 默认 echo 模式（确定性，供测试与冒烟）；真实 Pi runtime 接入时替换 runAgent()。
+ * This package deliberately does not execute prompts. A probe reports that the
+ * transport is present but execution is unavailable, and a prompt receives a
+ * structured error. stdout is reserved exclusively for protocol messages.
  */
 import readline from "node:readline";
 
 const BRIDGE_VERSION = "0.1.0";
 const PROTOCOL_VERSION = "v1";
+const MAX_ID_LENGTH = 128;
 
-async function runAgent(text, emit) {
-  emit({ type: "output", text });
-  return text.toUpperCase();
+function emit(event) {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
-function handle(message, emit) {
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function validId(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_ID_LENGTH &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function emitError(id, code, message) {
+  emit({ type: "error", id, error: { code, message } });
+}
+
+function handle(message) {
   if (message.type === "probe") {
-    emit({ type: "version", version: BRIDGE_VERSION, protocol: PROTOCOL_VERSION });
-    return;
-  }
-  if (message.type === "prompt") {
-    const id = message.id ?? null;
-    emit({ type: "started", id });
-    runAgent(String(message.text ?? ""), (event) => emit({ id, ...event })).then((answer) => {
-      emit({ type: "output", id, text: `answer: ${answer}` });
-      emit({ type: "finished", id, status: "completed" });
+    if (!hasOnlyKeys(message, new Set(["type"]))) {
+      emitError(null, "INVALID_REQUEST", "invalid protocol message");
+      return;
+    }
+    emit({
+      type: "version",
+      version: BRIDGE_VERSION,
+      protocol: PROTOCOL_VERSION,
+      execution_ready: false,
     });
     return;
   }
-  emit({ type: "error", error: `unsupported message type: ${message.type}` });
+
+  if (message.type === "prompt") {
+    const id = validId(message.id) ? message.id : null;
+    if (
+      id === null ||
+      typeof message.text !== "string" ||
+      !hasOnlyKeys(message, new Set(["type", "id", "text"]))
+    ) {
+      emitError(id, "INVALID_REQUEST", "invalid protocol message");
+      return;
+    }
+    emitError(
+      id,
+      "PI_BACKEND_UNAVAILABLE",
+      "Pi execution backend is not configured",
+    );
+    return;
+  }
+
+  const id = validId(message.id) ? message.id : null;
+  emitError(id, "UNSUPPORTED_MESSAGE", "unsupported protocol message");
 }
 
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
-  const emit = (event) => process.stdout.write(JSON.stringify(event) + "\n");
   let message;
   try {
     message = JSON.parse(line);
-    if (typeof message !== "object" || message === null || Array.isArray(message)) throw new Error("not an object");
   } catch {
-    emit({ type: "error", error: "malformed protocol message" });
+    emitError(null, "INVALID_REQUEST", "invalid protocol message");
     return;
   }
-  handle(message, emit);
+
+  if (!isObject(message) || typeof message.type !== "string") {
+    emitError(null, "INVALID_REQUEST", "invalid protocol message");
+    return;
+  }
+
+  try {
+    handle(message);
+  } catch {
+    const id = validId(message.id) ? message.id : null;
+    emitError(id, "BRIDGE_INTERNAL_ERROR", "bridge request failed");
+  }
 });
