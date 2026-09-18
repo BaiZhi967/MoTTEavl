@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelRun, createRun, getRuns, setCredential, updateModel, updateProvider } from "../src/api/client";
+import {
+  cancelRun, createBenchmarkRun, createRun, getBenchmarkCases, getRuns, importBenchmark,
+  setCredential, updateModel, updateProvider,
+} from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
   const spy = vi.fn(async () => ({
@@ -66,5 +69,42 @@ describe("api client", () => {
     expect(url).toBe("/api/v1/models/qwen2.5-7b");
     expect((init as any).method).toBe("PUT");
     expect(JSON.parse((init as any).body)).toEqual({ enabled: true });
+  });
+
+  it("POST importBenchmark 带 scope 与 pinned revision", async () => {
+    const fetchMock = mockFetch(201, {
+      imported: "gsm8k-test@2", scenario: "gsm8k-test-full@2", scope: "full",
+      benchmark: "gsm8k-full", cases: 1319, source_sha256: "s", cases_sha256: "c",
+    });
+    const receipt = await importBenchmark({
+      revision: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b", license: "MIT", version: "2", scope: "full",
+    });
+    expect(receipt.scenario).toBe("gsm8k-test-full@2");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/benchmarks/gsm8k/import");
+    expect(JSON.parse((init as any).body)).toEqual({
+      revision: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b", license: "MIT", version: "2", scope: "full",
+    });
+  });
+
+  it("GET getBenchmarkCases 拼分页与搜索参数", async () => {
+    const fetchMock = mockFetch(200, { dataset: "gsm8k-test@1", total: 0, items: [] });
+    await getBenchmarkCases({ dataset: "gsm8k-test@1", offset: 25, limit: 25, query: "ducks" });
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/benchmarks/gsm8k/cases?dataset=gsm8k-test%401&offset=25&limit=25&query=ducks");
+  });
+
+  it("POST createBenchmarkRun 携带题目子集与思考强度", async () => {
+    const fetchMock = mockFetch(202, { id: "run-9", status: "queued" });
+    await createBenchmarkRun({
+      model: "reasoner", scenario: "gsm8k-test-full@1", reasoning_level: "high",
+      case_selection: { mode: "random", count: 100, seed: "deadbeef" },
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/benchmarks/gsm8k/runs");
+    expect(JSON.parse((init as any).body)).toEqual({
+      model: "reasoner", scenario: "gsm8k-test-full@1", reasoning_level: "high",
+      case_selection: { mode: "random", count: 100, seed: "deadbeef" },
+    });
   });
 });

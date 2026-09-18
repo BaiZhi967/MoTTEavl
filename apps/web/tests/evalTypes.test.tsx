@@ -6,6 +6,7 @@ import { BatchMonitor } from "../src/components/BatchMonitor";
 import { DirectLlmOperate, DirectLlmResult } from "../src/evalTypes/directllm/DirectLlmPages";
 import { FallbackMonitorPage, FallbackResultPage } from "../src/evalTypes/fallback/FallbackPages";
 import { gridCells } from "../src/evalTypes/gsm8k/grid";
+import { Gsm8kCases } from "../src/evalTypes/gsm8k/Gsm8kCases";
 import { Gsm8kCompare } from "../src/evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "../src/evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kResult } from "../src/evalTypes/gsm8k/Gsm8kResult";
@@ -23,6 +24,7 @@ const clientMocks = vi.hoisted(() => ({
   getBenchmarkOverview: vi.fn(),
   importBenchmark: vi.fn(),
   createBenchmarkRun: vi.fn(),
+  getBenchmarkCases: vi.fn(),
   getModels: vi.fn(),
   subscribeRunEvents: vi.fn(() => () => undefined),
 }));
@@ -143,7 +145,8 @@ describe("Gsm8kOperate", () => {
     fireEvent.click(screen.getByLabelText("选择模型 qwen-max"));
     fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
     await waitFor(() => expect(clientMocks.createBenchmarkRun).toHaveBeenCalledTimes(2));
-    expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({ model: "glm-4.7", scenario: "gsm8k-test-smoke@1" });
+    expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({
+      model: "glm-4.7", scenario: "gsm8k-test-smoke@1", case_selection: { mode: "all" } });
     expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-42,run-43");
   });
 
@@ -168,12 +171,15 @@ describe("Gsm8kOperate", () => {
     expect(link.getAttribute("href")).toBe("/gsm8k/monitor?runs=run-44");
   });
 
-  it("导入表单提交 revision / license / version", async () => {
+  it("默认一键下载官方最新全量数据集（commit/版本留空由服务端解析）", async () => {
     clientMocks.getBenchmarkOverview.mockResolvedValue({ items: [], total: 0 });
     clientMocks.importBenchmark.mockResolvedValue({
-      imported: "gsm8k-test@2",
-      scenario: "gsm8k-test-smoke@2",
-      cases: 20,
+      imported: "gsm8k-test@1",
+      scenario: "gsm8k-test-full@1",
+      scope: "full",
+      benchmark: "gsm8k-full",
+      cases: 1319,
+      revision: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b",
       source_sha256: "s",
       cases_sha256: "c",
     });
@@ -182,18 +188,319 @@ describe("Gsm8kOperate", () => {
         <Gsm8kOperate />
       </MemoryRouter>
     );
-    const revision = await screen.findByLabelText(/官方仓库 commit/);
-    fireEvent.change(revision, { target: { value: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b" } });
-    fireEvent.change(screen.getByLabelText(/数据集版本/), { target: { value: "2" } });
-    fireEvent.click(screen.getByRole("button", { name: /下载并导入/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /下载最新全量数据集/ }));
     await waitFor(() =>
-      expect(clientMocks.importBenchmark).toHaveBeenCalledWith(
-        expect.objectContaining({
-          revision: "5d0b5c9a1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b",
-          license: "MIT",
-          version: "2",
-        })
-      ));
+      expect(clientMocks.importBenchmark).toHaveBeenCalledWith({
+        revision: "", license: "MIT", name: "gsm8k-test", version: "", scope: "full",
+      }));
+    expect(await screen.findByText(/已导入 gsm8k-test@1 · 全量 · 1319 题 · revision 5d0b5c9/)).toBeTruthy();
+  });
+
+  it("高级设置可改范围 / commit / 版本，按钮文案随 commit 变化", async () => {
+    clientMocks.getBenchmarkOverview.mockResolvedValue({ items: [], total: 0 });
+    clientMocks.importBenchmark.mockResolvedValue({
+      imported: "gsm8k-test@2",
+      scenario: "gsm8k-test-smoke@2",
+      scope: "smoke",
+      benchmark: "gsm8k-20",
+      cases: 20,
+      revision: "0123456789abcdef0123456789abcdef01234567",
+      source_sha256: "s",
+      cases_sha256: "c",
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    // 高级设置默认收起，展开后才是次级字段
+    fireEvent.click(await screen.findByText("高级设置"));
+    fireEvent.change(screen.getByLabelText("题目范围"), { target: { value: "smoke" } });
+    fireEvent.change(screen.getByLabelText(/数据集版本/), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText(/官方仓库 commit/),
+      { target: { value: "0123456789abcdef0123456789abcdef01234567" } });
+    fireEvent.click(screen.getByRole("button", { name: /按指定 commit 下载冒烟数据集/ }));
+    await waitFor(() =>
+      expect(clientMocks.importBenchmark).toHaveBeenCalledWith(expect.objectContaining({
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        version: "2",
+        scope: "smoke",
+      })));
+    expect(await screen.findByText(/已导入 gsm8k-test@2 · 冒烟 · 20 题/)).toBeTruthy();
+  });
+
+  it("导入失败就地显示服务端错误（例如版本冲突）", async () => {
+    clientMocks.getBenchmarkOverview.mockResolvedValue({ items: [], total: 0 });
+    clientMocks.importBenchmark.mockRejectedValue(
+      new Error("benchmark version already exists with different content; use a new version"));
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /下载最新全量数据集/ }));
+    expect(await screen.findByText(/use a new version/)).toBeTruthy();
+  });
+
+  it("多个数据集可选，跑测用选中的场景而不是列表第一个", async () => {
+    clientMocks.getBenchmarkOverview.mockResolvedValue({
+      items: [
+        { scenario: "gsm8k-test-full@2", dataset: "gsm8k-test@2", scope: "full", cases: 1319, runs: [] },
+        { scenario: "gsm8k-test-smoke@1", dataset: "gsm8k-test@1", scope: "smoke", cases: 20, runs: [] },
+      ],
+      total: 2,
+    });
+    clientMocks.createBenchmarkRun.mockResolvedValue({ id: "run-77", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    const picker = (await screen.findByLabelText("运行数据集")) as HTMLSelectElement;
+    // 默认选中题数最多的数据集（全量），切换到冒烟则发起更省的运行
+    expect(picker.value).toBe("gsm8k-test-full@2");
+    fireEvent.change(picker, { target: { value: "gsm8k-test-smoke@1" } });
+    expect(screen.getByText(/gsm8k-test@1 · 冒烟 · 20 题/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.click(screen.getByRole("button", { name: /20 题/ }));
+    await waitFor(() =>
+      expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith(
+        { model: "glm-4.7", scenario: "gsm8k-test-smoke@1", case_selection: { mode: "all" } }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-77"));
+  });
+
+  it("高级设置里改范围不改动已导入的数据集选择", async () => {
+    clientMocks.getBenchmarkOverview.mockResolvedValue({
+      items: [{ scenario: "gsm8k-test-smoke@1", dataset: "gsm8k-test@1", scope: "smoke", cases: 20, runs: [] }],
+      total: 1,
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    // 默认全量 + 版本/commit 留空（服务端自动解析最新 commit 与版本号）
+    fireEvent.click(await screen.findByText("高级设置"));
+    expect((screen.getByLabelText("题目范围") as HTMLSelectElement).value).toBe("full");
+    expect((screen.getByLabelText(/数据集版本/) as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("button", { name: /下载最新全量数据集/ })).toBeTruthy();
+  });
+
+  it("synthetic 夹具数据集显式提示不是官方题目", async () => {
+    clientMocks.getBenchmarkOverview.mockResolvedValue({
+      items: [{
+        scenario: "gsm8k-test-smoke@1", dataset: "gsm8k-test@1", scope: "smoke", cases: 20, runs: [],
+        provenance: { synthetic: true, revision: "a".repeat(40) },
+      }],
+      total: 1,
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/合成夹具（synthetic）/)).toBeTruthy();
+  });
+
+  it("随机 N 题：题数与种子进 case_selection，按钮显示真实题数", async () => {
+    clientMocks.createBenchmarkRun.mockResolvedValue({ id: "run-90", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-smoke@1");
+    fireEvent.change(screen.getByLabelText("本次运行题目"), { target: { value: "random" } });
+    fireEvent.change(screen.getByLabelText("随机题数"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText(/随机种子/), { target: { value: "deadbeef" } });
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    expect(screen.getByRole("button", { name: /1 个模型 × 7 题/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
+    await waitFor(() =>
+      expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({
+        model: "glm-4.7", scenario: "gsm8k-test-smoke@1",
+        case_selection: { mode: "random", count: 7, seed: "deadbeef" } }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-90"));
+  });
+
+  it("指定题目：读取题目页勾选，未选择时禁用发起", async () => {
+    sessionStorage.clear();
+    clientMocks.createBenchmarkRun.mockResolvedValue({ id: "run-91", status: "queued" });
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-smoke@1");
+    fireEvent.change(screen.getByLabelText("本次运行题目"), { target: { value: "ids" } });
+    expect(screen.getByText(/尚未选择题目/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: /发起跑测/ }) as HTMLButtonElement).disabled).toBe(true);
+    unmount();
+
+    sessionStorage.setItem("motte.gsm8k.case-selection",
+      JSON.stringify({ dataset: "gsm8k-test@1", caseIds: ["gsm8k-test-0001", "gsm8k-test-0003"] }));
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-smoke@1");
+    fireEvent.change(screen.getByLabelText("本次运行题目"), { target: { value: "ids" } });
+    expect(screen.getByText(/已选 2 题（gsm8k-test@1）/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("选择模型 glm-4.7"));
+    fireEvent.click(screen.getByRole("button", { name: /1 个模型 × 2 题/ }));
+    await waitFor(() =>
+      expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({
+        model: "glm-4.7", scenario: "gsm8k-test-smoke@1",
+        case_selection: { mode: "ids", case_ids: ["gsm8k-test-0001", "gsm8k-test-0003"] } }));
+    sessionStorage.clear();
+  });
+
+  it("勾选支持推理的模型后出现思考强度选择并随运行提交", async () => {
+    clientMocks.getModels.mockResolvedValue({
+      items: [
+        { id: "reasoner", provider: "local", capabilities: {}, context_window: 64000,
+          reasoning: { supported: true, levels: ["low", "high"], control: null, default_level: "low" } },
+        { id: "plain", provider: "local", capabilities: {}, context_window: 8000 },
+      ],
+    });
+    clientMocks.createBenchmarkRun.mockResolvedValue({ id: "run-92", status: "queued" });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-smoke@1");
+    expect(screen.queryByLabelText(/的思考强度/)).toBeNull(); // 未选中模型时不出现
+    fireEvent.click(screen.getByLabelText("选择模型 reasoner"));
+    fireEvent.click(screen.getByLabelText("选择模型 plain"));
+    expect(screen.getByText(/输出上限固定 1024/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/reasoner 的思考强度/), { target: { value: "high" } });
+    fireEvent.click(screen.getByRole("button", { name: /发起跑测/ }));
+    await waitFor(() =>
+      expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith(expect.objectContaining({
+        model: "reasoner", reasoning_level: "high" })));
+    const plainCall = clientMocks.createBenchmarkRun.mock.calls.find((call) => call[0].model === "plain");
+    expect(plainCall && "reasoning_level" in plainCall[0]).toBe(false); // 不支持推理的模型不带等级
+  });
+});
+
+describe("Gsm8kCases", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    clientMocks.getBenchmarkOverview.mockResolvedValue({
+      items: [{ scenario: "gsm8k-test-full@1", dataset: "gsm8k-test@1", scope: "full", cases: 60, runs: [] }],
+      total: 1,
+    });
+    clientMocks.getBenchmarkCases.mockResolvedValue({
+      dataset: "gsm8k-test@1", total: 3, dataset_total: 60, offset: 0, limit: 25, query: "",
+      items: [
+        { case_id: "gsm8k-test-0000", input: "Janet's ducks lay 16 eggs.", expected: "18", source_line: 1 },
+        { case_id: "gsm8k-test-0001", input: "A robe takes 2 bolts of blue fiber.", expected: "3", source_line: 2 },
+        { case_id: "gsm8k-test-0002", input: "Josh decides to try flipping a house.", expected: "4", source_line: 3 },
+      ],
+    });
+  });
+
+  it("搜索走后端查询参数", async () => {
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/cases"]}>
+        <Gsm8kCases />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("Janet's ducks lay 16 eggs.")).toBeTruthy();
+    expect(clientMocks.getBenchmarkCases).toHaveBeenCalledWith(
+      { dataset: "gsm8k-test@1", offset: 0, limit: 25, query: "" });
+    fireEvent.change(screen.getByLabelText("搜索题目关键词"), { target: { value: "ducks" } });
+    fireEvent.click(screen.getByRole("button", { name: /搜索/ }));
+    await waitFor(() => expect(clientMocks.getBenchmarkCases).toHaveBeenCalledWith(
+      { dataset: "gsm8k-test@1", offset: 0, limit: 25, query: "ducks" }));
+  });
+
+  it("翻页带上 offset，末页禁用下一页", async () => {
+    clientMocks.getBenchmarkCases.mockResolvedValue({
+      dataset: "gsm8k-test@1", total: 60, dataset_total: 60, offset: 0, limit: 25, query: "",
+      items: [{ case_id: "gsm8k-test-0000", input: "Janet's ducks lay 16 eggs.", expected: "18" }],
+    });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/cases"]}>
+        <Gsm8kCases />
+      </MemoryRouter>
+    );
+    await screen.findByText(/匹配 60 \/ 数据集 60 题 · 第 1\/3 页/);
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(clientMocks.getBenchmarkCases).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: 25 })));
+    await screen.findByText(/第 2\/3 页/);
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByText(/第 3\/3 页/);
+    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+    await screen.findByText(/第 2\/3 页/);
+  });
+
+  it("勾选题目后用 sessionStorage 带回操作页并发起指定题目", async () => {
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/cases"]}>
+        <Gsm8kCases />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    await screen.findByText("Janet's ducks lay 16 eggs.");
+    fireEvent.click(screen.getByLabelText("选择 gsm8k-test-0000"));
+    fireEvent.click(screen.getByLabelText("选择 gsm8k-test-0002"));
+    expect(screen.getByText(/已选 2 题/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /用所选 2 题发起跑测/ }));
+    expect(screen.getByTestId("location").textContent).toBe("/gsm8k");
+    expect(JSON.parse(sessionStorage.getItem("motte.gsm8k.case-selection") ?? "{}")).toEqual({
+      dataset: "gsm8k-test@1", caseIds: ["gsm8k-test-0000", "gsm8k-test-0002"] });
+
+    // 回到操作页读同一份存储
+    render(
+      <MemoryRouter initialEntries={["/gsm8k"]}>
+        <Gsm8kOperate />
+      </MemoryRouter>
+    );
+    await screen.findByText("gsm8k-test-full@1");
+    fireEvent.change(screen.getByLabelText("本次运行题目"), { target: { value: "ids" } });
+    expect(screen.getByText(/已选 2 题（gsm8k-test@1）/)).toBeTruthy();
+    sessionStorage.clear();
+  });
+
+  it("粘贴 case id 精确校验：越界与格式错误会被剔除并提示", async () => {
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/cases"]}>
+        <Gsm8kCases />
+      </MemoryRouter>
+    );
+    await screen.findByText("Janet's ducks lay 16 eggs.");
+    fireEvent.change(screen.getByLabelText("粘贴 case ID"),
+      { target: { value: "gsm8k-test-0005, gsm8k-test-9999, oops" } });
+    fireEvent.click(screen.getByRole("button", { name: "加入" }));
+    expect(screen.getByText(/忽略 2 个不在该数据集内的 id/)).toBeTruthy();
+    expect(screen.getByText(/已选 1 题/)).toBeTruthy();
+  });
+
+  it("全选本页、取消本页与清空已选", async () => {
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/cases"]}>
+        <Gsm8kCases />
+      </MemoryRouter>
+    );
+    await screen.findByText("Janet's ducks lay 16 eggs.");
+    fireEvent.click(screen.getByRole("button", { name: "全选本页" }));
+    expect(screen.getByText(/已选 3 题/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "取消本页" }));
+    expect(screen.getByText(/已选 0 题/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "全选本页" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空已选" }));
+    expect(screen.getByText(/已选 0 题/)).toBeTruthy();
+    expect(sessionStorage.getItem("motte.gsm8k.case-selection")).toBeNull();
   });
 });
 
@@ -313,6 +620,26 @@ describe("Gsm8kResult", () => {
     expect(screen.getByText(/无法解析数字/)).toBeTruthy();
     expect(screen.getByText(/Natalia|每周存/)).toBeTruthy();
     expect(screen.getByText(/期望/)).toBeTruthy();
+  });
+
+  it("显示本次运行的题目选择（子集运行给出版本化证据）", async () => {
+    clientMocks.getRun.mockResolvedValue({
+      ...GSM8K_RUN,
+      manifest: {
+        ...GSM8K_RUN.manifest,
+        benchmark_provenance: {
+          selected_count: 1319,
+          run_selection: { mode: "random", count: 100, seed: "deadbeefcafe" },
+        },
+      },
+    });
+    clientMocks.getReport.mockResolvedValue({ cost: null, scores: [] });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/runs/run-42/result"]}>
+        <Gsm8kResult />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/本次题目：随机 100 题（seed deadbeef…，可复现）/)).toBeTruthy();
   });
 });
 

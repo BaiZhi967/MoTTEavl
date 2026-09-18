@@ -16,6 +16,7 @@ export interface EvalTypeSuite {
 export function suiteRoutes(id: string) {
   return {
     operate: `/${id}`,
+    cases: `/${id}/cases`,
     monitor: (runIds: string[]) => `/${id}/monitor?runs=${runIds.join(",")}`,
     result: (runId: string) => `/${id}/runs/${runId}/result`,
     compare: (runIds: string[]) => `/${id}/compare?runs=${runIds.join(",")}`,

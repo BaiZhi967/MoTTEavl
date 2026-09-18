@@ -4,6 +4,7 @@ import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 import { EVAL_SUITES } from "./evalTypes/registry";
 import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
+import { Gsm8kCases } from "./evalTypes/gsm8k/Gsm8kCases";
 import { Gsm8kCompare } from "./evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
 import { Gsm8kMonitor } from "./evalTypes/gsm8k/Gsm8kMonitor";
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
           <Route path="/gsm8k" element={<Gsm8kOperate />} />
+          <Route path="/gsm8k/cases" element={<Gsm8kCases />} />
           <Route path="/gsm8k/monitor" element={<Gsm8kMonitor />} />
           <Route path="/gsm8k/runs/:runId/result" element={<Gsm8kResult />} />
           <Route path="/gsm8k/compare" element={<Gsm8kCompare />} />

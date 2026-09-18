@@ -167,7 +167,7 @@ export const deleteModel = (id: string) => request<{ deleted: string }>(`/api/v1
 
 export const getScenarios = () => request<{ items: any[] }>(`/api/v1/scenarios`);
 
-// ---------------------------------------------------------------- benchmarks (GSM8K smoke)
+// ---------------------------------------------------------------- benchmarks (GSM8K)
 
 export interface BenchmarkRunProgress {
   id: string;
@@ -179,6 +179,8 @@ export interface BenchmarkRunProgress {
 export interface BenchmarkPreset {
   scenario: string;
   dataset: string;
+  /** smoke=前 20 题 / full=整个 test split；未知预设为 null。 */
+  scope?: string | null;
   benchmark?: Record<string, any>;
   provenance?: Record<string, any>;
   cases: number;
@@ -193,15 +195,58 @@ export interface BenchmarkOverview {
 export const getBenchmarkOverview = () =>
   request<BenchmarkOverview>(`/api/v1/benchmarks/gsm8k`);
 
-/** 从官方仓库 pinned revision 下载 test.jsonl 并导入（同版本幂等，内容冲突 409）。 */
-export const importBenchmark = (body: { revision: string; license: string; version?: string; name?: string }) =>
-  request<{ imported: string; scenario: string; cases: number; source_sha256: string; cases_sha256: string }>(
-    "/api/v1/benchmarks/gsm8k/import",
-    jsonBody(body),
-  );
+export interface BenchmarkCase {
+  case_id: string;
+  input: string;
+  expected: string;
+  source_line?: number | null;
+}
 
-export const createBenchmarkRun = (body: { model: string; scenario?: string; parameters?: Record<string, number> }) =>
-  request<RunRecord>("/api/v1/benchmarks/gsm8k/runs", jsonBody(body));
+export interface BenchmarkCasePage {
+  dataset: string;
+  /** 当前过滤条件下匹配到的题数（分页分母）。 */
+  total: number;
+  /** 数据集总题数（不过滤时等于 total）。 */
+  dataset_total: number;
+  offset: number;
+  limit: number;
+  query: string;
+  items: BenchmarkCase[];
+}
+
+/** 分页浏览数据集题目（只读；运行级子集由 createBenchmarkRun 的 case_selection 决定）。 */
+export const getBenchmarkCases = (params: {
+  dataset: string; offset?: number; limit?: number; query?: string;
+}) => {
+  const search = new URLSearchParams({ dataset: params.dataset });
+  if (params.offset) search.set("offset", String(params.offset));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.query) search.set("query", params.query);
+  return request<BenchmarkCasePage>(`/api/v1/benchmarks/gsm8k/cases?${search.toString()}`);
+};
+
+/** 下载官方 test split 并导入（默认：解析最新 commit + 全量；同内容复用版本，冲突 409）。 */
+export const importBenchmark = (body: {
+  revision?: string; license?: string; version?: string; name?: string; scope?: "smoke" | "full";
+}) =>
+  request<{
+    imported: string; scenario: string; scope: string; benchmark: string; cases: number;
+    /** 本次真正使用的 commit：省略 revision 时由服务端解析官方最新后固定在此。 */
+    revision: string; source_sha256: string; cases_sha256: string;
+  }>("/api/v1/benchmarks/gsm8k/import", jsonBody(body));
+
+export interface CaseSelectionRequest {
+  /** all=整份数据集；ids=指定题目；random=随机 N 题（seed 记录进运行快照，可复现）。 */
+  mode: "all" | "ids" | "random";
+  case_ids?: string[];
+  count?: number;
+  seed?: string;
+}
+
+export const createBenchmarkRun = (body: {
+  model: string; scenario?: string; parameters?: Record<string, number>;
+  reasoning_level?: string; case_selection?: CaseSelectionRequest;
+}) => request<RunRecord>("/api/v1/benchmarks/gsm8k/runs", jsonBody(body));
 
 // ---------------------------------------------------------------- provider kinds
 
