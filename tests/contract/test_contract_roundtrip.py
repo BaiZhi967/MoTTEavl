@@ -29,5 +29,14 @@ def test_model_profile_rejects_unknown_fields():
 
 def test_dump_json_schema_contains_public_contracts():
     schema = dump_json_schema()
-    assert "TraceEvent" in schema and "ModelProfile" in schema
+    for name in (
+        "RunStatus", "Run", "CaseRun", "CaseAttempt", "ExecutionError", "ErrorEnvelope",
+        "ExecutionSpec", "EvaluationDescriptor", "ResolvedManifest", "TraceEvent", "Score",
+        "ScoringPass", "ScoreSet", "RunCommand", "RunReport", "IdentityPolicy",
+        "IdentityEvidence", "IdentityResult", "ModelProfile",
+    ):
+        assert name in schema
+    assert "scenario_version" in schema["Run"]["properties"]
+    assert "scenario_id" not in schema["Run"]["properties"]
+    assert "needs_review" in schema["RunStatus"]["enum"]
     json.dumps(schema)
