@@ -114,6 +114,19 @@ uv run python -m motte_cli benchmark run --scenario gsm8k-test-full@1 --model YO
 uv run python -m apps.worker.motte_worker --once
 ```
 
+Worker execution writes one JSON object per line to stderr, so a long run can be watched without exposing model content:
+
+```bash
+uv run python -m apps.worker.motte_worker --once 2>worker-progress.jsonl
+# PowerShell: uv run python -m apps.worker.motte_worker --once 2>worker-progress.jsonl
+```
+
+Each line identifies the run and event; case progress includes `ordinal`, `total`, `duration_ms`, and, when
+available, numeric token/cost/retry summaries. The stream deliberately excludes prompts, gold answers, response
+content, canonical provider payloads, error messages, and credentials. Use `--quiet` for a silent worker. The
+persisted event trace and full evidence remain available through the monitor page or
+`GET /api/v1/runs/{id}/events`; stderr is an operational progress summary, not a replacement for that trace.
+
 Alternatively use a complete provider configuration in a local JSON file (no plaintext key):
 
 ```json

@@ -29,7 +29,7 @@ make install        # uv sync + pnpm install --frozen-lockfile
 
 - **API**: `uv run uvicorn apps.api.app.main:app --reload --port 8000` (or just `make dev`). Reads `MOTTE_DB_PATH` (default `./var/runs.db`, SQLite).
 - **Web**: `pnpm --dir apps/web dev` — Vite on `http://localhost:5173`, `/api` is proxied to the API on port 8000.
-- **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
+- **Worker**: `uv run python -m apps.worker.motte_worker` (or `make worker`) — polls the durable SQLite queue (`MOTTE_DB_PATH`), claims queued runs, and resumes interrupted runs after a restart. Use `--once` to drain the queue and exit. Progress is emitted as one-line JSON objects to **stderr** (run claim, lifecycle, per-case ordinal/total, duration, safe token/cost/retry summaries, and final counts); stdout stays available for scripts. Use `--quiet` to suppress progress output. Logs intentionally omit prompts, gold answers, response content, provider payloads, and credentials. Celery/Redis dispatch is available in eager-tested form (`apps/worker/motte_worker/celery_app.py`); the default local mode needs no broker.
 - **Optional services** (PostgreSQL, Redis, OTel collector): `docker compose -f infra/docker-compose.yml up -d`. Compose builds the `motteavl:local` image before starting API, migration, and Worker services.
 
 `make dev` (equivalently `uv run python -m apps.dev`) uses a Python standard-library

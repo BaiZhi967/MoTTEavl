@@ -1,4 +1,7 @@
+import json
+
 import pytest
+from apps.worker.motte_worker.reporting import WorkerReporter
 from motte_sdk.service import RunService
 from motte_storage.run_store import InMemoryRunStore, SQLiteRunStore
 
@@ -46,6 +49,51 @@ def test_service_uses_persistent_repository_for_new_instance(tmp_path):
     assert second.get_run(created["id"])["manifest"]["seed"] == 3
     next_run = second.create_run("scenario@1", {})
     assert next_run["id"] != created["id"]
+
+
+
+
+def test_event_and_progress_observers_receive_safe_persisted_details(capsys):
+    reporter = WorkerReporter()
+    service = RunService(
+        InMemoryRunStore(),
+        event_observer=reporter.observe_event,
+        progress_observer=reporter.observe_progress,
+    )
+    run = service.create_run("replay@1", {}, case_ids=["case-1"])
+    result = service.execute(run["id"], provider=lambda _: {
+        "content": "private answer",
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+        "cost": {"total": 0.25, "price_table_version": "test"},
+    })
+    assert result["status"] == "completed"
+    output = capsys.readouterr().err
+    lines = [json.loads(line) for line in output.splitlines()]
+    assert lines[0]["event"] == "queued"
+    assert any(line["event"] == "case_started" and line["ordinal"] == 1 for line in lines)
+    finished = next(line for line in lines if line["event"] == "case_finished")
+    assert finished["prompt_tokens"] == 2
+    assert finished["cost_total"] == 0.25
+    assert "private answer" not in output
+    trace = service.events(run["id"])
+    assert [event["seq"] for event in trace] == list(range(1, len(trace) + 1))
+
+
+def test_observer_failure_does_not_change_run_execution():
+    seen = []
+
+    def broken(event):
+        seen.append(event)
+        raise RuntimeError("observer must not break runs")
+
+    service = RunService(InMemoryRunStore(), event_observer=broken, progress_observer=broken)
+    run = service.create_run("replay@1", {}, case_ids=["case-1"])
+    result = service.execute(run["id"], provider=lambda _: {"ok": True})
+    assert result["status"] == "completed"
+    assert seen
+    assert [event["type"] for event in service.events(run["id"])] == [
+        "queued", "preparing", "running", "model_response", "collecting", "scoring", "completed"
+    ]
 
 
 def test_execute_replay_persists_scores_and_trace(tmp_path):
