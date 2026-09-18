@@ -21,11 +21,13 @@ class AdapterSpec:
     smoke_supported: 是否可被 CLI live-smoke 显式调用（产生真实费用）；
     connection_required_fields: ProviderConnection 资源级的必填字段（如 base_url）；
     provider_cls / transport_kwargs: HTTP 适配器的构造入口与传输层协议差异。
+    implementation_version: 必须显式固定的内置实现版本；默认值仅兼容旧扩展。
     """
 
     kind: str
     validate: Callable[[dict[str, Any]], None]
     build: Callable[[dict[str, Any], dict[str, Any]], Any]
+    implementation_version: str = "unversioned"
     default_key_env: str | None = None
     smoke_supported: bool = False
     connection_required_fields: tuple[str, ...] = ()
@@ -39,6 +41,8 @@ _SPECS: dict[str, AdapterSpec] = {}
 
 
 def register(spec: AdapterSpec) -> AdapterSpec:
+    if not isinstance(spec.implementation_version, str) or not spec.implementation_version.strip():
+        raise ValueError("adapter implementation_version must be a non-empty string")
     if spec.kind in _SPECS:
         raise ValueError(f"adapter already registered: {spec.kind}")
     _SPECS[spec.kind] = spec

@@ -1,6 +1,271 @@
 {
   "components": {
     "schemas": {
+      "CancelRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "CancelRunRequest",
+        "type": "object"
+      },
+      "CaseRun": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Id"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected": {
+            "title": "Expected"
+          },
+          "ordinal": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ordinal"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "result": {
+            "title": "Result"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "stop_run": {
+            "default": false,
+            "title": "Stop Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "case_id"
+        ],
+        "title": "CaseRun",
+        "type": "object"
+      },
+      "CreateRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "case_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Case Ids",
+            "type": "array"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "scenario_version": {
+            "minLength": 1,
+            "title": "Scenario Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario_version"
+        ],
+        "title": "CreateRunRequest",
+        "type": "object"
+      },
+      "EvaluationDescriptor": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "minLength": 1,
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "adapter_version": {
+            "minLength": 1,
+            "title": "Adapter Version",
+            "type": "string"
+          },
+          "benchmark_id": {
+            "minLength": 1,
+            "title": "Benchmark Id",
+            "type": "string"
+          },
+          "benchmark_version": {
+            "minLength": 1,
+            "title": "Benchmark Version",
+            "type": "string"
+          },
+          "scorer_id": {
+            "minLength": 1,
+            "title": "Scorer Id",
+            "type": "string"
+          },
+          "scorer_version": {
+            "minLength": 1,
+            "title": "Scorer Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "benchmark_id",
+          "benchmark_version",
+          "adapter_id",
+          "adapter_version",
+          "scorer_id",
+          "scorer_version"
+        ],
+        "title": "EvaluationDescriptor",
+        "type": "object"
+      },
+      "ExecutionError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Class"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "pointer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pointer"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "title": "ExecutionError",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -12,6 +277,1143 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ReplayCase": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "title": "Expected"
+          },
+          "output": {
+            "title": "Output"
+          }
+        },
+        "required": [
+          "output"
+        ],
+        "title": "ReplayCase",
+        "type": "object"
+      },
+      "ReplayRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ReplayCase"
+            },
+            "title": "Cases",
+            "type": "object"
+          }
+        },
+        "required": [
+          "cases"
+        ],
+        "title": "ReplayRunRequest",
+        "type": "object"
+      },
+      "ReportCase": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "result": {
+            "title": "Result"
+          }
+        },
+        "required": [
+          "case_id"
+        ],
+        "title": "ReportCase",
+        "type": "object"
+      },
+      "ReportCost": {
+        "additionalProperties": false,
+        "properties": {
+          "known_cases": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Known Cases"
+          },
+          "price_table_versions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Table Versions",
+            "type": "array"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "unknown_cases": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unknown Cases"
+          }
+        },
+        "title": "ReportCost",
+        "type": "object"
+      },
+      "ReportSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "accuracy": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracy"
+          },
+          "aggregate": {
+            "additionalProperties": true,
+            "title": "Aggregate",
+            "type": "object"
+          },
+          "attempt_rate": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Rate"
+          },
+          "attempted": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempted"
+          },
+          "call_failed": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call Failed"
+          },
+          "cases": {
+            "minimum": 0.0,
+            "title": "Cases",
+            "type": "integer"
+          },
+          "completion": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion"
+          },
+          "correct": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denominator"
+          },
+          "failed": {
+            "minimum": 0.0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "judged": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judged"
+          },
+          "no_expectation": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Expectation"
+          },
+          "not_attempted": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Attempted"
+          },
+          "parse_failure": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parse Failure"
+          },
+          "pass_rate": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass Rate"
+          },
+          "passed": {
+            "minimum": 0.0,
+            "title": "Passed",
+            "type": "integer"
+          },
+          "responded": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responded"
+          },
+          "scored": {
+            "minimum": 0.0,
+            "title": "Scored",
+            "type": "integer"
+          },
+          "scorer_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorer Version"
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected"
+          },
+          "unjudged": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unjudged"
+          },
+          "wrong_answer": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wrong Answer"
+          }
+        },
+        "required": [
+          "cases",
+          "scored",
+          "passed",
+          "failed"
+        ],
+        "title": "ReportSummary",
+        "type": "object"
+      },
+      "Run": {
+        "additionalProperties": false,
+        "properties": {
+          "cancellation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancellation"
+          },
+          "case_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Case Ids",
+            "type": "array"
+          },
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/CaseRun"
+            },
+            "title": "Cases",
+            "type": "array"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "current_scoring_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Scoring Pass Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "requested_manifest": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Manifest"
+          },
+          "rescored": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rescored"
+          },
+          "revision": {
+            "default": 1,
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "scenario_version": {
+            "title": "Scenario Version",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 2,
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scores": {
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "title": "Scores",
+            "type": "array"
+          },
+          "scoring_pass": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoringPass"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus",
+            "default": "queued"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "scenario_version"
+        ],
+        "title": "Run",
+        "type": "object"
+      },
+      "RunCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged At"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Token"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "revision": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunCommandStatus",
+            "default": "queued"
+          },
+          "type": {
+            "default": "user_message",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id"
+        ],
+        "title": "RunCommand",
+        "type": "object"
+      },
+      "RunCommandListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunCommand"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "RunCommandListResponse",
+        "type": "object"
+      },
+      "RunCommandStatus": {
+        "enum": [
+          "queued",
+          "delivered",
+          "acknowledged",
+          "failed"
+        ],
+        "title": "RunCommandStatus",
+        "type": "string"
+      },
+      "RunListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "RunListResponse",
+        "type": "object"
+      },
+      "RunMessageRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "RunMessageRequest",
+        "type": "object"
+      },
+      "RunReport": {
+        "additionalProperties": false,
+        "properties": {
+          "benchmark": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark"
+          },
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/ReportCase"
+            },
+            "title": "Cases",
+            "type": "array"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/ReportCost"
+          },
+          "evaluation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvaluationDescriptor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "scenario_version": {
+            "title": "Scenario Version",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 2,
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scores": {
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "title": "Scores",
+            "type": "array"
+          },
+          "scoring_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scoring Pass Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ReportSummary"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage"
+          }
+        },
+        "required": [
+          "run_id",
+          "scenario_version",
+          "status",
+          "generated_at",
+          "summary",
+          "cost"
+        ],
+        "title": "RunReport",
+        "type": "object"
+      },
+      "RunStatus": {
+        "enum": [
+          "queued",
+          "preparing",
+          "running",
+          "collecting",
+          "scoring",
+          "completed",
+          "failed",
+          "cancelled",
+          "unsupported",
+          "profile_stale",
+          "needs_review"
+        ],
+        "title": "RunStatus",
+        "type": "string"
+      },
+      "Score": {
+        "additionalProperties": false,
+        "properties": {
+          "attempted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempted"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Class"
+          },
+          "evaluator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator"
+          },
+          "judged": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judged"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "parsed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parsed"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "responded": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responded"
+          },
+          "scorer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorer"
+          },
+          "scorer_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorer Version"
+          },
+          "scoring_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scoring Pass Id"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "Score",
+        "type": "object"
+      },
+      "ScoringPass": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "previous_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Pass Id"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "scorer_id": {
+            "title": "Scorer Id",
+            "type": "string"
+          },
+          "scorer_version": {
+            "title": "Scorer Version",
+            "type": "string"
+          },
+          "scores": {
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "title": "Scores",
+            "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "source_run_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Revision"
+          },
+          "source_snapshot_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Hash"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "title": "Summary",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "scorer_id",
+          "scorer_version"
+        ],
+        "title": "ScoringPass",
+        "type": "object"
+      },
+      "ScoringPassListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScoringPass"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ScoringPassListResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -78,6 +1480,184 @@
         "summary": "List Agents"
       }
     },
+    "/api/v1/benchmarks/direct-llm": {
+      "get": {
+        "operationId": "direct_llm_overview_api_v1_benchmarks_direct_llm_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Direct Llm Overview"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/builtins": {
+      "get": {
+        "description": "仓库内置样例数据集清单（含实际题数），供控制台一键导入。",
+        "operationId": "direct_llm_builtins_api_v1_benchmarks_direct_llm_builtins_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Direct Llm Builtins"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/cases": {
+      "get": {
+        "description": "分页浏览某个数据集的题目（控制台「题目」页用）：题面、期望答案、生效评分器、源文件行号。",
+        "operationId": "direct_llm_cases_api_v1_benchmarks_direct_llm_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset",
+            "required": true,
+            "schema": {
+              "title": "Dataset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Cases"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/import": {
+      "post": {
+        "description": "导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。\n\n``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file\n时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。\n省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。\n同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。",
+        "operationId": "direct_llm_import_api_v1_benchmarks_direct_llm_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Import"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/runs": {
+      "post": {
+        "operationId": "direct_llm_run_api_v1_benchmarks_direct_llm_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Run"
+      }
+    },
     "/api/v1/benchmarks/gsm8k": {
       "get": {
         "operationId": "gsm8k_overview_api_v1_benchmarks_gsm8k_get",
@@ -94,9 +1674,77 @@
         "summary": "Gsm8K Overview"
       }
     },
+    "/api/v1/benchmarks/gsm8k/cases": {
+      "get": {
+        "description": "分页浏览某个数据集版本的题目（控制台「题目」页用）：题面、期望答案、源文件行号。\n\n数据集本身不可变，这里只读；运行级的题目子集由跑测接口的 case_selection 决定。",
+        "operationId": "gsm8k_cases_api_v1_benchmarks_gsm8k_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset",
+            "required": true,
+            "schema": {
+              "title": "Dataset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gsm8K Cases"
+      }
+    },
     "/api/v1/benchmarks/gsm8k/import": {
       "post": {
-        "description": "从官方仓库 pinned revision 下载 test.jsonl 并导入（幂等；重复版本冲突返回 409）。",
+        "description": "从官方仓库下载 test split 并导入，默认「最新全量」。\n\n省略 revision 时先解析官方仓库中该数据文件的最新 commit，再按该固定 revision 下载并\n落盘（provenance 记录的就是解析出的 sha，不是浮动分支）。scope=full 取整个 split，\nscope=smoke 取前 20 题，题数记入不可变数据集。省略 version 时自动选版本：同内容复用\n（重复导入幂等），否则取下一个空号。同 name@version 内容不同返回 409。",
         "operationId": "gsm8k_import_api_v1_benchmarks_gsm8k_import_post",
         "requestBody": {
           "content": {
@@ -568,6 +2216,43 @@
         "summary": "Update Model"
       }
     },
+    "/api/v1/models/{model_id}/publish": {
+      "post": {
+        "operationId": "publish_model_api_v1_models__model_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Model"
+      }
+    },
     "/api/v1/models/{model_id}/test": {
       "post": {
         "description": "对单个模型做一次最小真实调用（Web 版 live smoke，操作者显式触发）。\n\n连接、密钥、模型名一次验证：密钥按凭据链解析、绝不进入响应；\nmax_output_tokens=16 封顶费用；报告复用 adapter envelope（已脱敏）。",
@@ -981,7 +2666,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -1005,9 +2692,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/CreateRunRequest"
               }
             }
           },
@@ -1017,7 +2702,9 @@
           "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
               }
             },
             "description": "Successful Response"
@@ -1054,7 +2741,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
               }
             },
             "description": "Successful Response"
@@ -1093,8 +2782,7 @@
               "schema": {
                 "anyOf": [
                   {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/CancelRunRequest"
                   },
                   {
                     "type": "null"
@@ -1109,7 +2797,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
               }
             },
             "description": "Successful Response"
@@ -1126,6 +2816,45 @@
           }
         },
         "summary": "Cancel Run"
+      }
+    },
+    "/api/v1/runs/{run_id}/commands": {
+      "get": {
+        "operationId": "list_run_commands_api_v1_runs__run_id__commands_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Run Commands"
       }
     },
     "/api/v1/runs/{run_id}/events": {
@@ -1193,22 +2922,23 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/RunMessageRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "202": {
+          "404": {
+            "description": "Run not found"
+          },
+          "409": {
             "content": {
               "application/json": {
                 "schema": {}
               }
             },
-            "description": "Successful Response"
+            "description": "Command unsupported for this run"
           },
           "422": {
             "content": {
@@ -1219,6 +2949,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "501": {
+            "description": "No command consumer is registered"
           }
         },
         "summary": "Send Run Message"
@@ -1242,19 +2975,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/ReplayRunRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
               }
             },
             "description": "Successful Response"
@@ -1285,13 +3018,31 @@
               "title": "Run Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "scoring_pass_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scoring Pass Id"
+            }
           }
         ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RunReport"
+                }
               }
             },
             "description": "Successful Response"
@@ -1328,7 +3079,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
               }
             },
             "description": "Successful Response"
@@ -1365,7 +3118,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
               }
             },
             "description": "Successful Response"
@@ -1382,6 +3137,45 @@
           }
         },
         "summary": "Retry Run"
+      }
+    },
+    "/api/v1/runs/{run_id}/scoring-passes": {
+      "get": {
+        "operationId": "list_scoring_passes_api_v1_runs__run_id__scoring_passes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringPassListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Scoring Passes"
       }
     },
     "/api/v1/scenarios": {

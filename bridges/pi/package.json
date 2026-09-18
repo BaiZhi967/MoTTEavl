@@ -1,6 +1,7 @@
 {
   "name": "@motteavl/pi-bridge",
   "version": "0.1.0",
+  "description": "Protocol-only Pi bridge stub; no execution backend is bundled.",
   "private": true,
   "type": "module",
   "bin": { "motte-pi-bridge": "./bridge.mjs" },

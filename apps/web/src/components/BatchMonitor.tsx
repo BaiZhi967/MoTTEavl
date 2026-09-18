@@ -5,53 +5,58 @@ import { StatusBadge } from "./StatusBadge";
 import { RunProgress } from "./RunProgress";
 import { countDone, isTerminal, useRunEvents } from "../hooks/useRunEvents";
 
-const RETRYABLE = ["failed", "cancelled", "unsupported", "profile_stale"];
+const RETRYABLE = ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
 
 function BatchRow({ runId, resultPath, renderDetail }: {
   runId: string;
   resultPath: (runId: string) => string;
   renderDetail?: (runId: string) => ReactNode;
 }) {
+  const [activeRunId, setActiveRunId] = useState(runId);
   const [run, setRun] = useState<RunRecord | null>(null);
-  const { events, status } = useRunEvents(runId);
+  const { events, status } = useRunEvents(activeRunId);
   const [expanded, setExpanded] = useState(false);
   const current = status ?? run?.status ?? "queued";
   const terminal = isTerminal(current);
 
   useEffect(() => {
     let alive = true;
-    const load = () => getRun(runId).then((record) => alive && setRun(record)).catch(() => undefined);
+    const load = () => getRun(activeRunId).then((record) => alive && setRun(record)).catch(() => undefined);
     void load();
     if (!terminal) {
       const timer = setInterval(load, 3000);
       return () => { alive = false; clearInterval(timer); };
     }
     return () => { alive = false; };
-  }, [runId, terminal]);
+  }, [activeRunId, terminal]);
 
   const total = run?.case_ids?.length ?? 0;
   const done = terminal ? (run?.cases?.length ?? total) : Math.max(countDone(events), run?.cases?.length ?? 0);
 
-  const refresh = () => getRun(runId).then(setRun).catch(() => undefined);
+  const followRetry = (child: RunRecord) => {
+    setRun(child);
+    setActiveRunId(child.id);
+    setExpanded(false);
+  };
 
   return (
     <li className="batch-row">
       <div className="batch-row-head">
         <button type="button" className="link" onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
-          {runId}
+          {activeRunId}
         </button>
         <span className="mono">{modelLabel(run) ?? "—"}</span>
         <StatusBadge status={current} />
         <RunProgress done={done} total={total} />
         {terminal ? (
           <>
-            <Link className="link" to={resultPath(runId)}>结果</Link>
+            <Link className="link" to={resultPath(activeRunId)}>结果</Link>
             {RETRYABLE.includes(current) && (
-              <button type="button" onClick={() => void retryRun(runId).then(refresh)}>重试</button>
+              <button type="button" onClick={() => void retryRun(activeRunId).then(followRetry)}>重试</button>
             )}
           </>
         ) : (
-          <button type="button" onClick={() => void cancelRun(runId, "web 控制台取消")}>取消</button>
+          <button type="button" onClick={() => void cancelRun(activeRunId, "web 控制台取消")}>取消</button>
         )}
       </div>
       {current === "queued" && <p className="hint">等待 Worker 领取；若长期排队，请在服务端启动 Worker（make worker）。</p>}
@@ -60,7 +65,7 @@ function BatchRow({ runId, resultPath, renderDetail }: {
           {run.error.code ?? run.error.type ?? ""} {run.error.message ?? ""}
         </p>
       )}
-      {expanded && renderDetail?.(runId)}
+      {expanded && renderDetail?.(activeRunId)}
     </li>
   );
 }

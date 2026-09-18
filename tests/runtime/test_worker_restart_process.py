@@ -1,5 +1,6 @@
 """以真实子进程验证 Worker 的持久化与重启恢复（阶段 1 验收门）。"""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,12 +16,23 @@ FIXTURE = {
 
 
 def _run_worker(db_path: Path) -> None:
+    package_paths = [
+        REPO_ROOT,
+        *(REPO_ROOT / path for path in (
+            "packages/contracts",
+            "packages/sdk-python",
+            "packages/provider-runtime",
+            "packages/storage",
+        )),
+    ]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, package_paths))}
     subprocess.run(
         [sys.executable, "-m", "apps.worker.motte_worker", "--db", str(db_path), "--once"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         timeout=60,
+        env=env,
     )
 
 
@@ -30,9 +42,14 @@ def test_worker_process_executes_and_resumes_after_restart(tmp_path):
     first = service.create_run("replay@1", {"provider": {"kind": "replay", "fixture": FIXTURE}}, case_ids=list(FIXTURE))
 
     # 模拟第一个进程在 case-1 后崩溃。
-    crashed = service.store.runs.get(first["id"])
-    crashed["status"] = "running"
-    service.store.runs.save(crashed)
+    preparing = service.store.runs.transition(
+        first["id"], expected_revision=first["revision"], expected_status="queued",
+        status="preparing", event={"type": "preparing"},
+    )
+    service.store.runs.transition(
+        first["id"], expected_revision=preparing["revision"], expected_status="preparing",
+        status="running", event={"type": "running"},
+    )
     service.store.case_runs.upsert(
         {"run_id": first["id"], "case_id": "case-1", "result": {"n": 1}, "expected": {"n": 1}}
     )
@@ -62,12 +79,14 @@ def test_worker_process_picks_up_retry_child_run(tmp_path):
     run = service.create_run("replay@1", {}, case_ids=[])
     service.cancel(run["id"], reason="operator request")
     child = service.retry(run["id"])
-    service.store.runs.save(
+    service.store.runs.update(
         {
-            **child,
+            **service.store.runs.get(child["id"]),
             "manifest": {"provider": {"kind": "replay", "fixture": {"case-1": FIXTURE["case-1"]}}},
             "case_ids": ["case-1"],
-        }
+        },
+        expected_revision=child["revision"],
+        expected_status="queued",
     )
 
     _run_worker(db_path)

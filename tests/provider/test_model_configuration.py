@@ -107,7 +107,9 @@ def test_api_roundtrip_and_legacy_metadata(resources):
     assert saved["input_modalities"] == ["text"]
     assert saved["capabilities"] == {"custom": 1, "structured_output": False, "native_search": False, "system_messages": False}
     assert saved["reasoning"]["default_level"] is None
-    assert resolve_manifest({"model": "old"}, resources)["provider"]["reasoning"]["control"] == "reasoning_effort"
+    assert resolve_manifest(
+        {"model": "old"}, resources, allow_draft_model=True
+    )["provider"]["reasoning"]["control"] == "reasoning_effort"
     assert client.put("/api/v1/models/old", json={"input_modalities": ["image"]}).status_code == 422
     assert client.put("/api/v1/models/old", json={"capabilities": {"native_search": "yes"}}).status_code == 422
     assert client.put("/api/v1/models/old", json={"max_output_tokens": None, "parameters": {"max_output_tokens": None}}).status_code == 200

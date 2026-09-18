@@ -1,30 +1,29 @@
-export interface Score {
-  case_id: string;
-  passed: boolean;
-  outcome?: string;
-  attempted?: boolean;
-  responded?: boolean;
-}
+import type { components } from "./schema";
 
-export interface CaseRun {
-  case_id: string;
+type GeneratedScore = components["schemas"]["Score"];
+type GeneratedCaseRun = components["schemas"]["CaseRun"];
+type GeneratedRun = components["schemas"]["Run"];
+
+export type Score = GeneratedScore;
+
+export type CaseRun = Omit<GeneratedCaseRun, "result" | "expected"> & {
   result: any;
   expected?: any;
-}
+};
 
-export interface RunRecord {
-  id: string;
-  scenario_version: string;
+/** Core fields come from generated OpenAPI; JSON payloads stay open for suite plugins. */
+export type RunRecord = Omit<
+  GeneratedRun,
+  "status" | "manifest" | "requested_manifest" | "cases" | "scores" | "cancellation" | "error"
+> & {
   status: string;
   manifest?: any;
-  case_ids?: string[];
+  requested_manifest?: any;
   cases?: CaseRun[];
   scores?: Score[];
-  model?: string | null;
-  parent_run_id?: string;
   cancellation?: { reason?: string };
   error?: any;
-}
+};
 
 export interface ProviderRecord {
   name: string;
@@ -41,6 +40,11 @@ export interface ModelRecord {
   provider: string;
   model?: string | null;
   enabled?: boolean;
+  generation?: number;
+  lifecycle?: "draft" | "published" | "deprecated";
+  profile_hash?: string | null;
+  published_at?: string | null;
+  deprecated_at?: string | null;
   capabilities: Record<string, any>;
   context_window?: number | null;
   max_output_tokens?: number | null;
@@ -63,18 +67,20 @@ export interface HarnessReport {
   source: string | null;
   path: string | null;
   runnable: boolean;
+  protocol_ready?: boolean;
+  execution_ready?: boolean;
   error?: string | null;
 }
 
-export interface RunReport {
-  run_id: string;
-  scenario_version: string;
-  status: string;
-  generated_at: string;
-  summary: { cases: number; scored: number; passed: number; failed: number; pass_rate: number | null };
-  cost: { total: number | null; price_table_versions: string[] };
-  scores: Score[];
+export interface AgentReport {
+  id: string;
+  kind: string;
+  description: string;
+  protocol_ready: boolean;
+  execution_ready: boolean;
 }
+
+export type RunReport = components["schemas"]["RunReport"];
 
 /** 模型摘要：档案引用 > 展开快照 > inline provider 字段（镜像后端 _run_model_label）。
  * 详情端点 GET /runs/{id} 不回顶层 model（仅列表端点回），须从 manifest 摘要。 */
@@ -144,6 +150,8 @@ export const createModel = (body: any) => request<ModelRecord>("/api/v1/models",
 /** 读-改-写更新模型档案（合并式，保留未提及字段）；id / provider 不可变。 */
 export const updateModel = (id: string, body: Partial<ModelRecord>) =>
   request<ModelRecord>(`/api/v1/models/${id}`, jsonRequest("PUT", body));
+export const publishModel = (id: string) =>
+  request<ModelRecord>(`/api/v1/models/${id}/publish`, jsonBody({}));
 
 // ---------------------------------------------------------------- model test
 
@@ -163,7 +171,7 @@ export interface ModelTestResult {
 /** 单次最小真实调用（max_output_tokens=16），验证连接、密钥与模型名；报告已脱敏。 */
 export const testModel = (id: string) =>
   request<ModelTestResult>(`/api/v1/models/${id}/test`, jsonBody({}));
-export const deleteModel = (id: string) => request<{ deleted: string }>(`/api/v1/models/${id}`, { method: "DELETE" });
+export const deleteModel = (id: string) => request<{ deprecated: string }>(`/api/v1/models/${id}`, { method: "DELETE" });
 
 export const getScenarios = () => request<{ items: any[] }>(`/api/v1/scenarios`);
 
@@ -248,6 +256,89 @@ export const createBenchmarkRun = (body: {
   reasoning_level?: string; case_selection?: CaseSelectionRequest;
 }) => request<RunRecord>("/api/v1/benchmarks/gsm8k/runs", jsonBody(body));
 
+// ---------------------------------------------------------------- direct llm
+
+export interface DirectLlmPreset {
+  scenario: string;
+  dataset: string;
+  suite: string;
+  /** 数据集级 eval 描述：scorer / scorer_version / prompt_version / selected_count 等。 */
+  eval?: Record<string, any>;
+  provenance?: Record<string, any>;
+  cases: number;
+  runs: BenchmarkRunProgress[];
+}
+
+export interface DirectLlmOverview {
+  items: DirectLlmPreset[];
+  total: number;
+}
+
+export interface DirectLlmBuiltin {
+  id: string;
+  label: string;
+  description: string;
+  scorer: string;
+  source: string;
+  /** false 表示样例文件缺失或损坏，错误原因见 error。 */
+  importable: boolean;
+  cases?: number | null;
+  error?: string;
+}
+
+export interface DirectLlmCase {
+  case_id: string;
+  input: string;
+  /** null = 本题没有期望答案，评分记为「无判定」。 */
+  expected: string | null;
+  scorer: string;
+  source_line?: number | null;
+}
+
+export interface DirectLlmCasePage {
+  dataset: string;
+  total: number;
+  dataset_total: number;
+  offset: number;
+  limit: number;
+  query: string;
+  items: DirectLlmCase[];
+}
+
+export interface DirectLlmImportReceipt {
+  imported: string; scenario: string; suite: string; scorer: string; cases: number;
+  source: string; source_sha256: string; cases_sha256: string;
+}
+
+export const getDirectLlmOverview = () =>
+  request<DirectLlmOverview>(`/api/v1/benchmarks/direct-llm`);
+
+/** 仓库内置样例清单（含题数与可导入性），供操作页一键导入。 */
+export const getDirectLlmBuiltins = () =>
+  request<{ items: DirectLlmBuiltin[]; total: number }>(`/api/v1/benchmarks/direct-llm/builtins`);
+
+/** 分页浏览数据集题目（只读；运行级子集由 createDirectLlmRun 的 case_selection 决定）。 */
+export const getDirectLlmCases = (params: {
+  dataset: string; offset?: number; limit?: number; query?: string;
+}) => {
+  const search = new URLSearchParams({ dataset: params.dataset });
+  if (params.offset) search.set("offset", String(params.offset));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.query) search.set("query", params.query);
+  return request<DirectLlmCasePage>(`/api/v1/benchmarks/direct-llm/cases?${search.toString()}`);
+};
+
+/** 导入一份 JSONL：`content`（本地粘贴/上传正文）与 `builtin`（内置样例 id）二选一。 */
+export const importDirectLlm = (body: {
+  content?: string; builtin?: string; name?: string; version?: string;
+  license?: string; scorer?: string; source?: string;
+}) => request<DirectLlmImportReceipt>("/api/v1/benchmarks/direct-llm/import", jsonBody(body));
+
+export const createDirectLlmRun = (body: {
+  model: string; scenario?: string; parameters?: Record<string, number>;
+  reasoning_level?: string; case_selection?: CaseSelectionRequest;
+}) => request<RunRecord>("/api/v1/benchmarks/direct-llm/runs", jsonBody(body));
+
 // ---------------------------------------------------------------- provider kinds
 
 export interface ProviderKindMeta {
@@ -279,16 +370,21 @@ export const getCredentials = () => request<{ items: CredentialSummary[] }>(`/ap
 export const createScenario = (body: any) => request<any>("/api/v1/scenarios", jsonBody(body));
 
 export const getAgents = () =>
-  request<{ items: { id: string; kind: string; description: string }[] }>(`/api/v1/agents`);
+  request<{ items: AgentReport[] }>(`/api/v1/agents`);
 export const getHarnesses = () => request<{ items: HarnessReport[] }>(`/api/v1/harnesses`);
 
 // ---------------------------------------------------------------- SSE
 
 export interface TraceEvent {
+  protocol?: "motte.trace";
+  schema_version?: number;
   run_id: string;
   seq: number;
   type: string;
-  [key: string]: any;
+  payload?: Record<string, any>;
+  span_id?: string | null;
+  parent_span_id?: string | null;
+  recorded_at?: string | null;
 }
 
 /** 订阅运行事件流；浏览器重连时自动携带 Last-Event-ID，服务端按 seq 续传。 */

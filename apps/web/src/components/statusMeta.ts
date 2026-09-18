@@ -14,6 +14,7 @@ export const STATUS_META: Record<string, { label: string; tone: Tone }> = {
   cancelled: { label: "已取消", tone: "neutral" },
   unsupported: { label: "不支持", tone: "warning" },
   profile_stale: { label: "配置过期", tone: "warning" },
+  needs_review: { label: "需人工复核", tone: "warning" },
 };
 
 export const STATUS_ORDER = Object.keys(STATUS_META);
@@ -38,14 +39,19 @@ const EVENT_LABELS: Record<string, string> = {
   cancelled: "取消",
   unsupported: "不支持",
   profile_stale: "配置过期",
+  needs_review: "需人工复核",
   model_response: "模型响应",
+  case_call_failed: "调用失败",
   score: "评分结果",
+  scoring_pass_created: "评分批次已创建",
   rescored: "重新评分",
 };
 
 const DATA_EVENT_TONES: Record<string, Tone> = {
   model_response: "neutral",
+  case_call_failed: "error",
   score: "success",
+  scoring_pass_created: "neutral",
   rescored: "info",
 };
 

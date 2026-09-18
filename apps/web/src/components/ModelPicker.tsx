@@ -30,7 +30,8 @@ export function ModelPicker({ models, selected, onToggle }: {
         <div key={provider} className="model-picker-group">
           <p className="field-label">{provider}</p>
           {group.map((model) => {
-            const enabled = model.enabled !== false;
+            const lifecycleReady = model.lifecycle == null || model.lifecycle === "published";
+            const enabled = model.enabled !== false && lifecycleReady;
             const context = formatContext(model.context_window);
             return (
               <label key={model.id} className="model-picker-item" data-enabled={enabled ? undefined : "false"}>
@@ -44,7 +45,9 @@ export function ModelPicker({ models, selected, onToggle }: {
                 <span className="mono">{model.id}</span>
                 {context && <span className="status-badge status-tone-neutral model-badge">{context}</span>}
                 {model.supports_tools && <span className="status-badge status-tone-neutral model-badge">工具</span>}
-                {!enabled && <span className="muted">已停用</span>}
+                {model.enabled === false && <span className="muted">已停用</span>}
+                {model.lifecycle === "draft" && <span className="muted">草稿</span>}
+                {model.lifecycle === "deprecated" && <span className="muted">已弃用</span>}
               </label>
             );
           })}

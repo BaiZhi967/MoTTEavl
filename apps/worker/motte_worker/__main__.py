@@ -6,6 +6,7 @@ import argparse
 from motte_sdk.service import RunService
 from motte_storage.run_store import SQLiteRunStore
 
+from .coordination import WorkerAlreadyRunning
 from .reporting import WorkerReporter
 from .runtime import WorkerLoop
 from .tasks import get_service
@@ -19,14 +20,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quiet", action="store_true", help="关闭 Worker stderr 进度日志")
     args = parser.parse_args(argv)
 
-    service = RunService(SQLiteRunStore(args.db)) if args.db is not None else get_service()
-    loop = WorkerLoop(service, reporter=WorkerReporter(enabled=not args.quiet))
-    loop.recover_interrupted()
-    if args.once:
-        while loop.claim_and_execute() is not None:
-            pass
-        return 0
-    loop.run_forever(poll_interval=args.poll_interval, recover=False)
+    service = get_service() if args.db is None else RunService(SQLiteRunStore(args.db))
+    reporter = WorkerReporter(enabled=not args.quiet)
+    loop = WorkerLoop(service, reporter=reporter)
+    try:
+        if args.once:
+            while loop.run_once() is not None:
+                pass
+            return 0
+        loop.run_forever(poll_interval=args.poll_interval, recover=True)
+    except WorkerAlreadyRunning as error:
+        reporter.emit("worker_start_refused", reason="executor_lock_held", message=str(error))
+        return 75
+    except KeyboardInterrupt:
+        # Ctrl-C 是 Worker 的正常停止方式：不打印 traceback，退出码 130（与 apps/dev.py 一致）。
+        reporter.emit("worker_stopped", reason="interrupted")
+        return 130
     return 0
 
 

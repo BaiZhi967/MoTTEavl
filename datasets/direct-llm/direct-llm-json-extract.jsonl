@@ -1,0 +1,7 @@
+{"input": "从下面的文本中抽取字段，只输出一个 JSON 对象（键名必须是 name、amount、currency），不要代码块、不要解释：\n「客户张伟在 2026-03-14 支付了 1280 元人民币用于续费。」", "expected": "\"name\"\\s*:\\s*\"张伟\""}
+{"input": "从下面的文本中抽取字段，只输出一个 JSON 对象（键名必须是 name、amount、currency），不要代码块、不要解释：\n「客户张伟在 2026-03-14 支付了 1280 元人民币用于续费。」", "expected": "\"amount\"\\s*:\\s*1280(\\.0+)?"}
+{"input": "从下面的文本中抽取字段，只输出一个 JSON 对象（键名必须是 name、amount、currency），不要代码块、不要解释：\n「客户张伟在 2026-03-14 支付了 1280 元人民币用于续费。」", "expected": "\"currency\"\\s*:\\s*\"(CNY|RMB|人民币)\""}
+{"input": "从下面的文本中抽取字段，只输出一个 JSON 对象（键名必须是 order_id、items、total），不要代码块、不要解释；缺失的字段填 null。\n「订单 A-1024 包含 3 件商品，合计 256 元，未使用优惠券。」", "expected": "\"order_id\"\\s*:\\s*\"A-1024\""}
+{"input": "从下面的文本中抽取字段，只输出一个 JSON 对象（键名必须是 order_id、items、total），不要代码块、不要解释；缺失的字段填 null。\n「订单 A-1024 包含 3 件商品，合计 256 元，未使用优惠券。」", "expected": "\"total\"\\s*:\\s*256(\\.0+)?"}
+{"input": "从下面的文本中抽取字段，只输出一个 JSON 对象（键名必须是 order_id、items、total、coupon），不要代码块、不要解释；文本里没有提到的字段必须填 null。\n「订单 A-1024 包含 3 件商品，合计 256 元，未使用优惠券。」", "expected": "\"coupon\"\\s*:\\s*null"}
+{"input": "用一句话总结下面的公告，并在句末附上标签 [SUMMARY]，只输出这一句：\n「系统将于本周六 02:00-04:00 停机维护。」", "expected": "[SUMMARY]", "scorer": "contains"}

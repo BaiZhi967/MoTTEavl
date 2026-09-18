@@ -9,6 +9,14 @@ def test_builtin_adapters_are_registered():
     kinds = registered_kinds()
     assert "openai_compatible" in kinds
     assert "replay" in kinds
+    for kind in ("openai_compatible", "openai_responses", "anthropic_messages", "replay"):
+        assert adapter_for(kind).implementation_version == "1"
+
+
+def test_pinned_implementation_version_mismatch_fails_before_dispatch():
+    with pytest.raises(ValueError, match="adapter version mismatch"):
+        config.build_provider({"kind": "replay", "implementation_version": "other"})
+    assert config.build_provider({"kind": "replay", "implementation_version": "1"}) is not None
 
 
 def test_smoke_kinds_only_include_smoke_supported():

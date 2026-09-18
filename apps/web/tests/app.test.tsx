@@ -16,6 +16,7 @@ vi.mock("../src/api/client", () => ({
   getProviders: vi.fn(async () => ({ items: [] })),
   getCredentials: vi.fn(async () => ({ items: [] })),
   getProviderKinds: vi.fn(async () => ({ items: [] })),
+  publishModel: vi.fn(),
   getAgents: vi.fn(async () => ({ items: [] })),
   getHarnesses: vi.fn(async () => ({ items: [] })),
   getBenchmarkOverview: vi.fn(async () => ({ items: [], total: 0 })),

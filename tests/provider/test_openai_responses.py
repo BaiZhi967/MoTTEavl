@@ -74,6 +74,10 @@ def test_request_body_uses_instructions_and_input():
     assert body["temperature"] == 0.2
     assert "messages" not in body
     assert envelope["provider"] == "openai_responses"
+    assert envelope["requested_model"] == "gpt-4o-mini"
+    assert envelope["reported_model"] == "gpt-4o-mini-2024-07-18"
+    assert envelope["resolved_model_identity"] is None
+    assert envelope["identity_policy_result"] == "mismatch"
     assert envelope["canonical"]["request"]["path"] == "/responses"
 
 

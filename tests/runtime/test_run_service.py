@@ -16,7 +16,9 @@ def test_create_run_persists_queued_manifest():
 def test_execute_is_idempotent_and_emits_trace():
     service = RunService(InMemoryRunStore())
     run = service.create_run("scenario@1", {})
-    first = service.execute(run["id"], ["case-1"])
+    first = service.execute(
+        run["id"], ["case-1"], provider=lambda case_id: {"case_id": case_id}
+    )
     second = service.execute(run["id"], ["case-1"])
     assert first == second
     assert first["status"] == "completed"
@@ -92,7 +94,8 @@ def test_observer_failure_does_not_change_run_execution():
     assert result["status"] == "completed"
     assert seen
     assert [event["type"] for event in service.events(run["id"])] == [
-        "queued", "preparing", "running", "model_response", "collecting", "scoring", "completed"
+        "queued", "preparing", "running", "model_response", "collecting", "scoring",
+        "scoring_pass_created", "completed",
     ]
 
 

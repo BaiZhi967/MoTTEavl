@@ -87,9 +87,13 @@ interface EvalTypeSuite {
 
 ### 6.2 Direct LLM（通用直连评测）
 
-- **操作页**：场景选择（`direct-llm@1` 及变体）+ 模型多选 + 参数（temperature / max_output_tokens ≤ 模型上限 / reasoning_level，预填档案默认值）。
-- **过程页**：case 流式卡片，每 case 一张（输入 → 输出实时填充），SSE 驱动。
-- **结果页**：通过率 + 期望对比表（实际输出 vs 期望，diff 高亮）。
+实施后已升级为「数据集驱动」的完整纵向切片，本节按最终形态描述（原「手填 case 列表」形态作废）：
+
+- **操作页**：六卡——数据集卡（当前 pinned 数据集：场景名、数据集名@版本、题数、数据集级评分器、来源、prompt/scorer 版本）+ 题目卡（全部 / 随机 N 题 + 可复现种子 / 指定题目，与 GSM8K 同构）+ 模型多选卡（勾选支持推理的模型后就地出现该模型的思考强度下拉）+ 跑测参数卡（temperature、max_output_tokens 可覆盖数据集预设 1024 且不得超模型上限；题数与重试为只读）+ 内置样例卡（仓库自带样例一键导入）+ 导入本地 JSONL 卡（按钮触发隐藏 file input 或直接粘贴正文，高级设置里是数据集名 / 版本 / 默认评分器 / License / 来源标记）。
+- **题目页**（`/direct-llm/cases`）：数据集下拉 + 关键词/case id 搜索 + 分页表格（勾选列、mono case id、题面、mono 期望答案或「（无判定）」、生效评分器）+ 全选本页 / 清空 / 粘贴 case id +「用所选 N 题发起评测」。
+- **过程页（批次）**：与 GSM8K 同构（批次行 + 逐题格子 + 运行时间线）；格子把 `no_expectation` 也视作「未判定」的灰格。
+- **结果页**：通过率（分母＝判定题数）/ 判定题数（选中·无判定）/ tokens / 成本（含 price_table 版本）/ 模型五张指标卡 + 逐题钻取表；词汇为 通过 / 不通过 / 无判定 / 调用失败 / 未尝试。
+- **对比页**：模型列 × 指标行（通过率、判定题数、tokens、成本）+ 共同不通过题 + 逐题矩阵下钻（各模型输出与期望、评分器并排）。
 
 ### 6.3 Replay（回放一致性）
 
@@ -154,3 +158,27 @@ interface EvalTypeSuite {
 
 - GSM8K 结果页成本卡附带 price_table 版本（`成本 · pt v…`，取 `report.cost.price_table_versions[0]`）。
 - GSM8K 过程页行内展开在逐题网格下方附带运行时间线（复用 `RunTimeline` + `useRunEvents`）。
+
+## 15. Direct LLM 接入记录（2026-09-20，实施后）
+
+第 14 节第 1 条（Direct LLM 场景固定 `direct-llm@1`）与第 6.2 节的原形态被本次接入取代。原因：原形态只把 `case_ids` 发给 `POST /api/v1/runs`，而 `manifest.cases`（题面→prompt 的映射）没有任何来源，`CaseDrivenProvider.invoke` 必然 `KeyError`，即该套件此前无法真正跑通。
+
+本次按「参考 GSM8K」补齐完整纵向切片：
+
+| 层 | 产物 |
+| --- | --- |
+| 契约 | `motte_contracts/direct_llm.py`（JSONL 导入、`exact`/`contains`/`regex` 评分器、`eval` 顶层键做套件判定）；`motte_contracts/selection.py`（运行级题目选择，与 GSM8K 共用）；`motte_contracts/suites.py`（套件分发单一来源） |
+| 评分 | `motte_eval/direct_llm.py`；`exact` 两侧 strip 后全等、`contains` 子串、`regex` 用 `re.search`；**无 `expected` 的题记为 `no_expectation`，不进 accuracy 分母**（分母＝判定题数 judged） |
+| SDK | `motte_sdk/direct_llm.py`（导入落库、内置样例注册表、创建期展开、评分）；`motte_sdk/suites.py`（manifest 展开 / 评分 / 聚合分发） |
+| 数据 | `datasets/direct-llm/*.jsonl` 三份内置样例（exact 8 题 / contains 8 题 / regex 7 题）+ 该目录 README |
+| API | `GET /benchmarks/direct-llm`、`GET .../builtins`、`POST .../import`、`GET .../cases`、`POST .../runs` |
+| CLI | `motte direct-llm builtins / list / import (--builtin|--file) / run` |
+| Web | 操作 / 题目 / 过程 / 结果 / 对比五页（第 6.2 节） |
+
+范围裁剪记录（本次不做）：
+
+1. Web 端不做 JS 侧字符级 diff 高亮（与第 14 节第 3 条一致）。
+2. case_id 由导入方自由指定，题目页在分页下无法精确校验粘贴的 id，未知 id 交由服务端在发起时以 422 拒绝。
+3. 导出/导入不引入 multipart：本地文件由浏览器读成文本后放进 JSON body（`content` 字段）。
+
+套件判别：GSM8K 与 Direct LLM 的运行都带 `manifest.benchmark_provenance`，因此新增 `provenance.suite`（`gsm8k` / `direct-llm`）作为唯一判别字段；旧运行缺该字段时按 `gsm8k` 兼容（`motte_contracts.suites.suite_of_run` 与 `apps/web/src/evalTypes/registry.ts` 同一规则）。

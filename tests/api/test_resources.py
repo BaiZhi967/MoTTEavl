@@ -67,6 +67,43 @@ def test_model_crud_validates_contract():
     assert client.get("/api/v1/models/qwen-7b").json()["provider"] == "local-vllm"
 
 
+def test_server_managed_resource_fields_cannot_bypass_lifecycle():
+    client, store = client_with_resources()
+    forged_provider = client.post("/api/v1/providers", json={
+        "name": "forged", "kind": "openai_compatible",
+        "base_url": "http://localhost:8001/v1", "generation": 99,
+    })
+    assert forged_provider.status_code == 422
+    assert forged_provider.json()["error"]["code"] == "SERVER_MANAGED_FIELD"
+    hidden_version = client.post("/api/v1/scenarios", json={
+        "name": "hidden", "version": "1", "cases": [], "_deleted": True,
+    })
+    assert hidden_version.status_code == 422
+    assert hidden_version.json()["error"]["code"] == "SERVER_MANAGED_FIELD"
+    assert store.scenarios.get("hidden", "1") is None
+
+    client.post("/api/v1/providers", json={
+        "name": "local-vllm", "kind": "openai_compatible",
+        "base_url": "http://localhost:8001/v1",
+    })
+    forged_model = client.post("/api/v1/models", json={
+        "id": "forged", "provider": "local-vllm", "capabilities": {"text": True},
+        "lifecycle": "published", "published_at": "2026-09-18T00:00:00Z",
+    })
+    assert forged_model.status_code == 422
+    assert forged_model.json()["error"]["code"] == "SERVER_MANAGED_FIELD"
+    assert store.models.get("forged") is None
+
+    client.post("/api/v1/models", json={
+        "id": "draft", "provider": "local-vllm", "capabilities": {"text": True},
+    })
+    forged_update = client.put("/api/v1/models/draft", json={
+        "lifecycle": "published", "published_at": "2026-09-18T00:00:00Z",
+    })
+    assert forged_update.status_code == 422
+    assert store.models.get("draft")["lifecycle"] == "draft"
+
+
 def test_provider_update_edits_connection_and_toggles_enabled():
     client, _ = client_with_resources()
     client.post("/api/v1/providers", json={
@@ -141,8 +178,8 @@ def test_slash_in_model_id_and_provider_name_is_addressable():
     assert client.put("/api/v1/providers/gateway/cn", json={"enabled": False}).json()["enabled"] is False
     assert client.put(model_path, json={"enabled": True}).status_code == 200
 
-    assert client.delete(model_path).json()["deleted"] == "Qwen/Qwen2.5-7B-Instruct"
-    assert store.models.list() == []
+    assert client.delete(model_path).json()["deprecated"] == "Qwen/Qwen2.5-7B-Instruct"
+    assert store.models.get("Qwen/Qwen2.5-7B-Instruct")["lifecycle"] == "deprecated"
     assert client.delete("/api/v1/providers/gateway/cn").status_code == 200
 
 
@@ -181,7 +218,10 @@ def test_versioned_scenario_and_dataset_routes():
     assert client.get("/api/v1/scenarios/json_extract/4").status_code == 404
     missing = client.post("/api/v1/datasets", json={"name": "d"})
     assert missing.status_code == 422
-    assert client.delete("/api/v1/scenarios/json_extract/3").json() == {"deleted": "json_extract@3"}
+    immutable = client.delete("/api/v1/scenarios/json_extract/3")
+    assert immutable.status_code == 409
+    assert immutable.json()["error"]["code"] == "PUBLISHED_RESOURCE_IMMUTABLE"
+    assert client.get("/api/v1/scenarios/json_extract/3").status_code == 200
 
 
 def test_agent_and_skill_catalogs():
@@ -214,6 +254,12 @@ def test_run_listing_filter_and_report(tmp_path):
     client = TestClient(create_app(store, resource_store=InMemoryResourceStore()))
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1", "case_ids": ["case-1"]}).json()
     client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": {"case-1": {"output": {"n": 1}, "expected": {"n": 1}}}})
+    from apps.worker.motte_worker.reporting import WorkerReporter
+    from apps.worker.motte_worker.runtime import WorkerLoop
+
+    WorkerLoop(
+        client.app.state.run_service, reporter=WorkerReporter(enabled=False)
+    ).claim_and_execute(run["id"])
 
     listed = client.get("/api/v1/runs").json()
     assert listed["total"] == 1

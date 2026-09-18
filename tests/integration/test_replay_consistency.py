@@ -3,6 +3,8 @@ import json
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
+from apps.worker.motte_worker.reporting import WorkerReporter
+from apps.worker.motte_worker.runtime import WorkerLoop
 from motte_cli.main import main as cli_main
 from motte_sdk.replay_run import ReplayProvider
 from motte_sdk.service import RunService
@@ -34,7 +36,11 @@ def test_replay_trace_and_score_are_identical_across_api_cli_sdk(tmp_path, capsy
 
     client = TestClient(create_app(SQLiteRunStore(tmp_path / "api.db")))
     api_run = client.post("/api/v1/runs", json={"scenario_version": "replay@1", "case_ids": list(FIXTURE)}).json()
-    api_result = client.post(f"/api/v1/runs/{api_run['id']}/replay", json={"cases": FIXTURE}).json()
+    queued = client.post(f"/api/v1/runs/{api_run['id']}/replay", json={"cases": FIXTURE})
+    assert queued.status_code == 202
+    api_result = WorkerLoop(
+        client.app.state.run_service, reporter=WorkerReporter(enabled=False)
+    ).claim_and_execute(api_run["id"])
     api = _normalize(api_result, client.app.state.run_service.events(api_run["id"]))
 
     exit_code = cli_main(["replay", "--db", str(tmp_path / "cli.db"), "--fixture", json.dumps(FIXTURE), "--json"])

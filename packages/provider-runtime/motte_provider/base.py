@@ -17,6 +17,7 @@ from motte_trace.redaction import redact
 
 from .capabilities import validate_parameters
 from .errors import ProviderError, classify_exception
+from .identity import assess_identity, validate_identity_config
 from .pricing import PriceTable, cost_detail, parse_price_table
 from .transport import HTTPTransport, TransportOutcome
 
@@ -43,6 +44,8 @@ def validate_http_provider_config(config: dict[str, Any], supported_parameters: 
     validate_parameters(params, supported_parameters)
     parse_price_table(config.get("price_table"))
     reasoning_patch(config.get("reasoning"), config.get("reasoning_level"))
+    validate_identity_config(config.get("identity_policy", "report_only"),
+                             config.get("identity_aliases"), config.get("identity_alias_version"))
 
 
 class ProviderCallError(ProviderError):
@@ -60,6 +63,7 @@ class BaseHTTPProvider:
     request_path: ClassVar[str] = ""
     SUPPORTED_PARAMETERS: ClassVar[dict[str, Any]] = {}
     _API_NAMES: ClassVar[dict[str, str]] = {}
+    IMPLEMENTATION_VERSION: ClassVar[str] = "unversioned"
 
     def __init__(
         self,
@@ -71,10 +75,16 @@ class BaseHTTPProvider:
         max_output_tokens: int | None = None,
         reasoning: dict[str, Any] | None = None,
         reasoning_level: str | None = None,
+        identity_policy: str = "report_only",
+        identity_aliases: dict[str, str] | None = None,
+        identity_alias_version: str | None = None,
         redactor: Callable[[Any], Any] = redact,
     ) -> None:
         params = dict(parameters or {})
         validate_parameters(params, self.SUPPORTED_PARAMETERS)
+        self.identity_policy, aliases, self.identity_alias_version = validate_identity_config(
+            identity_policy, identity_aliases, identity_alias_version)
+        self.identity_aliases = deepcopy(aliases)
         self.transport = transport
         self.model = model
         self.parameters = params
@@ -131,6 +141,11 @@ class BaseHTTPProvider:
             self.calls.append(envelope)
             raise ProviderCallError(envelope) from error
         envelope = self._envelope(body, outcome, error=None)
+        if "error" in envelope:
+            # Canonical response is redacted in _envelope; preserve token usage as evidence.
+            envelope["tool_calls"] = self._redactor(envelope["tool_calls"])
+            self.calls.append(envelope)
+            raise ProviderCallError(envelope)
         self.calls.append(envelope)
         return envelope
 
@@ -143,7 +158,23 @@ class BaseHTTPProvider:
     ) -> dict[str, Any]:
         envelope: dict[str, Any] = {
             "provider": self.kind,
-            "model": self.model,
+            "implementation_version": self.IMPLEMENTATION_VERSION,
+            "model": self.model,  # Legacy field: the request model, never a reported identity.
+            "requested_model": body["model"],
+            "reported_model": None,
+            "resolved_model_identity": None,
+            "identity_evidence": {
+                "source": None,
+                "reported_value": None,
+                "path": None,
+                "alias_map_version": self.identity_alias_version,
+                "matched_alias": None,
+                "policy": self.identity_policy,
+                "details": {},
+            },
+            "identity_policy": self.identity_policy,
+            "identity_policy_result": "not_evaluated",
+            "policy_passed": None,
             "canonical": {
                 "request": {"path": self.request_path, "body": self._redactor(body)},
                 "response": None,
@@ -176,4 +207,23 @@ class BaseHTTPProvider:
             usage_details=dict(response.usage_details),
         )
         envelope["cost"] = cost_detail(self.price_table, response.usage)
+        resolved, result, evidence, allowed = assess_identity(
+            body["model"], response.model,
+            policy=self.identity_policy, aliases=self.identity_aliases,
+            alias_version=self.identity_alias_version,
+        )
+        envelope.update(
+            reported_model=response.model if response.model.strip() else None,
+            resolved_model_identity=resolved,
+            identity_evidence=evidence,
+            identity_policy_result=result,
+            policy_passed=allowed,
+        )
+        if not allowed:
+            envelope["metering"]["error_class"] = "model_identity"
+            envelope["error"] = {
+                "class": "model_identity",
+                "message": "provider did not report a model identity" if result == "unreported"
+                           else "provider model identity does not match the requested model",
+            }
         return envelope

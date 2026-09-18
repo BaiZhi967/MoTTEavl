@@ -3,6 +3,8 @@ import json
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
+from apps.worker.motte_worker.reporting import WorkerReporter
+from apps.worker.motte_worker.runtime import WorkerLoop
 from motte_storage.run_store import SQLiteRunStore
 
 FIXTURE = {
@@ -20,6 +22,7 @@ FULL_EVENT_TYPES = [
     "scoring",
     "score",
     "score",
+    "scoring_pass_created",
     "completed",
 ]
 
@@ -28,6 +31,9 @@ def _completed_client(tmp_path):
     client = TestClient(create_app(SQLiteRunStore(tmp_path / "api.db")))
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1", "case_ids": list(FIXTURE)}).json()
     client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": FIXTURE})
+    WorkerLoop(
+        client.app.state.run_service, reporter=WorkerReporter(enabled=False)
+    ).claim_and_execute(run["id"])
     return client, run["id"]
 
 
@@ -54,7 +60,7 @@ def test_sse_resumes_after_seq_query_param(tmp_path):
     client, run_id = _completed_client(tmp_path)
     response = client.get(f"/api/v1/runs/{run_id}/events?after=7")
     events = _sse_events(response.text)
-    assert [event["seq"] for event in events] == [8, 9, 10]
+    assert [event["seq"] for event in events] == [8, 9, 10, 11]
     assert "id: 8" in response.text
 
 
@@ -62,7 +68,7 @@ def test_sse_resumes_from_last_event_id_header(tmp_path):
     client, run_id = _completed_client(tmp_path)
     response = client.get(f"/api/v1/runs/{run_id}/events", headers={"Last-Event-ID": "5"})
     events = _sse_events(response.text)
-    assert [event["seq"] for event in events] == [6, 7, 8, 9, 10]
+    assert [event["seq"] for event in events] == [6, 7, 8, 9, 10, 11]
 
 
 def test_sse_returns_404_for_unknown_run(tmp_path):

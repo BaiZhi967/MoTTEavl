@@ -722,6 +722,11 @@ td.row-actions .link {
   color: var(--text-secondary);
 }
 
+.kv dd {
+  min-width: var(--space-none);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- 时间线 ---------- */
 
 .timeline {

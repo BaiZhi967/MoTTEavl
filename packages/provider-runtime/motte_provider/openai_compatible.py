@@ -42,6 +42,7 @@ _API_NAMES = {
 
 class OpenAICompatibleProvider(BaseHTTPProvider):
     kind = "openai_compatible"
+    IMPLEMENTATION_VERSION = "1"
     request_path = "/chat/completions"
     SUPPORTED_PARAMETERS = SUPPORTED_PARAMETERS
     _API_NAMES = _API_NAMES
@@ -82,7 +83,7 @@ class OpenAICompatibleProvider(BaseHTTPProvider):
         }
         details = _usage_details(usage)
         return ModelResponse(
-            model=data.get("model", ""),
+            model=data["model"] if isinstance(data.get("model"), str) else "",
             content=message.get("content") or "",
             finish_reason=normalize_finish_reason(choice.get("finish_reason")),
             usage=canonical_usage,

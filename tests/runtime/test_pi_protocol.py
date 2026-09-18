@@ -2,7 +2,7 @@ import shutil
 
 import pytest
 
-from motte_agent.pi import PiAgentRuntime
+from motte_agent.pi import PiAgentRuntime, PiBridgeError
 from motte_agent.protocol import decode_message, encode_message
 
 
@@ -11,18 +11,17 @@ def test_protocol_roundtrip():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required for the pi bridge")
-def test_pi_bridge_probe_and_prompt_roundtrip():
+def test_default_pi_bridge_is_probeable_but_not_execution_ready():
     runtime = PiAgentRuntime()
     probe = runtime.probe()
-    assert probe["available"] is True
+    assert probe["transport_available"] is True
+    assert probe["available"] is False
+    assert probe["execution_ready"] is False
     assert probe["protocol"] == "v1"
 
-    result = runtime.run("hello")
-    assert result["status"] == "completed"
-    assert result["answer"] == "answer: HELLO"
-    types = [event["type"] for event in result["events"]]
-    assert types[0] == "version"
-    assert "started" in types and "finished" in types
+    with pytest.raises(PiBridgeError) as caught:
+        runtime.run("hello")
+    assert caught.value.code == "PI_BACKEND_UNAVAILABLE"
 
 
 def test_missing_bridge_reports_unavailable(tmp_path):
