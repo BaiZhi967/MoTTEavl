@@ -6,9 +6,10 @@ import { CaretDownIcon, CheckIcon, DotsThreeIcon } from "@phosphor-icons/react";
 import { cancelRun, getRuns, retryRun, type RunRecord } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { STATUS_ORDER, statusLabel } from "../components/statusMeta";
+import { formatDuration, formatTimestamp, shortRunId } from "../components/runFormat";
+import { isTerminal } from "../hooks/useRunEvents";
 import { EVAL_SUITES, suiteForRun, suiteRoutes } from "../evalTypes/registry";
 
-const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
 const RETRYABLE_STATUSES = ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
 
 function typeLabel(run: RunRecord): string {
@@ -40,7 +41,17 @@ export function RunsOverviewPage() {
 
   const visible = runs.filter((run) => typeFilter === "all" || typeLabel(run) === typeFilter);
 
+  const monitorPath = (run: RunRecord) => {
+    const suite = suiteForRun(run);
+    return suite ? suiteRoutes(suite.id).monitor([run.id]) : `/runs/${run.id}/monitor`;
+  };
+
+  /* 非终态优先看过程，终态直达结果 */
   const openRun = (run: RunRecord) => {
+    if (!isTerminal(run.status)) {
+      navigate(monitorPath(run));
+      return;
+    }
     const suite = suiteForRun(run);
     navigate(suite ? suiteRoutes(suite.id).result(run.id) : `/runs/${run.id}/result`);
   };
@@ -61,12 +72,32 @@ export function RunsOverviewPage() {
           <h2>运行总览</h2>
           <div className="inline-field">
             <span className="field-label">类型</span>
-            <select className="control" value={typeFilter} onChange={(change) => setTypeFilter(change.target.value)} aria-label="类型过滤">
-              <option value="all">全部类型</option>
-              {[...EVAL_SUITES.map((suite) => suite.label), "通用"].map((label) => (
-                <option key={label} value={label}>{label}</option>
-              ))}
-            </select>
+            <Select.Root value={typeFilter} onValueChange={setTypeFilter}>
+              <Select.Trigger className="select-trigger" aria-label="类型过滤">
+                <Select.Value />
+                <CaretDownIcon size={14} weight="bold" aria-hidden />
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Content className="select-content" position="popper" sideOffset={4}>
+                  <Select.Viewport>
+                    <Select.Item value="all" className="select-item">
+                      <Select.ItemText>全部类型</Select.ItemText>
+                      <Select.ItemIndicator className="select-item-indicator">
+                        <CheckIcon size={14} weight="bold" aria-hidden />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                    {[...EVAL_SUITES.map((suite) => suite.label), "通用"].map((label) => (
+                      <Select.Item key={label} value={label} className="select-item">
+                        <Select.ItemText>{label}</Select.ItemText>
+                        <Select.ItemIndicator className="select-item-indicator">
+                          <CheckIcon size={14} weight="bold" aria-hidden />
+                        </Select.ItemIndicator>
+                      </Select.Item>
+                    ))}
+                  </Select.Viewport>
+                </Select.Content>
+              </Select.Portal>
+            </Select.Root>
           </div>
           <div className="inline-field">
             <span className="field-label">状态</span>
@@ -102,25 +133,30 @@ export function RunsOverviewPage() {
         <table>
           <thead>
             <tr>
-              <th>ID</th><th>类型</th><th>场景</th><th>模型</th><th>状态</th><th>进度</th><th>操作</th>
+              <th>ID</th><th>类型</th><th>场景</th><th>模型</th><th>状态</th><th>进度</th><th>开始</th><th>耗时</th><th>操作</th>
             </tr>
           </thead>
           <tbody>
             {visible.map((run) => {
-              const cancellable = !TERMINAL_STATUSES.includes(run.status);
+              const cancellable = !isTerminal(run.status);
               const retryable = RETRYABLE_STATUSES.includes(run.status);
               const total = run.case_ids?.length ?? 0;
               const done = run.cases?.length ?? 0;
               return (
                 <tr key={run.id}>
-                  <td><button className="link" onClick={() => openRun(run)}>{run.id}</button></td>
+                  <td className="mono" title={run.id}>
+                    <button className="link" onClick={() => openRun(run)}>{shortRunId(run.id)}</button>
+                  </td>
                   <td>{typeLabel(run)}</td>
                   <td className="mono">{run.scenario_version}</td>
                   <td className="mono">{run.model ?? "—"}</td>
                   <td><StatusBadge status={run.status} /></td>
                   <td className="mono">{total ? `${done}/${total}` : "—"}</td>
+                  <td className="mono">{formatTimestamp(run.created_at) ?? "—"}</td>
+                  <td className="mono">{formatDuration(run.created_at, run.finished_at) ?? "—"}</td>
                   <td className="row-actions">
-                    {cancellable || retryable ? (
+                    <button type="button" className="link" onClick={() => navigate(monitorPath(run))}>过程</button>
+                    {(cancellable || retryable) ? (
                       <DropdownMenu.Root>
                         <DropdownMenu.Trigger asChild>
                           <button className="icon-btn" aria-label={`运行 ${run.id} 操作`}>
@@ -142,15 +178,13 @@ export function RunsOverviewPage() {
                           </DropdownMenu.Content>
                         </DropdownMenu.Portal>
                       </DropdownMenu.Root>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
+                    ) : null}
                   </td>
                 </tr>
               );
             })}
             {visible.length === 0 && (
-              <tr><td colSpan={7} className="empty">暂无运行</td></tr>
+              <tr><td colSpan={9} className="empty">暂无运行</td></tr>
             )}
           </tbody>
         </table>
