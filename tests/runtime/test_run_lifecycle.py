@@ -87,13 +87,32 @@ def test_scoring_rejects_aggregate_counts_outside_selected_cases(monkeypatch):
     monkeypatch.setattr(
         benchmark_plugins,
         "aggregate_with_plugin",
-        lambda _run, _scores: {"selected": 1, "correct": 2, "accuracy": None},
+        lambda _run, _scores: {"correct": 2, "accuracy": None},
     )
     with pytest.raises(ValueError, match="exceed selected"):
         service._append_scoring_pass(
             run["id"], [{"case_id": "case-1", "passed": True}], source="test"
         )
     assert service.store.scoring_passes.list_for_run(run["id"]) == []
+
+
+def test_scoring_aggregate_uses_legacy_case_rows_as_selection(monkeypatch):
+    from motte_sdk import benchmark_plugins
+
+    service = RunService(InMemoryRunStore())
+    run = service.create_run("custom@1", {"benchmark_provenance": {"suite": "custom"}})
+    service.store.case_runs.upsert({
+        "run_id": run["id"], "case_id": "legacy-case", "result": {"output": 1},
+    })
+    monkeypatch.setattr(
+        benchmark_plugins,
+        "aggregate_with_plugin",
+        lambda _run, _scores: {"selected": 1, "correct": 1, "accuracy": 1.0},
+    )
+    scoring_pass = service._append_scoring_pass(
+        run["id"], [{"case_id": "legacy-case", "passed": True}], source="test"
+    )
+    assert scoring_pass["summary"]["aggregate"]["selected"] == 1
 
 
 def test_scoring_rejects_plugin_owned_scoring_pass_binding(monkeypatch):

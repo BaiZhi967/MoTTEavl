@@ -44,6 +44,21 @@ def test_resolve_execution_pins_direct_provider_backend():
     }
 
 
+def test_direct_backend_rejects_fixture_on_non_replay_provider():
+    with pytest.raises(ExecutionBackendError) as raised:
+        resolve_execution(
+            "direct-llm@1",
+            {
+                "provider": {
+                    "kind": "openai_compatible",
+                    "base_url": "https://example.test/v1",
+                    "fixture": {"case-a": {"output": "not-used"}},
+                }
+            },
+        )
+    assert raised.value.code == "EXECUTION_BACKEND_CONFLICT"
+
+
 def test_resolve_execution_pins_replay_backend_and_builds_handle():
     manifest = resolve_execution(
         "replay@1",
