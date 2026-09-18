@@ -18,8 +18,18 @@ def create_celery_app() -> Celery:
 celery_app = create_celery_app()
 
 
-@celery_app.task(name="motte.execute_run")
-def execute_run_task(run_id: str, cases: list[str] | None = None):
+@celery_app.task(
+    bind=True,
+    name="motte.execute_run",
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=300,
+)
+def execute_run_task(self, run_id: str, cases: list[str] | None = None):
+    from .coordination import WorkerAlreadyRunning
     from .tasks import execute_run
 
-    return execute_run(run_id, cases or ())
+    try:
+        return execute_run(run_id, cases or ())
+    except WorkerAlreadyRunning as error:
+        raise self.retry(exc=error, countdown=1) from error

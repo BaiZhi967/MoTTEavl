@@ -140,6 +140,44 @@ def test_attempt_recovery_marks_only_dispatching_indeterminate(store):
                                   expected_status="indeterminate", status="dispatching")
 
 
+def test_attempt_quarantine_updates_attempt_run_and_event_atomically(store):
+    run = store.runs.create({"id": "run-quarantine", "status": "running"})
+    attempt = store.attempts.begin({"run_id": run["id"], "case_id": "case-1"})
+    dispatching = store.attempts.transition(
+        attempt["id"], expected_revision=1, expected_status="prepared", status="dispatching"
+    )
+    event = {
+        "type": "needs_review", "status": "needs_review",
+        "attempt_ids": [attempt["id"]],
+    }
+    with pytest.raises(RunConflictError):
+        store.attempts.quarantine_indeterminate(
+            run["id"], expected_run_revision=99, expected_run_status="running",
+            changes={"error": {"code": "CALL_OUTCOME_INDETERMINATE"}}, event=event,
+        )
+    assert store.attempts.get(attempt["id"]) == dispatching
+    assert store.runs.get(run["id"])["status"] == "running"
+    assert store.events.list_for_run(run["id"]) == []
+
+    quarantined = store.attempts.quarantine_indeterminate(
+        run["id"], expected_run_revision=run["revision"], expected_run_status="running",
+        changes={"error": {"code": "CALL_OUTCOME_INDETERMINATE"}}, event=event,
+    )
+    assert quarantined[0]["status"] == "indeterminate"
+    recovered = store.runs.get(run["id"])
+    assert recovered["status"] == "needs_review" and recovered["revision"] == 2
+    assert store.events.list_for_run(run["id"])[-1]["type"] == "needs_review"
+
+
+def test_score_contract_rejects_unknown_fields_before_persistence(store):
+    run = store.runs.create({"id": "run-score-contract", "status": "queued"})
+    with pytest.raises(ValueError, match="public contract"):
+        store.scores.replace_for_run(
+            run["id"], [{"case_id": "case-1", "passed": True, "unexpected": "value"}]
+        )
+    assert store.scores.list_for_run(run["id"]) == []
+
+
 def test_scoring_passes_are_immutable_and_current_tracks_revision(store):
     run = store.runs.create({"id": "run-scores", "status": "completed"})
     store.scores.replace_for_run(run["id"], [{"case_id": "a", "passed": True}])

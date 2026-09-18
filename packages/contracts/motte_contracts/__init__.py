@@ -8,5 +8,6 @@ from .evidence import *
 from .errors import *
 from .report import *
 from .dataset import *
+from .compat import *
 
 __version__ = "0.1.0"

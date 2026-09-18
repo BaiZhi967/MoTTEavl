@@ -1,5 +1,6 @@
 from apps.worker.motte_worker.runtime import WorkerLoop
 from apps.worker.motte_worker.tasks import configure_service
+from motte_contracts.run import Run
 from motte_sdk.service import RunService
 from motte_storage.run_store import SQLiteRunStore
 
@@ -44,6 +45,7 @@ def test_worker_executes_replay_run_created_by_api(tmp_path):
         "scoring",
         "score",
         "score",
+        "scoring_pass_created",
         "completed",
     ]
     assert worker.claim_and_execute() is None
@@ -65,9 +67,14 @@ def test_worker_recovers_interrupted_run_after_restart(tmp_path):
     run = service.create_run("replay@1", REPLAY_MANIFEST, case_ids=["case-1", "case-2"])
 
     # 模拟 Worker 在 case-1 完成后、case-2 之前崩溃：状态卡在 running。
-    crashed = service.store.runs.get(run["id"])
-    crashed["status"] = "running"
-    service.store.runs.save(crashed)
+    preparing = service.store.runs.transition(
+        run["id"], expected_revision=run["revision"], expected_status="queued",
+        status="preparing", event={"type": "preparing"},
+    )
+    service.store.runs.transition(
+        run["id"], expected_revision=preparing["revision"], expected_status="preparing",
+        status="running", event={"type": "running"},
+    )
     service.store.case_runs.upsert(
         {
             "run_id": run["id"],
@@ -129,49 +136,69 @@ def test_worker_quiet_suppresses_progress_log(tmp_path, capsys):
     assert captured.out == "" and captured.err == ""
 
 
-def test_worker_interrupt_returns_130_and_leaves_the_run_recoverable(tmp_path, capsys, monkeypatch):
-    """Ctrl-C 是正常停止方式：退出码 130、无 traceback，中间态 Run 留给下次启动回收。"""
-    from apps.worker.motte_worker import runtime as worker_runtime
+def test_worker_interrupt_after_dispatch_requires_review(tmp_path, capsys, monkeypatch):
+    """A dispatched call with no durable result is never replayed automatically."""
     from apps.worker.motte_worker.__main__ import main
+    from motte_sdk.dispatcher import RunDispatcher
 
     path = tmp_path / "runs.db"
+    paid_manifest = {
+        **REPLAY_MANIFEST,
+        "execution": {
+            "backend_id": "direct-llm", "backend_version": "1",
+            "capabilities": {"interactive": False, "safe_to_repeat": False},
+        },
+    }
     run = RunService(SQLiteRunStore(path)).create_run(
-        "replay@1", REPLAY_MANIFEST, case_ids=["case-1", "case-2"])
+        "direct-llm@1", paid_manifest, case_ids=["case-1", "case-2"])
 
-    def interrupted(_run):
-        # 真实路径：Ctrl-C 落在某一题的调用中间，Run 已被抢占为 preparing
+    def interrupted(dispatcher, claimed):
+        dispatcher.service._begin_case_attempt(claimed, "case-1")
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(worker_runtime, "provider_for_run", interrupted)
+    monkeypatch.setattr(RunDispatcher, "execute_claimed", interrupted)
     assert main(["--db", str(path)]) == 130
     events = _stderr_events(capsys)
     assert events[-1] == {"component": "worker", "event": "worker_stopped",
                           "reason": "interrupted"}
-    # 没有落任何 case 结果，Run 停在中间态
     store = RunService(SQLiteRunStore(path)).store
     assert store.runs.get(run["id"])["status"] == "preparing"
+    assert store.attempts.list_open(run["id"])[0]["status"] == "dispatching"
     assert store.case_runs.list_for_run(run["id"]) == []
 
-    # 下次启动把它回收为 queued 并跑完（不再抛异常）
     monkeypatch.undo()
     assert main(["--db", str(path), "--once"]) == 0
-    finished = RunService(SQLiteRunStore(path)).store
-    assert finished.runs.get(run["id"])["status"] == "completed"
-    assert len(finished.case_runs.list_for_run(run["id"])) == 2
-    assert [row["case_id"] for row in finished.case_runs.list_for_run(run["id"])] == [
-        "case-1", "case-2"]
+    recovered = RunService(SQLiteRunStore(path)).store
+    recovered_run = recovered.runs.get(run["id"])
+    assert recovered_run["status"] == "needs_review"
+    assert Run.model_validate(recovered_run).error.details["attempt_ids"]
+    assert recovered.attempts.list_for_run(run["id"])[0]["status"] == "indeterminate"
+    assert recovered.case_runs.list_for_run(run["id"]) == []
+
+
+def test_safe_replay_attempt_is_requeued_after_interrupt(tmp_path):
+    service = RunService(SQLiteRunStore(tmp_path / "safe-replay.db"))
+    run = service.create_run("replay@1", REPLAY_MANIFEST, case_ids=["case-1"])
+    claimed = service.store.runs.claim(run["id"])
+    attempt = service._begin_case_attempt(claimed, "case-1")
+
+    requeued = WorkerLoop(service).recover_interrupted()
+    assert requeued == [run["id"]]
+    assert service.store.runs.get(run["id"])["status"] == "queued"
+    assert service.store.attempts.get(attempt["id"])["status"] == "failed"
+    assert WorkerLoop(service).claim_and_execute(run["id"])["status"] == "completed"
 
 
 def test_worker_interrupt_during_once_also_returns_130(tmp_path, capsys, monkeypatch):
     """--once 与长轮询共用同一段 try：两条路径的中断处理必须一致。"""
-    from apps.worker.motte_worker import runtime as worker_runtime
     from apps.worker.motte_worker.__main__ import main
+    from motte_sdk.dispatcher import RunDispatcher
 
-    def interrupted(_run):
+    def interrupted(dispatcher, claimed):
         raise KeyboardInterrupt
 
     path = tmp_path / "runs.db"
     RunService(SQLiteRunStore(path)).create_run("replay@1", REPLAY_MANIFEST, case_ids=["case-1"])
-    monkeypatch.setattr(worker_runtime, "provider_for_run", interrupted)
+    monkeypatch.setattr(RunDispatcher, "execute_claimed", interrupted)
     assert main(["--db", str(path), "--once"]) == 130
     assert _stderr_events(capsys)[-1]["reason"] == "interrupted"

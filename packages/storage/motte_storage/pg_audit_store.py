@@ -26,7 +26,10 @@ class PgAttempts:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
 
-    def begin(self, record: dict[str, Any]) -> dict[str, Any]:
+    def begin(
+        self, record: dict[str, Any], *, expected_run_revision: int | None = None,
+        expected_run_status: str | None = None,
+    ) -> dict[str, Any]:
         stored = new_record(record, "attempt", "prepared")
         if not isinstance(stored.get("case_id"), str) or not stored["case_id"]:
             raise ValueError("attempt needs a nonempty case_id")
@@ -36,6 +39,31 @@ class PgAttempts:
         try:
             with _connect(self._dsn) as connection:
                 with connection.cursor() as cursor:
+                    if (expected_run_revision is None) != (expected_run_status is None):
+                        raise ValueError("provide both expected Run revision and status")
+                    if expected_run_revision is not None:
+                        cursor.execute(
+                            "SELECT revision, payload->>'status' FROM runs WHERE id = %s FOR UPDATE",
+                            (stored["run_id"],),
+                        )
+                        run_row = cursor.fetchone()
+                        if run_row != (expected_run_revision, expected_run_status):
+                            raise RunConflictError(
+                                f"run revision or status changed: {stored['run_id']}"
+                            )
+                    cursor.execute(
+                        "SELECT 1 FROM case_runs WHERE run_id = %s AND case_id = %s",
+                        (stored["run_id"], stored["case_id"]),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise RunConflictError(f"case result already exists: {stored['case_id']}")
+                    cursor.execute(
+                        "SELECT 1 FROM case_attempts WHERE run_id = %s AND case_id = %s "
+                        "AND status IN ('prepared', 'dispatching', 'indeterminate') FOR UPDATE",
+                        (stored["run_id"], stored["case_id"]),
+                    )
+                    if cursor.fetchone() is not None:
+                        raise RunConflictError(f"case already has an open attempt: {stored['case_id']}")
                     cursor.execute(
                         "INSERT INTO case_attempts(id, run_id, case_id, attempt_no, status, revision, payload) "
                         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
@@ -163,6 +191,63 @@ class PgAttempts:
                     changed.append(deepcopy(stored))
         return changed
 
+    def quarantine_indeterminate(
+        self, run_id: str, *, expected_run_revision: int, expected_run_status: str,
+        changes: dict[str, Any], event: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Atomically quarantine uncertain attempts and their owning Run."""
+        pending = validate_event(event, run_id)
+        if pending is None:
+            raise ValueError("quarantine requires an event")
+        if {"id", "revision", "schema_version", "status"}.intersection(changes):
+            raise ValueError("quarantine changes cannot overwrite run identity, revision or status")
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload, revision FROM runs WHERE id = %s FOR UPDATE", (run_id,)
+                )
+                run_row = cursor.fetchone()
+                if run_row is None or run_row[1] != expected_run_revision:
+                    raise RunConflictError(f"run revision changed: {run_id}")
+                run = stored_run(run_row[0], run_row[1])
+                if run.get("status") != expected_run_status:
+                    raise RunConflictError(f"run status changed: {run_id}")
+                cursor.execute(
+                    "SELECT payload FROM case_attempts WHERE run_id = %s "
+                    "AND status IN ('dispatching', 'indeterminate') "
+                    "ORDER BY position FOR UPDATE", (run_id,),
+                )
+                uncertain: list[dict[str, Any]] = []
+                for (current,) in cursor.fetchall():
+                    stored = current
+                    if current["status"] == "dispatching":
+                        stored = advance_record(
+                            current, expected_revision=current["revision"],
+                            expected_status="dispatching", status="indeterminate", changes=None,
+                            transitions=ATTEMPT_TRANSITIONS,
+                        )
+                        cursor.execute(
+                            "UPDATE case_attempts SET payload = %s, status = %s, revision = %s "
+                            "WHERE id = %s",
+                            (Json(stored), "indeterminate", stored["revision"], stored["id"]),
+                        )
+                    uncertain.append(deepcopy(stored))
+                if not uncertain:
+                    return []
+                updated_run = next_run(
+                    {**run, **deepcopy(changes), "status": "needs_review"}, expected_run_revision
+                )
+                cursor.execute(
+                    "UPDATE runs SET payload = %s, revision = %s WHERE id = %s AND revision = %s "
+                    "AND payload->>'status' = %s",
+                    (Json(updated_run), updated_run["revision"], run_id,
+                     expected_run_revision, expected_run_status),
+                )
+                if cursor.rowcount != 1:
+                    raise RunConflictError(f"run revision or status changed: {run_id}")
+                _append_event(cursor, pending)
+        return uncertain
+
 
 class PgScoringPasses:
     def __init__(self, dsn: str) -> None:
@@ -171,13 +256,25 @@ class PgScoringPasses:
     def append(
         self, record: dict[str, Any], scores: list[dict[str, Any]], *,
         expected_run_revision: int | None = None, expected_run_status: str | None = None,
-        event: dict[str, Any] | None = None,
+        event: dict[str, Any] | None = None, final_status: str | None = None,
+        run_changes: dict[str, Any] | None = None,
+        terminal_event: dict[str, Any] | None = None,
+        score_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         stored = _pass_record(record)
         rows = validate_scores(scores)
         pending = validate_event(event, stored["run_id"])
+        pending_scores = [
+            validate_event(item, stored["run_id"]) for item in (score_events or [])
+        ]
+        pending_terminal = validate_event(terminal_event, stored["run_id"])
         if (expected_run_revision is None) != (expected_run_status is None):
             raise ValueError("provide both expected_run_revision and expected_run_status")
+        if final_status is not None and expected_run_revision is None:
+            raise ValueError("final scoring status requires an expected Run revision and status")
+        changes = deepcopy(run_changes or {})
+        if {"id", "revision", "schema_version", "status"}.intersection(changes):
+            raise ValueError("scoring changes cannot overwrite run identity, revision or status")
         try:
             with _connect(self._dsn) as connection:
                 with connection.cursor() as cursor:
@@ -194,7 +291,13 @@ class PgScoringPasses:
                         if run.get("status") != expected_run_status:
                             raise RunConflictError("run status changed during scoring")
                         updated_run = next_run(
-                            {**run, "current_scoring_pass_id": stored["id"]}, expected_run_revision
+                            {
+                                **run,
+                                **changes,
+                                "current_scoring_pass_id": stored["id"],
+                                "status": final_status or run["status"],
+                            },
+                            expected_run_revision,
                         )
                     cursor.execute(
                         "INSERT INTO scoring_passes(id, run_id, payload) VALUES (%s, %s, %s)",
@@ -215,8 +318,18 @@ class PgScoringPasses:
                         )
                         if cursor.rowcount != 1:
                             raise RunConflictError("run revision or status changed during scoring")
+                    terminal_first = pending_terminal is not None and pending_terminal.get(
+                        "status"
+                    ) in {"cancelled", "unsupported"}
+                    if terminal_first:
+                        _append_event(cursor, pending_terminal)
+                    for score_event in pending_scores:
+                        if score_event is not None:
+                            _append_event(cursor, score_event)
                     if pending is not None:
                         _append_event(cursor, pending)
+                    if pending_terminal is not None and not terminal_first:
+                        _append_event(cursor, pending_terminal)
         except UniqueViolation as error:
             raise RunConflictError(f"scoring pass already exists: {stored['id']}") from error
         return deepcopy(stored)

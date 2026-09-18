@@ -35,8 +35,10 @@ def test_cancel_before_worker_emits_terminal_event_and_never_calls():
     assert result['status'] == 'cancelled'
     assert len(result['scores']) == 20
     assert all(s['outcome'] == 'not_attempted' and not s['attempted'] for s in result['scores'])
-    assert [e['type'] for e in service.events(run['id'])] == ['queued', 'cancelled']
-    assert service.events(run['id'])[-1]['reason'] == 'operator cancelled before worker'
+    assert [e['type'] for e in service.events(run['id'])] == [
+        'queued', 'cancelled', 'scoring_pass_created']
+    cancelled = next(e for e in service.events(run['id']) if e['type'] == 'cancelled')
+    assert cancelled['reason'] == 'operator cancelled before worker'
     assert WorkerLoop(service).claim_and_execute() is None
     assert calls == []
     assert service.rescore(run['id'])['scores'] == result['scores']
@@ -291,7 +293,7 @@ def test_full_scope_run_uses_recorded_case_count_as_denominator():
     assert service.rescore(run['id'])['scores'] == result['scores']
 
 
-def test_restart_skips_durable_results_and_preserves_stop_marker(tmp_path):
+def test_restart_quarantines_uncertain_calls_and_preserves_stop_marker(tmp_path):
     from apps.worker.motte_worker.runtime import WorkerLoop
     from motte_storage.run_store import SQLiteRunStore
     resources, scenario = synthetic_resources()
@@ -309,11 +311,15 @@ def test_restart_skips_durable_results_and_preserves_stop_marker(tmp_path):
     with pytest.raises(KeyboardInterrupt):
         service.execute(run['id'], provider=interrupted)
     reopened = RunService(SQLiteRunStore(path))
-    assert WorkerLoop(reopened).recover_interrupted() == [run['id']]
-    resumed = []
-    result = reopened.execute(run['id'], provider=lambda cid: resumed.append(cid) or {'content':'#### 1'})
-    assert len(resumed) == 18 and result['status'] == 'completed'
-    assert resumed[0] == run['case_ids'][2]
+    assert WorkerLoop(reopened).recover_interrupted() == []
+    uncertain = reopened.get_run(run['id'])
+    assert uncertain['status'] == 'needs_review' and len(uncertain['cases']) == 2
+    assert reopened.store.attempts.list_for_run(run['id'])[-1]['status'] == 'indeterminate'
+    child = reopened.retry(run['id'])
+    retried = []
+    result = reopened.execute(
+        child['id'], provider=lambda cid: retried.append(cid) or {'content':'#### 1'})
+    assert retried == run['case_ids'] and result['status'] == 'completed'
     # Simulate crash just after durable systemic failure row, before terminal update.
     second = reopened.create_run('smoke@1', manifest, list(manifest['cases']))
     reopened._transition(second['id'], 'preparing')

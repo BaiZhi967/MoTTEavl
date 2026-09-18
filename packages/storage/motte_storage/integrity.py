@@ -93,8 +93,16 @@ def advance_record(
 
 
 def validate_scores(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from pydantic import ValidationError
+    from motte_contracts.evidence import Score
+
     result = deepcopy(scores)
     ids = [score.get("case_id") for score in result]
     if any(not isinstance(case_id, str) or not case_id for case_id in ids) or len(ids) != len(set(ids)):
         raise ValueError("scores need distinct nonempty case_id values")
+    try:
+        for score in result:
+            Score.model_validate(score)
+    except ValidationError as error:
+        raise ValueError(f"score does not match the public contract: {error}") from error
     return result

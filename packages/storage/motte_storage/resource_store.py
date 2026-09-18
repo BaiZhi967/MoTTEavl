@@ -54,6 +54,37 @@ def _check_version(table: str, existing: dict[str, Any] | None,
     return True
 
 
+def _check_mutation(
+    table: str, existing: dict[str, Any] | None, record: dict[str, Any],
+    expected_generation: int | None,
+) -> bool:
+    if expected_generation is not None:
+        if expected_generation == 0:
+            if existing is not None:
+                raise ResourceConflictError("resource already exists")
+        elif existing is None or existing.get("generation", 1) != expected_generation:
+            raise ResourceConflictError("resource generation changed")
+    if table != "model_profiles" or existing is None:
+        return False
+    lifecycle = existing.get("lifecycle", "draft")
+    if lifecycle == "deprecated":
+        if existing != record:
+            raise ResourceConflictError("deprecated model profiles are immutable")
+        return True
+    if lifecycle != "published":
+        return False
+    if record.get("lifecycle") != "deprecated":
+        if existing != record:
+            raise ResourceConflictError("published model profiles are immutable")
+        return True
+    ignored = {"generation", "lifecycle", "deprecated_at"}
+    before = {key: value for key, value in existing.items() if key not in ignored}
+    after = {key: value for key, value in record.items() if key not in ignored}
+    if before != after or not record.get("deprecated_at"):
+        raise ResourceConflictError("published model profiles may only be deprecated")
+    return False
+
+
 def _check_delete(table: str, record: dict[str, Any] | None) -> None:
     if table in VERSIONED_TABLES and record is not None:
         raise ResourceConflictError("resource versions are immutable; use a new version")
@@ -75,7 +106,9 @@ class _SQLiteResourceRepository:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path, isolation_level=None, timeout=10.0)
 
-    def put(self, record: dict[str, Any]) -> dict[str, Any]:
+    def put(
+        self, record: dict[str, Any], *, expected_generation: int | None = None
+    ) -> dict[str, Any]:
         _validate_managed(self._table, record)
         values = [str(record[field]) for field in self._keys]
         with closing(self._connect()) as connection, connection:
@@ -87,6 +120,8 @@ class _SQLiteResourceRepository:
             existing_record = json.loads(existing[0]) if existing else None
             if _check_version(self._table, existing_record, record):
                 return existing_record
+            if _check_mutation(self._table, existing_record, record, expected_generation):
+                return deepcopy(existing_record)
             connection.execute(
                 f"INSERT INTO {self._table}({', '.join(self._keys)}, payload) "
                 f"VALUES ({', '.join('?' for _ in range(len(self._keys) + 1))}) "
@@ -110,12 +145,17 @@ class _SQLiteResourceRepository:
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
-    def delete(self, *key: str) -> bool:
+    def delete(self, *key: str, expected_generation: int | None = None) -> bool:
         where = " AND ".join(f"{field} = ?" for field in self._keys)
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(f"SELECT payload FROM {self._table} WHERE {where}", list(key)).fetchone()
-            _check_delete(self._table, json.loads(row[0]) if row else None)
+            current = json.loads(row[0]) if row else None
+            if expected_generation is not None and current is not None and current.get(
+                "generation", 1
+            ) != expected_generation:
+                raise ResourceConflictError("resource generation changed")
+            _check_delete(self._table, current)
             if self._table in VERSIONED_TABLES:
                 return False
             cursor = connection.execute(f"DELETE FROM {self._table} WHERE {where}", list(key))
@@ -133,7 +173,9 @@ class _PgResourceRepository:
 
         return connect(self._dsn)
 
-    def put(self, record: dict[str, Any]) -> dict[str, Any]:
+    def put(
+        self, record: dict[str, Any], *, expected_generation: int | None = None
+    ) -> dict[str, Any]:
         from psycopg.types.json import Json
 
         _validate_managed(self._table, record)
@@ -158,6 +200,26 @@ class _PgResourceRepository:
                         raise ResourceConflictError("resource version vanished while inserting")
                     _check_version(self._table, existing[0], record)
                     return deepcopy(existing[0])
+                if expected_generation == 0:
+                    cursor.execute(
+                        f"INSERT INTO {self._table}({fields}) VALUES ({placeholders}) "
+                        f"ON CONFLICT ({', '.join(self._keys)}) DO NOTHING RETURNING payload",
+                        [*values, Json(record)],
+                    )
+                    inserted = cursor.fetchone()
+                    if inserted:
+                        return deepcopy(inserted[0])
+                    raise ResourceConflictError("resource already exists")
+                where = " AND ".join(f"{field} = %s" for field in self._keys)
+                cursor.execute(
+                    f"SELECT payload FROM {self._table} WHERE {where} FOR UPDATE", values
+                )
+                existing = cursor.fetchone()
+                existing_record = existing[0] if existing else None
+                if _check_mutation(
+                    self._table, existing_record, record, expected_generation
+                ):
+                    return deepcopy(existing_record)
                 cursor.execute(
                     f"INSERT INTO {self._table}({fields}) VALUES ({placeholders}) "
                     f"ON CONFLICT ({', '.join(self._keys)}) DO UPDATE SET payload = EXCLUDED.payload",
@@ -182,13 +244,20 @@ class _PgResourceRepository:
                 rows = cursor.fetchall()
         return [deepcopy(row[0]) for row in rows]
 
-    def delete(self, *key: str) -> bool:
+    def delete(self, *key: str, expected_generation: int | None = None) -> bool:
         where = " AND ".join(f"{field} = %s" for field in self._keys)
         with self._connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f"SELECT payload FROM {self._table} WHERE {where}", list(key))
+                cursor.execute(
+                    f"SELECT payload FROM {self._table} WHERE {where} FOR UPDATE", list(key)
+                )
                 row = cursor.fetchone()
-                _check_delete(self._table, row[0] if row else None)
+                current = row[0] if row else None
+                if expected_generation is not None and current is not None and current.get(
+                    "generation", 1
+                ) != expected_generation:
+                    raise ResourceConflictError("resource generation changed")
+                _check_delete(self._table, current)
                 if self._table in VERSIONED_TABLES:
                     return False
                 cursor.execute(f"DELETE FROM {self._table} WHERE {where}", list(key))
@@ -202,12 +271,16 @@ class _InMemoryResourceRepository:
         self._rows: dict[tuple[str, ...], dict[str, Any]] = {}
         self._lock = RLock()
 
-    def put(self, record: dict[str, Any]) -> dict[str, Any]:
+    def put(
+        self, record: dict[str, Any], *, expected_generation: int | None = None
+    ) -> dict[str, Any]:
         _validate_managed(self._table, record)
         key = tuple(str(record[field]) for field in self._keys)
         with self._lock:
             existing = self._rows.get(key)
             if _check_version(self._table, existing, record):
+                return deepcopy(existing)
+            if _check_mutation(self._table, existing, record, expected_generation):
                 return deepcopy(existing)
             self._rows[key] = deepcopy(record)
             return deepcopy(record)
@@ -220,10 +293,15 @@ class _InMemoryResourceRepository:
         with self._lock:
             return deepcopy([row for _, row in sorted(self._rows.items())])
 
-    def delete(self, *key: str) -> bool:
+    def delete(self, *key: str, expected_generation: int | None = None) -> bool:
         lookup = tuple(str(value) for value in key)
         with self._lock:
-            _check_delete(self._table, self._rows.get(lookup))
+            current = self._rows.get(lookup)
+            if expected_generation is not None and current is not None and current.get(
+                "generation", 1
+            ) != expected_generation:
+                raise ResourceConflictError("resource generation changed")
+            _check_delete(self._table, current)
             return self._rows.pop(lookup, None) is not None
 
 

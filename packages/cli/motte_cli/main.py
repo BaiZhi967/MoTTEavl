@@ -28,9 +28,13 @@ def _harness_installations() -> dict:
         from motte_agent.pi import PiAgentRuntime
 
         runtime = PiAgentRuntime()
+        transport_available = runtime.available()
+        probe = runtime.probe() if transport_available else None
         reports["pi-bridge"] = {
             "name": "pi-bridge",
-            "installed": runtime.available(),
+            "installed": bool(probe and probe["execution_ready"]),
+            "execution_ready": bool(probe and probe["execution_ready"]),
+            "transport_available": transport_available,
             "detail": f"node={runtime._node is not None}, bridge={runtime.bridge_path}",
         }
     except Exception as error:  # agent 包异常时 doctor 不失败
@@ -271,7 +275,9 @@ def _direct_llm_command(args) -> int:
         return _error(error.code, str(error))
     except ValueError as error:
         return _error("CONTRACT_INVALID", str(error))
-    run = _service(args).create_run(args.scenario, manifest, case_ids)
+    run = _service(args).create_run(
+        args.scenario, manifest, case_ids, requested_manifest=requested
+    )
     print(json.dumps(run, ensure_ascii=False))
     return 0
 
@@ -307,7 +313,8 @@ def main(argv=None):
 
         spec = _load_json(args.spec)
         service = _service(args)
-        manifest = spec.get("manifest", {})
+        requested_manifest = spec.get("manifest", {})
+        manifest = requested_manifest
         try:
             manifest, case_ids = prepare_run(spec.get("scenario_version", "default@1"), manifest, spec.get("case_ids", []), _resources(args))
         except ManifestResolutionError as error:
@@ -317,17 +324,45 @@ def main(argv=None):
             spec.get("scenario_version", "default@1"),
             manifest,
             case_ids,
+            requested_manifest=requested_manifest,
         )
         print(json.dumps(run, ensure_ascii=False))
         return 0
 
     if args.command == "replay":
         fixture = _load_json(args.fixture)
-        from motte_sdk.replay_run import ReplayProvider
+        from motte_sdk.dispatcher import RunDispatcher
+        from motte_sdk.execution_lock import WorkerAlreadyRunning, worker_execution_lock
+        from motte_sdk.resolve import find_secret_paths
 
+        if find_secret_paths(fixture):
+            return _error("CREDENTIALS_REJECTED", "replay fixtures cannot contain credential fields")
+        if not isinstance(fixture, dict) or not fixture or any(
+            not isinstance(case_id, str) or not case_id
+            or not isinstance(item, dict) or "output" not in item
+            for case_id, item in fixture.items()
+        ):
+            return _error(
+                "REPLAY_FIXTURE_INVALID",
+                "replay fixture must contain object cases with output fields",
+            )
         service = _service(args)
-        run = service.create_run(args.scenario, {}, case_ids=list(fixture))
-        result = service.execute(run["id"], provider=ReplayProvider(fixture).invoke)
+        manifest = {
+            "provider": {"kind": "replay", "fixture": fixture},
+            "execution": {
+                "backend_id": "replay",
+                "backend_version": "1",
+                "capabilities": {"interactive": False, "safe_to_repeat": True},
+            },
+        }
+        try:
+            with worker_execution_lock(args.db):
+                run = service.create_run(
+                    args.scenario, manifest, case_ids=list(fixture), requested_manifest=manifest
+                )
+                result = RunDispatcher(service).dispatch(run["id"])
+        except WorkerAlreadyRunning as error:
+            return _error("EXECUTOR_LOCKED", str(error))
         print(json.dumps(result, ensure_ascii=False))
         return 0
 
@@ -438,7 +473,9 @@ def main(argv=None):
             print(json.dumps({"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
                              ensure_ascii=False), file=sys.stderr)
             return 2
-        run = _service(args).create_run(args.scenario, manifest, case_ids)
+        run = _service(args).create_run(
+            args.scenario, manifest, case_ids, requested_manifest=requested
+        )
         print(json.dumps(run, ensure_ascii=False))
         return 0
 

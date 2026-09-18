@@ -47,7 +47,8 @@ def _build_replay(config: dict[str, Any], manifest: dict[str, Any]):
     # lazy import：provider-runtime 不在模块级依赖 motte_sdk（sdk 也不依赖本包，方向安全）
     from motte_sdk.replay_run import ReplayProvider
 
-    return ReplayProvider(config.get("fixture") or {})
+    fixture = config.get("fixture") or (manifest or {}).get("replay_fixture") or {}
+    return ReplayProvider(fixture)
 
 
 def _build_http(config: dict[str, Any], manifest: dict[str, Any]):

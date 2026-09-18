@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import Field, StrictBool, field_validator, model_validator
 
 from .errors import ExecutionError
-from .evidence import Score
+from .evidence import Score, ScoringPass
 from .messages import Contract
 
 
@@ -62,6 +62,11 @@ class EvaluationDescriptor(Contract):
     scorer_version: str = Field(min_length=1)
 
 
+class ReplayCase(Contract):
+    output: Any
+    expected: Any = None
+
+
 class ResolvedManifest(Contract):
     schema_version: int = Field(default=2, ge=2, strict=True)
     execution: ExecutionSpec
@@ -80,6 +85,7 @@ class ResolvedManifest(Contract):
     price_table_version: str | None = None
     benchmark_snapshot: dict[str, Any] | None = None
     benchmark_provenance: dict[str, Any] | None = None
+    replay_fixture: dict[str, ReplayCase] | None = None
     agent: str | None = None
     skills: list[str] = Field(default_factory=list)
     harness: str | None = None
@@ -107,6 +113,7 @@ class CaseAttempt(Contract):
     revision: int = Field(default=1, ge=1, strict=True)
     attempt_no: int = Field(default=1, ge=1, strict=True)
     execution_token: str | None = None
+    execution_backend_id: str | None = None
     idempotency_key: str | None = None
     prepared_at: datetime | None = None
     dispatched_at: datetime | None = None
@@ -133,6 +140,7 @@ class Run(Contract):
     finished_at: datetime | None = None
     cases: list[CaseRun] = Field(default_factory=list)
     scores: list[Score] = Field(default_factory=list)
+    scoring_pass: ScoringPass | None = None
     cancellation: dict[str, Any] | None = None
     error: ExecutionError | None = None
     rescored: bool | None = None

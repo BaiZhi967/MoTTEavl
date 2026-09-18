@@ -179,7 +179,9 @@ def test_cancel_before_worker_marks_every_case_not_attempted():
     assert len(cancelled["scores"]) == 6
     assert all(score["outcome"] == "not_attempted" and not score["attempted"]
                and not score["judged"] for score in cancelled["scores"])
-    assert [event["type"] for event in service.events(run["id"])] == ["queued", "cancelled"]
+    assert [event["type"] for event in service.events(run["id"])] == [
+        "queued", "cancelled", "scoring_pass_created"
+    ]
     assert WorkerLoop(service).claim_and_execute() is None
 
 
@@ -205,7 +207,7 @@ def test_cases_without_expectation_stay_out_of_the_denominator():
     assert summary["no_expectation"] == 1
 
 
-def test_restart_resumes_only_the_unfinished_cases(tmp_path):
+def test_restart_does_not_repeat_an_indeterminate_paid_call(tmp_path):
     from apps.worker.motte_worker.runtime import WorkerLoop
 
     resources, scenario, _ = synthetic_resources()
@@ -224,11 +226,19 @@ def test_restart_resumes_only_the_unfinished_cases(tmp_path):
     with pytest.raises(KeyboardInterrupt):
         service.execute(run["id"], provider=interrupted)
     reopened = RunService(SQLiteRunStore(path))
-    assert WorkerLoop(reopened).recover_interrupted() == [run["id"]]
-    resumed = []
-    result = reopened.execute(run["id"],
-                              provider=lambda case_id: resumed.append(case_id) or {"content": GOLD})
-    assert len(resumed) == 4 and resumed[0] == run["case_ids"][2]
+    assert WorkerLoop(reopened).recover_interrupted() == []
+    uncertain = reopened.get_run(run["id"])
+    assert uncertain["status"] == "needs_review"
+    assert len(uncertain["cases"]) == 2
+    assert reopened.store.attempts.list_for_run(run["id"])[-1]["status"] == "indeterminate"
+
+    # Repeating work requires an explicit operator retry and creates a child Run.
+    child = reopened.retry(run["id"])
+    retried = []
+    result = reopened.execute(
+        child["id"], provider=lambda case_id: retried.append(case_id) or {"content": GOLD}
+    )
+    assert retried == run["case_ids"]
     assert result["status"] == "completed" and len(result["scores"]) == 6
 
 

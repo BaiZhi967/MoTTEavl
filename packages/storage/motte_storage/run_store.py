@@ -15,7 +15,7 @@ from threading import RLock
 from typing import Any
 from uuid import uuid4
 
-from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event
+from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event, validate_scores
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -354,6 +354,7 @@ class _SQLiteScores:
         self._path = path
 
     def replace_for_run(self, run_id: str, scores: list[dict[str, Any]]) -> None:
+        scores = validate_scores(scores)
         connection = _connect(self._path)
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -540,6 +541,7 @@ class _InMemoryScores:
         self._lock = lock
 
     def replace_for_run(self, run_id: str, scores: list[dict[str, Any]]) -> None:
+        scores = validate_scores(scores)
         with self._lock:
             self._scores[run_id] = deepcopy(scores)
 
@@ -598,7 +600,7 @@ def InMemoryRunStore() -> RunStore:
         case_runs=cases,
         events=events,
         scores=_InMemoryScores(lock),
-        attempts=MemoryAttempts(cases, events, lock),
+        attempts=MemoryAttempts(runs, cases, events, lock),
         scoring_passes=MemoryScoringPasses(runs, events, score_sets, lock),
         score_sets=score_sets,
         commands=MemoryCommands(lock),

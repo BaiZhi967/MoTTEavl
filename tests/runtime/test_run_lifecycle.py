@@ -30,12 +30,58 @@ def test_execute_emits_full_lifecycle_events(tmp_path):
         "scoring",
         "score",
         "score",
+        "scoring_pass_created",
         "completed",
     ]
     assert result["scores"] == [
         {"case_id": "case-1", "passed": True},
         {"case_id": "case-2", "passed": False},
     ]
+
+
+def test_scoring_rejects_case_ids_outside_run_selection(monkeypatch):
+    service = RunService(InMemoryRunStore())
+    run = service.create_run("replay@1", {}, case_ids=["case-1"])
+    monkeypatch.setattr(service, "_score_results", lambda *_args, **_kwargs: [
+        {"case_id": "bogus", "passed": True}
+    ])
+
+    result = service.execute(run["id"], provider=lambda _case_id: {"output": 1})
+
+    assert result["status"] == "failed"
+    assert "outside the run selection" in result["error"]["message"]
+    assert service.store.scoring_passes.list_for_run(run["id"]) == []
+
+
+def test_scoring_rejects_plugin_owned_scoring_pass_binding(monkeypatch):
+    service = RunService(InMemoryRunStore())
+    run = service.create_run("replay@1", {}, case_ids=["case-1"])
+    monkeypatch.setattr(service, "_score_results", lambda *_args, **_kwargs: [
+        {"case_id": "case-1", "passed": True, "scoring_pass_id": "other-pass"}
+    ])
+
+    result = service.execute(run["id"], provider=lambda _case_id: {"output": 1})
+
+    assert result["status"] == "failed"
+    assert "assigned by the scoring pass" in result["error"]["message"]
+    assert service.store.scoring_passes.list_for_run(run["id"]) == []
+
+
+def test_scoring_failure_is_terminal_and_does_not_leave_run_in_scoring(monkeypatch):
+    service = RunService(InMemoryRunStore())
+    run = service.create_run("replay@1", {}, case_ids=["case-1"])
+    monkeypatch.setattr(
+        service,
+        "_score_results",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("scorer exploded")),
+    )
+
+    result = service.execute(run["id"], provider=lambda _case_id: {"output": 1})
+
+    assert result["status"] == "failed"
+    assert service.get_run(run["id"])["status"] == "failed"
+    assert service.store.scoring_passes.list_for_run(run["id"]) == []
+    assert service.events(run["id"])[-1]["type"] == "failed"
 
 
 def test_cancel_records_reason_and_blocks_remaining_cases():
@@ -98,7 +144,7 @@ def test_profile_stale_blocks_execution_and_is_retryable():
     assert stale["error"] == {"code": "PROFILE_STALE", "message": "model profile updated"}
     with pytest.raises(ValueError, match="terminal"):
         service.execute(run["id"], [])
-    child = service.retry(run["id"])
+    child = service.retry(run["id"], refreshed_manifest={})
     assert child["parent_run_id"] == run["id"]
 
 
@@ -111,11 +157,13 @@ def test_rescore_recomputes_scores_without_provider_calls():
 
     service = RunService(InMemoryRunStore(), provider=tracking)
     run = service.create_run("replay@1", {})
-    service.execute(run["id"], ["case-1"], expectations={"case-1": {"n": 1}})
+    original = service.execute(run["id"], ["case-1"], expectations={"case-1": {"n": 1}})
     assert calls == ["case-1"]
+    original_pass = original["current_scoring_pass_id"]
     rescored = service.rescore(run["id"])
     assert rescored["scores"] == [{"case_id": "case-1", "passed": True}]
-    assert rescored["rescored"] is True
+    assert rescored["current_scoring_pass_id"] != original_pass
+    assert len(service.store.scoring_passes.list_for_run(run["id"])) == 2
     assert calls == ["case-1"]
     event_types = [event["type"] for event in service.events(run["id"])]
     assert "rescored" in event_types
@@ -133,7 +181,9 @@ def test_invalid_transition_is_rejected():
 def test_completed_run_reexecution_returns_same_result():
     service = RunService(InMemoryRunStore())
     run = service.create_run("replay@1", {})
-    first = service.execute(run["id"], ["case-1"])
+    first = service.execute(
+        run["id"], ["case-1"], provider=lambda case_id: {"case_id": case_id}
+    )
     second = service.execute(run["id"], ["case-1"])
     assert first == second
     assert service.get_run(run["id"])["case_ids"] == ["case-1"]
