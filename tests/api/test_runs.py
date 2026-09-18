@@ -1,5 +1,8 @@
 from fastapi.testclient import TestClient
 from apps.api.app.main import create_app
+from apps.worker.motte_worker.reporting import WorkerReporter
+from apps.worker.motte_worker.runtime import WorkerLoop
+from motte_sdk.service import RunService
 from motte_storage.run_store import InMemoryRunStore, SQLiteRunStore
 
 
@@ -25,16 +28,19 @@ def test_api_reopens_durable_repository(tmp_path):
     assert second.get(f"/api/v1/runs/{created['id']}").json()["status"] == "queued"
 
 
-def test_replay_run_completes_through_api(tmp_path):
-    from motte_sdk.replay_run import ReplayProvider
-
+def test_replay_run_is_queued_then_completed_by_dispatcher(tmp_path):
     app = create_app(SQLiteRunStore(tmp_path / "api.db"))
     client = TestClient(app)
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
     fixture = {"case-1": {"output": {"name": "Ada"}, "expected": {"name": "Ada"}}}
     response = client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": fixture})
-    assert response.status_code == 200
-    assert response.json()["scores"] == [{"case_id": "case-1", "passed": True}]
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
+
+    result = WorkerLoop(
+        app.state.run_service, reporter=WorkerReporter(enabled=False)
+    ).claim_and_execute(run["id"])
+    assert result["scores"] == [{"case_id": "case-1", "passed": True}]
 
 
 def test_retry_endpoint_creates_child_run_for_cancelled_run():
@@ -54,6 +60,7 @@ def test_retry_endpoint_rejects_completed_run(tmp_path):
     client = TestClient(create_app(SQLiteRunStore(tmp_path / "api.db")))
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
     client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": {"case-1": {"output": 1, "expected": 1}}})
+    WorkerLoop(client.app.state.run_service, reporter=WorkerReporter(enabled=False)).claim_and_execute(run["id"])
     conflict = client.post(f"/api/v1/runs/{run['id']}/retry")
     assert conflict.status_code == 409
 
@@ -63,8 +70,12 @@ def test_rescore_endpoint_recomputes_scores_without_new_model_calls(tmp_path):
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1", "case_ids": ["case-1"]}).json()
     fixture = {"case-1": {"output": {"n": 1}, "expected": {"n": 1}}}
     client.post(f"/api/v1/runs/{run['id']}/replay", json={"cases": fixture})
+    completed = WorkerLoop(
+        client.app.state.run_service, reporter=WorkerReporter(enabled=False)
+    ).claim_and_execute(run["id"])
+    initial_pass = completed["current_scoring_pass_id"]
     rescored = client.post(f"/api/v1/runs/{run['id']}/rescore").json()
-    assert rescored["rescored"] is True
+    assert rescored["current_scoring_pass_id"] != initial_pass
     assert rescored["scores"] == [{"case_id": "case-1", "passed": True}]
     model_responses = [
         event
@@ -178,12 +189,31 @@ def test_create_run_rejects_nested_plaintext_credentials():
     assert store.runs.list() == []
 
 
-def test_messages_endpoint_accepts_active_run_message():
+def test_messages_endpoint_rejects_noninteractive_backend_without_fake_acceptance():
     client = TestClient(create_app(InMemoryRunStore()))
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
     response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue"})
-    assert response.status_code == 202
-    assert response.json()["run_id"] == run["id"]
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "COMMAND_UNSUPPORTED"
+    assert client.get(f"/api/v1/runs/{run['id']}/commands").json()["items"] == []
+
+
+def test_messages_endpoint_does_not_trust_manifest_claimed_command_transport():
+    store = InMemoryRunStore()
+    service = RunService(store)
+    run = service.create_run("custom@1", {
+        "execution": {
+            "backend_id": "future-interactive",
+            "backend_version": "1",
+            "capabilities": {"interactive": True},
+            "command_transport": "durable-v1",
+        },
+    })
+    client = TestClient(create_app(store))
+    response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue"})
+    assert response.status_code == 501
+    assert response.json()["error"]["code"] == "RUN_COMMANDS_NOT_IMPLEMENTED"
+    assert store.commands.list_for_run(run["id"]) == []
 
 
 def test_create_run_with_model_reference_expands_snapshot():
@@ -243,8 +273,159 @@ def test_price_tables_crud_roundtrip():
         "model_id": "m", "version": "v", "input_per_million": -1,
     })
     assert negative.status_code == 422
-    assert client.delete("/api/v1/price_tables/gpt-4o-mini/2024-09").status_code == 200
-    assert client.get("/api/v1/price_tables/gpt-4o-mini/2024-09").status_code == 404
+    deleted = client.delete("/api/v1/price_tables/gpt-4o-mini/2024-09")
+    assert deleted.status_code == 409
+    assert deleted.json()["error"]["code"] == "PUBLISHED_RESOURCE_IMMUTABLE"
+    assert client.get("/api/v1/price_tables/gpt-4o-mini/2024-09").status_code == 200
+
+
+def test_model_publish_and_provider_generation_are_snapshotted():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=resources))
+    provider = client.post("/api/v1/providers", json={
+        "name": "local", "kind": "openai_compatible", "base_url": "https://one.test/v1",
+    })
+    assert provider.status_code == 201
+    assert provider.json()["generation"] == 1
+    provider = client.put("/api/v1/providers/local", json={"base_url": "https://two.test/v1"})
+    assert provider.json()["generation"] == 2
+
+    model = client.post("/api/v1/models", json={
+        "id": "m1", "provider": "local", "capabilities": {},
+    })
+    assert model.status_code == 201
+    assert model.json()["lifecycle"] == "draft"
+    assert model.json()["profile_hash"].startswith("sha256:")
+    unpublished = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1", "manifest": {"model": "m1"},
+    })
+    assert unpublished.status_code == 422
+    assert unpublished.json()["error"]["code"] == "MODEL_NOT_PUBLISHED"
+
+    published = client.post("/api/v1/models/m1/publish")
+    assert published.status_code == 200
+    assert published.json()["lifecycle"] == "published"
+    assert published.json()["generation"] == 2
+    run = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1", "manifest": {"model": "m1"},
+        "case_ids": ["case-1"],
+    })
+    assert run.status_code == 202
+    snapshots = run.json()["manifest"]["resource_snapshots"]
+    assert snapshots["provider_connection"]["generation"] == 2
+    assert snapshots["model_profile"]["generation"] == 2
+    assert snapshots["model_profile"]["lifecycle"] == "published"
+
+    updated = client.put("/api/v1/providers/local", json={"base_url": "https://three.test/v1"})
+    assert updated.json()["generation"] == 3
+    persisted = client.get(f"/api/v1/runs/{run.json()['id']}").json()
+    assert persisted["manifest"]["resource_snapshots"]["provider_connection"]["generation"] == 2
+    assert client.put("/api/v1/models/m1", json={"enabled": False}).status_code == 409
+    assert client.delete("/api/v1/models/m1").json() == {"deprecated": "m1"}
+    assert client.get("/api/v1/models/m1").json()["lifecycle"] == "deprecated"
+
+
+def test_profile_stale_retry_re_resolves_requested_resources():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    app = create_app(InMemoryRunStore(), resource_store=resources)
+    client = TestClient(app)
+    client.post("/api/v1/providers", json={
+        "name": "local", "kind": "openai_compatible", "base_url": "https://one.test/v1",
+    })
+    client.post("/api/v1/models", json={
+        "id": "m1", "provider": "local", "capabilities": {},
+    })
+    client.post("/api/v1/models/m1/publish")
+    parent = client.post("/api/v1/runs", json={
+        "scenario_version": "direct-llm@1", "manifest": {"model": "m1"},
+        "case_ids": ["case-1"],
+    }).json()
+    assert parent["manifest"]["resource_snapshots"]["provider_connection"]["generation"] == 1
+
+    client.put("/api/v1/providers/local", json={"base_url": "https://two.test/v1"})
+    app.state.run_service.mark_profile_stale(parent["id"], reason="provider generation changed")
+    child = client.post(f"/api/v1/runs/{parent['id']}/retry")
+    assert child.status_code == 200
+    assert child.json()["parent_run_id"] == parent["id"]
+    assert child.json()["requested_manifest"] == {"model": "m1"}
+    assert child.json()["manifest"]["resource_snapshots"]["provider_connection"]["generation"] == 2
+
+
+def test_explicit_top_level_replay_fixture_is_validated_and_selects_cases():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    client = TestClient(create_app(InMemoryRunStore(), resource_store=InMemoryResourceStore()))
+    valid = {"a": {"output": {"ok": True}, "expected": {"ok": True}}}
+    created = client.post("/api/v1/runs", json={
+        "scenario_version": "replay@1",
+        "manifest": {"replay_fixture": valid},
+    })
+    assert created.status_code == 202
+    assert created.json()["case_ids"] == ["a"]
+    from apps.worker.motte_worker.runtime import WorkerLoop
+
+    from apps.worker.motte_worker.reporting import WorkerReporter
+
+    completed = WorkerLoop(
+        client.app.state.run_service,
+        reporter=WorkerReporter(enabled=False),
+    ).claim_and_execute(created.json()["id"])
+    assert completed["status"] == "completed"
+    assert completed["scores"] == [{"case_id": "a", "passed": True}]
+
+    top_level = client.post("/api/v1/runs", json={
+        "scenario_version": "replay@1",
+        "manifest": {"replay_fixture": valid},
+        "case_ids": ["a"],
+    }).json()
+    mismatch = client.post(
+        f"/api/v1/runs/{top_level['id']}/replay",
+        json={"cases": {"a": {"output": {"different": True}}}},
+    )
+    assert mismatch.status_code == 409
+
+    for fixture, case_ids, code in (
+        ({}, ["a"], "REPLAY_FIXTURE_INVALID"),
+        ({"b": {"output": 1}}, ["a"], "REPLAY_CASE_NOT_FOUND"),
+    ):
+        response = client.post("/api/v1/runs", json={
+            "scenario_version": "replay@1",
+            "manifest": {"replay_fixture": fixture},
+            "case_ids": case_ids,
+        })
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == code
+
+
+def test_replay_profile_stale_retry_preserves_provider_reference_and_fixture():
+    from motte_storage.resource_store import InMemoryResourceStore
+
+    resources = InMemoryResourceStore()
+    app = create_app(InMemoryRunStore(), resource_store=resources)
+    client = TestClient(app)
+    provider = client.post("/api/v1/providers", json={"name": "replay-local", "kind": "replay"})
+    assert provider.status_code == 201
+    parent = client.post("/api/v1/runs", json={
+        "scenario_version": "replay@1",
+        "manifest": {"provider": "replay-local"},
+        "case_ids": ["case-1"],
+    }).json()
+    fixture = {"case-1": {"output": {"n": 1}, "expected": {"n": 1}}}
+    assert client.post(f"/api/v1/runs/{parent['id']}/replay", json={"cases": fixture}).status_code == 202
+    app.state.run_service.mark_profile_stale(parent["id"], reason="provider generation changed")
+
+    child = client.post(f"/api/v1/runs/{parent['id']}/retry")
+
+    assert child.status_code == 200
+    assert child.json()["requested_manifest"] == {
+        "provider": "replay-local", "replay_fixture": fixture
+    }
+    assert child.json()["manifest"]["provider"]["kind"] == "replay"
+    assert child.json()["manifest"]["replay_fixture"] == fixture
 
 
 def test_provider_resource_rejects_bad_transport_params():
