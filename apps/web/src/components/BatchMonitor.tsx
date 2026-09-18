@@ -86,6 +86,13 @@ export function BatchMonitor({ runIds, resultPath, comparePath, renderDetail }: 
           <BatchRow key={runId} runId={runId} resultPath={resultPath} renderDetail={renderDetail} />
         ))}
       </ul>
+      {runIds.length === 0 && (
+        <p className="empty">
+          未指定运行。从各类型操作页发起跑测后自动进入，或到
+          <Link className="link" to="/runs">运行总览</Link>
+          查看历史运行。
+        </p>
+      )}
       {comparePath && <Link className="link" to={comparePath}>查看对比结果</Link>}
     </section>
   );
