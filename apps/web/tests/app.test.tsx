@@ -69,6 +69,6 @@ describe("应用路由（收尾）", () => {
     renderWithLocation("/gsm8k");
     expect(screen.getByRole("link", { name: /GSM8K 数学评测/ })).toBeTruthy();
     expect(screen.getByRole("link", { name: /Direct LLM 评测/ })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Replay 回放/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Replay$/ })).toBeTruthy();
   });
 });
