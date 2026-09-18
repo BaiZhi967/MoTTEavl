@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { getRun, cancelRun, retryRun, rescoreRun, getReport, type RunRecord } from "../../api/client";
 import { isTerminal, useRunEvents } from "../../hooks/useRunEvents";
 import { StatusBadge } from "../../components/StatusBadge";
 import { RunTimeline } from "../../components/RunTimeline";
 import { ScoreTable } from "../../components/ScoreTable";
+import { RunAuditSummary } from "../../components/RunAuditSummary";
 
 /** 未匹配类型 run 的通用过程页：状态 + 时间线 + 取消/重试。 */
 export function FallbackMonitorPage() {
   const { runId = "" } = useParams();
+  const navigate = useNavigate();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [error, setError] = useState("");
   const { events, status } = useRunEvents(runId);
@@ -25,6 +27,15 @@ export function FallbackMonitorPage() {
     }
     return () => { alive = false; };
   }, [runId, terminal]);
+
+  const retry = async () => {
+    try {
+      const child = await retryRun(runId);
+      navigate(`/runs/${child.id}/monitor`);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const act = async (action: () => Promise<unknown>) => {
     try {
@@ -46,8 +57,8 @@ export function FallbackMonitorPage() {
             ) : (
               <button type="button" onClick={() => act(() => cancelRun(runId, "web 控制台取消"))}>取消</button>
             )}
-            {terminal && run && ["failed", "cancelled", "unsupported", "profile_stale"].includes(current ?? "") && (
-              <button type="button" onClick={() => act(() => retryRun(runId))}>重试</button>
+            {terminal && run && ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(current ?? "") && (
+              <button type="button" onClick={() => void retry()}>重试</button>
             )}
           </div>
         </div>
@@ -129,6 +140,7 @@ export function FallbackResultPage() {
             {run.cancellation?.reason && (<><dt>取消原因</dt><dd>{run.cancellation.reason}</dd></>)}
           </dl>
         )}
+        {run && <RunAuditSummary run={run} />}
         {run?.scores && <ScoreTable scores={run.scores} embedded />}
       </section>
     </div>

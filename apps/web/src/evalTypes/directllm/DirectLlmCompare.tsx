@@ -29,7 +29,9 @@ function collect(run: RunRecord, report: { cost?: { total?: number | null } } | 
     judged: judged.length,
     tokens,
     cost: report?.cost?.total ?? null,
-    failedCases: judged.filter((score) => !score.passed).map((score) => score.case_id),
+    failedCases: judged
+      .filter((score) => !score.passed && typeof score.case_id === "string")
+      .map((score) => score.case_id as string),
     run,
   };
 }

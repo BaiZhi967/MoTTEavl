@@ -4,6 +4,7 @@ import { getReport, getRun, rescoreRun, type RunRecord } from "../../api/client"
 import { MetricCards } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { StatusBadge } from "../../components/StatusBadge";
+import { RunAuditSummary } from "../../components/RunAuditSummary";
 import { runSelectionLabel } from "./selection";
 
 /* 词汇表对齐真实 scorer（packages/evaluators/motte_eval/gsm8k.py）五种 outcome。 */
@@ -106,6 +107,7 @@ export function Gsm8kResult() {
           { label: priceTable ? `成本 · pt ${priceTable}` : "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
           { label: `口径（选中 ${run.case_ids?.length ?? 0} · 应答 ${attempted}）`, value: `${passed}/${scores.length}`, tone: "neutral" },
         ]} />
+        <RunAuditSummary run={run} />
         <CaseDrillTable rows={rows} />
       </section>
     </div>

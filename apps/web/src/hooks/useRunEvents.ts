@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { subscribeRunEvents, type TraceEvent } from "../api/client";
 
-const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "unsupported", "profile_stale"];
+const TERMINAL_STATUSES = ["completed", "failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
 
 export function isTerminal(status: string | null): boolean {
   return status != null && TERMINAL_STATUSES.includes(status);
@@ -11,8 +11,9 @@ export function isTerminal(status: string | null): boolean {
 export function countDone(events: TraceEvent[]): number {
   const done = new Set<string>();
   for (const event of events) {
-    if ((event.type === "model_response" || event.type === "case_call_failed") && typeof event.case_id === "string") {
-      done.add(event.case_id);
+    const payload: Record<string, any> = event.payload ?? (event as unknown as Record<string, any>);
+    if ((event.type === "model_response" || event.type === "case_call_failed") && typeof payload.case_id === "string") {
+      done.add(payload.case_id);
     }
   }
   return done.size;
@@ -28,8 +29,9 @@ export function useRunEvents(runId: string): { events: TraceEvent[]; status: str
     const unsubscribe = subscribeRunEvents(runId, {
       onEvent: (event) => {
         setEvents((current) => (current.some((item) => item.seq === event.seq) ? current : [...current, event]));
-        if (typeof event.status === "string") {
-          setStatus(event.status);
+        const payload: Record<string, any> = event.payload ?? (event as unknown as Record<string, any>);
+        if (typeof payload.status === "string") {
+          setStatus(payload.status);
         }
       },
     });

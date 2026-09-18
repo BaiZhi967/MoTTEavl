@@ -346,6 +346,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/models/{model_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Model */
+        post: operations["publish_model_api_v1_models__model_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/models/{model_id}/test": {
         parameters: {
             query?: never;
@@ -530,6 +547,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Run Commands */
+        get: operations["list_run_commands_api_v1_runs__run_id__commands_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/events": {
         parameters: {
             query?: never;
@@ -632,6 +666,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/scoring-passes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Scoring Passes */
+        get: operations["list_scoring_passes_api_v1_runs__run_id__scoring_passes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scenarios": {
         parameters: {
             query?: never;
@@ -707,10 +758,394 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** CancelRunRequest */
+        CancelRunRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /** CaseRun */
+        CaseRun: {
+            /** Attempt Id */
+            attempt_id?: string | null;
+            /** Case Id */
+            case_id: string;
+            error?: components["schemas"]["ExecutionError"] | null;
+            /** Expected */
+            expected?: unknown;
+            /** Ordinal */
+            ordinal?: number | null;
+            /** Outcome */
+            outcome?: string | null;
+            /** Result */
+            result?: unknown;
+            /** Run Id */
+            run_id: string;
+            /** Status */
+            status?: string | null;
+            /**
+             * Stop Run
+             * @default false
+             */
+            stop_run: boolean;
+        };
+        /** CreateRunRequest */
+        CreateRunRequest: {
+            /** Case Ids */
+            case_ids?: string[];
+            /** Manifest */
+            manifest?: {
+                [key: string]: unknown;
+            };
+            /** Scenario Version */
+            scenario_version: string;
+        };
+        /** EvaluationDescriptor */
+        EvaluationDescriptor: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Adapter Version */
+            adapter_version: string;
+            /** Benchmark Id */
+            benchmark_id: string;
+            /** Benchmark Version */
+            benchmark_version: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /** ExecutionError */
+        ExecutionError: {
+            /** Code */
+            code?: string | null;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+            /** Error Class */
+            error_class?: string | null;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            } | null;
+            /** Field */
+            field?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Pointer */
+            pointer?: string | null;
+            /** Type */
+            type?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** ReplayCase */
+        ReplayCase: {
+            /** Expected */
+            expected?: unknown;
+            /** Output */
+            output: unknown;
+        };
+        /** ReplayRunRequest */
+        ReplayRunRequest: {
+            /** Cases */
+            cases: {
+                [key: string]: components["schemas"]["ReplayCase"];
+            };
+        };
+        /** ReportCase */
+        ReportCase: {
+            /** Case Id */
+            case_id: string;
+            /** Outcome */
+            outcome?: string | null;
+            /** Result */
+            result?: unknown;
+        };
+        /** ReportCost */
+        ReportCost: {
+            /** Known Cases */
+            known_cases?: number | null;
+            /** Price Table Versions */
+            price_table_versions?: string[];
+            /** Total */
+            total?: number | null;
+            /** Unknown Cases */
+            unknown_cases?: number | null;
+        };
+        /** ReportSummary */
+        ReportSummary: {
+            /** Accuracy */
+            accuracy?: number | null;
+            /** Aggregate */
+            aggregate?: {
+                [key: string]: unknown;
+            };
+            /** Attempt Rate */
+            attempt_rate?: number | null;
+            /** Attempted */
+            attempted?: number | null;
+            /** Call Failed */
+            call_failed?: number | null;
+            /** Cases */
+            cases: number;
+            /** Completion */
+            completion?: number | null;
+            /** Correct */
+            correct?: number | null;
+            /** Denominator */
+            denominator?: string | null;
+            /** Failed */
+            failed: number;
+            /** Judged */
+            judged?: number | null;
+            /** No Expectation */
+            no_expectation?: number | null;
+            /** Not Attempted */
+            not_attempted?: number | null;
+            /** Parse Failure */
+            parse_failure?: number | null;
+            /** Pass Rate */
+            pass_rate?: number | null;
+            /** Passed */
+            passed: number;
+            /** Responded */
+            responded?: number | null;
+            /** Scored */
+            scored: number;
+            /** Scorer Version */
+            scorer_version?: string | null;
+            /** Selected */
+            selected?: number | null;
+            /** Unjudged */
+            unjudged?: number | null;
+            /** Wrong Answer */
+            wrong_answer?: number | null;
+        };
+        /** Run */
+        Run: {
+            /** Cancellation */
+            cancellation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Case Ids */
+            case_ids?: string[];
+            /** Cases */
+            cases?: components["schemas"]["CaseRun"][];
+            /** Created At */
+            created_at?: string | null;
+            /** Current Scoring Pass Id */
+            current_scoring_pass_id?: string | null;
+            error?: components["schemas"]["ExecutionError"] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /** Manifest */
+            manifest?: {
+                [key: string]: unknown;
+            };
+            /** Model */
+            model?: string | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Requested Manifest */
+            requested_manifest?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rescored */
+            rescored?: boolean | null;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /** Scenario Version */
+            scenario_version: string;
+            /**
+             * Schema Version
+             * @default 2
+             */
+            schema_version: number;
+            /** Scores */
+            scores?: components["schemas"]["Score"][];
+            scoring_pass?: components["schemas"]["ScoringPass"] | null;
+            /** Started At */
+            started_at?: string | null;
+            /** @default queued */
+            status: components["schemas"]["RunStatus"];
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /** RunCommand */
+        RunCommand: {
+            /** Acknowledged At */
+            acknowledged_at?: string | null;
+            /** Content */
+            content?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Delivered At */
+            delivered_at?: string | null;
+            error?: components["schemas"]["ExecutionError"] | null;
+            /** Execution Token */
+            execution_token?: string | null;
+            /** Failed At */
+            failed_at?: string | null;
+            /** Id */
+            id: string;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            /** Run Id */
+            run_id: string;
+            /** @default queued */
+            status: components["schemas"]["RunCommandStatus"];
+            /**
+             * Type
+             * @default user_message
+             */
+            type: string;
+        };
+        /** RunCommandListResponse */
+        RunCommandListResponse: {
+            /** Items */
+            items: components["schemas"]["RunCommand"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * RunCommandStatus
+         * @enum {string}
+         */
+        RunCommandStatus: "queued" | "delivered" | "acknowledged" | "failed";
+        /** RunListResponse */
+        RunListResponse: {
+            /** Items */
+            items: components["schemas"]["Run"][];
+            /** Total */
+            total: number;
+        };
+        /** RunMessageRequest */
+        RunMessageRequest: {
+            /** Content */
+            content: string;
+        };
+        /** RunReport */
+        RunReport: {
+            /** Benchmark */
+            benchmark?: {
+                [key: string]: unknown;
+            } | null;
+            /** Cases */
+            cases?: components["schemas"]["ReportCase"][];
+            cost: components["schemas"]["ReportCost"];
+            evaluation?: components["schemas"]["EvaluationDescriptor"] | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Run Id */
+            run_id: string;
+            /** Scenario Version */
+            scenario_version: string;
+            /**
+             * Schema Version
+             * @default 2
+             */
+            schema_version: number;
+            /** Scores */
+            scores?: components["schemas"]["Score"][];
+            /** Scoring Pass Id */
+            scoring_pass_id?: string | null;
+            status: components["schemas"]["RunStatus"];
+            summary: components["schemas"]["ReportSummary"];
+            /** Usage */
+            usage?: {
+                [key: string]: number;
+            } | null;
+        };
+        /**
+         * RunStatus
+         * @enum {string}
+         */
+        RunStatus: "queued" | "preparing" | "running" | "collecting" | "scoring" | "completed" | "failed" | "cancelled" | "unsupported" | "profile_stale" | "needs_review";
+        /** Score */
+        Score: {
+            /** Attempted */
+            attempted?: boolean | null;
+            /** Case Id */
+            case_id?: string | null;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+            /** Error Class */
+            error_class?: string | null;
+            /** Evaluator */
+            evaluator?: string | null;
+            /** Judged */
+            judged?: boolean | null;
+            /** Outcome */
+            outcome?: string | null;
+            /** Parsed */
+            parsed?: string | null;
+            /** Passed */
+            passed?: boolean | null;
+            /** Responded */
+            responded?: boolean | null;
+            /** Scorer */
+            scorer?: string | null;
+            /** Scorer Version */
+            scorer_version?: string | null;
+            /** Scoring Pass Id */
+            scoring_pass_id?: string | null;
+            /** Value */
+            value?: number | null;
+        };
+        /** ScoringPass */
+        ScoringPass: {
+            /** Created At */
+            created_at?: string | null;
+            /** Id */
+            id: string;
+            /** Previous Pass Id */
+            previous_pass_id?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Scores */
+            scores?: components["schemas"]["Score"][];
+            /** Source */
+            source?: string | null;
+            /** Source Run Revision */
+            source_run_revision?: number | null;
+            /** Source Snapshot Hash */
+            source_snapshot_hash?: string | null;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ScoringPassListResponse */
+        ScoringPassListResponse: {
+            /** Items */
+            items: components["schemas"]["ScoringPass"][];
+            /** Total */
+            total: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -1372,6 +1807,37 @@ export interface operations {
             };
         };
     };
+    publish_model_api_v1_models__model_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     test_model_api_v1_models__model_id__test_post: {
         parameters: {
             query?: never;
@@ -1719,7 +2185,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RunListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1742,9 +2208,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["CreateRunRequest"];
             };
         };
         responses: {
@@ -1754,7 +2218,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */
@@ -1785,7 +2249,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */
@@ -1810,9 +2274,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                } | null;
+                "application/json": components["schemas"]["CancelRunRequest"] | null;
             };
         };
         responses: {
@@ -1822,7 +2284,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_run_commands_api_v1_runs__run_id__commands_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunCommandListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1880,14 +2373,19 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["RunMessageRequest"];
             };
         };
         responses: {
-            /** @description Successful Response */
-            202: {
+            /** @description Run not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Command unsupported for this run */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1904,6 +2402,13 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description No command consumer is registered */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     replay_run_api_v1_runs__run_id__replay_post: {
@@ -1917,19 +2422,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["ReplayRunRequest"];
             };
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */
@@ -1945,7 +2448,9 @@ export interface operations {
     };
     run_report_api_v1_runs__run_id__report_get: {
         parameters: {
-            query?: never;
+            query?: {
+                scoring_pass_id?: string | null;
+            };
             header?: never;
             path: {
                 run_id: string;
@@ -1960,7 +2465,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RunReport"];
                 };
             };
             /** @description Validation Error */
@@ -1991,7 +2496,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Run"];
                 };
             };
             /** @description Validation Error */
@@ -2022,7 +2527,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_scoring_passes_api_v1_runs__run_id__scoring_passes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoringPassListResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelRun, createBenchmarkRun, createRun, getBenchmarkCases, getRuns, importBenchmark,
-  setCredential, updateModel, updateProvider,
+  publishModel, setCredential, updateModel, updateProvider,
 } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
@@ -69,6 +69,15 @@ describe("api client", () => {
     expect(url).toBe("/api/v1/models/qwen2.5-7b");
     expect((init as any).method).toBe("PUT");
     expect(JSON.parse((init as any).body)).toEqual({ enabled: true });
+  });
+
+  it("POST publishModel 显式发布草稿", async () => {
+    const fetchMock = mockFetch(200, { id: "qwen2.5-7b", lifecycle: "published" });
+    const published = await publishModel("qwen2.5-7b");
+    expect(published.lifecycle).toBe("published");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/models/qwen2.5-7b/publish");
+    expect((init as any).method).toBe("POST");
   });
 
   it("POST importBenchmark 带 scope 与 pinned revision", async () => {
