@@ -147,9 +147,11 @@ def test_cases_pagination_search_and_missing_dataset():
 def _model(client, model_id="probe"):
     client.post("/api/v1/providers", json={"name": "local", "kind": "openai_compatible",
                                            "base_url": "https://local.test/v1"})
-    client.post("/api/v1/models", json={"id": model_id, "provider": "local",
-                                        "model": "probe-1", "capabilities": {},
-                                        "max_output_tokens": 8192})
+    created = client.post("/api/v1/models", json={"id": model_id, "provider": "local",
+                                                  "model": "probe-1", "capabilities": {},
+                                                  "max_output_tokens": 8192})
+    assert created.status_code == 201
+    assert client.post(f"/api/v1/models/{model_id}/publish").status_code == 200
     return model_id
 
 
