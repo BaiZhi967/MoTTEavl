@@ -21,4 +21,13 @@ describe("全局样式完整性", () => {
   it("[hidden] 不被作者样式（display:block）复活", () => {
     expect(css).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
   });
+
+  it("ModelPicker 行内布局压过 .operate-card label 的 display:block", () => {
+    expect(css).toContain(".operate-card .model-picker-item {");
+  });
+
+  it("工具类只定义一次", () => {
+    expect(css.match(/\.actions\s*\{/g)).toHaveLength(1);
+    expect(css.match(/\.run-progress\s*\{/g)).toHaveLength(1);
+  });
 });
