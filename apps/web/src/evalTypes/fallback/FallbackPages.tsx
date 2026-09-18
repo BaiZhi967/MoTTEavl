@@ -113,6 +113,7 @@ export function FallbackResultPage() {
         <div className="panel-head">
           <h2 className="mono">运行 {runId}</h2>
           <div className="panel-head-actions">
+            <Link className="link" to="/runs">返回总览</Link>
             <button type="button" onClick={() => act(() => rescoreRun(runId))} disabled={run?.status !== "completed"}>
               重新评分
             </button>
