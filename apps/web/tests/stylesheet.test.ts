@@ -1,0 +1,14 @@
+import { describe, expect, it } from "vitest";
+import css from "../src/index.css?raw";
+
+/* 全局 CSS 完整性：这些断言对应审计报告里"一处代码坏，全站跟着坏"的缺陷，
+ * 防止工具类重复定义、全局规则缺失等问题回归。 */
+describe("全局样式完整性", () => {
+  it("全局 box-sizing: border-box", () => {
+    expect(css).toMatch(/\*,\s*\*::before,\s*\*::after\s*\{\s*box-sizing:\s*border-box;?\s*\}/);
+  });
+
+  it("冗余的局部 box-sizing 已收敛到全局一条", () => {
+    expect(css.match(/box-sizing:\s*border-box/g)).toHaveLength(1);
+  });
+});

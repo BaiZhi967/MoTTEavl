@@ -124,7 +124,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 滑出面板（Dialog） | 富视图详情与创建表单（运行详情、创建 Provider）用右侧滑出：`min(720px, 100vw - 280px)` 宽、左边框 1px、200ms 右滑入场；遮罩 `rgba(17,17,17,0.32)`；标题左侧、X 关闭按钮右侧 |
 | 下拉菜单（DropdownMenu） | 行操作收敛为 `···` 触发；白底 1px 边框 8px 圆角 + 极淡阴影 `0 4px 16px rgba(0,0,0,0.05)`；破坏性操作文字用 error 前景色 |
 | 下拉选择（Select） | Radix Select，trigger 与原生输入控件同规格（168px 起、1px 边框、6px 圆角），选中项右侧 Check 指示；简单过滤场景可用同款样式的原生 `<select>`（如时间线事件过滤、表单内固定选项的协议类型） |
-| 开关（Switch） | 32×18 pill（`box-sizing: border-box` + `padding: 0`，并显式压掉全局 `button` 的 hover 底色——Radix Switch.Root 本身就是 `<button>`），关闭态 `--tone-neutral-bg`，开启态 `--ink` 实色；thumb 12px 绝对定位、离边 2px，位移只用 `transform` 200ms，禁止把滑块写成 flex 流内元素（会被压扁并顶出胶囊） |
+| 开关（Switch） | 32×18 pill（`padding: 0`，并显式压掉全局 `button` 的 hover 底色——Radix Switch.Root 本身就是 `<button>`），关闭态 `--tone-neutral-bg`，开启态 `--ink` 实色；thumb 12px 绝对定位、离边 2px，位移只用 `transform` 200ms，禁止把滑块写成 flex 流内元素（会被压扁并顶出胶囊） |
 | 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
 | kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
 | 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |
