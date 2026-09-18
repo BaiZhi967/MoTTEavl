@@ -39,29 +39,54 @@ def migrated_dsn(dsn):
     import importlib.util
     from pathlib import Path
 
-    version_file = Path(__file__).resolve().parents[2] / "migrations" / "versions" / "0001_initial.py"
-    spec = importlib.util.spec_from_file_location("v0001", version_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    versions = Path(__file__).resolve().parents[2] / "migrations" / "versions"
+    modules = []
+    for version in ("0002_platform_integrity", "0001_initial"):
+        version_file = versions / f"{version}.py"
+        spec = importlib.util.spec_from_file_location(version, version_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        modules.append(module)
 
     with psycopg.connect(dsn) as connection:
         with connection.cursor() as cursor:
-            for statement in module.DOWN_STATEMENTS:
-                cursor.execute(statement)
+            for module in modules:
+                for statement in module.DOWN_STATEMENTS:
+                    # 0002's revision column does not exist on an already-downgraded 0001 database.
+                    if "ALTER TABLE runs DROP COLUMN" in statement:
+                        cursor.execute("SELECT to_regclass('public.runs')")
+                        if cursor.fetchone()[0] is None:
+                            continue
+                    cursor.execute(statement)
             cursor.execute("DROP TABLE IF EXISTS schema_migrations")
             cursor.execute("DROP TABLE IF EXISTS alembic_version")
         connection.commit()
 
     assert current(dsn) is None
-    assert upgrade(dsn) == "0001_initial"
-    assert upgrade(dsn) == "0001_initial"  # 幂等
+    assert upgrade(dsn) == "0002_platform_integrity"
+    assert upgrade(dsn) == "0002_platform_integrity"  # 幂等
     return dsn
 
 
 def test_migration_rollback_and_reapply(migrated_dsn):
-    assert downgrade(migrated_dsn) is None
-    assert current(migrated_dsn) is None
-    assert upgrade(migrated_dsn) == "0001_initial"
+    assert downgrade(migrated_dsn) == "0001_initial"
+    assert current(migrated_dsn) == "0001_initial"
+    with psycopg.connect(migrated_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO runs(id, payload) VALUES "
+                "('run-legacy-pg', '{\"id\":\"run-legacy-pg\",\"status\":\"cancelled\"}'::jsonb)"
+            )
+            cursor.execute(
+                "INSERT INTO scores(run_id, case_id, ordinal, payload) VALUES "
+                "('run-legacy-pg', 'case-legacy', 1, '{\"case_id\":\"case-legacy\",\"passed\":true}'::jsonb)"
+            )
+    assert upgrade(migrated_dsn) == "0002_platform_integrity"
+    store = create_postgres_run_store(migrated_dsn)
+    legacy = store.runs.get("run-legacy-pg")
+    assert legacy["revision"] == 0 and legacy["schema_version"] == 1
+    assert store.scores.list_for_run(legacy["id"]) == [{"case_id": "case-legacy", "passed": True}]
+    assert store.runs.update(legacy, expected_revision=0)["revision"] == 1
 
 
 def test_full_run_lifecycle_on_postgres(migrated_dsn):
@@ -103,12 +128,16 @@ def test_full_run_lifecycle_on_postgres(migrated_dsn):
         "scoring",
         "score",
         "score",
+        "scoring_pass_created",
         "completed",
     ]
-    assert [event["seq"] for event in fresh.events_after(run_id, 8)] == [9, 10]
+    assert [event["seq"] for event in fresh.events_after(run_id, 8)] == [9, 10, 11]
 
-    rescored = client.post(f"/api/v1/runs/{run_id}/rescore").json()
-    assert rescored["rescored"] is True
+    rescored_response = client.post(f"/api/v1/runs/{run_id}/rescore")
+    assert rescored_response.status_code == 200
+    rescored = rescored_response.json()
+    assert rescored["status"] == "completed"
+    assert len(fresh.store.scoring_passes.list_for_run(run_id)) == 2
     retried = client.post(f"/api/v1/runs/{run_id}/retry")
     assert retried.status_code == 409  # completed 不可 retry
 
@@ -142,3 +171,66 @@ def test_claim_is_exclusive_on_postgres(migrated_dsn):
     assert first["status"] == "preparing"
     assert store.runs.claim_next_queued() is None
     store.runs.save({**first, "status": "cancelled"})
+
+
+def test_integrity_repositories_on_postgres(migrated_dsn):
+    from motte_storage.integrity import RunConflictError
+
+    store = create_postgres_run_store(migrated_dsn)
+    run = store.runs.create({"id": "run-integrity-pg", "status": "queued"},
+                            event={"type": "queued"})
+    assert run["revision"] == 1
+    with pytest.raises(RunConflictError):
+        store.runs.create({"id": run["id"], "status": "queued"})
+    claimed = store.runs.claim(run["id"])
+    assert claimed["revision"] == 2
+    assert [row["type"] for row in store.events.list_for_run(run["id"])] == ["queued", "preparing"]
+    with pytest.raises(RunConflictError):
+        store.runs.transition(run["id"], expected_revision=1,
+                              expected_status="queued", status="running")
+    attempt = store.attempts.begin({"run_id": run["id"], "case_id": "case-1"})
+    dispatched = store.attempts.transition(attempt["id"], expected_revision=1,
+                                           expected_status="prepared", status="dispatching")
+    completed = store.attempts.complete(
+        dispatched["id"], expected_revision=2, case_run={
+            "run_id": run["id"], "case_id": "case-1", "result": "answer"
+        }, event={"type": "model_response", "case_id": "case-1"},
+    )
+    assert completed["status"] == "succeeded"
+    scoring_pass = store.scoring_passes.append(
+        {"run_id": run["id"], "scorer_version": "v1"},
+        [{"case_id": "case-1", "passed": True}],
+        expected_run_revision=2, expected_run_status="preparing",
+    )
+    assert store.scoring_passes.current(run["id"]) == scoring_pass
+    assert store.score_sets.list_for_pass(scoring_pass["id"]) == [{"case_id": "case-1", "passed": True}]
+    command = store.commands.create({"run_id": run["id"], "content": "continue"})
+    delivered = store.commands.transition(command["id"], expected_revision=1,
+                                          expected_status="queued", status="delivered")
+    assert store.commands.get(command["id"]) == delivered
+    fresh = create_postgres_run_store(migrated_dsn)
+    assert fresh.attempts.get(attempt["id"])["status"] == "succeeded"
+    assert fresh.commands.list_for_run(run["id"]) == [delivered]
+
+
+def test_postgres_unmanaged_versions_are_immutable(migrated_dsn):
+    from motte_storage.resource_store import PostgresResourceStore, ResourceConflictError
+
+    store = PostgresResourceStore(migrated_dsn)
+    for repository, record, key in (
+        (store.datasets, {"name": "custom-pg", "version": "v1", "cases": []},
+         ("custom-pg", "v1")),
+        (store.scenarios, {"name": "custom-pg", "version": "v1", "cases": []},
+         ("custom-pg", "v1")),
+        (store.price_tables, {"model_id": "m-custom-pg", "version": "v1", "price": 1},
+         ("m-custom-pg", "v1")),
+    ):
+        assert repository.put(record) == record
+        assert repository.put(record) == record
+        with pytest.raises(ResourceConflictError):
+            repository.put({**record, "content": "different"})
+        with pytest.raises(ResourceConflictError):
+            repository.delete(*key)
+        assert repository.get(*key) == record
+    assert store.models.put({"id": "model-pg", "provider": "p1"})["provider"] == "p1"
+    assert store.models.put({"id": "model-pg", "provider": "p2"})["provider"] == "p2"
