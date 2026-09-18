@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { createRun, getRun, type RunRecord } from "../../api/client";
+import { createRun, getRun, getRuns, type RunRecord } from "../../api/client";
 import { BatchMonitor } from "../../components/BatchMonitor";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { RunTimeline } from "../../components/RunTimeline";
 import { RunAuditSummary } from "../../components/RunAuditSummary";
-import { useRunEvents } from "../../hooks/useRunEvents";
-import { suiteRoutes } from "../registry";
+import { StatusBadge } from "../../components/StatusBadge";
+import { formatTimestamp, shortRunId } from "../../components/runFormat";
+import { isTerminal, useRunEvents } from "../../hooks/useRunEvents";
+import { suiteForRun, suiteRoutes } from "../registry";
 
 const ROUTES = suiteRoutes("replay");
 const SCENARIOS = ["replay@1", "json_extract@1"];
@@ -17,8 +19,20 @@ export function ReplayOperate() {
   const [caseIds, setCaseIds] = useState("case-1");
   const [manifest, setManifest] = useState("");
   const [error, setError] = useState("");
+  const [recent, setRecent] = useState<RunRecord[]>([]);
 
-  const submit = () => {
+  useEffect(() => {
+    getRuns()
+      .then((payload) => setRecent(payload.items.filter((run) => suiteForRun(run)?.id === "replay")))
+      .catch(() => undefined);
+  }, []);
+
+  const openRecent = (run: RunRecord) => {
+    navigate(isTerminal(run.status) ? ROUTES.result(run.id) : ROUTES.monitor([run.id]));
+  };
+
+  const submit = (form: FormEvent<HTMLFormElement>) => {
+    form.preventDefault();
     setError("");
     let parsed: any = {};
     if (manifest.trim()) {
@@ -41,25 +55,50 @@ export function ReplayOperate() {
   return (
     <div className="page">
       <section className="panel form-panel">
-        <h2>Replay 回放 · 操作</h2>
+        <h2>Replay · 操作</h2>
         {error && <p className="error">{error}</p>}
-        <label>
-          场景
-          <select className="mono" value={scenario} onChange={(change) => setScenario(change.target.value)}>
-            {SCENARIOS.map((item) => <option key={item} value={item}>{item}</option>)}
-          </select>
-        </label>
-        <label>
-          Case 列表（逗号分隔）
-          <input value={caseIds} onChange={(change) => setCaseIds(change.target.value)} />
-        </label>
-        <label>
-          Manifest JSON（inline provider 或 replay fixture）
-          <textarea className="mono" rows={6} value={manifest} onChange={(change) => setManifest(change.target.value)}
-            placeholder='{"provider":{"kind":"replay","fixture":{…}}}' />
-        </label>
-        <button type="button" className="primary" onClick={submit}>创建回放</button>
+        <form onSubmit={submit} aria-label="创建回放">
+          <label>
+            场景
+            <select className="control mono" value={scenario} onChange={(change) => setScenario(change.target.value)}>
+              {SCENARIOS.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label>
+            Case 列表（逗号分隔）
+            <input className="control mono" value={caseIds} onChange={(change) => setCaseIds(change.target.value)} />
+          </label>
+          <label>
+            Manifest JSON（inline Provider 或 replay fixture）
+            <textarea className="control mono" rows={6} value={manifest} onChange={(change) => setManifest(change.target.value)}
+              placeholder='{"provider":{"kind":"replay","fixture":{…}}}' />
+          </label>
+          <button type="submit" className="primary">创建回放</button>
+        </form>
         <p className="hint">回放不产生模型费用；fixture 与期望在 Manifest 或 replay 接口中提供。</p>
+      </section>
+      <section className="panel" aria-label="最近 Replay 运行">
+        <div className="panel-head"><h2>最近 Replay 运行</h2></div>
+        {recent.length === 0 ? (
+          <p className="empty">暂无回放运行</p>
+        ) : (
+          <table>
+            <thead>
+              <tr><th>ID</th><th>状态</th><th>开始</th></tr>
+            </thead>
+            <tbody>
+              {recent.slice(0, 10).map((run) => (
+                <tr key={run.id}>
+                  <td className="mono" title={run.id}>
+                    <button type="button" className="link" onClick={() => openRecent(run)}>{shortRunId(run.id)}</button>
+                  </td>
+                  <td><StatusBadge status={run.status} /></td>
+                  <td className="mono">{formatTimestamp(run.created_at) ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
     </div>
   );

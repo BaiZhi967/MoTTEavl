@@ -1190,6 +1190,7 @@ describe("DirectLlmCompare", () => {
 });
 describe("ReplayOperate", () => {
   it("手写 Manifest 作为 inline provider 创建运行", async () => {
+    clientMocks.getRuns.mockResolvedValue({ items: [], total: 0 });
     clientMocks.createRun.mockResolvedValue({ id: "run-61", status: "queued" });
     render(
       <MemoryRouter initialEntries={["/replay"]}>
@@ -1207,6 +1208,22 @@ describe("ReplayOperate", () => {
       manifest: { provider: { kind: "replay", model: "fixture-model" } },
       case_ids: ["case-1"],
     }));
-    expect(screen.getByTestId("location").textContent).toBe("/replay/monitor?runs=run-61");
+    /* 创建后的跳转与 getRuns 面板渲染同帧竞争，等导航真正落地再断言 */
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/replay/monitor?runs=run-61"));
+  });
+
+  it("最近回放运行面板可进入过程页", async () => {
+    clientMocks.getRuns.mockResolvedValue({
+      items: [{ id: "run-70", scenario_version: "replay@1", status: "running", case_ids: [], cases: [], scores: [] }],
+      total: 1,
+    });
+    render(
+      <MemoryRouter initialEntries={["/replay"]}>
+        <ReplayOperate />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "run-70" }));
+    expect(screen.getByTestId("location").textContent).toBe("/replay/monitor?runs=run-70");
   });
 });

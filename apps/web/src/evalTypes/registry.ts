@@ -54,7 +54,7 @@ const DIRECT_LLM_SUITE: EvalTypeSuite = {
 
 const REPLAY_SUITE: EvalTypeSuite = {
   id: "replay",
-  label: "Replay 回放",
+  label: "Replay",
   icon: ClockCounterClockwiseIcon,
   matchRun: (run) =>
     run.scenario_version.startsWith("replay@") || run.scenario_version.startsWith("json_extract@"),
