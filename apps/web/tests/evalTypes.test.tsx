@@ -696,6 +696,30 @@ describe("Gsm8kResult", () => {
     );
     expect(await screen.findByText(/本次题目：随机 100 题（seed deadbeef…，可复现）/)).toBeTruthy();
   });
+
+  it("失败运行的通过率指标降为中性语气", async () => {
+    clientMocks.getRun.mockResolvedValue({ ...GSM8K_RUN, status: "failed" });
+    clientMocks.getReport.mockResolvedValue({ cost: null, scores: [] });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/runs/run-42/result"]}>
+        <Gsm8kResult />
+      </MemoryRouter>
+    );
+    const value = await screen.findByText("33%");
+    expect(value.closest(".metric-card")!.getAttribute("data-tone")).toBe("neutral");
+  });
+
+  it("完成运行的通过率保持 success 语气", async () => {
+    clientMocks.getRun.mockResolvedValue(GSM8K_RUN);
+    clientMocks.getReport.mockResolvedValue({ cost: null, scores: [] });
+    render(
+      <MemoryRouter initialEntries={["/gsm8k/runs/run-42/result"]}>
+        <Gsm8kResult />
+      </MemoryRouter>
+    );
+    const value = await screen.findByText("33%");
+    expect(value.closest(".metric-card")!.getAttribute("data-tone")).toBe("success");
+  });
 });
 
 describe("Gsm8kCompare", () => {
@@ -1128,6 +1152,17 @@ describe("DirectLlmResult", () => {
     expect(await screen.findByText("调用失败")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /case-1/ }));
     expect(screen.getByText(/auth：denied/)).toBeTruthy();
+  });
+
+  it("失败运行的通过率指标降为中性语气", async () => {
+    clientMocks.getRun.mockResolvedValue(directRun({ status: "failed" }));
+    render(
+      <MemoryRouter initialEntries={["/direct-llm/runs/run-51/result"]}>
+        <DirectLlmResult />
+      </MemoryRouter>
+    );
+    const value = await screen.findByText("50%", { selector: ".metric-value" });
+    expect(value.closest(".metric-card")!.getAttribute("data-tone")).toBe("neutral");
   });
 });
 

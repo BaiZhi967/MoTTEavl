@@ -115,7 +115,7 @@ export function DirectLlmResult() {
         {selection && <p className="hint">本次题目：{selection}</p>}
         {datasetScorerName && <p className="hint mono">评分器 {datasetScorerName}（数据集默认，单题可覆盖）</p>}
         <MetricCards items={[
-          { label: `通过率 · ${passed}/${judged}`, value: rate == null ? "—" : `${rate}%`, tone: "success" },
+          { label: `通过率 · ${passed}/${judged}`, value: rate == null ? "—" : `${rate}%`, tone: run.status === "completed" ? "success" : "neutral" },
           { label: `判定题数（选中 ${scores.length} · 无判定 ${scores.length - judged}）`, value: `${judged}`, tone: "neutral" },
           { label: `tokens（输入 ${usage.prompt} + 输出 ${usage.completion}）`, value: String(usage.prompt + usage.completion), tone: "neutral" },
           { label: priceTable ? `成本 · pt ${priceTable}` : "成本", value: cost == null ? "—" : `¥${cost}`, tone: "neutral" },
