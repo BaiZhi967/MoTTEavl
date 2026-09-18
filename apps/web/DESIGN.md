@@ -103,14 +103,14 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 组件 | 规范 |
 |---|---|
 | 应用骨架 | `.app-shell` 使用 fixed 定位与 `inset: var(--space-none)` 固定在视口内，外框不滚动；左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + 路由侧边栏，图标 + 文字，导航项由 react-router `NavLink` 驱动、active 态 `aria-current="page"` 同 Radix active 观感），分组标签「评测类型」「通用」用 `.nav-group-label`（11px `--text-faint`）；右侧全屏工作台独立滚动（`.page` 通栏铺满、padding 16/32） |
-| 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）；导航型清单列用 `.panel.list-panel`（240px 固定窄列）——禁止两个内容面板 50/50 平分 |
+| 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）；导航型清单列用 `.panel.list-panel`（240px 固定窄列）；不对称双表布局用 `.panel.wide-panel`（flex 2）/ `.panel.narrow-panel`（flex 1）——禁止两个内容面板 50/50 平分 |
 | Provider 清单 | 列表头 `.panel-head`（15px 标题 + `icon-btn` 刷新 + link「添加」）；列表项 `.provider-item`（Phosphor Plug 16px + mono 名称 + 会话内测试状态点），选中态同导航 active（`--tone-neutral-bg` + 500 字重），禁用项名称弱化为 `--text-faint` |
 | 测试状态点 | `.state-dot`（8px 圆点）：只映射本次会话内真实测试结果（pass 用 success 前景色 / fail 用 error 前景色），无数据不渲染；禁止装饰性常亮 |
 | Provider 详情头 | `.detail-head`：mono 名称 + kind 徽章（neutral pill）+ 启用 Switch（随行 `.field-label`，包在 `.inline-field` 里且清零其下边距，与操作 link 同一中心线）+ link 操作组（更新密钥 / 两步确认删除） |
 | 连接分节 | `.connection-form`：`.embed-title`「连接」+ `.connection-grid` 双列（协议 select + Base URL 输入，窄屏换行）；凭据 profile / 密钥 hint 用 `.kv` 只读；表单脏状态才显示「保存连接」 |
 | 模型紧凑行 | `.model-row`：mono ID + neutral pill 徽章（上下文格式化 256000→256K、1000000→1M；能力如「工具」）+ 参数摘要 12px mono 次色；行尾启用 Switch + link 操作（测试/编辑/删除）；行 hover `--bg-subtle`；测试结果用 `.model-test-result` 行内反馈（`--bg-subtle` 底、12px、pass/fail 前景色） |
 | 导航项 | 图标（Phosphor Bold 16px）+ 13px 文字，静默态次色，hover `--bg-subtle`，active `--tone-neutral-bg` + 主文字色 + 500 字重 |
-| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
+| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500、表头不换行；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
 | 行内反馈行 | 即时操作结果（如连通性测试）用 `colSpan` 整行嵌在目标行下方：`--bg-subtle` 底、12px、成功 `pass` / 失败 `fail` 前景色；进行中用 `--text-faint` 文案 |
 | 状态徽章 | pill（9999px）、12px、语义粉彩底 + 对应前景色 |
 | 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono；无内层滚动，由所在容器统一滚动 |
