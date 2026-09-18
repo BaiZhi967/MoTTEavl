@@ -138,6 +138,7 @@ body {
   font: inherit;
   font-size: 13px;
   text-align: left;
+  text-decoration: none;
   transition: background-color 200ms ease, color 200ms ease;
 }
 
@@ -243,6 +244,11 @@ form select,
   background: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
+}
+
+/* 作者样式（如 form input 的 display:block）会覆盖 UA 对 [hidden] 的 display:none，显式守住 */
+[hidden] {
+  display: none !important;
 }
 
 /* 表单体系之外的控件（过滤行内联场景）：label 与控件并排 */
