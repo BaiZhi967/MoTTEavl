@@ -113,6 +113,13 @@ describe("RunTimeline", () => {
     render(<RunTimeline events={[]} />);
     expect(screen.getByText("暂无事件")).toBeTruthy();
   });
+
+  it("渲染事件时间戳（recorded_at）", () => {
+    render(<RunTimeline events={[
+      { run_id: "run-1", seq: 1, type: "queued", recorded_at: "2026-09-19T08:30:05" },
+    ] as any} />);
+    expect(document.querySelector(".event .time")?.textContent).toBe("09-19 08:30:05");
+  });
 });
 
 describe("ScoreTable", () => {

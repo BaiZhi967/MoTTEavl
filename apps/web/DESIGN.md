@@ -113,7 +113,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500、表头不换行；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
 | 行内反馈行 | 即时操作结果（如连通性测试）用 `colSpan` 整行嵌在目标行下方：`--bg-subtle` 底、12px、成功 `pass` / 失败 `fail` 前景色；进行中用 `--text-faint` 文案 |
 | 状态徽章 | pill（9999px）、12px、语义粉彩底 + 对应前景色 |
-| 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono；无内层滚动，由所在容器统一滚动 |
+| 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono，事件时间戳列（recorded_at，`MM-DD HH:mm:ss` mono `--text-faint`）；无内层滚动，由所在容器统一滚动 |
 | 表单 | label 13px 次色在控件上方；控件白底 1px 边框 6px 圆角；focus-visible 2px info 色描边（`.operate-card` 内的字段同规格，见「卡片内字段」） |
 | 行内过滤控件 | 表单体系之外的控件用 `.control`（与表单控件同款）+ `.field-label` + `.inline-field`（label 与控件并排），禁止浏览器默认外观裸奔 |
 | 嵌入分节 | 已有卡片壳的容器（滑出面板等）内部分节用 `embedded` 组件 + `.embed-title`（14px 标题、无壳），禁止卡片套卡片 |

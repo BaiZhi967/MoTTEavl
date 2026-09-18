@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { TraceEvent } from "../api/client";
+import { formatClock } from "./runFormat";
 import { eventLabel, eventTone } from "./statusMeta";
 
 function summarize(event: TraceEvent): string {
@@ -54,6 +55,7 @@ export function RunTimeline({ events, embedded = false }: { events: TraceEvent[]
         {visible.map((event) => (
           <li key={`${event.seq}-${event.type}`} className={`event event-tone-${eventTone(event.type)}`}>
             <span className="seq">#{event.seq}</span>
+            {event.recorded_at && <span className="time">{formatClock(event.recorded_at)}</span>}
             <span className="type">{eventLabel(event.type)}</span>
             {summarize(event) && <span className="detail">{summarize(event)}</span>}
           </li>
