@@ -140,6 +140,16 @@ describe("HarnessesPage", () => {
     expect(screen.getByText("pi")).toBeTruthy();
     expect(screen.getAllByText("否").length).toBeGreaterThanOrEqual(2);
   });
+
+  it("接口失败时错误在面板内并显示空状态行", async () => {
+    clientMocks.getHarnesses.mockRejectedValueOnce(new Error("HTTP 500"));
+    clientMocks.getAgents.mockResolvedValueOnce({ items: [] });
+    render(<HarnessesPage />);
+    expect(await screen.findByText(/HTTP 500/)).toBeTruthy();
+    const harnessPanel = document.querySelector("section[aria-label='Harness 安装情况']") as HTMLElement;
+    expect(harnessPanel.textContent).toContain("暂无 Harness 数据");
+    expect(await screen.findByText("暂无 Agent")).toBeTruthy();
+  });
 });
 
 describe("ProvidersPage", () => {

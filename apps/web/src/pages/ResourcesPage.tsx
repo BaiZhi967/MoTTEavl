@@ -888,9 +888,9 @@ export function HarnessesPage() {
 
   return (
     <div className="page">
-      {error && <p className="error">{error}</p>}
-      <section className="panel">
+      <section className="panel wide-panel" aria-label="Harness 安装情况">
         <h2>Harness 安装情况</h2>
+        {error && <p className="error">{error}</p>}
         <table>
           <thead>
             <tr>
@@ -913,10 +913,13 @@ export function HarnessesPage() {
                 <td className={harness.execution_ready ? "pass" : "fail"}>{harness.execution_ready ? "是" : "否"}</td>
               </tr>
             ))}
+            {harnesses.length === 0 && (
+              <tr><td colSpan={6} className="empty">暂无 Harness 数据</td></tr>
+            )}
           </tbody>
         </table>
       </section>
-      <section className="panel">
+      <section className="panel narrow-panel" aria-label="Agent 运行时">
         <h2>Agent 运行时</h2>
         <table>
           <thead>
@@ -932,6 +935,9 @@ export function HarnessesPage() {
                 <td>{agent.description}</td>
               </tr>
             ))}
+            {agents.length === 0 && (
+              <tr><td colSpan={5} className="empty">暂无 Agent</td></tr>
+            )}
           </tbody>
         </table>
       </section>

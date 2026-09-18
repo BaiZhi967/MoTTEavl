@@ -198,6 +198,15 @@ body {
   flex-basis: 100%;
 }
 
+/* 不对称双表布局：宽表占大头，禁止两个内容面板 50/50 平分（DESIGN.md 第 4 节） */
+.panel.wide-panel {
+  flex: 2 1 0;
+}
+
+.panel.narrow-panel {
+  flex: 1 1 0;
+}
+
 .panel h2 {
   font-size: 15px;
   font-weight: 600;
@@ -696,6 +705,7 @@ th {
   color: var(--text-secondary);
   font-weight: 500;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 tbody tr:hover {
