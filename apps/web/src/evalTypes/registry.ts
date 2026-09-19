@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { CalculatorIcon, ChatTextIcon, ClockCounterClockwiseIcon, type IconProps } from "@phosphor-icons/react";
+import { CalculatorIcon, ChatTextIcon, ClockCounterClockwiseIcon, RobotIcon, type IconProps } from "@phosphor-icons/react";
 
 export interface RunLike {
   scenario_version: string;
@@ -60,7 +60,22 @@ const REPLAY_SUITE: EvalTypeSuite = {
     run.scenario_version.startsWith("replay@") || run.scenario_version.startsWith("json_extract@"),
 };
 
-export const EVAL_SUITES: EvalTypeSuite[] = [GSM8K_SUITE, DIRECT_LLM_SUITE, REPLAY_SUITE];
+const AGENT_TASKS_SUITE: EvalTypeSuite = {
+  id: "agent-tasks",
+  label: "Agent 文件任务",
+  icon: RobotIcon,
+  matchRun: (run) =>
+    provenanceSuite(run) === "agent-tasks"
+    || /^file-report.*@\d+$/.test(run.scenario_version) === false
+      && run.manifest?.agent === "builtin-agent@1",
+};
+
+export const EVAL_SUITES: EvalTypeSuite[] = [
+  AGENT_TASKS_SUITE,
+  GSM8K_SUITE,
+  DIRECT_LLM_SUITE,
+  REPLAY_SUITE,
+];
 
 export function suiteForRun(run: RunLike): EvalTypeSuite | null {
   return EVAL_SUITES.find((suite) => suite.matchRun(run)) ?? null;

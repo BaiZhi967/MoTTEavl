@@ -1,6 +1,242 @@
 {
   "components": {
     "schemas": {
+      "AgentBudgetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "max_steps": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 64.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Steps"
+          },
+          "max_tool_calls": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 256.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tool Calls"
+          },
+          "observed_cost_limit": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Cost Limit"
+          },
+          "per_call_timeout_sec": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Call Timeout Sec"
+          },
+          "total_token_limit": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Token Limit"
+          },
+          "wall_time_sec": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 3600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Time Sec"
+          }
+        },
+        "title": "AgentBudgetRequest",
+        "type": "object"
+      },
+      "AgentTasksDryRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "budget": {
+            "additionalProperties": true,
+            "title": "Budget",
+            "type": "object"
+          },
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          },
+          "selected_cases": {
+            "minimum": 1.0,
+            "title": "Selected Cases",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scenario",
+          "dataset",
+          "mode",
+          "prompt_version",
+          "selected_cases",
+          "backend",
+          "budget"
+        ],
+        "title": "AgentTasksDryRunResponse",
+        "type": "object"
+      },
+      "AgentTasksImportRequest": {
+        "additionalProperties": false,
+        "description": "Agent 文件任务数据集导入：cases 为 JSON 数组。",
+        "properties": {
+          "content": {
+            "minLength": 2,
+            "title": "Content",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "content",
+          "name"
+        ],
+        "title": "AgentTasksImportRequest",
+        "type": "object"
+      },
+      "AgentTasksRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentBudgetRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "case_selection": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "all": "#/components/schemas/DirectLlmAllSelection",
+                    "ids": "#/components/schemas/DirectLlmIdsSelection",
+                    "profile": "#/components/schemas/DirectLlmProfileSelection",
+                    "random": "#/components/schemas/DirectLlmRandomSelection"
+                  },
+                  "propertyName": "mode"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DirectLlmAllSelection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DirectLlmIdsSelection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DirectLlmRandomSelection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DirectLlmProfileSelection"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Selection"
+          },
+          "mode": {
+            "default": "native-tool",
+            "enum": [
+              "native-tool",
+              "legacy-json"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "scenario": {
+            "minLength": 1,
+            "title": "Scenario",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario",
+          "model"
+        ],
+        "title": "AgentTasksRunRequest",
+        "type": "object"
+      },
       "CancelRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2151,6 +2387,17 @@
             ],
             "title": "Case Id"
           },
+          "denominator": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denominator"
+          },
           "details": {
             "additionalProperties": true,
             "title": "Details",
@@ -2178,6 +2425,28 @@
             ],
             "title": "Evaluator"
           },
+          "evaluator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator Id"
+          },
+          "evaluator_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator Version"
+          },
           "judged": {
             "anyOf": [
               {
@@ -2188,6 +2457,28 @@
               }
             ],
             "title": "Judged"
+          },
+          "metric_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Id"
+          },
+          "metric_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Status"
           },
           "outcome": {
             "anyOf": [
@@ -2221,6 +2512,17 @@
               }
             ],
             "title": "Passed"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
           },
           "responded": {
             "anyOf": [
@@ -2265,6 +2567,28 @@
               }
             ],
             "title": "Scoring Pass Id"
+          },
+          "trial_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Id"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
           },
           "value": {
             "anyOf": [
@@ -3102,6 +3426,204 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/agent-tasks": {
+      "get": {
+        "description": "Agent 文件任务数据集清单 + 最近 Run（含多指标通过概况）。",
+        "operationId": "agent_tasks_overview_api_v1_agent_tasks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Agent Tasks Overview"
+      }
+    },
+    "/api/v1/agent-tasks/cases": {
+      "get": {
+        "description": "分页浏览任务题面（操作员可见 expected/forbidden；模型侧从不投影）。",
+        "operationId": "agent_tasks_cases_api_v1_agent_tasks_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset",
+            "required": true,
+            "schema": {
+              "title": "Dataset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Agent Tasks Cases"
+      }
+    },
+    "/api/v1/agent-tasks/import": {
+      "post": {
+        "description": "导入 Agent 文件任务数据集（JSON 数组），落成不可变数据集 + 场景。",
+        "operationId": "agent_tasks_import_api_v1_agent_tasks_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTasksImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Agent Tasks Import"
+      }
+    },
+    "/api/v1/agent-tasks/runs": {
+      "post": {
+        "description": "创建 Agent Run：native-tool 不支持 tools 的模型在创建期 422（零调用）。",
+        "operationId": "agent_tasks_run_api_v1_agent_tasks_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTasksRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Agent Tasks Run"
+      }
+    },
+    "/api/v1/agent-tasks/runs/dry-run": {
+      "post": {
+        "description": "预检：模式、模型能力、预算与选择，全部通过才返回摘要。",
+        "operationId": "agent_tasks_dry_run_api_v1_agent_tasks_runs_dry_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTasksRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentTasksDryRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Agent Tasks Dry Run"
+      }
+    },
     "/api/v1/agents": {
       "get": {
         "operationId": "list_agents_api_v1_agents_get",
@@ -4571,6 +5093,109 @@
         "summary": "Cancel Run"
       }
     },
+    "/api/v1/runs/{run_id}/cases/{case_id}/agent": {
+      "get": {
+        "description": "样本下钻：终止原因、逐步事件、Observation 概要与产物清单。",
+        "operationId": "agent_case_detail_api_v1_runs__run_id__cases__case_id__agent_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Agent Case Detail"
+      }
+    },
+    "/api/v1/runs/{run_id}/cases/{case_id}/artifacts/content": {
+      "get": {
+        "description": "读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。",
+        "operationId": "agent_artifact_content_api_v1_runs__run_id__cases__case_id__artifacts_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Agent Artifact Content"
+      }
+    },
     "/api/v1/runs/{run_id}/commands": {
       "get": {
         "operationId": "list_run_commands_api_v1_runs__run_id__commands_get",
@@ -4655,6 +5280,60 @@
           }
         },
         "summary": "Events"
+      }
+    },
+    "/api/v1/runs/{run_id}/invocations": {
+      "get": {
+        "description": "持久调用日志（prepared/dispatching/settled）下钻。",
+        "operationId": "run_invocations_api_v1_runs__run_id__invocations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "case_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Invocations"
       }
     },
     "/api/v1/runs/{run_id}/messages": {

@@ -53,6 +53,7 @@ class AgentTasksDataset(Contract):
     schema_version: Literal[1] = 1
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
+    suite: Literal["agent-tasks"] = SUITE
     cases: list[AgentTaskCase] = Field(min_length=1)
     cases_sha256: str | None = None
     dataset_fingerprint: str | None = None
@@ -68,6 +69,7 @@ class AgentTasksDataset(Contract):
 
 def normalize_agent_tasks_dataset(record: dict[str, Any]) -> dict[str, Any]:
     """校验并填充派生 hash；显式 supplied hash 不一致时拒绝。"""
+    record = {**record, "suite": SUITE}
     dataset = AgentTasksDataset.model_validate(record).model_dump(mode="json")
     cases_hash = canonical_sha256(dataset["cases"])
     if dataset.get("cases_sha256") not in (None, cases_hash):

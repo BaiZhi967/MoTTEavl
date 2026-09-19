@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import direct_llm, direct_llm_v2, gsm8k
+from . import agent_tasks, direct_llm, direct_llm_v2, gsm8k
 from .selection import CASE_SELECTION_KEY, RUN_SELECTION_KEY
 
 # 运行快照键：两种套件共用同一组 manifest 键，service/api 的执行与报告链路因此无需分叉。
@@ -24,6 +24,23 @@ RESERVED_KEYS = frozenset({SNAPSHOT_KEY, PROVENANCE_KEY, "benchmark_cases"})
 
 def _gsm8k_match(record: Any) -> bool:
     return gsm8k.is_benchmark(record)
+
+
+def _agent_tasks_match(record: Any) -> bool:
+    return isinstance(record, dict) and record.get("suite") == agent_tasks.SUITE
+
+
+def _validate_agent_tasks_dataset(record: dict[str, Any]) -> None:
+    agent_tasks.normalize_agent_tasks_dataset(record)
+
+
+def _validate_agent_tasks_scenario(record: dict[str, Any]) -> None:
+    if record.get("suite") != agent_tasks.SUITE:
+        raise ValueError("agent-tasks scenario requires suite=agent-tasks")
+    if record.get("plugin_version") != agent_tasks.PLUGIN_VERSION:
+        raise ValueError(
+            f"unsupported agent-tasks plugin_version: {record.get('plugin_version')!r}"
+        )
 
 
 def _direct_llm_match(record: Any) -> bool:
@@ -79,6 +96,9 @@ SUITES: dict[
     ],
 ] = {
     gsm8k.SUITE: (_gsm8k_match, gsm8k.validate_dataset, gsm8k.validate_scenario),
+    agent_tasks.SUITE: (
+        _agent_tasks_match, _validate_agent_tasks_dataset, _validate_agent_tasks_scenario,
+    ),
     direct_llm.SUITE: (
         _direct_llm_match,
         _validate_direct_llm_dataset,
