@@ -144,7 +144,8 @@ def test_systemic_failure_stops_run_and_report_uses_judged_denominator():
     assert len(calls) == 3
 
 
-def test_transient_failure_continues_without_retries():
+def test_transient_failure_gets_one_second_chance():
+    """瞬时失败题主循环后补跑一次：补跑仍失败则 run 判 failed，其余题不受影响。"""
     resources, scenario, _ = synthetic_resources()
     manifest = resolve_direct_llm_manifest(scenario, {}, resources)
     service = RunService(InMemoryRunStore())
@@ -161,7 +162,8 @@ def test_transient_failure_continues_without_retries():
         return {"content": f"{GOLD} ok-{case_id[-1]}"}
 
     result = service.execute(run["id"], provider=invoke)
-    assert result["status"] == "failed" and len(calls) == 6
+    # 主循环 6 次 + 瞬时失败题补跑 1 次（只补一次，不做无限重试）
+    assert result["status"] == "failed" and len(calls) == 7
     outcomes = [score["outcome"] for score in result["scores"]]
     assert outcomes[2] == "call_failed" and outcomes.count("call_failed") == 1
     assert outcomes.count("correct") == 5

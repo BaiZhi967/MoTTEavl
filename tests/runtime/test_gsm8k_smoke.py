@@ -62,13 +62,90 @@ def test_any_call_failure_marks_run_failed_but_transient_error_continues():
 
     result = service.execute(run['id'], provider=invoke)
     assert result['status'] == 'failed'
-    assert len(calls) == 20
+    # 主循环 20 次 + 瞬时错误题补跑 1 次（补跑仍失败，run 才判 failed）
+    assert len(calls) == 21
     assert sum(s['outcome'] == 'correct' for s in result['scores']) == 19
     assert sum(s['outcome'] == 'call_failed' for s in result['scores']) == 1
     assert result['scores'][5]['attempted'] is True
     assert result['scores'][5]['responded'] is False
+    # 每题一条 attempt 记账：该题开放挂起，补跑失败后一次落盘
+    attempts = [a for a in service.store.attempts.list_for_run(run['id'])
+                if a['case_id'] == 'gsm8k-test-0005']
+    assert [a['status'] for a in attempts] == ['failed']
     assert service.rescore(run['id'])['scores'] == result['scores']
-    assert len(calls) == 20
+    assert len(calls) == 21
+
+
+def test_transient_failure_recovers_via_second_chance_sweep():
+    """瞬时失败题主循环后补跑一次：补跑成功则整 run 通过，证据保留两次外呼。"""
+    resources, scenario = synthetic_resources()
+    manifest = resolve_benchmark_manifest(scenario, {}, resources)
+    service = RunService(InMemoryRunStore())
+    run = service.create_run('smoke@1', manifest, list(manifest['cases']))
+    calls = []
+
+    class ServerError(Exception):
+        error_class = 'server'
+
+    def invoke(case_id):
+        calls.append(case_id)
+        if case_id == 'gsm8k-test-0005' and calls.count(case_id) == 1:
+            raise ServerError('synthetic upstream 500')
+        return {'content': '#### 1'}
+
+    result = service.execute(run['id'], provider=invoke)
+    assert result['status'] == 'completed'
+    assert len(calls) == 21
+    assert all(s['outcome'] == 'correct' and s['passed'] for s in result['scores'])
+    assert calls.count('gsm8k-test-0005') == 2
+    attempts = [a for a in service.store.attempts.list_for_run(run['id'])
+                if a['case_id'] == 'gsm8k-test-0005']
+    assert [a['status'] for a in attempts] == ['succeeded']
+    assert result.get('error') is None
+    # 恢复证据：首次失败以 first_attempt_error 嵌入补跑成功的结果
+    row = next(r for r in service.store.case_runs.list_for_run(run['id'])
+               if r['case_id'] == 'gsm8k-test-0005')
+    assert row['result']['content'] == '#### 1'
+    assert row['result']['first_attempt_error'] == {
+        'class': 'server', 'message': 'synthetic upstream 500'}
+    # 时间线如实记录两次外呼：先失败、后恢复（score 事件另计）
+    kinds = [(e['type'], e.get('case_id')) for e in service.events(run['id'])
+             if e.get('case_id') == 'gsm8k-test-0005'
+             and e['type'] in ('case_call_failed', 'model_response')]
+    assert kinds == [('case_call_failed', 'gsm8k-test-0005'),
+                     ('model_response', 'gsm8k-test-0005')]
+
+
+def test_cancel_while_transient_case_pending_settles_and_terminates():
+    """瞬时题挂起期间收到取消：pending 按首次错误落盘，run 干净终态 cancelled，不补跑。"""
+    resources, scenario = synthetic_resources()
+    manifest = resolve_benchmark_manifest(scenario, {}, resources)
+    service = RunService(InMemoryRunStore())
+    run = service.create_run('smoke@1', manifest, list(manifest['cases']))
+    calls = []
+
+    class ServerError(Exception):
+        error_class = 'server'
+
+    def invoke(case_id):
+        calls.append(case_id)
+        if case_id == 'gsm8k-test-0005':
+            raise ServerError('synthetic upstream 500')
+        if len(calls) == 8:
+            service.cancel(run['id'], reason='operator cancelled mid-run')
+        return {'content': '#### 1'}
+
+    result = service.execute(run['id'], provider=invoke)
+    assert result['status'] == 'cancelled'
+    assert len(calls) == 8
+    # 挂起题按首次错误落盘（不补跑），后续未执行题保持 not_attempted
+    assert calls.count('gsm8k-test-0005') == 1
+    rows = {row['case_id']: row for row in service.store.case_runs.list_for_run(run['id'])}
+    assert rows['gsm8k-test-0005']['result']['error'] == {
+        'class': 'server', 'message': 'synthetic upstream 500'}
+    assert sum(row.get('outcome') == 'not_attempted' for row in rows.values()) == 12
+    assert [a['status'] for a in service.store.attempts.list_for_run(run['id'])
+            if a['case_id'] == 'gsm8k-test-0005'] == ['failed']
 
 
 def test_systemic_failure_preserves_partial_scores_and_strict_report():
