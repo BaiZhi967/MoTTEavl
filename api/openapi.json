@@ -4203,6 +4203,62 @@
         "summary": "Gsm8K Run"
       }
     },
+    "/api/v1/comparisons": {
+      "get": {
+        "operationId": "compare_runs_api_v1_comparisons_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "baseline",
+            "required": true,
+            "schema": {
+              "title": "Baseline",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate",
+            "required": true,
+            "schema": {
+              "title": "Candidate",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "factors",
+            "required": false,
+            "schema": {
+              "default": "model",
+              "title": "Factors",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compare Runs"
+      }
+    },
     "/api/v1/credentials": {
       "get": {
         "operationId": "list_credentials_api_v1_credentials_get",
@@ -4411,6 +4467,44 @@
           }
         },
         "summary": "Get Versioned"
+      }
+    },
+    "/api/v1/gates": {
+      "post": {
+        "operationId": "evaluate_run_gate_api_v1_gates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluate Run Gate"
       }
     },
     "/api/v1/harnesses": {

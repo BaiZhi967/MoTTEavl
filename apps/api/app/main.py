@@ -1706,6 +1706,61 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return {"jobs": []}
         return {"jobs": external_jobs.jobs_for_run(run_id)}
 
+    # ------------------------------------------- 比较/门禁（M6-Lite 公共服务，只读）
+
+    from motte_sdk.comparisons import ComparisonService
+
+    application.state.comparisons = comparisons_service = ComparisonService(
+        service.store,
+    )
+
+    @application.get("/api/v1/comparisons")
+    def compare_runs(baseline: str, candidate: str, factors: str = "model"):
+        try:
+            result = comparisons_service.compare(
+                baseline, candidate, allowed_factors=factors.split(","),
+            )
+        except KeyError as error:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "RUN_NOT_FOUND", "message": str(error)}},
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "POLICY_INVALID", "message": str(error)}},
+            )
+        return {
+            "eligible": result.eligible,
+            "reasons": list(result.reasons),
+            "metric_eligibility": result.metric_eligibility,
+            "case_diff": result.case_diff,
+        }
+
+    @application.post("/api/v1/gates")
+    def evaluate_run_gate(body: dict):
+        run_id = body.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "RUN_REQUIRED", "message": "run_id is required"}},
+            )
+        policy = body.get("policy") or {}
+        if not isinstance(policy, dict):
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "POLICY_INVALID", "message": "policy must be an object"}},
+            )
+        try:
+            return comparisons_service.evaluate_gate(
+                run_id, policy=policy, baseline_run_id=body.get("baseline_run_id"),
+            )
+        except KeyError as error:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "RUN_NOT_FOUND", "message": str(error)}},
+            )
+
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 
     from motte_contracts.dataset_sources import SourceSpec
