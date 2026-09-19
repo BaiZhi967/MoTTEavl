@@ -19,7 +19,10 @@ from .evaluation import (
     InvocationRecord,
     MetricResult,
     ObservedUsage,
+    ProcessRecord,
     TerminationRecord,
+    ToolCallRecord,
+    WorkspaceSnapshot,
 )
 from .evidence import Artifact, Observation, Score, ScoreSet, ScoringPass
 from .messages import Contract, ModelRequest, ModelResponse, StreamEvent
@@ -40,6 +43,7 @@ _PUBLIC: tuple[type[Contract], ...] = (
     ExecutionError, ErrorEnvelope, DatasetVersion,
     FrozenObservation, EvidenceRef, EvidenceCoverage, ArtifactEntry, EvaluatorSpec,
     MetricResult, AgentResult, InvocationRecord, ObservedUsage, TerminationRecord,
+    ToolCallRecord, WorkspaceSnapshot, ProcessRecord,
 )
 _ENUMS: tuple[type[Enum], ...] = (
     RunStatus, AttemptStatus, RunCommandStatus, IdentityPolicy, IdentityVerdict,
