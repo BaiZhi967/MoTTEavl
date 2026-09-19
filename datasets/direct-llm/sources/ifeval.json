@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "id": "ifeval",
+  "label": "IFEval",
+  "description": "Verifiable instruction-following benchmark requiring a dedicated versioned rule evaluator.",
+  "tier": "advanced",
+  "governance": {
+    "status": "pending",
+    "distribution_scope": "blocked",
+    "stable_eligible": false,
+    "reviewer": null,
+    "reviewed_at": null,
+    "decision_notes": "License evidence, dataset/evaluator boundaries, and the dedicated scoring contract require fixed-revision review."
+  },
+  "links": {
+    "homepage": "https://huggingface.co/datasets/google/IFEval",
+    "repository": "https://github.com/google-research/google-research/tree/master/instruction_following_eval",
+    "dataset_card": "https://huggingface.co/datasets/google/IFEval",
+    "citation": null
+  },
+  "upstream": {
+    "revision": {
+      "kind": "hf-commit",
+      "resolver": "huggingface-dataset-commit",
+      "value": null
+    },
+    "artifacts": [
+      {
+        "logical_name": "dataset-export",
+        "url": null,
+        "format": null,
+        "sha256": null,
+        "bytes": null,
+        "max_bytes": null,
+        "required": true
+      }
+    ]
+  },
+  "license": {
+    "data": {
+      "declared_ids": [
+        "Apache-2.0"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://huggingface.co/datasets/google/IFEval"
+      ]
+    },
+    "code": {
+      "declared_ids": [
+        "Apache-2.0"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/google-research/google-research/blob/master/LICENSE"
+      ]
+    },
+    "commercial_use": "unknown",
+    "redistribution": "unknown",
+    "attribution": "unknown",
+    "share_alike": "unknown",
+    "review_notes": "Upstream declarations are recorded but not yet verified for a pinned dataset and evaluator revision."
+  },
+  "conversion": {
+    "converter": {
+      "id": "ifeval-to-direct",
+      "version": null
+    },
+    "splits": [],
+    "default_split": null,
+    "prompt_version": null,
+    "scorer": {
+      "id": "instruction-rules",
+      "version": null
+    },
+    "profiles": [],
+    "optional_dependency": null
+  },
+  "safety": {
+    "network_entrypoint": "cli-only",
+    "allowed_protocols": [
+      "https"
+    ],
+    "trust_remote_code": false,
+    "online_rows_fallback": false,
+    "executable_upstream_code": false,
+    "archive_auto_extract": false
+  },
+  "official_comparability": {
+    "status": "not-established",
+    "notes": "Requires a pinned or equivalent official evaluator and separate prompt-level and instruction-level strict/loose metrics."
+  },
+  "blockers": [
+    "Dataset and evaluator licenses are not human-verified at immutable revisions.",
+    "No immutable dataset or evaluator revision is pinned.",
+    "Artifact URL, format, SHA-256, byte count, and size limit are not pinned.",
+    "Dedicated instruction-rule scorer, metric contract, converter, splits, profiles, and prompt version are not fixed.",
+    "Official evaluator parity is not established."
+  ]
+}

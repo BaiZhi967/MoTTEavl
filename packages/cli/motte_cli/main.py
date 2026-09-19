@@ -2,7 +2,10 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
+import tempfile
+from pathlib import Path
 
 
 def _load_json(raw: str):
@@ -132,6 +135,63 @@ def _build_parser() -> argparse.ArgumentParser:
     direct_builtins.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     direct_list = direct_sub.add_parser("list", help="列出已导入的 Direct LLM 数据集")
     direct_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    direct_sources = direct_sub.add_parser(
+        "sources",
+        help="静态来源登记、安全缓存、转换与发布",
+        description=("Direct LLM 静态来源登记与受控处理；支持 list、inspect、fetch、verify、"
+                     "convert、import、prepare。"),
+    )
+    source_sub = direct_sources.add_subparsers(dest="source_command", required=True)
+    source_list = source_sub.add_parser("list", help="列出静态来源登记；只读本地 JSON，不联网")
+    source_inspect = source_sub.add_parser("inspect", help="查看一个静态来源登记；不联网")
+    source_inspect.add_argument("--source", required=True, help="来源 id，如 mmlu-pro")
+    source_fetch = source_sub.add_parser(
+        "fetch", help="由 CLI 显式下载并校验 required artifacts")
+    source_fetch.add_argument("--source", required=True, help="来源 id")
+    source_fetch.add_argument("--revision", help="不可变 revision；省略时使用登记值")
+    source_fetch.add_argument("--timeout", type=float, default=30.0, help="单次请求超时秒数")
+    source_fetch.add_argument(
+        "--max-bytes", type=int,
+        help="单 artifact 下载上限；省略时使用登记的 max_bytes")
+    source_verify = source_sub.add_parser(
+        "verify", help="只复验 required artifact 缓存的大小与 SHA-256；绝不联网")
+    source_verify.add_argument("--source", required=True, help="来源 id")
+    source_verify.add_argument("--revision", help="不可变 revision；省略时使用登记值")
+    source_convert = source_sub.add_parser(
+        "convert", help="从 verified cache 转换为 Direct LLM v2 JSON；绝不联网")
+    source_convert.add_argument("--source", required=True, help="来源 id")
+    source_convert.add_argument("--revision", required=True, help="不可变 revision")
+    source_convert.add_argument("--config", required=True, help="converter config JSON 或 @文件")
+    source_convert.add_argument("--output", required=True, help="原子写入 dataset+receipt JSON")
+    source_convert.add_argument(
+        "--allow-experimental", action="store_true",
+        help="允许 pending/restricted 仅本地转换；结果不可发布")
+    source_import = source_sub.add_parser(
+        "import", help="从 verified cache 重新转换并原子发布；绝不联网")
+    source_import.add_argument("--source", required=True, help="来源 id")
+    source_import.add_argument("--revision", required=True, help="不可变 revision")
+    source_import.add_argument("--config", required=True, help="converter config JSON 或 @文件")
+    source_import.add_argument("--actor", required=True, help="发布操作者")
+    source_import.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    source_prepare = source_sub.add_parser(
+        "prepare", help="显式 fetch、转换并原子发布 approved 来源")
+    source_prepare.add_argument("--source", required=True, help="来源 id")
+    source_prepare.add_argument("--revision", required=True, help="不可变 revision")
+    source_prepare.add_argument("--config", required=True, help="prepare config JSON 或 @文件")
+    source_prepare.add_argument("--actor", required=True, help="发布操作者")
+    source_prepare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    for source_parser in (
+        source_list, source_inspect, source_fetch, source_verify,
+        source_convert, source_import, source_prepare,
+    ):
+        source_parser.add_argument(
+            "--registry-dir", help="静态来源 JSON 目录（默认 datasets/direct-llm/sources）")
+        source_parser.add_argument(
+            "--cache-dir", help="artifact 缓存根目录（默认 var/datasets/direct-llm）")
+    for source_parser in (source_fetch, source_verify):
+        source_parser.add_argument("--override-actor", help="restricted 单次 override 操作者")
+        source_parser.add_argument("--override-purpose", help="restricted 单次 override 用途")
+        source_parser.add_argument("--override-ticket", help="restricted 单次 override 工单/审批号")
     direct_import = direct_sub.add_parser("import", help="导入一份 Direct LLM JSONL（内置样例或本地文件）")
     origin = direct_import.add_mutually_exclusive_group(required=True)
     origin.add_argument("--builtin", help="内置样例 id，见 `direct-llm builtins`")
@@ -152,6 +212,9 @@ def _build_parser() -> argparse.ArgumentParser:
     direct_subset.add_argument("--case-ids", help="只跑指定题目：逗号分隔的 case id")
     direct_subset.add_argument("--random", type=int, dest="random_count", metavar="N",
                                help="随机抽 N 题（种子写进运行快照，可复现）")
+    direct_subset.add_argument(
+        "--profile", help="运行 v2 数据集的固定 profile，如 smoke / regression / full"
+    )
     direct_run.add_argument("--seed", help="随机种子（8-64 位十六进制，省略则生成并记录）")
     direct_run.add_argument("--temperature", type=float, help="采样温度（省略=模型档案默认值）")
     direct_run.add_argument("--max-output-tokens", type=int, dest="max_output_tokens",
@@ -184,9 +247,318 @@ def _error(code: str, message: str) -> int:
     return 2
 
 
+def _source_payload(source) -> dict:
+    return {
+        "id": source.id,
+        "label": source.label,
+        "description": source.description,
+        "status": source.governance.status,
+        "tier": source.tier,
+        "blockers": list(source.blockers),
+        "revision": source.upstream.revision.model_dump(mode="json"),
+        "artifacts": [item.model_dump(mode="json") for item in source.upstream.artifacts],
+        "conversion": source.conversion.model_dump(mode="json"),
+        "safety": source.safety.model_dump(mode="json"),
+        "links": source.links.model_dump(mode="json"),
+        "license": source.license.model_dump(mode="json"),
+        "official_comparability": source.official_comparability.model_dump(mode="json"),
+    }
+
+
+def _source_override(args):
+    from motte_sdk.dataset_sources import SourcePipelineError
+
+    values = (args.override_actor, args.override_purpose, args.override_ticket)
+    if not any(values):
+        return None
+    if not all(values):
+        raise SourcePipelineError(
+            "CONTRACT_INVALID",
+            "restricted override requires --override-actor, --override-purpose, and --override-ticket together",
+        )
+    # These are untrusted request attributes, not approval evidence. This CLI
+    # deliberately has no ApprovalVerifier capability.
+    return {"actor": values[0], "purpose": values[1], "ticket": values[2]}
+
+
+def _source_error(error) -> int:
+    print(json.dumps({"error": error.to_dict()}, ensure_ascii=False), file=sys.stderr)
+    return 2
+
+
+_SOURCE_CONFIG_KEYS = frozenset({
+    "converter_id",
+    "converter_version",
+    "expected_rows",
+    "expected_test_rows",
+    "expected_validation_rows",
+    "input_count",
+    "max_bytes",
+    "profile_counts",
+    "profile_seed",
+    "profile_targets",
+    "runner_revision",
+    "seed",
+    "split",
+    "test_artifact",
+    "timeout",
+    "validation_artifact",
+    "version",
+})
+
+
+def _source_config(raw: str) -> dict:
+    from motte_sdk.dataset_sources import SourcePipelineError, parse_json
+    from motte_sdk.resolve import find_secret_paths
+
+    try:
+        payload = Path(raw[1:]).read_bytes() if raw.startswith("@") else raw.encode("utf-8")
+    except OSError as error:
+        raise SourcePipelineError(
+            "SOURCE_CONFIG_INVALID", f"cannot read source config: {error}") from error
+    value = parse_json(payload)
+    if not isinstance(value, dict):
+        raise SourcePipelineError("SOURCE_CONFIG_INVALID", "source config must be a JSON object")
+    secret_paths = find_secret_paths(value)
+    if secret_paths:
+        raise SourcePipelineError(
+            "CREDENTIALS_REJECTED",
+            "source config cannot contain credential fields",
+            details={"paths": sorted(secret_paths)},
+        )
+    unknown = sorted(set(value) - _SOURCE_CONFIG_KEYS)
+    if unknown:
+        raise SourcePipelineError(
+            "SOURCE_CONFIG_INVALID",
+            "source config contains unsupported fields",
+            details={"fields": unknown},
+        )
+    return value
+
+
+def _require_managed_actions(source, actions) -> None:
+    from motte_contracts.dataset_sources import SourceActionBlockedError, require_source_action
+    from motte_sdk.dataset_sources import SourcePipelineError
+
+    for action in actions:
+        try:
+            require_source_action(source, action)
+        except SourceActionBlockedError as error:
+            decision = error.decision
+            raise SourcePipelineError(
+                decision.code or "SOURCE_ACTION_BLOCKED",
+                "; ".join(decision.reasons),
+                details={"source_id": source.id, "action": action},
+            ) from error
+
+
+def _atomic_source_output(path: str, payload: dict) -> None:
+    from motte_sdk.dataset_sources import SourcePipelineError
+
+    target = Path(path)
+    encoded = (json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False
+    ) + "\n").encode("utf-8")
+    temporary_path = None
+    try:
+        if target.is_symlink():
+            raise SourcePipelineError(
+                "SOURCE_OUTPUT_UNSAFE", f"output path cannot be a symlink: {target}")
+        if target.exists():
+            if target.read_bytes() == encoded:
+                return
+            raise SourcePipelineError(
+                "SOURCE_OUTPUT_CONFLICT", f"output already exists with different content: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(encoded)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        try:
+            os.link(temporary_path, target)
+        except FileExistsError:
+            if target.is_symlink() or target.read_bytes() != encoded:
+                raise SourcePipelineError(
+                    "SOURCE_OUTPUT_CONFLICT",
+                    f"output concurrently appeared with different content: {target}",
+                )
+    except SourcePipelineError:
+        raise
+    except (OSError, ValueError) as error:
+        raise SourcePipelineError(
+            "SOURCE_OUTPUT_IO", f"cannot atomically write source output: {error}") from error
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _managed_source_summary(result: dict, *, output: str | None = None) -> dict:
+    summary = {
+        "source_id": result.get("source_id"),
+        "revision": result.get("revision"),
+        "dataset_fingerprint": result.get("dataset_fingerprint"),
+        "profile_hashes": result.get("profile_hashes", {}),
+        "publishable": result.get(
+            "publishable", result.get("governance", {}).get("publishable", False)),
+    }
+    if output is not None:
+        summary["output"] = output
+    if result.get("publication_id") is not None:
+        summary["publication_id"] = result["publication_id"]
+    return summary
+
+
+def _direct_llm_sources_command(args) -> int:
+    """Static source catalog and CLI-only artifact cache operations."""
+    from motte_sdk.dataset_sources import (
+        SafeFetcher,
+        SourcePipelineError,
+        artifact_cache_path,
+        inspect_source,
+        list_sources,
+        load_registry,
+        read_cached_artifact,
+        resolve_revision,
+    )
+    from motte_sdk.managed_sources import (
+        ManagedSourceError,
+        convert_cached_source,
+        import_cached_source,
+        prepare_source,
+    )
+
+    try:
+        if args.source_command == "list":
+            items = [_source_payload(source) for source in list_sources(args.registry_dir)]
+            print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+            return 0
+
+        source = inspect_source(args.source, args.registry_dir)
+        if args.source_command == "inspect":
+            print(json.dumps(_source_payload(source), ensure_ascii=False))
+            return 0
+
+        if args.source_command in {"convert", "import", "prepare"}:
+            config = _source_config(args.config)
+            registry = load_registry(args.registry_dir)
+            if args.source_command == "convert":
+                result = convert_cached_source(
+                    source.id,
+                    args.revision,
+                    config,
+                    args.allow_experimental,
+                    registry=registry,
+                    cache_root=args.cache_dir,
+                )
+                dataset = result["dataset"]
+                receipt = {key: value for key, value in result.items() if key != "dataset"}
+                output = str(Path(args.output))
+                _atomic_source_output(output, {"dataset": dataset, "receipt": receipt})
+                print(json.dumps(
+                    _managed_source_summary(result, output=output), ensure_ascii=False))
+                return 0
+
+            actions = ("import", "publish")
+            if args.source_command == "prepare":
+                actions = ("fetch", "import", "publish")
+            _require_managed_actions(source, actions)
+            resources = _resources(args)
+            if args.source_command == "import":
+                result = import_cached_source(
+                    source.id,
+                    args.revision,
+                    config,
+                    resources=resources,
+                    actor=args.actor,
+                    registry=registry,
+                    cache_root=args.cache_dir,
+                )
+            else:
+                result = prepare_source(
+                    source.id,
+                    args.revision,
+                    config,
+                    resources=resources,
+                    actor=args.actor,
+                    registry=registry,
+                    cache_root=args.cache_dir,
+                )
+            print(json.dumps(_managed_source_summary(result), ensure_ascii=False))
+            return 0
+
+        override = _source_override(args)
+        revision = args.revision or source.upstream.revision.value or ""
+        required = [artifact for artifact in source.upstream.artifacts if artifact.required]
+        if args.source_command == "fetch":
+            fetcher = SafeFetcher(cache_root=args.cache_dir)
+            receipts = []
+            for artifact in required:
+                limit = args.max_bytes if args.max_bytes is not None else artifact.max_bytes or 1
+                receipt = fetcher.fetch(
+                    source,
+                    revision,
+                    artifact.logical_name,
+                    entrypoint="cli",
+                    timeout=args.timeout,
+                    max_bytes=limit,
+                    override=override,
+                )
+                receipts.append(receipt.to_dict())
+            effective_revision = receipts[0]["revision"] if receipts else revision
+            print(json.dumps({
+                "source_id": source.id,
+                "revision": effective_revision,
+                "artifacts": receipts,
+                "total": len(receipts),
+            }, ensure_ascii=False))
+            return 0
+
+        resolved = resolve_revision(source, revision)
+        verified = []
+        for artifact in required:
+            raw = read_cached_artifact(
+                source,
+                resolved,
+                artifact.logical_name,
+                cache_root=args.cache_dir,
+                override=override,
+            )
+            verified.append({
+                "logical_name": artifact.logical_name,
+                "path": str(artifact_cache_path(
+                    source, resolved, artifact.logical_name, cache_root=args.cache_dir)),
+                "sha256": artifact.sha256,
+                "bytes": len(raw),
+                "verified": True,
+            })
+        print(json.dumps({
+            "source_id": source.id,
+            "revision": resolved,
+            "artifacts": verified,
+            "total": len(verified),
+        }, ensure_ascii=False))
+        return 0
+    except (SourcePipelineError, ManagedSourceError) as error:
+        return _source_error(error)
+    except OSError as error:
+        return _error("SOURCE_UNAVAILABLE", str(error))
+    except ValueError as error:
+        return _error("CONTRACT_INVALID", str(error))
+
+
 def _direct_llm_command(args) -> int:
     """`motte direct-llm`：内置样例 / 本地 JSONL 的导入、清单与运行创建（stdout 始终是 JSON）。"""
-    from motte_contracts.direct_llm import SUITE, is_scenario
+    if args.direct_command == "sources":
+        return _direct_llm_sources_command(args)
+
+    from motte_contracts import suites as contract_suites
+    from motte_contracts.direct_llm import SUITE
     from motte_sdk.direct_llm import (BuiltinUnavailable, builtin_catalog, import_builtin_dataset,
                                       import_direct_llm_split)
     from motte_storage.resource_store import ResourceConflictError
@@ -200,18 +572,30 @@ def _direct_llm_command(args) -> int:
         resources = _resources(args)
         items = []
         for scenario in sorted(resources.scenarios.list(), key=lambda s: str(s.get("name"))):
-            if not is_scenario(scenario):
+            if contract_suites.suite_of(scenario) != SUITE:
                 continue
             name, _, version = str(scenario.get("dataset", "")).rpartition("@")
             dataset = resources.datasets.get(name, version)
             if dataset is None:
                 continue
+            provenance = dataset.get("provenance") or {}
+            profiles = [
+                {"name": profile.get("name"), "count": profile.get("count")}
+                for profile in dataset.get("profiles") or [] if isinstance(profile, dict)
+            ]
             items.append({"scenario": f"{scenario['name']}@{scenario['version']}",
                           "dataset": scenario["dataset"],
                           "suite": SUITE,
+                          "contract_version": dataset.get("contract_version", 1),
+                          "dataset_fingerprint": dataset.get("dataset_fingerprint"),
                           "scorer": (dataset.get("eval") or {}).get("scorer"),
                           "cases": len(dataset.get("cases") or ()),
-                          "source": (dataset.get("provenance") or {}).get("source")})
+                          "profiles": profiles,
+                          "source": provenance.get("source_id", provenance.get("source")),
+                          "revision": provenance.get("upstream_revision", provenance.get("revision")),
+                          "license_status": ((provenance.get("license") or {}).get("status")
+                                             if isinstance(provenance.get("license"), dict)
+                                             else provenance.get("license"))})
         print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
         return 0
 
@@ -244,6 +628,12 @@ def _direct_llm_command(args) -> int:
     scenario = _resources(args).scenarios.get(name, version)
     if scenario is None:
         return _error("SCENARIO_NOT_FOUND", f"scenario not found: {args.scenario}")
+    actual_suite = contract_suites.suite_of(scenario)
+    if actual_suite != SUITE:
+        return _error(
+            "SUITE_MISMATCH",
+            f"resource {args.scenario} belongs to suite {actual_suite!r}, expected {SUITE!r}",
+        )
     if args.model:
         requested: dict = {"model": args.model}
     else:
@@ -259,6 +649,12 @@ def _direct_llm_command(args) -> int:
             requested["case_selection"] = {"mode": "random", "count": args.random_count}
             if args.seed:
                 requested["case_selection"]["seed"] = args.seed
+        elif args.profile is not None:
+            if not args.profile.strip():
+                raise ValueError("--profile 不能为空")
+            if args.seed:
+                raise ValueError("--seed 只与 --random 搭配使用")
+            requested["case_selection"] = {"mode": "profile", "profile": args.profile.strip()}
         elif args.seed:
             raise ValueError("--seed 只与 --random 搭配使用")
         parameters = {}

@@ -224,6 +224,63 @@ def test_versioned_scenario_and_dataset_routes():
     assert client.get("/api/v1/scenarios/json_extract/3").status_code == 200
 
 
+def test_dataset_catalog_projects_summary_without_case_payloads():
+    client, store = client_with_resources()
+    store.datasets.put({
+        "name": "large-catalog-fixture",
+        "version": "1",
+        "contract_version": 2,
+        "dataset_fingerprint": "sha256:" + "1" * 64,
+        "cases_sha256": "sha256:" + "2" * 64,
+        "cases": [
+            {"case_id": f"case-{index}", "input": f"SECRET-LARGE-PROMPT-{index}"}
+            for index in range(12_000)
+        ],
+        "profiles": [{
+            "name": "smoke", "count": 50, "strategy": "fixed-stratified",
+            "case_ids": [f"case-{index}" for index in range(50)],
+            "case_ids_sha256": "sha256:" + "3" * 64,
+        }],
+        "eval": {"suite": "unmanaged-fixture", "version": 2, "scorer": "fixture"},
+        "provenance": {"source": "synthetic-capacity", "revision": "fixture-v1"},
+    })
+
+    response = client.get("/api/v1/datasets")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["cases"] == 12_000
+    assert payload["items"][0]["profiles"] == [{
+        "name": "smoke", "count": 50, "strategy": "fixed-stratified",
+        "case_ids_sha256": "sha256:" + "3" * 64,
+    }]
+    assert "case_ids" not in payload["items"][0]["profiles"][0]
+    assert "SECRET-LARGE-PROMPT" not in response.text
+    detail = client.get("/api/v1/datasets/large-catalog-fixture/1").json()
+    assert len(detail["cases"]) == 12_000
+
+
+def test_direct_llm_source_catalog_is_static_typed_and_fail_closed():
+    client, _ = client_with_resources()
+    response = client.get("/api/v1/benchmarks/direct-llm/sources")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 7
+    by_id = {item["id"]: item for item in payload["items"]}
+    assert by_id["mmlu-pro"]["status"] == "pending"
+    assert by_id["ceval"]["status"] == "restricted"
+    assert by_id["motte-core-zh"]["status"] == "pending"
+    assert all(item["blocker_count"] > 0 for item in payload["items"])
+
+    detail = client.get("/api/v1/benchmarks/direct-llm/sources/mmlu-pro")
+    assert detail.status_code == 200
+    assert detail.json()["safety"]["trust_remote_code"] is False
+    assert detail.json()["upstream"]["revision"]["value"] is None
+    assert client.get(
+        "/api/v1/benchmarks/direct-llm/sources/unknown"
+    ).status_code == 404
+
+
 def test_agent_and_skill_catalogs():
     client, _ = client_with_resources()
     agents = client.get("/api/v1/agents").json()

@@ -222,11 +222,27 @@ def _validate_direct(manifest: dict[str, Any]) -> None:
         )
 
 
+def _provider_execution_manifest(
+    manifest: dict[str, Any], provider_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Project only allowlisted request-building inputs across the adapter boundary."""
+    projected: dict[str, Any] = {"cases": deepcopy(manifest.get("cases") or {})}
+    for key in ("tools", "parameters"):
+        if key in manifest:
+            projected[key] = deepcopy(manifest[key])
+    if provider_config.get("kind") == "replay" and "replay_fixture" in manifest:
+        projected["replay_fixture"] = deepcopy(manifest["replay_fixture"])
+    return projected
+
+
 def _build_direct(run: dict[str, Any]) -> ExecutionHandle:
     from motte_provider.config import build_provider
 
     manifest = run.get("manifest") or {}
-    provider = build_provider(manifest["provider"], manifest)
+    provider_config = manifest["provider"]
+    provider = build_provider(
+        provider_config, _provider_execution_manifest(manifest, provider_config)
+    )
     return ExecutionHandle(
         backend_id="direct-llm",
         backend_version="1",

@@ -1,5 +1,6 @@
 """CLI `direct-llm`：内置样例 / 本地 JSONL 的导入、清单与运行创建（零网络零费用）。"""
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -102,10 +103,16 @@ def test_list_shows_imported_datasets_and_ignores_other_suites(capsys, tmp_path)
     assert main(_db_args(tmp_path, "list")) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["total"] == 1
-    assert payload["items"][0] == {"scenario": "direct-llm-json-extract@1",
-                                   "dataset": "direct-llm-json-extract@1",
-                                   "suite": "direct-llm", "scorer": "regex", "cases": 7,
-                                   "source": "builtin:direct-llm-json-extract"}
+    item = payload["items"][0]
+    assert {key: item[key] for key in (
+        "scenario", "dataset", "suite", "scorer", "cases", "source",
+    )} == {"scenario": "direct-llm-json-extract@1",
+           "dataset": "direct-llm-json-extract@1",
+           "suite": "direct-llm", "scorer": "regex", "cases": 7,
+           "source": "builtin:direct-llm-json-extract"}
+    assert item["contract_version"] == 1
+    assert item["dataset_fingerprint"].startswith("sha256:")
+    assert item["profiles"] == [] and item["license_status"] == "internal-sample"
 
 
 def test_list_skips_scenarios_whose_dataset_is_gone(capsys, tmp_path):
@@ -160,6 +167,79 @@ def test_run_random_subset_requires_seed_pairing(capsys, tmp_path):
     assert main(_db_args(tmp_path, "run", scenario="direct-llm-exact-answer@1", model="probe",
                          seed="deadbeef")) == 2
     assert "--seed" in json.loads(capsys.readouterr().err)["error"]["message"]
+
+
+def test_v2_list_and_run_support_fixed_profile_selection(capsys, tmp_path):
+    from motte_contracts.direct_llm_v2 import scenario_for_v2
+    from motte_sdk.core_zh import build_dataset
+    from motte_sdk.direct_llm_v2 import normalize_direct_llm_v2_dataset, persist_direct_llm_v2_dataset
+    from motte_sdk.publication import publication_audit
+
+    store = _store(tmp_path)
+    dataset = deepcopy(build_dataset())
+    dataset["provenance"].update({
+        "source_id": "cli-v2-synthetic-fixture",
+        "source_kind": "synthetic-test",
+        "synthetic": True,
+    })
+    dataset["provenance"]["license"]["status"] = "approved-test-only"
+    dataset.pop("dataset_fingerprint")
+    dataset = normalize_direct_llm_v2_dataset(dataset)
+    scenario = scenario_for_v2(dataset, version="1")
+    audit = publication_audit(
+        dataset, scenario, {"fixture": "cli-v2-profile"},
+        actor="pytest", entrypoint="cli-test", published_at="2026-09-19T00:00:00Z",
+    )
+    persist_direct_llm_v2_dataset(dataset, store, version="1", publication=audit)
+    store.providers.put({"name": "local", "kind": "openai_compatible",
+                         "base_url": "https://local.test/v1", "model": "unused"})
+    store.models.put({"id": "probe", "provider": "local", "model": "probe-1",
+                      "capabilities": {}, "max_output_tokens": 4096})
+
+    assert main(_db_args(tmp_path, "list")) == 0
+    listed = json.loads(capsys.readouterr().out)["items"][0]
+    assert listed["contract_version"] == 2
+    assert listed["profiles"] == [
+        {"name": "smoke", "count": 80},
+        {"name": "regression", "count": 500},
+        {"name": "full", "count": 1000},
+    ]
+
+    assert main(_db_args(
+        tmp_path, "run", scenario="motte-core-zh@1", model="probe", profile="smoke",
+    )) == 0
+    run = json.loads(capsys.readouterr().out)
+    assert len(run["case_ids"]) == 80
+    selection = run["manifest"]["benchmark_snapshot"]["selection"]
+    assert selection["mode"] == "profile" and selection["profile"] == "smoke"
+    assert selection["count"] == 80
+
+
+@pytest.mark.parametrize(("scenario", "record", "actual_suite"), [
+    ("gsm-probe-full@1",
+     {"name": "gsm-probe-full", "version": "1", "mode": "direct-llm",
+      "benchmark": {"id": "gsm8k-full", "version": 1, "selected_count": 1},
+      "dataset": "gsm-probe@1"},
+     "gsm8k"),
+    ("foreign-probe@1",
+     {"name": "foreign-probe", "version": "1", "mode": "direct-llm",
+      "eval": {"suite": "foreign", "id": "foreign-probe", "version": 1},
+      "dataset": "foreign-probe@1"},
+     None),
+])
+def test_run_rejects_scenarios_outside_direct_llm_suite(
+        capsys, tmp_path, scenario, record, actual_suite):
+    _store(tmp_path).scenarios.put(record)
+
+    assert main(_db_args(tmp_path, "run", scenario=scenario, model="unused")) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err)["error"] == {
+        "code": "SUITE_MISMATCH",
+        "message": (f"resource {scenario} belongs to suite {actual_suite!r}, "
+                    "expected 'direct-llm'"),
+    }
 
 
 def test_run_reports_structured_errors(capsys, tmp_path):

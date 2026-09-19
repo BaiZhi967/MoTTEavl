@@ -1,7 +1,11 @@
 """Direct LLM SDK：内置样例、落库、创建期展开、评分（零网络零费用）。"""
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
 
 import pytest
+
+import motte_sdk.direct_llm as direct_llm_module
 
 from motte_contracts.direct_llm import SCORER_VERSION, import_direct_llm_jsonl, scenario_for
 from motte_sdk.direct_llm import (BUILTIN_DATASETS, BUILTIN_ENV, BuiltinUnavailable, builtin_catalog,
@@ -9,7 +13,11 @@ from motte_sdk.direct_llm import (BUILTIN_DATASETS, BUILTIN_ENV, BuiltinUnavaila
                                   import_direct_llm_split, persist_direct_llm_dataset,
                                   resolve_direct_llm_manifest)
 from motte_sdk.resolve import ManifestResolutionError, prepare_run
-from motte_storage.resource_store import InMemoryResourceStore, ResourceConflictError
+from motte_storage.resource_store import (
+    InMemoryResourceStore,
+    ResourceConflictError,
+    SQLiteResourceStore,
+)
 
 
 def raw_source(count=6):
@@ -17,12 +25,15 @@ def raw_source(count=6):
                       for i in range(count)) + "\n").encode()
 
 
-def seeded_resources(*, ceiling=8192, count=6, scorer=None):
+def seeded_resources(*, ceiling=8192, context_window=None, count=6, scorer=None):
     resources = InMemoryResourceStore()
     resources.providers.put({"name": "local", "kind": "openai_compatible",
                              "base_url": "https://local.test/v1", "model": "unused"})
-    resources.models.put({"id": "probe", "provider": "local", "model": "probe-1",
-                          "capabilities": {}, "max_output_tokens": ceiling})
+    profile = {"id": "probe", "provider": "local", "model": "probe-1",
+               "capabilities": {}, "max_output_tokens": ceiling}
+    if context_window is not None:
+        profile["context_window"] = context_window
+    resources.models.put(profile)
     record = import_direct_llm_jsonl(raw_source(count), name="direct-llm-synthetic", version="1",
                                      license_id="synthetic-only", scorer=scorer, source="synthetic",
                                      synthetic=True)
@@ -79,6 +90,9 @@ def test_import_split_persists_dataset_and_scenario_with_auto_version():
     assert receipt["scenario"] == "direct-llm-synthetic@1"
     assert receipt["suite"] == "direct-llm" and receipt["scorer"] == "exact"
     assert receipt["cases"] == 6 and receipt["source"] == "synthetic"
+    assert receipt["dataset_fingerprint"].startswith("sha256:")
+    assert resources.datasets.get("direct-llm-synthetic", "1")["dataset_fingerprint"] == \
+        receipt["dataset_fingerprint"]
     assert resources.scenarios.get("direct-llm-synthetic", "1")["dataset"] == "direct-llm-synthetic@1"
     # 同内容重复导入复用版本（幂等），内容不同才取下一个空号
     assert import_direct_llm_split(raw_source(), name="direct-llm-synthetic", version=None,
@@ -88,6 +102,114 @@ def test_import_split_persists_dataset_and_scenario_with_auto_version():
                                      license_id="synthetic-only", resources=resources,
                                      source="synthetic", synthetic=True)
     assert second["imported"] == "direct-llm-synthetic@2"
+
+
+def test_auto_version_uses_complete_dataset_identity():
+    resources = InMemoryResourceStore()
+    receipts = [
+        import_direct_llm_split(
+            raw_source(), name="identity", version=None, license_id=license_id,
+            scorer=scorer, source=source, resources=resources, synthetic=True,
+        )
+        for source, license_id, scorer in (
+            ("source-a", "license-a", "exact"),
+            ("source-b", "license-a", "exact"),
+            ("source-b", "license-b", "exact"),
+            ("source-b", "license-b", "contains"),
+        )
+    ]
+    assert [receipt["imported"] for receipt in receipts] == [
+        "identity@1", "identity@2", "identity@3", "identity@4"
+    ]
+    assert len({receipt["dataset_fingerprint"] for receipt in receipts}) == 4
+    assert len({receipt["cases_sha256"] for receipt in receipts}) == 1
+    assert import_direct_llm_split(
+        raw_source(), name="identity", version=None, license_id="license-b",
+        scorer="contains", source="source-b", resources=resources, synthetic=True,
+    ) == receipts[-1]
+
+
+def test_legacy_dataset_without_fingerprint_remains_idempotent():
+    resources = InMemoryResourceStore()
+    legacy = import_direct_llm_jsonl(
+        raw_source(), name="legacy", version="1", license_id="synthetic-only",
+        source="synthetic", synthetic=True,
+    )
+    resources.datasets.put(legacy)
+    resources.scenarios.put(scenario_for(legacy, version="1"))
+
+    automatic = persist_direct_llm_dataset(legacy, resources)
+    explicit = persist_direct_llm_dataset(legacy, resources, version="1")
+    assert automatic == explicit
+    assert automatic["imported"] == "legacy@1"
+    assert automatic["dataset_fingerprint"].startswith("sha256:")
+    assert "dataset_fingerprint" not in resources.datasets.get("legacy", "1")
+    assert len(resources.datasets.list()) == 1
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_concurrent_auto_versions_retry_without_partial_pairs(tmp_path, monkeypatch, backend):
+    resources = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "concurrent-direct.db"
+    )
+    records = [
+        import_direct_llm_jsonl(
+            raw_source(count), name="concurrent", version="1", license_id="synthetic-only",
+            source="synthetic", synthetic=True,
+        )
+        for count in range(1, 13)
+    ]
+    barrier = Barrier(len(records))
+    original_next = direct_llm_module.next_dataset_version
+
+    def synchronized_next(record, store):
+        candidate = original_next(record, store)
+        barrier.wait(timeout=10)
+        return candidate
+
+    conflicts = 0
+    conflicts_lock = Lock()
+    original_publish = resources.publish_dataset_scenario
+
+    def tracking_publish(dataset, scenario):
+        nonlocal conflicts
+        try:
+            return original_publish(dataset, scenario)
+        except ResourceConflictError:
+            with conflicts_lock:
+                conflicts += 1
+            raise
+
+    monkeypatch.setattr(direct_llm_module, "next_dataset_version", synchronized_next)
+    monkeypatch.setattr(resources, "publish_dataset_scenario", tracking_publish)
+    with ThreadPoolExecutor(max_workers=len(records)) as pool:
+        futures = [pool.submit(persist_direct_llm_dataset, record, resources) for record in records]
+        receipts = [future.result(timeout=20) for future in futures]
+
+    versions = {str(index) for index in range(1, len(records) + 1)}
+    assert conflicts >= len(records) - 1
+    assert {receipt["imported"].split("@", 1)[1] for receipt in receipts} == versions
+    assert {item["version"] for item in resources.datasets.list()} == versions
+    assert {item["version"] for item in resources.scenarios.list()} == versions
+
+
+def test_persist_is_atomic_when_the_scenario_conflicts():
+    resources = InMemoryResourceStore()
+    resources.scenarios.put({"name": "atomic", "version": "1", "cases": ["conflict"]})
+    record = import_direct_llm_jsonl(
+        raw_source(), name="atomic", version="1", license_id="synthetic-only",
+        source="synthetic", synthetic=True,
+    )
+
+    with pytest.raises(ResourceConflictError, match="different content"):
+        persist_direct_llm_dataset(record, resources, version="1")
+    assert resources.datasets.get("atomic", "1") is None
+    assert resources.scenarios.get("atomic", "1") == {
+        "name": "atomic", "version": "1", "cases": ["conflict"]
+    }
+    assert persist_direct_llm_dataset(record, resources)["imported"] == "atomic@2"
+    assert resources.datasets.get("atomic", "2") is not None
+    assert resources.scenarios.get("atomic", "2") is not None
 
 
 def test_persist_rejects_reusing_a_version_with_different_content():
@@ -121,6 +243,7 @@ def test_resolve_projects_cases_verbatim_and_snapshots_the_dataset():
     assert provenance["max_output_tokens"] == 1024 and provenance["max_retries"] == 0
     assert provenance["run_selection"] == {"mode": "all", "count": 6, "seed": None}
     assert provenance["cases_sha256"] == record["cases_sha256"]
+    assert provenance["dataset_fingerprint"].startswith("sha256:")
 
 
 def test_resolve_honours_subset_and_run_level_output_budget():
@@ -166,7 +289,7 @@ def test_resolve_rejects_unknown_dataset():
 # ------------------------------------------------------------------ prepare_run 接线
 
 def test_prepare_run_expands_a_direct_llm_scenario_once():
-    resources, scenario, record = seeded_resources()
+    resources, scenario, record = seeded_resources(context_window=4096)
     manifest, case_ids = prepare_run("direct-llm-synthetic@1", {"model": "probe"}, [], resources)
     assert case_ids == [case["case_id"] for case in record["cases"]]
     provider = manifest["provider"]
@@ -174,18 +297,52 @@ def test_prepare_run_expands_a_direct_llm_scenario_once():
     assert provider["parameters"]["max_output_tokens"] == 1024
     assert provider["max_retries"] == 0
     assert manifest["cases"]["direct-llm-synthetic-0000"]["prompt"] == "SYNTHETIC q0"
+    preflight = manifest["budget"]["context_preflight"]
+    assert preflight["method"] == "utf8-bytes-plus-structure-v1"
+    assert preflight["context_window"] == 4096
+    assert preflight["output_tokens_reserved"] == 1024
+    assert preflight["stats"]["case_count"] == len(record["cases"])
+    assert "per_case" not in preflight
+    assert manifest["resource_snapshots"]["model_profile"]["context_window"] == 4096
 
 
 def test_prepare_run_keeps_an_explicit_output_budget_and_rejects_over_ceiling():
-    resources, scenario, _ = seeded_resources(ceiling=512)
+    resources, scenario, _ = seeded_resources(ceiling=512, context_window=4096)
     manifest, _ = prepare_run("direct-llm-synthetic@1",
                               {"model": "probe", "parameters": {"max_output_tokens": 128}},
                               [], resources)
     assert manifest["provider"]["parameters"]["max_output_tokens"] == 128
+    assert manifest["budget"]["context_preflight"]["output_tokens_reserved"] == 128
     with pytest.raises(ManifestResolutionError) as error:
         prepare_run("direct-llm-synthetic@1",
                     {"model": "probe", "parameters": {"max_output_tokens": 4096}}, [], resources)
     assert error.value.code == "MODEL_CONFIG_INVALID"
+
+
+def test_prepare_run_rejects_context_overflow_before_execution_or_provider_calls(monkeypatch):
+    import motte_provider.config as provider_config
+    import motte_sdk.resolve as resolve_module
+
+    resources, _, _ = seeded_resources(context_window=1024)
+    calls = {"execution": 0, "provider": 0}
+
+    def unexpected_execution(*args, **kwargs):
+        calls["execution"] += 1
+        raise AssertionError("resolve_execution must not run after context preflight fails")
+
+    def unexpected_provider(*args, **kwargs):
+        calls["provider"] += 1
+        raise AssertionError("provider construction must not run during creation preflight")
+
+    monkeypatch.setattr(resolve_module, "resolve_execution", unexpected_execution)
+    monkeypatch.setattr(provider_config, "build_case_provider", unexpected_provider)
+
+    with pytest.raises(ManifestResolutionError) as error:
+        prepare_run("direct-llm-synthetic@1", {"model": "probe"}, [], resources)
+
+    assert error.value.code == "CONTEXT_WINDOW_EXCEEDED"
+    assert "direct-llm-synthetic-0000" in str(error.value)
+    assert calls == {"execution": 0, "provider": 0}
 
 
 def test_prepare_run_requires_provider_and_rejects_two_selection_channels():

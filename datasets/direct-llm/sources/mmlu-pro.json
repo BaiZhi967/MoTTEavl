@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "id": "mmlu-pro",
+  "label": "MMLU-Pro",
+  "description": "English knowledge and reasoning multiple-choice benchmark adapted as a versioned Direct LLM variant.",
+  "tier": "managed-public",
+  "governance": {
+    "status": "pending",
+    "distribution_scope": "blocked",
+    "stable_eligible": false,
+    "reviewer": null,
+    "reviewed_at": null,
+    "decision_notes": "The dataset card and repository expose different license claims; upstream item rights and protocol parity require human review."
+  },
+  "links": {
+    "homepage": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro",
+    "repository": "https://github.com/TIGER-AI-Lab/MMLU-Pro",
+    "dataset_card": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro",
+    "citation": null
+  },
+  "upstream": {
+    "revision": {
+      "kind": "hf-commit",
+      "resolver": "huggingface-dataset-commit",
+      "value": null
+    },
+    "artifacts": [
+      {
+        "logical_name": "dataset-export",
+        "url": null,
+        "format": null,
+        "sha256": null,
+        "bytes": null,
+        "max_bytes": null,
+        "required": true
+      }
+    ]
+  },
+  "license": {
+    "data": {
+      "declared_ids": [
+        "MIT"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro"
+      ]
+    },
+    "code": {
+      "declared_ids": [
+        "Apache-2.0"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/TIGER-AI-Lab/MMLU-Pro/blob/main/LICENSE"
+      ]
+    },
+    "commercial_use": "unknown",
+    "redistribution": "unknown",
+    "attribution": "unknown",
+    "share_alike": "unknown",
+    "review_notes": "Do not infer dataset or constituent-item rights from the repository code license."
+  },
+  "conversion": {
+    "converter": {
+      "id": "mmlu-pro-to-direct",
+      "version": null
+    },
+    "splits": [
+      "test",
+      "validation"
+    ],
+    "default_split": "test",
+    "prompt_version": "mmlu-pro-5shot-cot-direct-v1",
+    "scorer": {
+      "id": "choice",
+      "version": "1"
+    },
+    "profiles": [
+      "smoke",
+      "regression",
+      "full"
+    ],
+    "optional_dependency": null
+  },
+  "safety": {
+    "network_entrypoint": "cli-only",
+    "allowed_protocols": [
+      "https"
+    ],
+    "trust_remote_code": false,
+    "online_rows_fallback": false,
+    "executable_upstream_code": false,
+    "archive_auto_extract": false
+  },
+  "official_comparability": {
+    "status": "not-established",
+    "notes": "Requires pinned official runner and prediction-level prompt, extraction, and aggregation parity; zero-shot variants remain non-comparable."
+  },
+  "blockers": [
+    "Human license review has not resolved the dataset-card and repository-license boundary.",
+    "No immutable upstream revision is pinned.",
+    "Artifact URL, format, SHA-256, byte count, and size limit are not pinned.",
+    "Converter version and optional dependency are not fixed.",
+    "Official protocol parity is not established."
+  ]
+}

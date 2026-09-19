@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "id": "longbench-v2",
+  "label": "LongBench v2",
+  "description": "Long-context multiple-choice benchmark requiring tokenizer-aware eligibility and explicit protocol variants.",
+  "tier": "advanced",
+  "governance": {
+    "status": "pending",
+    "distribution_scope": "blocked",
+    "stable_eligible": false,
+    "reviewer": null,
+    "reviewed_at": null,
+    "decision_notes": "Dataset-card and repository license claims cover different surfaces, and constituent long-document rights require review."
+  },
+  "links": {
+    "homepage": "https://huggingface.co/datasets/THUDM/LongBench-v2",
+    "repository": "https://github.com/THUDM/LongBench",
+    "dataset_card": "https://huggingface.co/datasets/THUDM/LongBench-v2",
+    "citation": null
+  },
+  "upstream": {
+    "revision": {
+      "kind": "hf-commit",
+      "resolver": "huggingface-dataset-commit",
+      "value": null
+    },
+    "artifacts": [
+      {
+        "logical_name": "dataset-export",
+        "url": null,
+        "format": null,
+        "sha256": null,
+        "bytes": null,
+        "max_bytes": null,
+        "required": true
+      }
+    ]
+  },
+  "license": {
+    "data": {
+      "declared_ids": [
+        "Apache-2.0"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://huggingface.co/datasets/THUDM/LongBench-v2"
+      ]
+    },
+    "code": {
+      "declared_ids": [
+        "MIT"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/THUDM/LongBench/blob/main/LICENSE"
+      ]
+    },
+    "commercial_use": "unknown",
+    "redistribution": "unknown",
+    "attribution": "unknown",
+    "share_alike": "unknown",
+    "review_notes": "Do not infer rights for embedded books, documents, or code from the dataset-card or repository-level claim."
+  },
+  "conversion": {
+    "converter": {
+      "id": "longbench-v2-to-direct",
+      "version": null
+    },
+    "splits": [],
+    "default_split": null,
+    "prompt_version": null,
+    "scorer": {
+      "id": "choice",
+      "version": "1"
+    },
+    "profiles": [
+      "smoke",
+      "regression",
+      "full"
+    ],
+    "optional_dependency": null
+  },
+  "safety": {
+    "network_entrypoint": "cli-only",
+    "allowed_protocols": [
+      "https"
+    ],
+    "trust_remote_code": false,
+    "online_rows_fallback": false,
+    "executable_upstream_code": false,
+    "archive_auto_extract": false
+  },
+  "official_comparability": {
+    "status": "not-established",
+    "notes": "Only a full, untruncated, tokenizer-eligible protocol with pinned extraction and aggregation parity may claim overall comparability."
+  },
+  "blockers": [
+    "Human review has not resolved dataset-card, repository, and constituent-content rights.",
+    "No immutable upstream dataset or runner revision is pinned.",
+    "Artifact URL, format, SHA-256, byte count, and size limit are not pinned.",
+    "Converter, splits, prompt version, and optional dependency are not fixed.",
+    "Tokenizer-aware context eligibility, budget policy, and official runner parity are not established."
+  ]
+}

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { UploadSimpleIcon } from "@phosphor-icons/react";
+import { CalculatorIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import {
-  createDirectLlmRun, getDirectLlmBuiltins, getDirectLlmOverview, getModels, importDirectLlm,
-  type DirectLlmBuiltin, type DirectLlmPreset, type ModelRecord,
+  createDirectLlmRun, dryRunDirectLlm, getDirectLlmBuiltins, getDirectLlmOverview,
+  getDirectLlmSources, getModels, getSourceDetail, importDirectLlm,
+  type DirectLlmBuiltin, type DirectLlmCaseSelection, type DirectLlmDryRunResponse,
+  type DirectLlmPreset, type DirectLlmRunRequest, type DirectLlmSourceDetail,
+  type DirectLlmSourceSummary, type ModelRecord,
 } from "../../api/client";
 import { ModelPicker } from "../../components/ModelPicker";
 import { suiteRoutes } from "../registry";
@@ -12,7 +15,30 @@ import { clearCaseSelection, loadCaseSelection, randomSeed, selectionRequest,
 import { SCORER_OPTIONS, datasetScorer, scorerLabel, sortPresets } from "./presets";
 
 const ROUTES = suiteRoutes("direct-llm");
-type CaseMode = "all" | "ids" | "random";
+type CaseMode = "all" | "ids" | "random" | "profile";
+type SourceTone = "success" | "error" | "info" | "warning" | "neutral";
+
+const SOURCE_STATUS_META: Record<string, { label: string; tone: SourceTone }> = {
+  approved: { label: "已批准", tone: "success" },
+  "approved-internal": { label: "内部使用", tone: "info" },
+  internal: { label: "内部使用", tone: "info" },
+  restricted: { label: "受限", tone: "error" },
+  pending: { label: "待审核", tone: "warning" },
+};
+
+const DISTRIBUTION_LABELS: Record<string, string> = {
+  public: "公开",
+  "internal-only": "仅内部",
+  restricted: "受限",
+  blocked: "已阻断",
+};
+
+const COMPARABILITY_LABELS: Record<string, string> = {
+  established: "已建立",
+  "not-established": "未建立",
+  "not-applicable": "不适用",
+};
+
 /** 数据集缺失时的兜底展示值；真实预设由数据集记录声明（preset.eval.max_output_tokens）。 */
 const FALLBACK_BUDGET = 1024;
 
@@ -23,6 +49,13 @@ export function DirectLlmOperate() {
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [builtins, setBuiltins] = useState<DirectLlmBuiltin[]>([]);
+  const [managedSources, setManagedSources] = useState<DirectLlmSourceSummary[] | null>(null);
+  const [sourceError, setSourceError] = useState("");
+  const [showRestrictedSources, setShowRestrictedSources] = useState(false);
+  const [openSourceId, setOpenSourceId] = useState<string | null>(null);
+  const [sourceDetail, setSourceDetail] = useState<DirectLlmSourceDetail | null>(null);
+  const [sourceDetailLoading, setSourceDetailLoading] = useState(false);
+  const [sourceDetailError, setSourceDetailError] = useState("");
   const [chosenBuiltin, setChosenBuiltin] = useState("");
   const [builtinVersion, setBuiltinVersion] = useState("");
   const [content, setContent] = useState("");
@@ -38,33 +71,65 @@ export function DirectLlmOperate() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [caseMode, setCaseMode] = useState<CaseMode>("all");
+  const [profileName, setProfileName] = useState("");
   const [randomCount, setRandomCount] = useState("10");
   const [seed, setSeed] = useState(randomSeed);
   const [picked, setPicked] = useState<StoredSelection | null>(null);
   const [levels, setLevels] = useState<Record<string, string>>({});
   const [temperature, setTemperature] = useState("");
   const [budget, setBudget] = useState("");
+  const [dryRun, setDryRun] = useState<DirectLlmDryRunResponse | null>(null);
+  const [dryRunError, setDryRunError] = useState("");
+  const [estimating, setEstimating] = useState(false);
   const [fileName, setFileName] = useState("");
   const filePicker = useRef<HTMLInputElement>(null);
+  const selectionRestoreHandled = useRef(false);
+  const sourceDetailRequest = useRef(0);
+  const dryRunRequest = useRef(0);
 
   const presets = useMemo(() => sortPresets(overview), [overview]);
   /* 默认选中题数最多的数据集；用户一旦明确选择就不再被覆盖。 */
   const preset: DirectLlmPreset | undefined =
     presets.find((item) => item.scenario === chosenScenario) ?? presets[0];
+  const profiles = preset?.contract_version === 2 ? preset.profiles ?? [] : [];
+  const activeProfile = profiles.find((profile) => profile.name === profileName) ?? profiles[0];
+  const visibleSources = managedSources?.filter((item) => showRestrictedSources || item.status !== "restricted") ?? null;
   const usableBuiltin = builtins.find((item) => item.id === chosenBuiltin && item.importable);
   /* 指定题目来自「题目」页：数据集对不上时不能直接发起，避免把别的题集 id 发上去。 */
+  const pickedPreset = picked ? presets.find((item) => item.dataset === picked.dataset) : undefined;
   const pickedMismatch = Boolean(picked && preset && picked.dataset !== preset.dataset);
+  const pickedUnavailable = Boolean(picked && presets.length > 0 && !pickedPreset);
   const usablePicked = picked && !pickedMismatch ? picked : null;
   const reasoningModels = useMemo(
     () => models.filter((model) => selected.includes(model.id) && model.reasoning?.supported),
     [models, selected]);
   const runSize = caseMode === "random" ? Math.max(0, Math.floor(Number(randomCount) || 0))
     : caseMode === "ids" ? usablePicked?.caseIds.length ?? 0
-      : preset?.cases ?? 0;
+      : caseMode === "profile" ? activeProfile?.count ?? 0
+        : preset?.cases ?? 0;
   /* 数据集预设的输出上限（不填就是它，填了就以运行快照为准），展示与服务端同源。 */
   const presetBudget = typeof preset?.eval?.max_output_tokens === "number"
     ? preset.eval.max_output_tokens : FALLBACK_BUDGET;
   const effectiveBudget = budget.trim() ? Number(budget) : presetBudget;
+  const dryRunIdentity = JSON.stringify({
+    scenario: preset?.scenario ?? null,
+    models: selected,
+    caseMode,
+    profile: activeProfile?.name ?? null,
+    randomCount,
+    seed,
+    caseIds: usablePicked?.caseIds ?? [],
+    temperature,
+    budget,
+    levels,
+  });
+
+  useEffect(() => {
+    dryRunRequest.current += 1;
+    setDryRun(null);
+    setDryRunError("");
+    setEstimating(false);
+  }, [dryRunIdentity]);
 
   const refresh = useCallback(async () => {
     try {
@@ -90,19 +155,59 @@ export function DirectLlmOperate() {
           || "");
       })
       .catch(() => undefined);
+    getDirectLlmSources()
+      .then((payload) => {
+        setManagedSources(payload.items);
+        setSourceError("");
+      })
+      .catch((e) => {
+        setManagedSources([]);
+        setSourceError(String(e));
+      });
     setPicked(loadCaseSelection());
   }, [refresh]);
 
-  /* 数据集切换后旧勾选不再适用；换数据集时清空，避免「指定题目」带着别的题集 id 发起。 */
+  /* 题目页返回时只恢复一次：优先切到勾选所属数据集，并显式进入指定题目模式。 */
   useEffect(() => {
-    if (picked && preset && picked.dataset !== preset.dataset) {
-      setCaseMode((mode) => (mode === "ids" ? "all" : mode));
+    if (selectionRestoreHandled.current || presets.length === 0) return;
+    selectionRestoreHandled.current = true;
+    if (!picked) return;
+    setCaseMode("ids");
+    if (pickedPreset) setChosenScenario(pickedPreset.scenario);
+  }, [picked, pickedPreset, presets.length]);
+
+  const toggleSourceDetail = (sourceId: string) => {
+    if (openSourceId === sourceId) {
+      sourceDetailRequest.current += 1;
+      setOpenSourceId(null);
+      setSourceDetail(null);
+      setSourceDetailError("");
+      setSourceDetailLoading(false);
+      return;
     }
-  }, [picked, preset]);
+    const requestId = sourceDetailRequest.current + 1;
+    sourceDetailRequest.current = requestId;
+    setOpenSourceId(sourceId);
+    setSourceDetail(null);
+    setSourceDetailError("");
+    setSourceDetailLoading(true);
+    getSourceDetail(sourceId)
+      .then((detail) => {
+        if (sourceDetailRequest.current === requestId) setSourceDetail(detail);
+      })
+      .catch((e) => {
+        if (sourceDetailRequest.current === requestId) setSourceDetailError(String(e));
+      })
+      .finally(() => {
+        if (sourceDetailRequest.current === requestId) setSourceDetailLoading(false);
+      });
+  };
 
   const applyReceipt = (receipt: { imported: string; scenario: string; scorer: string; cases: number }) => {
     setMessage(`已导入 ${receipt.imported} · ${scorerLabel(receipt.scorer)} · ${receipt.cases} 题`);
     setChosenScenario(receipt.scenario);
+    setCaseMode("all");
+    setProfileName("");
   };
 
   const importBuiltin = async (form: FormEvent<HTMLFormElement>) => {
@@ -131,13 +236,17 @@ export function DirectLlmOperate() {
     setError("");
     setMessage("");
     try {
+      const trimmedName = name.trim();
+      const trimmedVersion = version.trim();
+      const trimmedLicense = license.trim();
+      const trimmedSource = source.trim();
       applyReceipt(await importDirectLlm({
         content,
-        name: name.trim(),
-        version: version.trim(),
-        license: license.trim(),
-        scorer: scorer || undefined,
-        source: source.trim() || undefined,
+        ...(trimmedName ? { name: trimmedName } : {}),
+        ...(trimmedVersion ? { version: trimmedVersion } : {}),
+        ...(trimmedLicense ? { license: trimmedLicense } : {}),
+        ...(scorer ? { scorer } : {}),
+        ...(trimmedSource ? { source: trimmedSource } : {}),
       }));
       setContent("");
       await refresh();
@@ -164,15 +273,59 @@ export function DirectLlmOperate() {
     }
   };
 
-  const doRun = async () => {
-    if (!preset) return;
-    const selection = selectionRequest(caseMode, {
+  const buildCaseSelection = (): DirectLlmCaseSelection | null => {
+    if (caseMode === "profile") {
+      return activeProfile ? { mode: "profile", profile: activeProfile.name } : null;
+    }
+    return selectionRequest(caseMode, {
       caseIds: usablePicked?.caseIds,
       count: Number(randomCount),
       seed,
-    });
+    }) as DirectLlmCaseSelection | null;
+  };
+
+  const buildRunRequest = (model: string, selection: DirectLlmCaseSelection): DirectLlmRunRequest => {
+    const parameters: Record<string, number> = {};
+    if (Number.isFinite(Number(temperature)) && temperature.trim()) {
+      parameters.temperature = Number(temperature);
+    }
+    if (Number.isFinite(Number(budget)) && budget.trim()) {
+      parameters.max_output_tokens = Number(budget);
+    }
+    return {
+      model,
+      scenario: preset?.scenario,
+      case_selection: selection,
+      ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
+      ...(levels[model] ? { reasoning_level: levels[model] } : {}),
+    };
+  };
+
+  const estimateRun = async () => {
+    const selection = buildCaseSelection();
+    if (!preset || selected.length !== 1 || !selection) return;
+    const requestId = dryRunRequest.current + 1;
+    dryRunRequest.current = requestId;
+    setEstimating(true);
+    setDryRun(null);
+    setDryRunError("");
+    try {
+      const result = await dryRunDirectLlm(buildRunRequest(selected[0], selection));
+      if (dryRunRequest.current === requestId) setDryRun(result);
+    } catch (e) {
+      if (dryRunRequest.current === requestId) setDryRunError(String(e));
+    } finally {
+      if (dryRunRequest.current === requestId) setEstimating(false);
+    }
+  };
+
+  const doRun = async () => {
+    if (!preset) return;
+    const selection = buildCaseSelection();
     if (!selection) {
-      setError(caseMode === "ids" ? "请先在「题目」页勾选要跑的题目" : "请填写随机题数（1 到数据集题数之间）");
+      setError(caseMode === "ids" ? "请先在「题目」页勾选要跑的题目"
+        : caseMode === "profile" ? "当前数据集没有可用 Profile"
+          : "请填写随机题数（1 到数据集题数之间）");
       return;
     }
     setRunning(true);
@@ -182,23 +335,9 @@ export function DirectLlmOperate() {
     try {
       const created: string[] = [];
       const failed: { model: string; error: string }[] = [];
-      /* 非数字输入不进 manifest（服务端只认数字参数，NaN 会被写成 null 再被静默丢弃）。 */
-      const parameters: Record<string, number> = {};
-      if (Number.isFinite(Number(temperature)) && temperature.trim()) {
-        parameters.temperature = Number(temperature);
-      }
-      if (Number.isFinite(Number(budget)) && budget.trim()) {
-        parameters.max_output_tokens = Number(budget);
-      }
       for (const model of selected) {
         try {
-          const run = await createDirectLlmRun({
-            model,
-            scenario: preset.scenario,
-            case_selection: selection,
-            ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
-            ...(levels[model] ? { reasoning_level: levels[model] } : {}),
-          });
+          const run = await createDirectLlmRun(buildRunRequest(model, selection));
           created.push(run.id);
         } catch (e) {
           failed.push({ model, error: String(e) });
@@ -238,7 +377,11 @@ export function DirectLlmOperate() {
                       className="control"
                       aria-label="运行数据集"
                       value={preset.scenario}
-                      onChange={(change) => setChosenScenario(change.target.value)}
+                      onChange={(change) => {
+                        setChosenScenario(change.target.value);
+                        setCaseMode((current) => current === "profile" ? "all" : current);
+                        setProfileName("");
+                      }}
                     >
                       {presets.map((item) => (
                         <option key={item.scenario} value={item.scenario}>
@@ -261,6 +404,137 @@ export function DirectLlmOperate() {
             ) : (
               <p className="hint">尚未导入数据集。用「内置样例」一键导入，或粘贴 / 选择本地 JSONL。</p>
             )}
+
+            <details className="disclosure">
+              <summary>
+                受管来源{sourceError ? "（加载失败）" : managedSources == null ? "（加载中）" : `（${visibleSources?.length ?? 0}）`}
+              </summary>
+              <p className="hint">只读治理目录，不触发外部网络访问；待审核与受限来源不提供获取或准备操作。</p>
+              {managedSources?.some((item) => item.status === "restricted") && (
+                <div className="model-picker-item">
+                  <input
+                    type="checkbox"
+                    checked={showRestrictedSources}
+                    onChange={(change) => setShowRestrictedSources(change.target.checked)}
+                    aria-label="显示受限来源"
+                  />
+                  <span>显示受限来源</span>
+                </div>
+              )}
+              {sourceError ? (
+                <p className="error">受管来源加载失败：{sourceError}</p>
+              ) : managedSources == null ? (
+                <p className="empty">受管来源加载中</p>
+              ) : managedSources.length === 0 ? (
+                <p className="empty">暂无受管来源</p>
+              ) : visibleSources?.length === 0 ? (
+                <p className="empty">没有非受限来源</p>
+              ) : (
+                <table aria-label="受管来源目录">
+                <thead>
+                  <tr><th>来源</th><th>状态</th><th>Revision</th><th>Stable</th></tr>
+                </thead>
+                <tbody>
+                  {(visibleSources ?? []).map((managedSource) => {
+                    const statusMeta = SOURCE_STATUS_META[managedSource.status]
+                      ?? { label: managedSource.status, tone: "neutral" as const };
+                    const isOpen = openSourceId === managedSource.id;
+                    return (
+                      <Fragment key={managedSource.id}>
+                        <tr>
+                          <td>
+                            <button
+                              type="button"
+                              className="link"
+                              aria-expanded={isOpen}
+                              onClick={() => toggleSourceDetail(managedSource.id)}
+                            >
+                              {managedSource.label}
+                            </button>
+                            <span className="muted mono"> {managedSource.id}</span>
+                          </td>
+                          <td>
+                            <span className={`status-badge status-tone-${statusMeta.tone}`}>
+                              {statusMeta.label}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              className={`status-badge ${managedSource.revision ? "status-tone-success" : "status-tone-neutral"}`}
+                              title={managedSource.revision ?? undefined}
+                            >
+                              {managedSource.revision ? "已固定" : "未固定"}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`status-badge ${managedSource.stable_eligible ? "status-tone-success" : "status-tone-neutral"}`}>
+                              {managedSource.stable_eligible ? "符合" : "不符合"}
+                            </span>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td colSpan={4} className="muted">
+                            License <span className="mono">{managedSource.license_ids?.join(", ") || "—"}</span>
+                            {" · "}Profiles <span className="mono">{managedSource.profiles?.join(", ") || "—"}</span>
+                            {" · "}阻断 <span className="mono">{managedSource.blocker_count}</span>
+                          </td>
+                        </tr>
+                        {isOpen && (
+                          <tr className="drill-detail-row">
+                            <td colSpan={4}>
+                              <div className="drill-detail">
+                                {sourceDetailLoading ? (
+                                  <p className="empty">来源详情加载中</p>
+                                ) : sourceDetailError ? (
+                                  <p className="error">来源详情加载失败：{sourceDetailError}</p>
+                                ) : sourceDetail?.id === managedSource.id ? (
+                                  <>
+                                    <p>{sourceDetail.description}</p>
+                                    <dl className="kv">
+                                      <dt>distribution scope</dt>
+                                      <dd>
+                                        {DISTRIBUTION_LABELS[sourceDetail.governance.distribution_scope]
+                                          ?? sourceDetail.governance.distribution_scope}
+                                        {" · "}<span className="mono">{sourceDetail.governance.distribution_scope}</span>
+                                      </dd>
+                                      <dt>revision</dt>
+                                      <dd className="mono">
+                                        {sourceDetail.upstream.revision.kind} · {sourceDetail.upstream.revision.value ?? "未固定"}
+                                      </dd>
+                                      <dt>comparability</dt>
+                                      <dd>
+                                        {COMPARABILITY_LABELS[sourceDetail.official_comparability.status]
+                                          ?? sourceDetail.official_comparability.status}
+                                      </dd>
+                                      <dt>network_entrypoint</dt><dd className="mono">{sourceDetail.safety.network_entrypoint}</dd>
+                                      <dt>trust_remote_code</dt><dd className="mono">{String(sourceDetail.safety.trust_remote_code)}</dd>
+                                      <dt>online_rows_fallback</dt><dd className="mono">{String(sourceDetail.safety.online_rows_fallback)}</dd>
+                                      <dt>executable_upstream_code</dt><dd className="mono">{String(sourceDetail.safety.executable_upstream_code)}</dd>
+                                      <dt>archive_auto_extract</dt><dd className="mono">{String(sourceDetail.safety.archive_auto_extract)}</dd>
+                                    </dl>
+                                    <p>
+                                      <span className="field-label">可比性说明</span>
+                                      {sourceDetail.official_comparability.notes}
+                                    </p>
+                                    <p><span className="field-label">阻断项</span></p>
+                                    {sourceDetail.blockers.length > 0 ? (
+                                      <ul>{sourceDetail.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
+                                    ) : (
+                                      <p className="hint">无阻断项</p>
+                                    )}
+                                  </>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+                </table>
+              )}
+            </details>
           </div>
 
           <div className="operate-card">
@@ -270,10 +544,16 @@ export function DirectLlmOperate() {
               <select
                 className="control"
                 value={caseMode}
-                onChange={(change) => setCaseMode(change.target.value === "ids" ? "ids"
-                  : change.target.value === "random" ? "random" : "all")}
+                onChange={(change) => {
+                  const nextMode: CaseMode = change.target.value === "ids" ? "ids"
+                    : change.target.value === "random" ? "random"
+                      : change.target.value === "profile" ? "profile" : "all";
+                  setCaseMode(nextMode);
+                  if (nextMode === "profile" && activeProfile) setProfileName(activeProfile.name);
+                }}
               >
                 <option value="all">全部（{preset?.cases ?? 0} 题）</option>
+                {profiles.length > 0 && <option value="profile">数据集 Profile</option>}
                 <option value="random">随机 N 题</option>
                 <option value="ids">指定题目（题目页勾选）</option>
               </select>
@@ -294,13 +574,38 @@ export function DirectLlmOperate() {
                 <button type="button" className="link" onClick={() => setSeed(randomSeed())}>重新生成种子</button>
               </>
             )}
+            {caseMode === "profile" && activeProfile && (
+              <>
+                <label>
+                  数据集 Profile
+                  <select
+                    className="control mono"
+                    aria-label="运行 Profile"
+                    value={activeProfile.name}
+                    onChange={(change) => setProfileName(change.target.value)}
+                  >
+                    {profiles.map((profile) => (
+                      <option key={profile.name} value={profile.name}>
+                        {profile.name} · {profile.count} 题
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="hint mono">
+                  strategy {activeProfile.strategy ?? "未提供"}
+                  {activeProfile.case_ids_sha256 ? ` · case ids ${activeProfile.case_ids_sha256}` : ""}
+                </p>
+              </>
+            )}
             {caseMode === "ids" && (
-              <p className="hint">
+              <p className={pickedMismatch ? "error" : "hint"}>
                 {usablePicked
                   ? `已选 ${usablePicked.caseIds.length} 题（${usablePicked.dataset}）`
-                  : pickedMismatch
-                    ? `已选题目来自 ${picked?.dataset}，当前数据集是 ${preset?.dataset}；请回题目页重新选择。`
-                    : "尚未选择题目。"}
+                  : pickedUnavailable
+                    ? `已选题目来自 ${picked?.dataset}，但该数据集当前不可用；请回题目页重新选择。`
+                    : pickedMismatch
+                      ? `已选题目来自 ${picked?.dataset}，当前数据集是 ${preset?.dataset}；不能用旧题目发起评测。`
+                      : "尚未选择题目。"}
                 {" "}
                 <Link className="link" to={ROUTES.cases}>去题目页选择</Link>
                 {usablePicked && (
@@ -369,7 +674,8 @@ export function DirectLlmOperate() {
               <dd className="mono">
                 {caseMode === "random" ? `${randomCount || 0} / ${preset?.cases ?? 0}`
                   : caseMode === "ids" ? `${usablePicked?.caseIds.length ?? 0} / ${preset?.cases ?? 0}`
-                    : preset?.cases ?? "—"}
+                    : caseMode === "profile" ? `${activeProfile?.count ?? 0} / ${preset?.cases ?? 0}`
+                      : preset?.cases ?? "—"}
               </dd>
               <dt>输出上限</dt>
               <dd className="mono">{Number.isFinite(effectiveBudget) ? effectiveBudget : "—"}</dd>
@@ -510,12 +816,45 @@ export function DirectLlmOperate() {
             type="button"
             className="primary"
             onClick={() => void doRun()}
-            disabled={running || selected.length === 0 || !preset || runSize <= 0}
+            disabled={running || estimating || selected.length === 0 || !preset || runSize <= 0}
           >
             {running ? "创建中…" : `发起评测（${selected.length} 个模型 × ${runSize} 题）`}
           </button>
-          <span className="hint">真实调用 · 产生费用 · 发起后自动进入过程页</span>
+          <button
+            type="button"
+            onClick={() => void estimateRun()}
+            disabled={estimating || running || selected.length !== 1 || !preset || runSize <= 0}
+          >
+            <CalculatorIcon size={14} weight="bold" aria-hidden />
+            {estimating ? "估算中…" : "运行前估算"}
+          </button>
+          <span className="hint">
+            真实调用 · 产生费用 · 发起后自动进入过程页
+            {selected.length > 1 ? " · 估算需只选择一个模型" : ""}
+          </span>
         </div>
+        {dryRunError && <p className="error" role="alert">运行前估算失败：{dryRunError}</p>}
+        {dryRun && (
+          <>
+            <h3 className="embed-title">运行前估算</h3>
+            <dl className="kv" aria-label="运行前估算结果">
+              <dt>选择题数</dt><dd className="mono">{dryRun.selected_count}</dd>
+              <dt>单题输入上界</dt><dd className="mono">{dryRun.max_input_tokens_upper_bound ?? "未提供"}</dd>
+              <dt>单题输出上限</dt><dd className="mono">{dryRun.max_output_tokens}</dd>
+              <dt>单题总量上界</dt><dd className="mono">{dryRun.max_total_tokens_upper_bound ?? "未提供"}</dd>
+              <dt>模型上下文</dt><dd className="mono">{dryRun.context_window ?? "未提供"}</dd>
+              <dt>估算方法</dt><dd className="mono">{dryRun.estimation_method ?? "未提供"}</dd>
+              <dt>费用上界</dt>
+              <dd className="mono">
+                {dryRun.estimated_cost_upper_bound == null
+                  ? "未提供"
+                  : `${dryRun.estimated_cost_upper_bound} ${dryRun.currency ?? "币种未提供"}`}
+              </dd>
+              <dt>价表版本</dt><dd className="mono">{dryRun.price_table_version ?? "未提供"}</dd>
+            </dl>
+            <p className="hint">估算结果是保守上界，不是最终账单；不会创建运行。</p>
+          </>
+        )}
         {failures.length > 0 && (
           <ul className="failure-list">
             {failures.map((failure) => (
