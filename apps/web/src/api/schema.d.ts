@@ -356,6 +356,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/benchmarks/external/{benchmark_id}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** External Benchmark Cases */
+        get: operations["external_benchmark_cases_api_v1_benchmarks_external__benchmark_id__cases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/external/{benchmark_id}/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** External Benchmark Preflight Route */
+        get: operations["external_benchmark_preflight_route_api_v1_benchmarks_external__benchmark_id__preflight_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/external/{benchmark_id}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** External Benchmark Prepare */
+        post: operations["external_benchmark_prepare_api_v1_benchmarks_external__benchmark_id__prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/external/{benchmark_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** External Benchmark Run */
+        post: operations["external_benchmark_run_api_v1_benchmarks_external__benchmark_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/benchmarks/gsm8k": {
         parameters: {
             query?: never;
@@ -2545,8 +2613,12 @@ export interface operations {
     };
     external_ceval_preflight_api_v1_benchmarks_external_ceval_preflight_get: {
         parameters: {
-            query: {
-                model: string;
+            query?: {
+                model?: string;
+                scope?: string;
+                split?: string;
+                few_shot?: number;
+                few_shot_split?: string;
             };
             header?: never;
             path?: never;
@@ -2614,6 +2686,152 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    external_benchmark_cases_api_v1_benchmarks_external__benchmark_id__cases_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                query?: string;
+            };
+            header?: never;
+            path: {
+                benchmark_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    external_benchmark_preflight_route_api_v1_benchmarks_external__benchmark_id__preflight_get: {
+        parameters: {
+            query?: {
+                model?: string;
+                scope?: string;
+                split?: string;
+                few_shot?: number;
+                few_shot_split?: string;
+            };
+            header?: never;
+            path: {
+                benchmark_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    external_benchmark_prepare_api_v1_benchmarks_external__benchmark_id__prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                benchmark_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    external_benchmark_run_api_v1_benchmarks_external__benchmark_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                benchmark_id: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -2774,6 +2992,8 @@ export interface operations {
                 baseline: string;
                 candidate: string;
                 factors?: string;
+                baseline_pass?: string | null;
+                candidate_pass?: string | null;
             };
             header?: never;
             path?: never;

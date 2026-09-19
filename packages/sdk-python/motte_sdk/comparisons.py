@@ -87,12 +87,9 @@ class ComparisonService:
         digest = hashlib.sha256(json.dumps(
             manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
-        pass_id = scoring_pass_id or _current_pass_id(self.store, run_id)
-        if pass_id is None:
-            raise ComparisonError(
-                "NO_SCORING_EVIDENCE",
-                f"run {run_id} has no scoring pass; an unfixed report has no ref",
-            )
+        # 显式 pass 与 current 同一校验：归属与存在性都由 _resolve_pass 把关
+        # （review R2-08：不存在的 pass 不能参与比较）。
+        pass_id = str(_resolve_pass(self.store, run_id, scoring_pass_id)["id"])
         return RunReportRef(
             run_id=run_id,
             scoring_pass_id=pass_id,
@@ -214,21 +211,45 @@ class ComparisonService:
         candidate_ref = self.report_ref(run_id, scoring_pass_id=scoring_pass_id)
         comparison_view: dict[str, Any] | None = None
         baseline_view: dict[str, Any] | None = None
-        if baseline_snapshot_id is not None and self.baselines is not None:
+        if baseline_snapshot_id is not None:
+            # Baseline 快照只提供固定报告的引用（run+pass）；可比性判断
+            # 与普通路径走**同一比较算法**（review R2-04）：快照自带的
+            # comparable 布尔不再被信任。
+            if self.baselines is None:
+                raise ComparisonError(
+                    "BASELINE_STORE_MISSING",
+                    "BASELINE_STORE_MISSING: baseline snapshots requested but no "
+                    "baseline store is wired",
+                )
             snapshot = self.baselines.get(baseline_snapshot_id)
             if snapshot is None:
                 raise ComparisonError(
                     "BASELINE_NOT_FOUND",
-                    f"baseline snapshot {baseline_snapshot_id} not found",
+                    f"BASELINE_NOT_FOUND: baseline snapshot {baseline_snapshot_id} not found",
                 )
+            base_run_id = snapshot.get("run_id")
+            base_pass_id = snapshot.get("scoring_pass_id")
+            if not isinstance(base_run_id, str) or not base_run_id or not isinstance(base_pass_id, str) or not base_pass_id:
+                raise ComparisonError(
+                    "BASELINE_INCOMPLETE",
+                    "BASELINE_INCOMPLETE: baseline snapshot "
+                    f"{baseline_snapshot_id} has no fixed "
+                    "run_id/scoring_pass_id; cannot resolve a report to compare",
+                )
+            result = self.compare(
+                base_run_id, run_id,
+                allowed_factors=policy.get("allowed_factors") or ["model"],
+                baseline_pass_id=base_pass_id,
+                candidate_pass_id=scoring_pass_id,
+            )
             comparison_view = {
-                "eligible": bool(snapshot.get("metrics", {}).get("comparable", True)),
-                "reasons": list(snapshot.get("metrics", {}).get("reasons") or []),
+                "eligible": result.eligible,
+                "reasons": list(result.reasons),
             }
             baseline_view = {
                 "baseline_snapshot_id": baseline_snapshot_id,
-                "run_id": snapshot.get("run_id"),
-                "scoring_pass_id": snapshot.get("scoring_pass_id"),
+                "run_id": base_run_id,
+                "scoring_pass_id": base_pass_id,
             }
         elif baseline_run_id is not None and policy.get("require_comparable"):
             result = self.compare(

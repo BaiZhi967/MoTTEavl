@@ -3994,9 +3994,50 @@
           {
             "in": "query",
             "name": "model",
-            "required": true,
+            "required": false,
             "schema": {
+              "default": "",
               "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "custom-subset",
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "split",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Split",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "few_shot",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Few Shot",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "few_shot_split",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Few Shot Split",
               "type": "string"
             }
           }
@@ -4098,6 +4139,258 @@
           }
         },
         "summary": "External Ceval Run"
+      }
+    },
+    "/api/v1/benchmarks/external/{benchmark_id}/cases": {
+      "get": {
+        "operationId": "external_benchmark_cases_api_v1_benchmarks_external__benchmark_id__cases_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "benchmark_id",
+            "required": true,
+            "schema": {
+              "title": "Benchmark Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Benchmark Cases"
+      }
+    },
+    "/api/v1/benchmarks/external/{benchmark_id}/preflight": {
+      "get": {
+        "operationId": "external_benchmark_preflight_route_api_v1_benchmarks_external__benchmark_id__preflight_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "benchmark_id",
+            "required": true,
+            "schema": {
+              "title": "Benchmark Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "custom-subset",
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "split",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Split",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "few_shot",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Few Shot",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "few_shot_split",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Few Shot Split",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Benchmark Preflight Route"
+      }
+    },
+    "/api/v1/benchmarks/external/{benchmark_id}/prepare": {
+      "post": {
+        "operationId": "external_benchmark_prepare_api_v1_benchmarks_external__benchmark_id__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "benchmark_id",
+            "required": true,
+            "schema": {
+              "title": "Benchmark Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Benchmark Prepare"
+      }
+    },
+    "/api/v1/benchmarks/external/{benchmark_id}/runs": {
+      "post": {
+        "operationId": "external_benchmark_run_api_v1_benchmarks_external__benchmark_id__runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "benchmark_id",
+            "required": true,
+            "schema": {
+              "title": "Benchmark Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Benchmark Run"
       }
     },
     "/api/v1/benchmarks/gsm8k": {
@@ -4291,6 +4584,38 @@
               "default": "model",
               "title": "Factors",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline_pass",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Baseline Pass"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate_pass",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Pass"
             }
           }
         ],

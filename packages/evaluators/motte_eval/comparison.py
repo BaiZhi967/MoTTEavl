@@ -130,6 +130,29 @@ def compare_run_reports(
             f"CASE_SET_CHANGED: added={added} removed={removed} changed={changed}",
         )
 
+    # 任务内容身份（review R2-05）：冻结行 hash 逐题比对；同 revision 字符串
+    # 相同不证明内容相同。单侧缺失身份 → 阻断，不默认相等。
+    base_content = baseline_manifest.get("case_content_hashes")
+    cand_content = candidate_manifest.get("case_content_hashes")
+    content_changed: list[str] = []
+    if (base_content is None) != (cand_content is None):
+        reasons.append(
+            "IDENTITY_MISSING:case_content_hashes: "
+            f"{type(base_content).__name__} vs {type(cand_content).__name__}"
+        )
+    elif isinstance(base_content, dict) and isinstance(cand_content, dict):
+        for case_id in sorted(common):
+            if base_content.get(case_id) != cand_content.get(case_id):
+                content_changed.append(case_id)
+        if content_changed:
+            reasons.append(f"CASE_CONTENT_CHANGED: {content_changed}")
+    base_few_shot = baseline_manifest.get("few_shot_hashes")
+    cand_few_shot = candidate_manifest.get("few_shot_hashes")
+    if (base_few_shot is None) != (cand_few_shot is None):
+        reasons.append("IDENTITY_MISSING:few_shot_hashes")
+    elif base_few_shot is not None and base_few_shot != cand_few_shot:
+        reasons.append("FEWSHOT_CONTENT_CHANGED: few-shot example content differs")
+
     # 逐指标资格：费用未知只影响 cost。
     baseline_cost_known = bool((baseline_cost or {}).get("known"))
     candidate_cost_known = bool((candidate_cost or {}).get("known"))
@@ -147,5 +170,9 @@ def compare_run_reports(
         eligible=structural_ok,
         reasons=tuple(reasons),
         metric_eligibility=metric_eligibility,
-        case_diff={"added": added, "removed": removed, "changed": changed},
+        case_diff={
+            "added": added,
+            "removed": removed,
+            "changed": sorted(set(changed) | set(content_changed)),
+        },
     )

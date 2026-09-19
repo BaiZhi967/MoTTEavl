@@ -75,15 +75,60 @@ class ExternalJobSupervisor:
         poll_interval_seconds: float = 0.1,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        evidence_sink: Callable[[str, bytes], Any] | None = None,
     ) -> None:
         self.adapter = adapter
         # 公开可替换：DurableExternalJobRunner 装配时写入 Job 存储。
         self.intent_journal = intent_journal
+        # 证据冻结通道（review R2-06）：解析前把完整输入字节写受控不可变
+        # Artifact；缺省无 sink 时仍在 cursor 记录内容 hash。
+        self.evidence_sink = evidence_sink
         self.poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
         self._monotonic = monotonic
         # 最近一次采集的 cursor（parser 版本与指标汇总随采集返回）。
         self.last_cursor: dict[str, Any] = {}
+
+    def _freeze_evidence_bytes(
+        self, handle: ExternalJobHandle, files: dict[str, str],
+    ) -> dict[str, Any]:
+        """把冻结字节写内容寻址 Artifact，返回 hash/引用/完整性视图。"""
+        bundle_files: dict[str, Any] = {}
+        total = 0
+        for rel, text in sorted(files.items()):
+            encoded = text.encode("utf-8")
+            entry: dict[str, Any] = {
+                "sha256": "sha256:" + hashlib.sha256(encoded).hexdigest(),
+                "size": len(encoded),
+            }
+            if len(encoded) <= _RAW_FILE_BUDGET and total + len(encoded) <= _RAW_TOTAL_BUDGET:
+                entry["content"] = text
+                total += len(encoded)
+            else:
+                entry["content"] = None
+                entry["note"] = "content over budget; hash only"
+            bundle_files[rel] = entry
+        # 快照不完整时如实标记（R2-06：预算不足不能冒充完整证据）。
+        bundle = {
+            "complete": all(
+                entry["content"] is not None for entry in bundle_files.values()
+            ),
+            "files": bundle_files,
+        }
+        digest = _canonical_hash(bundle)
+        artifact_id: str | None = None
+        if self.evidence_sink is not None:
+            artifact = self.evidence_sink(
+                f"external-jobs/{handle.run_id}/{handle.job_id}/evidence/raw-{_short(digest)}.json",
+                json.dumps(bundle, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            )
+            artifact_id = getattr(artifact, "id", None) or str(artifact)
+        return {
+            "hash": digest,
+            "artifact": artifact_id,
+            "complete": bundle["complete"],
+            "files": sorted(bundle_files),
+        }
 
     def _record(self, entry: dict[str, Any]) -> None:
         if self.intent_journal is not None:
@@ -232,8 +277,31 @@ class ExternalJobSupervisor:
     def _collect_quiet(
         self, handle: ExternalJobHandle,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        """采集并转成 outcome 载荷；解析前先快照原始输出 hash（R09）。"""
+        """采集并转成 outcome 载荷；**先冻结完整输入字节再解析**（R2-06）。"""
         cursor = dict(handle.collection_cursor or {})
+        reader = getattr(self.adapter, "read_output_files", None)
+        collect_from_files = getattr(self.adapter, "collect_from_files", None)
+        if callable(reader) and callable(collect_from_files):
+            try:
+                frozen_files = reader(handle)
+            except Exception as error:  # noqa: BLE001 - 读取失败进入证据
+                return ([], {
+                    "code": getattr(error, "code", "JOB_OUTPUT_UNREADABLE"),
+                    "message": str(error),
+                })
+            cursor["frozen_evidence"] = self._freeze_evidence_bytes(handle, frozen_files)
+            try:
+                results, collected = collect_from_files(handle, cursor, frozen_files)
+            except Exception as error:  # noqa: BLE001 - 采集失败进入证据
+                self.last_cursor = cursor
+                return ([], {
+                    "code": getattr(error, "code", "JOB_COLLECT_FAILED"),
+                    "message": str(error),
+                })
+            payload = [item.model_dump(mode="json") for item in results]
+            self.last_cursor = dict(collected or {})
+            return (payload, None)
+        # 旧协议 adapter（无字节级读取）：解析前先快照 hash（R09 兼容路径）。
         snapshotter = getattr(self.adapter, "snapshot_outputs", None)
         if callable(snapshotter):
             try:
@@ -281,6 +349,15 @@ class DurableExternalJobRunner:
     def bind_service(self, service: Any) -> None:
         self._service = service
 
+    def _evidence_sink(self, path: str, data: bytes) -> Any:
+        if self.artifacts is None:
+            return None
+        return self.artifacts.put_bytes(path, data)
+
+    def _wire_evidence_sink(self) -> None:
+        # 证据冻结通道（review R2-06）：supervisor 解析前写受控 Artifact。
+        self.supervisor.evidence_sink = self._evidence_sink
+
     def bind_store(self, store: Any) -> None:
         """分派时绑定 Job 存储与工件根（external-benchmark 后端经 attach 注入）。"""
         external_jobs = getattr(store, "external_jobs", None)
@@ -292,6 +369,7 @@ class DurableExternalJobRunner:
             from motte_storage.artifacts import ArtifactStore
 
             self.artifacts = ArtifactStore(os.environ.get("ARTIFACT_ROOT", "var/artifacts"))
+        self._wire_evidence_sink()
 
     # -------------------------------------------------------------- 启动日志
 
@@ -402,9 +480,12 @@ class DurableExternalJobRunner:
         try:
             from motte_sandbox.workspace import CaseWorkspace
 
+            from motte_benchmark.process import RESULTS_NAME
+
             workspace = CaseWorkspace(Path(work_dir), anchor=Path(work_dir).parent)
             rels = sorted(
-                rel for rel in workspace.list_files() if rel.startswith("outputs/")
+                rel for rel in workspace.list_files()
+                if rel.startswith("outputs/") or rel == RESULTS_NAME
             )
         except Exception:  # noqa: BLE001 - 工作目录缺失/被清理：如实记录
             return {"complete": False, "files": {}, "note": "work dir unavailable"}
@@ -436,48 +517,114 @@ class DurableExternalJobRunner:
         if not job_id:
             return outcome
         cursor = dict(outcome.get("cursor") or {})
+        current = self.job_store.get_job(job_id) or {}
+        checkpoint = dict(current.get("checkpoint") or {})
 
-        # (1) 证据冻结（R04/R09）：内容寻址路径，同内容幂等、不同内容不覆盖。
-        evidence: dict[str, Any] = {}
-        if self.artifacts is not None:
-            frozen_outcome = {
-                "job_status": status,
-                "results": outcome.get("results") or [],
-                "error": outcome.get("error"),
-                "spec": spec.model_dump(mode="json"),
-                "handle": handle,
-                "cursor": {
-                    key: value for key, value in cursor.items()
-                    if key != "raw_evidence"
-                },
+        # (0) 导入已完成的恢复（R2-07）：复用原 Artifact/指标/错误事实，
+        # 不重读可清理的工作目录、不替换 checkpoint 里的证据引用。
+        if outcome.get("recovered_from") == "job-store" and checkpoint.get("import_completed"):
+            evidence = checkpoint.get("evidence") or {}
+            outcome["import"] = {
+                "job_id": job_id,
+                # 已导入记录的重放不产生新导入（与逐条 no-op 语义一致）。
+                "imported": 0,
+                "records": len(outcome.get("results") or []),
+                "conflicts": [],
+                "artifact": evidence.get("outcome_artifact"),
+                "evidence": evidence,
+                "parser_version": self.parser_version,
+                "metrics": self._metrics_from_cursor(checkpoint.get("cursor") or {}),
             }
-            outcome_digest = _canonical_hash(frozen_outcome)
-            outcome_path = (
-                f"external-jobs/{spec.run_id}/{job_id}/outcome-{_short(outcome_digest)}.json"
-            )
-            outcome_artifact = self.artifacts.put_bytes(
-                outcome_path,
-                json.dumps(frozen_outcome, ensure_ascii=False, sort_keys=True).encode("utf-8"),
-            )
+            return outcome
+
+        # (1) 证据（R2-06）：优先使用解析前冻结的字节 bundle；旧协议
+        # adapter（无字节级读取）退回"再读工作目录 + 与解析前快照 hash
+        # 交叉核验"，不一致即拒绝最终化。
+        frozen = cursor.get("frozen_evidence") if isinstance(cursor.get("frozen_evidence"), dict) else None
+        evidence: dict[str, Any] = {}
+        evidence_inconsistent = False
+        if frozen is not None:
+            evidence = {
+                "raw_bundle_artifact": frozen.get("artifact"),
+                "raw_bundle_hash": frozen.get("hash"),
+                "raw_files": frozen.get("files") or [],
+                "complete": bool(frozen.get("complete")),
+                "frozen_before_parse": True,
+            }
+        elif self.artifacts is not None:
             bundle = self._raw_output_bundle(handle)
             pre_snapshot = cursor.get("raw_evidence") or {}
-            if isinstance(pre_snapshot, dict):
-                bundle["hashes_before_parse"] = pre_snapshot
+            if isinstance(pre_snapshot, dict) and pre_snapshot.get("files"):
+                def _bare(value: Any) -> Any:
+                    return str(value).split(":")[-1] if value is not None else None
+
+                pre_hashes = {
+                    rel: _bare(digest) for rel, digest in pre_snapshot["files"].items()
+                }
+                now_hashes = {
+                    rel: _bare(entry.get("sha256"))
+                    for rel, entry in (bundle.get("files") or {}).items()
+                }
+                if pre_hashes != now_hashes:
+                    evidence_inconsistent = True
             bundle_digest = _canonical_hash(bundle)
-            bundle_path = (
-                f"external-jobs/{spec.run_id}/{job_id}/evidence/raw-{_short(bundle_digest)}.json"
-            )
             bundle_artifact = self.artifacts.put_bytes(
-                bundle_path,
+                f"external-jobs/{spec.run_id}/{job_id}/evidence/raw-{_short(bundle_digest)}.json",
                 json.dumps(bundle, ensure_ascii=False, sort_keys=True).encode("utf-8"),
             )
             evidence = {
-                "outcome_artifact": outcome_artifact.id,
-                "outcome_sha256": outcome_artifact.sha256,
                 "raw_bundle_artifact": bundle_artifact.id,
                 "raw_bundle_sha256": bundle_artifact.sha256,
-                "raw_files": sorted(bundle.get("files") or {}),
+                "raw_files": sorted(bundle.get("files") or []),
+                "complete": bool(bundle.get("complete")),
+                "frozen_before_parse": False,
             }
+        if evidence:
+            # outcome 内容寻址冻结（同内容同路径；不同内容不互相覆盖）。
+            if self.artifacts is not None:
+                frozen_outcome = {
+                    "job_status": status,
+                    "results": outcome.get("results") or [],
+                    "error": outcome.get("error"),
+                    "spec": spec.model_dump(mode="json"),
+                    "handle": handle,
+                    "cursor": {
+                        key: value for key, value in cursor.items()
+                        if key != "raw_evidence"
+                    },
+                }
+                outcome_digest = _canonical_hash(frozen_outcome)
+                outcome_artifact = self.artifacts.put_bytes(
+                    f"external-jobs/{spec.run_id}/{job_id}/outcome-{_short(outcome_digest)}.json",
+                    json.dumps(frozen_outcome, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+                )
+                evidence["outcome_artifact"] = outcome_artifact.id
+                evidence["outcome_sha256"] = outcome_artifact.sha256
+        if evidence_inconsistent:
+            # 解析后证据被改写：拒绝最终化，保留两份 hash 供审计（R2-06）。
+            outcome["job_status"] = "failed"
+            outcome["error"] = {
+                "code": "EVIDENCE_INCONSISTENT",
+                "message": (
+                    "output files changed between parse and evidence freeze; "
+                    "official scores cannot be bound to a single content hash"
+                ),
+                "details": {
+                    "hashes_before_parse": cursor.get("raw_evidence"),
+                    "frozen": evidence,
+                },
+            }
+            self.job_store.update_job(job_id, {
+                "status": "failed",
+                "checkpoint": {**checkpoint, "import_completed": True, "evidence": evidence},
+                "handle": handle,
+            })
+            outcome["import"] = {
+                "job_id": job_id, "imported": 0, "conflicts": [],
+                "evidence": evidence, "parser_version": self.parser_version,
+                "metrics": {},
+            }
+            return outcome
 
         # (2) 幂等导入（R04：终态之前；崩溃时 Job 仍非终态，恢复可补齐）。
         imported = 0
@@ -500,15 +647,7 @@ class DurableExternalJobRunner:
                 })
 
         # (3) checkpoint：cursor 指标 + 证据引用 + import_completed（R04/R09）。
-        metrics: dict[str, Any] = {}
-        if isinstance(cursor.get("ceval_native"), dict):
-            metrics["native"] = cursor["ceval_native"]
-        if isinstance(cursor.get("ceval_diagnostic"), dict):
-            metrics["diagnostic"] = cursor["ceval_diagnostic"]
-        if isinstance(cursor.get("parser_version"), str):
-            metrics["parser_version"] = cursor["parser_version"]
-        current = self.job_store.get_job(job_id) or {}
-        checkpoint = dict(current.get("checkpoint") or {})
+        metrics = self._metrics_from_cursor(cursor)
         checkpoint.update({
             "cursor": {
                 "parser_version": cursor.get("parser_version"),
@@ -557,6 +696,17 @@ class DurableExternalJobRunner:
                 **checkpoint, "outcome_error": outcome["error"],
             }})
         return outcome
+
+    @staticmethod
+    def _metrics_from_cursor(cursor: dict[str, Any]) -> dict[str, Any]:
+        metrics: dict[str, Any] = {}
+        if isinstance(cursor.get("ceval_native"), dict):
+            metrics["native"] = cursor["ceval_native"]
+        if isinstance(cursor.get("ceval_diagnostic"), dict):
+            metrics["diagnostic"] = cursor["ceval_diagnostic"]
+        if isinstance(cursor.get("parser_version"), str):
+            metrics["parser_version"] = cursor["parser_version"]
+        return metrics
 
     # -------------------------------------------------------------- 取消
 

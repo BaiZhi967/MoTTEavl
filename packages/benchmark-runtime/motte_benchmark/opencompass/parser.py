@@ -371,36 +371,92 @@ class _TrustedDir:
             os.close(file_fd)
 
 
-def _result_candidate(
-    rel: str, base_parts: tuple[str, ...], kind: str, dataset: str,
-) -> bool:
-    """匹配 ``{base}/results/*/{dataset}[-_]*.json``（predictions 同形）。"""
-    parts = PurePosixPath(rel).parts
-    if len(parts) != len(base_parts) + 3:
-        return False
-    if parts[:len(base_parts)] != base_parts or parts[len(base_parts)] != kind:
-        return False
-    name = parts[-1]
+EXPERIMENT_POINTER = "experiment.json"
+_KNOWN_TOP_LEVEL = {"results", "predictions", EXPERIMENT_POINTER}
+
+
+def _stem_matches_dataset(name: str, dataset: str) -> bool:
+    """``{dataset}-*.json`` / ``{dataset}_*.json``（stem 含学科后缀）。"""
     if not name.endswith(".json"):
         return False
     stem = name[: -len(".json")]
     return stem.startswith(f"{dataset}-") or stem.startswith(f"{dataset}_")
 
 
-def _safe_result_files(
-    trusted: _TrustedDir,
-    base_parts: tuple[str, ...],
-    kind: str,
-    dataset: str,
-    max_bytes: int,
-) -> list[str]:
-    """受信目录内枚举结果文件；输出边界内的 symlink 显式拒绝。"""
-    files, symlinks = trusted.list_files()
-    _reject_symlinks_under(symlinks, base_parts)
-    return [
-        rel for rel in files
-        if _result_candidate(rel, base_parts, kind, dataset)
-    ]
+def _split_layout(
+    rels: list[str], base_parts: tuple[str, ...], dataset: str,
+) -> tuple[str | None, dict[str, list[str]], dict[str, list[str]]]:
+    """把受信清单按布局归类（review R2-02）。
+
+    支持两种固定形态（不多不少的层级，绝不无边界递归）：
+
+    - legacy：``{base}/results/<model>/{dataset}-*.json``
+    - timestamp：``{base}/<experiment>/results/<model>/{dataset}-*.json``
+      （OpenCompass 0.4.2 固定版 CLI 在 --work-dir 下按时间戳建实验目录）
+
+    返回 ``(experiment, results_by_exp, predictions_by_exp)``；legacy 记在
+    ``experiment=None``。``{base}/experiment.json`` 指针文件单独返回候选。
+    """
+    results: dict[str, list[str]] = {}
+    predictions: dict[str, list[str]] = {}
+    for rel in rels:
+        parts = PurePosixPath(rel).parts
+        if len(parts) <= len(base_parts) or parts[:len(base_parts)] != base_parts:
+            continue
+        rest = parts[len(base_parts):]
+        if len(rest) == 3 and rest[0] in ("results", "predictions"):
+            experiment = None
+            kind, name = rest[0], rest[2]
+        elif (
+            len(rest) == 4
+            and rest[0] not in _KNOWN_TOP_LEVEL
+            and rest[1] in ("results", "predictions")
+        ):
+            experiment = rest[0]
+            kind, name = rest[1], rest[3]
+        else:
+            continue
+        if not _stem_matches_dataset(name, dataset):
+            continue
+        bucket = results if kind == "results" else predictions
+        bucket.setdefault(experiment or "", []).append(rel)
+    results_by_exp = {key or None: value for key, value in results.items()}
+    predictions_by_exp = {key or None: value for key, value in predictions.items()}
+    return (None, results_by_exp, predictions_by_exp)
+
+
+def _resolve_experiment(
+    results_by_exp: dict[str | None, list[str]],
+    experiment: str | None,
+) -> str | None:
+    """确定本 Job 的实验目录（review R2-02：不递归混入其他实验）。
+
+    优先级：显式参数（含桥接 ``experiment.json`` 指针读出的值）> 唯一
+    候选自动发现；legacy 与 timestamp 并存或多候选 → 明确报错。
+    """
+    candidates = [key for key in results_by_exp if key is not None]
+    has_legacy = None in results_by_exp
+    if experiment is not None:
+        if experiment not in candidates:
+            raise CevalParserError(
+                f"missing-results: declared experiment {experiment!r} has no "
+                f"results under the output root (found: {candidates or 'none'})"
+            )
+        return experiment
+    if has_legacy and candidates:
+        raise CevalParserError(
+            "ambiguous-experiment: output root mixes legacy results and "
+            f"experiment dirs {sorted(candidates)}; refuse to merge runs"
+        )
+    if len(candidates) > 1:
+        raise CevalParserError(
+            "ambiguous-experiment: multiple experiment dirs "
+            f"{sorted(candidates)}; pass the explicit experiment or the "
+            "bridge-written experiment.json pointer"
+        )
+    if candidates:
+        return candidates[0]
+    return None
 
 
 def _reject_symlinks_under(symlinks: list[str], base_parts: tuple[str, ...]) -> None:
@@ -433,154 +489,115 @@ def _load_json_bytes(data: bytes, name: str) -> Any:
         ) from error
 
 
-def parse_opencompass_results(
-    root: str | Path,
+def parse_opencompass_files(
+    files: dict[str, str],
     *,
     dataset: str = "ceval",
-    max_file_bytes: int = 32 * 1024 * 1024,
-    trusted_root: str | Path | None = None,
+    experiment: str | None = None,
+    base_parts: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """解析 OpenCompass 输出目录 → native/diagnostic 双口径结果。
+    """纯内存解析：``{rel: text}`` → native/diagnostic 双口径结果。
 
-    信任边界（review R06）：``trusted_root`` 固定为原 Job 工作目录（缺省时
-    为 ``root`` 自身）；``root`` 只做词法包含检查、不做 ``resolve()``——
-    outputs 指向工作目录外的 symlink 不被重新认定为安全根。读取沿目录
-    描述符逐组件 ``O_NOFOLLOW`` 打开，单文件与总量都受限。
-
-    返回：samples（逐样本：预测/提取来源/结论覆盖/gold/对错/明细来源）、
-    diagnostic（per_subject + aggregate[宏平均] + detail_source）、
-    native（OpenCompass 原始聚合与对账指标）、parser_version、
-    migrated_from、runner_version_pin。
+    ``base_parts`` 是 rel 的公共前缀（如 ``("outputs",)``；受信根即 outputs
+    时为空）。与目录形态无关（legacy / ``<experiment>/`` 前缀都可），供
+    ``parse_opencompass_results``（受信目录读取）与“先冻结后解析”的
+    证据 bundle（review R2-06）共用同一实现。实验目录选择与目录版一致
+    （``_split_layout`` + ``_resolve_experiment``），混入多个实验目录时
+    拒绝，绝不合并不同运行的结果。
     """
-    outputs = Path(root)
-    trusted = Path(trusted_root if trusted_root is not None else root)
-    # 词法归一（abspath 不解析 symlink）：outputs 与 trusted 同一形态后再做
-    # 包含判断，相对 work_root 下也能得到正确的边界前缀。
-    import os as _os
+    rels = sorted(files)
+    _, results_by_exp, predictions_by_exp = _split_layout(rels, base_parts, dataset)
+    resolved_experiment = _resolve_experiment(results_by_exp, experiment)
+    results_rels = sorted(results_by_exp.get(resolved_experiment) or [])
+    prediction_rels = sorted(predictions_by_exp.get(resolved_experiment) or [])
+    if not results_rels:
+        raise CevalParserError(
+            f"missing-results: 未找到 OpenCompass 结果文件: results/*/{dataset}-*.json"
+        )
 
-    if outputs.is_absolute():
-        try:
-            rel_base = outputs.relative_to(trusted)
-        except ValueError as error:
+    def _subject_of(rel: str) -> str:
+        stem = PurePosixPath(rel).stem
+        return (
+            stem[len(f"{dataset}_"):] if stem.startswith(f"{dataset}_")
+            else stem[len(f"{dataset}-"):]
+        )
+
+    def _read(rel: str) -> Any:
+        return _load_json_bytes(files[rel].encode("utf-8"), PurePosixPath(rel).name)
+
+    prediction_files: dict[str, str] = {}
+    for rel in prediction_rels:
+        if isinstance(_read(rel), dict):
+            prediction_files.setdefault(_subject_of(rel), rel)
+
+    samples: list[dict[str, Any]] = []
+    per_subject: dict[str, float] = {}
+    detail_source: dict[str, str] = {}
+    native: dict[str, Any] = {}
+    conclusion_overrides = 0
+    for rel in results_rels:
+        subject = _subject_of(rel)
+        doc = _read(rel)
+        if not isinstance(doc, dict):
             raise CevalParserError(
-                f"path-escape: outputs {outputs} is not inside trusted root {trusted}",
-            ) from error
-    else:
-        trusted = Path(_os.path.abspath(trusted))
-        try:
-            rel_base = Path(_os.path.abspath(outputs)).relative_to(trusted)
-        except ValueError as error:
-            raise CevalParserError(
-                f"path-escape: outputs {outputs} is not inside trusted root {trusted}",
-            ) from error
-    base_parts = tuple(part for part in rel_base.parts if part not in ("", "."))
-    if not Path(root).is_dir():
-        raise CevalParserError(f"missing-output-root: {root} 不是目录")
-
-    max_total_bytes = max_file_bytes * 8
-    with _TrustedDir(trusted) as trusted_dir:
-        subject_rels = sorted(set(
-            _safe_result_files(trusted_dir, base_parts, "results", dataset, max_file_bytes)
-        ))
-        if not subject_rels:
-            raise CevalParserError(
-                f"missing-results: 未找到 OpenCompass 结果文件: results/*/{dataset}-*.json"
+                f"json-parse: 结果文件必须是对象: {PurePosixPath(rel).name}"
             )
-        prediction_rels = sorted(set(
-            _safe_result_files(trusted_dir, base_parts, "predictions", dataset, max_file_bytes)
-        ))
-        total_read = 0
-
-        def _read(rel: str) -> Any:
-            nonlocal total_read
-            data = trusted_dir.read_bytes(rel, max_bytes=max_file_bytes)
-            total_read += len(data)
-            if total_read > max_total_bytes:
-                raise CevalParserError(
-                    f"file-size: total output budget exceeded ({total_read} > {max_total_bytes})"
-                )
-            return _load_json_bytes(data, PurePosixPath(rel).name)
-
-        def _subject_of(rel: str) -> str:
-            stem = PurePosixPath(rel).stem
-            return (
-                stem[len(f"{dataset}_"):] if stem.startswith(f"{dataset}_")
-                else stem[len(f"{dataset}-"):]
+        acc = float(doc.get("accuracy", 0.0)) / 100.0
+        native[f"{dataset}_{subject}/accuracy"] = acc
+        rows = _sample_rows_from_details(doc.get("details"))
+        source_kind = "results_details" if rows else None
+        if not rows:
+            pred_rel = prediction_files.get(subject)
+            if pred_rel is not None:
+                doc_pred = _read(pred_rel)
+                for idx in sorted(
+                    doc_pred, key=lambda key: int(key) if str(key).isdigit() else 0,
+                ):
+                    item = doc_pred[idx] or {}
+                    if not isinstance(item, dict):
+                        continue
+                    gold = item.get("gold")
+                    raw = str(item.get("prediction", ""))
+                    conclusion = _extract_conclusion(raw)
+                    pred = conclusion if conclusion is not None else _extract_option(raw)
+                    rows.append({
+                        "idx": idx,
+                        "prompt": item.get("origin_prompt"),
+                        "raw_output": item.get("prediction"),
+                        "prediction": pred,
+                        "extraction": "conclusion" if conclusion is not None else "fallback_regex",
+                        "gold": gold,
+                        "correct": bool(
+                            pred is not None and gold is not None
+                            and str(pred).upper() == str(gold).strip().upper()
+                        ),
+                    })
+                source_kind = "predictions_fallback"
+        if rows:
+            per_subject[subject] = round(
+                sum(1 for row in rows if row["correct"]) / len(rows), 6,
             )
-
-        prediction_files: dict[str, str] = {}
-        for rel in prediction_rels:
-            if isinstance(_read(rel), dict):
-                prediction_files.setdefault(_subject_of(rel), rel)
-
-        samples: list[dict[str, Any]] = []
-        per_subject: dict[str, float] = {}
-        detail_source: dict[str, str] = {}
-        native: dict[str, Any] = {}
-        conclusion_overrides = 0
-        for rel in subject_rels:
-            subject = _subject_of(rel)
-            doc = _read(rel)
-            if not isinstance(doc, dict):
-                raise CevalParserError(
-                    f"json-parse: 结果文件必须是对象: {PurePosixPath(rel).name}"
-                )
-            acc = float(doc.get("accuracy", 0.0)) / 100.0
-            native[f"{dataset}_{subject}/accuracy"] = acc
-            rows = _sample_rows_from_details(doc.get("details"))
-            source_kind = "results_details" if rows else None
-            if not rows:
-                pred_rel = prediction_files.get(subject)
-                if pred_rel is not None:
-                    doc_pred = _read(pred_rel)
-                    for idx in sorted(
-                        doc_pred, key=lambda key: int(key) if str(key).isdigit() else 0,
-                    ):
-                        item = doc_pred[idx] or {}
-                        if not isinstance(item, dict):
-                            continue
-                        gold = item.get("gold")
-                        raw = str(item.get("prediction", ""))
-                        conclusion = _extract_conclusion(raw)
-                        pred = conclusion if conclusion is not None else _extract_option(raw)
-                        rows.append({
-                            "idx": idx,
-                            "prompt": item.get("origin_prompt"),
-                            "raw_output": item.get("prediction"),
-                            "prediction": pred,
-                            "extraction": "conclusion" if conclusion is not None else "fallback_regex",
-                            "gold": gold,
-                            "correct": bool(
-                                pred is not None and gold is not None
-                                and str(pred).upper() == str(gold).strip().upper()
-                            ),
-                        })
-                    source_kind = "predictions_fallback"
-            if rows:
-                per_subject[subject] = round(
-                    sum(1 for row in rows if row["correct"]) / len(rows), 6,
-                )
-                detail_source[subject] = source_kind or "results_details"
-            else:
-                # 仅聚合：保留 native 聚合与缺失标记，不伪造样本（M2-A03）。
-                per_subject[subject] = acc
-                detail_source[subject] = "aggregate_only_native_only"
-            conclusion_overrides += sum(
-                1 for row in rows if row.get("official_prediction") is not None
-            )
-            for row in rows:
-                samples.append({
-                    "sample_id": f"{subject}-{row['idx']}",
-                    "subject": subject,
-                    "prediction": row.get("prediction"),
-                    "extraction": row.get("extraction"),
-                    "official_prediction": row.get("official_prediction"),
-                    "gold": row.get("gold"),
-                    "correct": row.get("correct"),
-                    "raw_output": row.get("raw_output"),
-                    "prompt": row.get("prompt"),
-                    "detail_source": detail_source[subject],
-                })
+            detail_source[subject] = source_kind or "results_details"
+        else:
+            # 仅聚合：保留 native 聚合与缺失标记，不伪造样本（M2-A03）。
+            per_subject[subject] = acc
+            detail_source[subject] = "aggregate_only_native_only"
+        conclusion_overrides += sum(
+            1 for row in rows if row.get("official_prediction") is not None
+        )
+        for row in rows:
+            samples.append({
+                "sample_id": f"{subject}-{row['idx']}",
+                "subject": subject,
+                "prediction": row.get("prediction"),
+                "extraction": row.get("extraction"),
+                "official_prediction": row.get("official_prediction"),
+                "gold": row.get("gold"),
+                "correct": row.get("correct"),
+                "raw_output": row.get("raw_output"),
+                "prompt": row.get("prompt"),
+                "detail_source": detail_source[subject],
+            })
 
     if samples:
         empty = sum(
@@ -610,3 +627,88 @@ def parse_opencompass_results(
             "detail_source": detail_source,
         },
     }
+
+
+def parse_opencompass_results(
+    root: str | Path,
+    *,
+    dataset: str = "ceval",
+    max_file_bytes: int = 32 * 1024 * 1024,
+    trusted_root: str | Path | None = None,
+    experiment: str | None = None,
+) -> dict[str, Any]:
+    """解析 OpenCompass 输出目录 → native/diagnostic 双口径结果。
+
+    信任边界（review R06）：``trusted_root`` 固定为原 Job 工作目录（缺省时
+    为 ``root`` 自身）；``root`` 只做词法包含检查、不做 ``resolve()``。
+    读取沿目录描述符逐组件 ``O_NOFOLLOW`` 打开，单文件与总量都受限。
+
+    实验目录（review R2-02）：固定版 OpenCompass 0.4.2 CLI 在 --work-dir
+    下按时间戳建实验目录（``outputs/<timestamp>/results/<model>/...``）。
+    只接受恰好一层实验目录：优先 ``experiment`` 显式参数（桥接会把
+    ``outputs/experiment.json`` 指针读出后传入），否则在唯一候选时自动
+    发现；legacy 直排与实验目录并存、或多个实验目录 → 拒绝，绝不把
+    其他实验的结果混进本 Job。
+
+    实际解析委托 ``parse_opencompass_files``（纯内存实现，供"先冻结后
+    解析"的证据 bundle 复用，review R2-06）。
+    """
+    outputs = Path(root)
+    trusted = Path(trusted_root if trusted_root is not None else root)
+    import os as _os
+
+    if outputs.is_absolute():
+        try:
+            rel_base = outputs.relative_to(trusted)
+        except ValueError as error:
+            raise CevalParserError(
+                f"path-escape: outputs {outputs} is not inside trusted root {trusted}",
+            ) from error
+    else:
+        trusted = Path(_os.path.abspath(trusted))
+        try:
+            rel_base = Path(_os.path.abspath(outputs)).relative_to(trusted)
+        except ValueError as error:
+            raise CevalParserError(
+                f"path-escape: outputs {outputs} is not inside trusted root {trusted}",
+            ) from error
+    base_parts = tuple(part for part in rel_base.parts if part not in ("", "."))
+    if not Path(root).is_dir():
+        raise CevalParserError(f"missing-output-root: {root} 不是目录")
+
+    max_total_bytes = max_file_bytes * 8
+    with _TrustedDir(trusted) as trusted_dir:
+        files, symlinks = trusted_dir.list_files()
+        _reject_symlinks_under(symlinks, base_parts)
+        _, results_by_exp, predictions_by_exp = _split_layout(files, base_parts, dataset)
+        pointer_rel = "/".join((*base_parts, EXPERIMENT_POINTER))
+        if experiment is None and pointer_rel in files:
+            pointer = _load_json_bytes(
+                trusted_dir.read_bytes(pointer_rel, max_bytes=4096),
+                EXPERIMENT_POINTER,
+            )
+            if isinstance(pointer, dict) and isinstance(pointer.get("experiment"), str):
+                experiment = pointer["experiment"]
+        resolved_experiment = _resolve_experiment(results_by_exp, experiment)
+        wanted = sorted(set(results_by_exp.get(resolved_experiment) or []))
+        wanted += sorted(set(predictions_by_exp.get(resolved_experiment) or []))
+        if not results_by_exp.get(resolved_experiment):
+            raise CevalParserError(
+                f"missing-results: 未找到 OpenCompass 结果文件: results/*/{dataset}-*.json"
+            )
+        frozen: dict[str, str] = {}
+        total_read = 0
+        for rel in wanted:
+            data = trusted_dir.read_bytes(rel, max_bytes=max_file_bytes)
+            total_read += len(data)
+            if total_read > max_total_bytes:
+                raise CevalParserError(
+                    f"file-size: total output budget exceeded "
+                    f"({total_read} > {max_total_bytes})"
+                )
+            frozen[rel] = data.decode("utf-8")
+    parsed = parse_opencompass_files(
+        frozen, dataset=dataset, base_parts=base_parts,
+    )
+    parsed["experiment"] = resolved_experiment
+    return parsed

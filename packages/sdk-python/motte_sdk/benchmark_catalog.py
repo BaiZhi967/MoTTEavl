@@ -48,6 +48,9 @@ _ANSWER_LABELS = frozenset({"A", "B", "C", "D"})
 
 _SCOPE_VALUES = ("smoke", "custom-subset", "full")
 _SMOKE_LIMIT = 20
+# Profile 默认生成长度（与 opencompass 配置层一致，review R2-10 的最终
+# 生效值：模型 parameters.max_output_tokens 覆盖 > Profile 默认）。
+_PROFILE_DEFAULT_MAX_OUTPUT_TOKENS = 1024
 
 
 def _digest(payload: bytes) -> str:
@@ -520,6 +523,22 @@ class BenchmarkCatalog:
         if self._store is not None:
             from datetime import UTC, datetime
 
+            existing = self._store.get(benchmark_id, dataset.dataset_revision)
+            if existing is not None:
+                existing_files = {
+                    str(item.get("logical_name")): str(item.get("sha256"))
+                    for item in existing.get("files") or []
+                }
+                new_files = {item.logical_name: item.sha256 for item in dataset.files}
+                if existing_files != new_files:
+                    # 同 revision 重写不同内容会让历史 Run 的内容身份失真
+                    # （review R2-05）：拒绝，要求换 revision 或恢复同内容。
+                    raise ValueError(
+                        "DATASET_REVISION_REUSED: benchmark "
+                        f"{benchmark_id}@{dataset.dataset_revision} was already "
+                        "prepared with different file content; use a new dataset "
+                        "revision instead of rewriting"
+                    )
             payload = dataset_to_payload(dataset)
             payload["created_at"] = datetime.now(UTC).isoformat()
             self._store.put(payload)
@@ -726,29 +745,61 @@ def validate_external_run_request(
         if not split_ids:
             reasons.append(f"SELECTION_EMPTY:split {split!r} has no rows")
 
-        # 上下文预算（保守：目标题干 + few-shot 示例的字节上界）。
+        # 最终生效的输出 token 预算（review R2-10）：模型覆盖 > Profile 默认；
+        # 输出不得超过模型声明上限；渲染 prompt（含模板与 few-shot 开销）
+        # + 有效输出不得超过上下文窗口。字符数为保守上界（不等同 token 数）。
+        model_parameters = model_view.get("parameters") or {}
+        if not isinstance(model_parameters, dict):
+            model_parameters = {}
+        effective_output = model_parameters.get(
+            "max_output_tokens", _PROFILE_DEFAULT_MAX_OUTPUT_TOKENS,
+        )
+        output_ceiling = model_view.get("max_output_tokens")
+        if isinstance(output_ceiling, int) and isinstance(effective_output, int):
+            if effective_output > output_ceiling:
+                reasons.append(
+                    f"MODEL_LIMIT_EXCEEDED:max_output_tokens {effective_output} "
+                    f"> model ceiling {output_ceiling}"
+                )
         context_window = model_view.get("context_window")
         if isinstance(context_window, int) and context_window > 0 and dataset.rows:
-            base = max(
-                len(str(row.get("question", ""))) + sum(
-                    len(str(row.get(label, ""))) for label in ("A", "B", "C", "D")
-                )
-                for row in dataset.rows
-            )
+            from motte_benchmark.opencompass.config import render_mcq_prompt
+
+            def _row_chars(row: dict[str, Any]) -> int:
+                return len(render_mcq_prompt(
+                    subject=str(row.get("subject") or ""),
+                    question=str(row.get("question", "")),
+                    options={label: str(row.get(label, "")) for label in ("A", "B", "C", "D")},
+                    few_shot=[],
+                ))
+
+            base = max(_row_chars(row) for row in dataset.rows)
             dev_rows = [
                 row for row in dataset.rows
                 if str(row.get("split")) == few_shot_split
             ]
-            example_bytes = 0
-            for row in dev_rows[:max(few_shot, 0)]:
-                example_bytes += len(str(row.get("question", ""))) + sum(
-                    len(str(row.get(label, ""))) for label in ("A", "B", "C", "D")
-                )
-            estimate = base + example_bytes
-            if estimate > context_window:
-                reasons.append(
-                    f"CONTEXT_WINDOW_INSUFFICIENT:prompt~{estimate} > window {context_window}",
-                )
+            few_shot_rows = [
+                {
+                    "question": str(row.get("question", "")),
+                    **{label: str(row.get(label, "")) for label in ("A", "B", "C", "D")},
+                    "answer": str(row.get("answer") or ""),
+                }
+                for row in dev_rows[:max(few_shot, 0)]
+            ]
+            probe = next(iter(dataset.rows))
+            estimate = len(render_mcq_prompt(
+                subject=str(probe.get("subject") or ""),
+                question=str(probe.get("question", "")),
+                options={label: str(probe.get(label, "")) for label in ("A", "B", "C", "D")},
+                few_shot=few_shot_rows,
+            ))
+            estimate = max(estimate, base)
+            if isinstance(effective_output, int):
+                if estimate + effective_output > context_window:
+                    reasons.append(
+                        f"CONTEXT_WINDOW_INSUFFICIENT:prompt~{estimate} + "
+                        f"output {effective_output} > window {context_window}"
+                    )
     return reasons
 
 
@@ -836,10 +887,22 @@ def prepare_external_run_inputs(
         str(row.get("id")): (row.get("answer") if row.get("answer") else None)
         for row in eval_rows
     }
+    # 任务内容身份（review R2-05）：题干/选项/gold 的行 hash 与 few-shot
+    # 内容 hash 冻结进 manifest——同 revision 字符串相同不证明内容相同。
+    row_hashes = {entry.case_id: entry.row_sha256 for entry in dataset.manifest}
+    case_content_hashes = {
+        str(row.get("id")): row_hashes.get(str(row.get("id")))
+        for row in eval_rows
+    }
+    few_shot_hashes = [
+        row_hashes.get(str(row.get("id"))) for row in dev_rows
+    ]
     manifest: dict[str, Any] = {
         "model": model_id,
         "scope": scope,
         "case_expectations": case_expectations,
+        "case_content_hashes": case_content_hashes,
+        "few_shot_hashes": few_shot_hashes,
         "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
         "external_benchmark": {
             "adapter_id": descriptor.adapter_id,

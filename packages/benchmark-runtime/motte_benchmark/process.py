@@ -246,6 +246,23 @@ class ProcessJobAdapter:
     def spawned_processes(self) -> list[int]:
         return list(self._pid_order)
 
+    def snapshot_outputs(self, handle: ExternalJobHandle) -> dict[str, Any]:
+        """解析前的输出 hash 快照（review R2-06：旧协议一致性核验）。"""
+        from motte_sandbox.workspace import CaseWorkspace, WorkspacePolicyError
+
+        try:
+            workspace = CaseWorkspace(
+                Path(handle.work_dir), anchor=Path(handle.work_dir).parent,
+            )
+            snap = workspace.snapshot()
+            files = {
+                rel: digest for rel, digest in (snap.get("hashes") or {}).items()
+                if rel == RESULTS_NAME or rel.startswith("outputs/")
+            }
+        except (WorkspacePolicyError, OSError):
+            return {"complete": False, "files": {}}
+        return {"complete": bool(snap.get("complete")) and bool(files), "files": files}
+
     # ------------------------------------------------------------ 有界输出
 
     def _start_tail_reader(self, proc: Any, *, max_output_bytes: int) -> None:

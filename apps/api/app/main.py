@@ -1564,8 +1564,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "details": {"reasons": list(prepared.reasons)},
                 }},
             )
-        # 准备结果持久化（review R13）：重启/第二个实例不再丢失。
-        external_catalog.update_dataset(benchmark_id, prepared)
+        # 准备结果持久化（review R13）：重启/第二个实例不再丢失；
+        # 同 revision 重写不同内容被拒（review R2-05）。
+        try:
+            external_catalog.update_dataset(benchmark_id, prepared)
+        except ValueError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "DATASET_REVISION_REUSED", "message": str(error)}},
+            )
         external_catalog.mark_profile_validated(benchmark_id, True)
         _external_catalog_sync()
         return {

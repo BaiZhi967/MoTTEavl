@@ -385,8 +385,10 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
     const [error, setError] = useState("");
     const submitRef = useRef(0);
 
-    // 输入改动即清理旧结论：旧 gate 不随输入漂移显示（review R15）。
+    // 输入改动即清理旧结论，并使在途 compare/gate 请求失效（review R2-11）：
+    // 不要求用户再次点击比较，晚到的旧响应也不会重新显示。
     useEffect(() => {
+      submitRef.current += 1;
       setComparison(null);
       setGate(null);
       setError("");

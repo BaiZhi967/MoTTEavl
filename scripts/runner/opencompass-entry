@@ -1,52 +1,32 @@
 #!/usr/bin/env bash
-# MoTTEavl 外部基准 Runner 入口（固定环境 wrapper，review R01/R10）。
+# MoTTEavl 外部基准 Runner 入口（固定环境 wrapper，review R01/R2-01/R2-10）。
 #
 # 契约（与 motte_benchmark.process.ProcessJobAdapter 对齐）：
 #   - 环境变量 MOTTE_WORK_DIR  : 受控工作目录（prepare 阶段创建）。
-#   - 环境变量 MOTTE_LAUNCH_TOKEN / MOTTE_JOB_ID / MOTTE_RUN_ID : 启动身份。
-#   - $MOTTE_WORK_DIR/runner-config.json : 冻结的运行配置（模型快照/逐题
-#     prompt/few-shot/凭据引用/config_hash），由创建入口生成、adapter 写入。
-#   - 输出写入 $MOTTE_WORK_DIR/outputs/（OpenCompass 形态结果树）。
-#   - 结束时原子写 $MOTTE_WORK_DIR/.motte-job-complete 完成标记：
-#     {"exit_code": <int>, "completed": true}。恢复路径只信该标记，存在
-#     部分输出而无标记一律按不确定处理，不升级为成功（review R10）。
+#   - 环境变量 MOTTE_LAUNCH_TOKEN / MOTTE_JOB_ID / MOTTE_RUN_ID : 启动身份，
+#     由桥接层记录，绝不作为参数透传给上游 OpenCompass CLI（0.4.2 不支持）。
+#   - $MOTTE_WORK_DIR/runner-config.json : 冻结的平台配置（模型快照/逐题
+#     数据/few-shot/凭据引用/config_hash）。
+#   - 桥接（motte_benchmark.opencompass.entry）负责：按学科导出本地数据、
+#     渲染 0.4.2 形态的 Python 配置、以位置参数调用 opencompass、定位
+#     时间戳实验目录并写 outputs/experiment.json 指针（R2-02）、原子写
+#     .motte-job-complete 完成标记（R2-10）。
 #
 # 固定环境（部署到 /opt/motte-runner，见 docs/operations/ceval.md）：
-#   - Python 解释器与 opencompass CLI 版本钉在 parser.RUNNER_VERSION_PIN。
-#   - 本脚本只转发生成的 argv；凭据由 runner 从环境变量按引用解析，
-#     命令行/日志不落明文密钥。
+#   - pinned 解释器同时安装 opencompass==0.4.2 与 motte-benchmark-runtime；
+#   - 凭据由 Runner 环境按引用注入（os.environ），命令行/配置不落明文。
 set -euo pipefail
 
 WORK_DIR="${MOTTE_WORK_DIR:?MOTTE_WORK_DIR is required}"
-CONFIG="$WORK_DIR/runner-config.json"
-MARKER="$WORK_DIR/.motte-job-complete"
-
-if [ ! -f "$CONFIG" ]; then
-    echo "runner-config.json missing in work dir" >&2
-    printf '{"exit_code": 2, "completed": true}\n' > "$MARKER"
-    exit 2
-fi
 
 RUNNER_ROOT="${MOTTE_RUNNER_ROOT:-/opt/motte-runner}"
-PYTHON_BIN="$RUNNER_ROOT/bin/python"
+PYTHON_BIN="${MOTTE_RUNNER_PYTHON:-$RUNNER_ROOT/bin/python}"
 if [ ! -x "$PYTHON_BIN" ]; then
     echo "pinned runner environment missing: $PYTHON_BIN" >&2
-    printf '{"exit_code": 3, "completed": true}\n' > "$MARKER"
-    exit 3
+    MARKER="$WORK_DIR/.motte-job-complete"
+    printf '{"exit_code": 4, "completed": true}\n' > "$MARKER.partial"
+    mv "$MARKER.partial" "$MARKER"
+    exit 4
 fi
 
-mkdir -p "$WORK_DIR/outputs"
-set +e
-"$PYTHON_BIN" -m opencompass.cli.main \
-    --config "$CONFIG" \
-    --work-dir "$WORK_DIR/outputs" \
-    --launch-token "${MOTTE_LAUNCH_TOKEN:-}" \
-    --job-id "${MOTTE_JOB_ID:-}" \
-    --run-id "${MOTTE_RUN_ID:-}"
-code=$?
-set -e
-
-# 原子写完成标记：先写临时文件再 rename，读到的一定是完整 JSON。
-printf '{"exit_code": %s, "completed": true}\n' "$code" > "$MARKER.partial"
-mv "$MARKER.partial" "$MARKER"
-exit "$code"
+exec "$PYTHON_BIN" -m motte_benchmark.opencompass.entry

@@ -68,10 +68,10 @@ def _fake_subject(dataset: str) -> str:
 
 
 def _write_opencompass_tree(
-    work: Path, *, dataset: str, subject: str, rows: list[dict[str, Any]],
+    base: Path, *, dataset: str, subject: str, rows: list[dict[str, Any]],
 ) -> None:
-    """按 OpenCompass 形态写 results/<model>/<dataset>-<subject>.json。"""
-    results_dir = work / "outputs" / "results" / "mock-model"
+    """按 OpenCompass 形态写 ``<base>/results/<model>/<dataset>-<subject>.json``。"""
+    results_dir = base / "results" / "mock-model"
     results_dir.mkdir(parents=True, exist_ok=True)
     details: dict[str, Any] = {}
     for position, row in enumerate(rows):
@@ -163,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_marker(work, 0)
         return 0
 
-    if mode in ("opencompass_ok", "opencompass_partial"):
+    if mode in ("opencompass_ok", "opencompass_partial", "opencompass_ts_ok"):
         dataset = os.environ.get("MOTTE_FAKE_DATASET", "ceval")
         subject = os.environ.get("MOTTE_FAKE_SUBJECT") or _fake_subject(dataset)
         if mode == "opencompass_ok":
@@ -173,10 +173,25 @@ def main(argv: list[str] | None = None) -> int:
                 {"case_id": f"{subject}-1", "prediction": "A", "gold": "C", "correct": False},
             ]
             exit_code = 0
+        elif mode == "opencompass_ts_ok":
+            # 固定版 CLI 的真实形态：--work-dir 下按时间戳建实验目录
+            # （review R2-02），无 experiment.json 指针 → 解析侧唯一候选自动发现。
+            rows = [
+                {"case_id": f"{subject}-0", "prediction": "B", "gold": "B", "correct": True},
+            ]
+            exit_code = 0
+            _write_opencompass_tree(
+                work / "outputs" / "20260920_090000",
+                dataset=dataset, subject=subject, rows=rows,
+            )
+            _write_marker(work, exit_code)
+            return exit_code
         else:
             rows = _opencompass_partial_rows(work, dataset, subject)
             exit_code = int(os.environ.get("MOTTE_FAKE_EXIT_CODE", "3"))
-        _write_opencompass_tree(work, dataset=dataset, subject=subject, rows=rows)
+        _write_opencompass_tree(
+            work / "outputs", dataset=dataset, subject=subject, rows=rows,
+        )
         _write_marker(work, exit_code)
         return exit_code
 

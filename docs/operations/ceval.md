@@ -21,19 +21,23 @@ CLI：`motte ceval prepare|preflight|run`（与 API 共用同一服务；`--spli
 （`benchmark_datasets` 表），重启/第二个 API 实例不丢。
 Web：`/ceval` 五页（操作/题目/监控/结果/比较）。
 
-**Runner 接入（review R01）**：创建入口会把冻结的
+**Runner 接入（review R01 + R2-01/R2-02）**：创建入口会把冻结的
 `runner-config.json`（模型快照/逐题 prompt/few-shot/凭据引用/config_hash）
-写入 Job 工作目录。adapter 注册经同一受控配置加载：
+写入 Job 工作目录，并冻结任务内容身份（`case_content_hashes`/`few_shot_hashes`，
+R2-05）。adapter 注册经同一受控配置加载：
 
 ```
 # var/runner/adapters.json（或 MOTTE_RUNNER_CONFIG 指向的文件）
 {"adapters": [{"benchmark": "ceval", "argv": ["/opt/motte-runner/bin/opencompass-entry"]}]}
 ```
 
-固定环境 wrapper 模板见 `scripts/runner/opencompass-entry`（钉
-`opencompass==0.4.2` 环境；结束时原子写 `.motte-job-complete` 完成标记，
-恢复路径只信该标记）。无配置且 wrapper 不存在 → RUNNER_NOT_CONNECTED，
-创建在提交前 422。
+固定环境 wrapper 见 `scripts/runner/opencompass-entry`：以 pinned 解释器调用
+`motte_benchmark.opencompass.entry` 桥接——按学科导出本地数据、渲染
+OpenCompass **0.4.2** 形态配置（位置参数调用，凭据引用经 `os.environ`
+解析）、定位时间戳实验目录并写 `outputs/experiment.json` 指针（解析侧据此
+选择唯一实验，绝不混入其他运行）、结束原子写 `.motte-job-complete` 完成标记。
+同 revision 重写不同内容在 prepare 层拒绝（`DATASET_REVISION_REUSED`）。
+无配置且 wrapper 不存在 → RUNNER_NOT_CONNECTED，创建在提交前 422。
 
 ## 2. 数据与来源治理
 

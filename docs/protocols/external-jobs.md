@@ -190,22 +190,43 @@ indeterminate → Run needs_review；禁止仅凭“没有 results”重新执�
   failed；**没有标记而只有部分输出 → indeterminate**，部分采集保留为
   审计证据，不升级为成功。存在 results.json 不再等同于成功退出。
 
-## 10. Runner 配置与受控 adapter 加载（review R01/R13）
+## 10. Runner 配置与受控 adapter 加载（review R01/R13 + R2-01/R2-02）
 
 - 创建入口（API/CLI 共用 `prepare_external_run_inputs`）把
   `build_opencompass_config` 的完整配置（模型快照、逐题 prompt、few-shot、
   凭据**引用**、config_hash）冻结进 `manifest.external_benchmark.runner_config`，
-  并同步冻结平台侧 gold 来源 `manifest.case_expectations`；adapter
-  `prepare` 将其写入受控目录 `runner-config.json`（真实 Runner 的输入）。
-  缺 `runner_config.cases` 的外部 Run 在创建/分派层拒绝
+  并同步冻结平台侧 gold 来源 `manifest.case_expectations` 与**任务内容身份**
+  `case_content_hashes`/`few_shot_hashes`（R2-05）；adapter `prepare` 将其
+  写入受控目录 `runner-config.json`（真实 Runner 的输入）。缺
+  `runner_config.cases` 的外部 Run 在创建/分派层拒绝
   （`EXTERNAL_JOB_VERSION_REQUIRED`）。
 - adapter 注册只经 `motte_benchmark.runner_config.ensure_builtin_adapters()`：
-  读 `MOTTE_RUNNER_CONFIG` 指向的受控 JSON（`{"adapters": [{"benchmark":
-  "ceval"|"cmmlu", "argv"|[...]}|"module": "..."}]}`），或固定环境 wrapper
+  读 `MOTTE_RUNNER_CONFIG` 指向的受控 JSON，或固定环境 wrapper
   `/opt/motte-runner/bin/opencompass-entry` 实际存在时注册；两者皆无则
-  RUNNER_NOT_CONNECTED，绝不静默落到不可执行 argv。API/Worker/CLI 启动时
-  各自调用，配置同源。
-- 结果采集按 `runner-config.json` 的冻结 case 顺序映射
-  `(subject, 行序) → CaseID`；未知/越界/重复映射隔离为 unmapped 记录并使
-  Run failed，绝不串题（review R03）。评分 gold 以 `case_expectations`
-  为权威，Runner 报告 gold 分歧记入 score details。
+  RUNNER_NOT_CONNECTED。API/Worker/CLI 启动时各自调用，配置同源。
+- **固定版桥接（R2-01）**：`motte_benchmark.opencompass.entry` 按学科导出
+  本地数据、渲染 OpenCompass **0.4.2** 形态配置（凭据引用经
+  `os.environ` 在 Runner 侧解析），以**位置参数**调用
+  `opencompass.cli.main <config> --work-dir <outputs>`；launch token/job/run
+  身份由桥接层消费，绝不作为未知参数透传上游。
+- **实验目录（R2-02）**：固定版 CLI 在 `--work-dir` 下按时间戳建实验目录
+  （`outputs/<timestamp>/results/<model>/...`）。解析侧只接受恰好一层实验
+  目录：优先 `outputs/experiment.json` 指针（桥接写入）或显式参数，唯一
+  候选自动发现；legacy 直排与实验目录并存、多候选 → 拒绝合并。
+- 结果采集按 `runner-config.json` 的冻结 case 顺序、以 **Runner 明细原始
+  行号**（`sample_id` 尾段）映射 `(subject, row_index) → CaseID`；游标只
+  决定导入哪些记录、不改变身份（R2-03）。未知/越界/重复映射隔离为
+  unmapped 记录并使 Run failed。评分 gold 以 `case_expectations` 为权威。
+
+## 11. 先冻结后解析与证据一致性（review R2-06/R2-07）
+
+- 采集顺序固定为：**读取完整输出字节 → 冻结内容寻址 Artifact → 从同一份
+  冻结内容解析**。正式分数、原始证据与恢复重放绑定同一内容 hash；
+  解析后对工作目录的改写/删除不影响已导入结果。证据 bundle 超出预算时
+  如实标记 `complete=false`（hash 仍在），不冒充完整证据。
+- 旧协议 adapter（无字节级读取）退回“解析前快照 hash + 最终化前重读”
+  的交叉核验；两次内容不一致 → `EVIDENCE_INCONSISTENT`，Job failed 且
+  保留两份 hash 供审计。
+- 导入完成（`checkpoint.import_completed`）后的恢复**复用原 Artifact、
+  指标与错误事实**：不重读可清理的工作目录、不替换 checkpoint 的证据
+  引用（R2-07）。中断恢复依赖已冻结产物，不依赖工作目录存活。

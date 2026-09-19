@@ -438,6 +438,11 @@ def _review_service(tmp_path, mode, monkeypatch):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("MOTTE_JOB_WORK_ROOT", str(tmp_path / "jobs"))
+    # monkeypatch.setitem 在测试结束时恢复原注册状态，避免跨文件泄漏。
+    monkeypatch.setitem(
+        registry._FACTORIES, "ceval-opencompass",
+        registry._FACTORIES.get("ceval-opencompass"),
+    )
     registry.register_adapter("ceval-opencompass", lambda: CevalJobAdapter(
         argv=self_argv(), extra_env={"MOTTE_FAKE_MODE": mode},
     ), replace=True)

@@ -178,6 +178,43 @@ describe("外部基准页面：请求身份保护（review R15）", () => {
     expect(screen.getByTestId("gate-pass")).toBeTruthy();
   });
 
+  it("R2-11：只修改比较输入（不再次提交）时，在途旧响应被丢弃", async () => {
+    const slowOld = deferred<any>();
+    clientMocks.compareRuns.mockImplementation((baseline: string) => (
+      baseline === "run-old" ? slowOld.promise : Promise.resolve({
+        eligible: false, reasons: ["SPLIT_CHANGED:split"],
+        metric_eligibility: { quality: false },
+        case_diff: { added: [], removed: [], changed: [] },
+      })
+    ));
+    clientMocks.evaluateRunGate.mockResolvedValue({
+      schema: "gate-lite@2", passed: false,
+      rules: [{ id: "comparable", passed: false, reason: "reports not comparable" }],
+    });
+    render(
+      <MemoryRouter initialEntries={["/ceval/compare"]}>
+        <CevalCompare />
+      </MemoryRouter>,
+    );
+    // 提交旧候选 → 请求在途；改成新候选但不再提交。
+    fireEvent.change(screen.getByLabelText("baseline"), { target: { value: "run-old" } });
+    fireEvent.change(screen.getByLabelText("candidate"), { target: { value: "cand-old" } });
+    fireEvent.click(screen.getByRole("button", { name: "比较" }));
+    fireEvent.change(screen.getByLabelText("candidate"), { target: { value: "cand-new" } });
+    // 旧请求此时才回来：界面输入已是新 Run，不得重新显示旧组结论。
+    await act(async () => {
+      slowOld.resolve({
+        eligible: true, reasons: [],
+        metric_eligibility: { quality: true },
+        case_diff: { added: [], removed: [], changed: [] },
+      });
+    });
+    expect((screen.getByLabelText("candidate") as HTMLInputElement).value).toBe("cand-new");
+    expect(screen.queryByTestId("comparison-panel")).toBeNull();
+    expect(screen.queryByTestId("gate-panel")).toBeNull();
+    expect(screen.queryByText(/两份报告可比/)).toBeNull();
+  });
+
   it("结果页展示 native/diagnostic 双栏指标（review R09）", async () => {
     clientMocks.getRun.mockResolvedValue({
       id: "run-m", status: "completed", scenario_version: "ceval-external@1",
