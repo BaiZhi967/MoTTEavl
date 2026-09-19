@@ -62,10 +62,11 @@ run 级（`agent.budget`，CLI `--max-steps/--max-tool-calls/--wall-time-sec`）
   不虚构硬限制；`observed_cost_limit` 为 observed（事后计量）。
 - 停止原因具体化：max_steps / max_tool_calls / wall_time / token_limit / cost_limit /
   cancelled / error，进入 Observation.termination 与结果页。
-- `per_call_timeout_sec`：executor 层在主流程内强制——到期先把该次 invocation
-  同步结算为 `settled/indeterminate`（可靠结算，不悬置 dispatching），再以
-  `per_call_timeout` 停止循环；被放弃的底层调用线程迟到返回只丢弃，不再改写
-  已完成 Run 的调用日志。
+- `per_call_timeout_sec`：executor 层在主流程内强制，**持久化结算由主流程独占**
+  ——后台线程只交回结果，绝不写调用日志。到期时主流程先把该次 invocation
+  同步结算为 `settled/indeterminate`（结算失败则 AgentFatalError → needs_review，
+  invocation 保留 dispatching 证据），再以 `per_call_timeout` 停止循环；被放弃
+  线程的迟到返回只被丢弃，即使此前结算因存储故障失败也不会被迟到结果改写。
 
 ## 4. 取消、恢复与重试
 
@@ -81,10 +82,11 @@ run 级（`agent.budget`，CLI `--max-steps/--max-tool-calls/--wall-time-sec`）
 
 - 每 Case 独立目录：`$MOTTE_AGENT_WORKSPACE_ROOT/<run_id>/<case_id>/`（默认
   `var/agent-workspaces/`）。仅接受受控相对路径；拒绝绝对路径、`..`、反斜杠、
-  symlink（目录链先验证已有组件、再逐级创建缺失目录——预置 `run/case` 目录为
-  symlink 指向外部时既拒绝创建、也不在外部目录留下任何副作用；组件级
-  `O_NOFOLLOW` 防 TOCTOU；清理前重校验归属）、设备/管道文件；配额
-  （单文件 1MB / 总量 10MB / 200 文件）写入前强制。
+  symlink、设备/管道文件。目录链从受信 anchor 起基于**已打开的目录 fd** 逐级
+  相对打开/创建/校验（O_NOFOLLOW+O_DIRECTORY；macOS 对 symlink 返回 ENOTDIR，
+  以 fstatat 区分真因）：预置 symlink 拒绝且不在外部目录留下副作用，校验后
+  父目录被替换也无法重定向创建；组件级 `O_NOFOLLOW` 防 TOCTOU，清理前按 fd
+  复核归属；配额（单文件 1MB / 总量 10MB / 200 文件）写入前强制。
 - Case 结束即清理 workspace；清理失败在 case 结果 `cleanup` 里报残留，不误报回收。
 - 产物冻结进 ArtifactStore（`$ARTIFACT_ROOT/agent/<run>/<case>/<path>`，SHA-256 绑定），
   读取走 `GET /api/v1/runs/{run}/cases/{case}/artifacts/content?path=`（归属校验 + 展示层脱敏）。

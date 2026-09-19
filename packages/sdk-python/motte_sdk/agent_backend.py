@@ -266,39 +266,19 @@ class AgentCaseExecutor:
                 })
                 return envelope
 
-            # R3 #1 / R4 #1：期限、线程与调用日志结算都在主流程内完成。到期时
-            # 主流程先同步把 invocation 结算为 indeterminate（可靠结算），再抛
-            # ProviderCallTimeout；被放弃的底层线程迟到返回后不得再写持久状态。
-            # settle_once 只在落盘成功后置位：结算失败留给另一方重试或上抛，
-            # 绝不让线程把 AgentFatalError 吞掉后主线程照常返回成功。
+            # R3 #1 / R4 #1 / R5 #1：期限、线程与调用日志结算都在主流程内完成，
+            # 且**结算由主流程独占**——后台线程只把结果交回 box，绝不写持久
+            # 状态。到期时主流程先同步结算 invocation 为 indeterminate（失败则
+            # AgentFatalError → needs_review），再抛 ProviderCallTimeout；此后
+            # 迟到的线程结果只被丢弃，即使主流程的结算因存储故障失败、invocation
+            # 仍停在 dispatching，后台线程也没有权限改写它。
             box: dict[str, Any] = {}
-            settled = threading.Event()
-            settle_lock = threading.Lock()
-
-            def settle_once(outcome: str, summary: dict[str, Any]) -> None:
-                with settle_lock:
-                    if settled.is_set():
-                        return  # 已终结；僵尸线程的结果只丢弃
-                    self._settle_invocation(invocation, outcome, summary)
-                    settled.set()
 
             def runner() -> None:
                 try:
                     box["envelope"] = self.provider_complete(request)
-                except BaseException as error:  # noqa: BLE001 - 线程边界内原样传递
+                except BaseException as error:  # noqa: BLE001 - 只交回结果，不结算
                     box["error"] = error
-                try:
-                    if "error" in box:
-                        settle_once("failed", {"error": str(box["error"])})
-                    else:
-                        envelope = box.get("envelope") or {}
-                        settle_once("succeeded", {
-                            "finish_reason": envelope.get("finish_reason"),
-                            "usage": envelope.get("usage"),
-                            "tool_calls": len(envelope.get("tool_calls") or []),
-                        })
-                except BaseException as error:  # noqa: BLE001 - R4 #1：结算边界异常带回主线程
-                    box["settle_error"] = error
 
             worker = threading.Thread(
                 target=runner, daemon=True, name="agent-model-call",
@@ -306,19 +286,22 @@ class AgentCaseExecutor:
             worker.start()
             worker.join(timeout=max(0.0, deadline - monotonic()))
             if worker.is_alive():
-                settle_once("indeterminate", {
+                self._settle_invocation(invocation, "indeterminate", {
                     "abandoned": "per_call_timeout",
                     "timeout_sec": budget.per_call_timeout_sec,
                 })
                 raise ProviderCallTimeout(
                     f"model call exceeded per_call_timeout_sec={budget.per_call_timeout_sec}"
                 )
-            # 结算边界失败（AgentFatalError）优先于调用结果：主线程重新抛出，
-            # 中止执行并进入 needs_review，绝不让线程吞掉后照常返回成功
-            if "settle_error" in box:
-                raise box["settle_error"]
             if "error" in box:
+                self._settle_invocation(invocation, "failed", {"error": str(box["error"])})
                 raise box["error"]
+            envelope = box.get("envelope") or {}
+            self._settle_invocation(invocation, "succeeded", {
+                "finish_reason": envelope.get("finish_reason"),
+                "usage": envelope.get("usage"),
+                "tool_calls": len(envelope.get("tool_calls") or []),
+            })
             return box.get("envelope")
 
         tools = _workspace_tools(workspace)
