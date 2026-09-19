@@ -25,7 +25,7 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 | `builtin-agent@1` | ✅ 已接线（`safe_to_repeat=false`） | 原生 Agent 文件任务：native-tool / legacy-json 双显式模式；native 模式要求已发布模型 `supports_tools=true`，否则创建期 422（零模型调用），不自动降级。模型请求按已发布 ModelProfile 快照构造（不再硬编码模型名）。操作见 [native-agent.md](../operations/native-agent.md)。 |
 | `direct-llm@1` | ✅ 可用 | 直连单轮评测 |
 | `replay@1` | ✅ 可用（safe_to_repeat） | 确定性回放 |
-| `external-benchmark@1` | ⛔ unavailable（未接线） | 待 M2 连接 |
+| `external-benchmark@1` | ✅ job 模式可用（M2-T07 起）；adapter 未注册时分派层 ADAPTER_UNKNOWN 拒绝 | `ceval-opencompass@1`（C-Eval，进程生命周期+迁移 Parser）；真实 OpenCompass 环境接入 not_run（见 operations/ceval.md） |
 
 ## Provider
 
@@ -80,6 +80,6 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 | pnpm | 9.15.0 | `package.json packageManager` |
 | TypeScript（web） | 5.9（openapi-typescript 尚不支持 TS7） | `apps/web/package.json` |
 | pi-bridge | 0.1.0 / 协议 v1 | `bridges/pi/package.json` |
-| 迁移 | alembic 1.20 / 当前 head `0002_platform_integrity` | `alembic.ini` / `migrations/versions/` |
+| 迁移 | alembic 1.20 / 当前 head `0006_external_jobs` | `alembic.ini` / `migrations/versions/` |
 
 更新本矩阵的时机：新增/变更 Provider、Agent、Harness、bridge 协议或工具链版本时，随同一提交更新。

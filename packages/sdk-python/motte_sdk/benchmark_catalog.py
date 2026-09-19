@@ -115,7 +115,7 @@ def _validate_rows(
     return (entries, problems)
 
 
-def prepare_ceval_external_dataset(
+def prepare_external_dataset(
     *,
     files: dict[str, bytes],
     dataset_revision: str,
@@ -124,9 +124,10 @@ def prepare_ceval_external_dataset(
     approval_evidence: dict[str, Any] | None = None,
     approval_verifier: Any | None = None,
     license_evidence: dict[str, Any] | None = None,
-    benchmark_version: str = CEVAL_BENCHMARK_VERSION,
+    benchmark_version: str = "1",
+    benchmark_id: str = CEVAL_BENCHMARK_ID,
 ) -> PreparedBenchmarkDataset:
-    """校验并冻结 C-Eval 外部数据：文件、checksum、样本清单与来源治理。"""
+    """校验并冻结外部基准数据：文件、checksum、样本清单与来源治理。"""
     reasons: list[str] = []
     official_ok = provenance_target == PROVENANCE_OFFICIAL
     evidence: SourceOverrideEvidence | None = None
@@ -212,7 +213,7 @@ def prepare_ceval_external_dataset(
         else PROVENANCE_USER
     )
     return PreparedBenchmarkDataset(
-        benchmark_id=CEVAL_BENCHMARK_ID,
+        benchmark_id=benchmark_id,
         benchmark_version=benchmark_version,
         dataset_revision=dataset_revision,
         state=state,
@@ -224,6 +225,27 @@ def prepare_ceval_external_dataset(
         license_evidence=dict(license_evidence) if license_evidence else None,
         row_count=len(manifest),
         gold_count=gold_count,
+    )
+
+
+def prepare_ceval_external_dataset(
+    *,
+    files: dict[str, bytes],
+    dataset_revision: str,
+    declared_sha256: dict[str, str] | None = None,
+    provenance_target: Literal["user-supplied", "verified-official"] = "user-supplied",
+    approval_evidence: dict[str, Any] | None = None,
+    approval_verifier: Any | None = None,
+    license_evidence: dict[str, Any] | None = None,
+    benchmark_version: str = CEVAL_BENCHMARK_VERSION,
+) -> PreparedBenchmarkDataset:
+    """C-Eval 包装（M2-T04 兼容入口；CMMLU 用 prepare_external_dataset）。"""
+    return prepare_external_dataset(
+        files=files, dataset_revision=dataset_revision,
+        declared_sha256=declared_sha256, provenance_target=provenance_target,
+        approval_evidence=approval_evidence, approval_verifier=approval_verifier,
+        license_evidence=license_evidence, benchmark_version=benchmark_version,
+        benchmark_id=CEVAL_BENCHMARK_ID,
     )
 
 

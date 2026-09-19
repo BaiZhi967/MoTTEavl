@@ -178,6 +178,22 @@ def _category_of(subject: str) -> str:
     return category
 
 
+def _aggregate_subjects(per_subject: dict[str, float]) -> dict[str, float]:
+    """非 C-Eval 数据集（如 CMMLU）：学科宏平均 + subject 条目，无大类。"""
+    aggregate: dict[str, float] = {}
+    if per_subject:
+        aggregate["accuracy"] = round(sum(per_subject.values()) / len(per_subject), 6)
+    for subject, acc in per_subject.items():
+        aggregate[f"subject:{subject}"] = acc
+    return aggregate
+
+
+def _aggregate_for(dataset: str, per_subject: dict[str, float]) -> dict[str, float]:
+    if dataset == "ceval":
+        return _aggregate_ceval(per_subject)
+    return _aggregate_subjects(per_subject)
+
+
 def _aggregate_ceval(per_subject: dict[str, float]) -> dict[str, float]:
     """C-Eval 四大类 + Hard 聚合（旧实现原样迁移：学科宏平均）。"""
     aggregate: dict[str, float] = {}
@@ -418,7 +434,7 @@ def parse_opencompass_results(
         "native": native,
         "diagnostic": {
             "per_subject": per_subject,
-            "aggregate": _aggregate_ceval(per_subject),
+            "aggregate": _aggregate_for(dataset, per_subject),
             "detail_source": detail_source,
         },
     }
