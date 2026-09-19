@@ -55,6 +55,7 @@ def test_resolve_execution_pins_direct_provider_backend():
         "backend_id": "direct-llm",
         "backend_version": "1",
         "capabilities": {"interactive": False, "safe_to_repeat": False},
+        "execution_mode": "sample",
     }
 
 

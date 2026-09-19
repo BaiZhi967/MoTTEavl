@@ -14,6 +14,7 @@ from pydantic import Field, StrictBool, field_validator, model_validator
 
 from .errors import ExecutionError
 from .evidence import Score, ScoringPass
+from .external_job import ExecutionMode
 from .messages import Contract
 
 
@@ -51,6 +52,8 @@ class ExecutionSpec(Contract):
     backend_version: str = Field(min_length=1)
     config_hash: str | None = None
     capabilities: dict[str, StrictBool] = Field(default_factory=dict)
+    # 分派模式由 backend 注册表决定；旧 manifest 缺省为 sample（M2-T01）。
+    execution_mode: ExecutionMode = ExecutionMode.sample
 
 
 class EvaluationDescriptor(Contract):

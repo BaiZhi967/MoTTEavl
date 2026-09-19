@@ -83,6 +83,16 @@ class RunDispatcher:
             attach = getattr(handle, "attach", None)
             if attach is not None:
                 attach(self.service, run_id)
+            if getattr(handle, "execution_mode", "sample") == "job":
+                # job 模式：整 Run 只启动一个外部 Job，不逐题 invoke（M2-G01）。
+                job_entry = getattr(handle, "run_job", None)
+                if job_entry is None:
+                    return self.service.mark_unsupported(
+                        run_id,
+                        "EXTERNAL_JOB_ENTRY_MISSING",
+                        message="job execution backend did not provide a run_job hook",
+                    )
+                return self.service.execute_external_job(run_id, dispatched, job_entry)
         except UnsupportedParameterError as error:
             return self.service.mark_unsupported(
                 run_id, "UNSUPPORTED_PARAMETER", message=str(error)

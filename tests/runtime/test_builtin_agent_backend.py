@@ -113,6 +113,7 @@ def test_registry_exposes_wired_builtin_agent():
         "backend_id": "builtin-agent",
         "backend_version": "1",
         "capabilities": {"interactive": False, "safe_to_repeat": False},
+        "execution_mode": "sample",
     }
     assert descriptor["agent"] == "builtin-agent@1"
     assert descriptor["agent_config"]["mode"] == "native-tool"

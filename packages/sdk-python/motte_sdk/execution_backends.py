@@ -2,14 +2,23 @@
 
 Provider adapters only describe wire protocols.  This registry selects the runtime
 that owns a Run (direct provider calls, deterministic replay, or an external
-benchmark adapter) and records that decision in the resolved manifest.
+benchmark adapter) and records that decision in the resolved manifest.  Every
+backend declares an ``execution_mode``: ``sample`` backends keep the per-case
+invoke path; ``job`` backends launch exactly one external job per Run
+(M2-G01) and expose a ``run_job`` hook instead.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
+
+from pydantic import ValidationError
+
+from motte_contracts.external_job import ExternalJobSpec
 
 
 class ExecutionBackendError(ValueError):
@@ -24,10 +33,14 @@ class ExecutionBackendError(ValueError):
 class ExecutionHandle:
     backend_id: str
     backend_version: str
-    invoke: Callable[[str], Any]
+    # sample 模式逐 Case 调用入口；job 模式后端不提供（分派走 run_job）。
+    invoke: Callable[[str], Any] | None = None
     capabilities: dict[str, bool] = field(default_factory=dict)
     # 可选：dispatch 前把 RunService 上下文接到后端（事件通道 / 调用日志 / 取消探测）
     attach: Callable[[Any, str], None] | None = None
+    execution_mode: str = "sample"
+    # job 模式入口：整 Run 调用一次，参数为已分派的 run 快照，返回 job 结局。
+    run_job: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +51,7 @@ class ExecutionBackendSpec:
     build: Callable[[dict[str, Any]], ExecutionHandle]
     capabilities: dict[str, bool] = field(default_factory=dict)
     available: bool = True
+    execution_mode: str = "sample"
 
 
 _SPECS: dict[tuple[str, str], ExecutionBackendSpec] = {}
@@ -167,10 +181,18 @@ def resolve_execution(
     backend_id = requested.get("backend_id")
     version = str(requested.get("backend_version") or "1")
     spec = backend_for(str(backend_id or ""), version)
+    requested_mode = requested.get("execution_mode")
+    if requested_mode is not None and requested_mode != spec.execution_mode:
+        raise ExecutionBackendError(
+            "EXECUTION_MODE_CONFLICT",
+            f"execution backend {spec.id}@{spec.version} dispatches in "
+            f"{spec.execution_mode} mode, not {requested_mode}",
+        )
     descriptor = {
         "backend_id": spec.id,
         "backend_version": spec.version,
         "capabilities": dict(spec.capabilities),
+        "execution_mode": spec.execution_mode,
     }
     resolved["execution"] = descriptor
     spec.validate(resolved)
@@ -208,6 +230,7 @@ def legacy_execution(run: dict[str, Any]) -> dict[str, Any]:
         "backend_id": backend_id,
         "backend_version": "1",
         "capabilities": dict(backend_for(backend_id, "1").capabilities),
+        "execution_mode": backend_for(backend_id, "1").execution_mode,
     }}
 
 
@@ -344,14 +367,90 @@ def _build_replay(run: dict[str, Any]) -> ExecutionHandle:
     )
 
 
-def _validate_external(manifest: dict[str, Any]) -> None:
+def validate_external_job_manifest(manifest: dict[str, Any]) -> None:
+    """job 模式 manifest 的共享校验：外部配置必须钉住全部版本（M2-G06）。
+
+    缺 runner/profile/environment 版本的外部 Job 一律在创建/分派前拒绝，
+    不允许占位 revision/digest 进入执行。
+    """
     _reject_unconnected_runtime_fields(manifest)
     external = manifest.get("external_benchmark")
-    if not isinstance(external, dict) or not external.get("adapter_id"):
+    if not isinstance(external, dict) or not str(external.get("adapter_id") or "").strip():
         raise ExecutionBackendError(
             "EXTERNAL_BENCHMARK_CONFIG_INVALID",
             "external-benchmark backend requires external_benchmark.adapter_id",
         )
+    if not str(external.get("adapter_version") or "").strip():
+        raise ExecutionBackendError(
+            "EXTERNAL_BENCHMARK_CONFIG_INVALID",
+            "external-benchmark backend requires external_benchmark.adapter_version",
+        )
+    missing = [
+        name for name in ("runner_version", "dataset_revision", "environment_digest")
+        if not str(external.get(name) or "").strip()
+    ]
+    profile = external.get("profile")
+    if not isinstance(profile, dict):
+        missing.append("profile")
+    else:
+        missing.extend(
+            f"profile.{name}"
+            for name in ("benchmark_id", "benchmark_version")
+            if not str(profile.get(name) or "").strip()
+        )
+    if missing:
+        raise ExecutionBackendError(
+            "EXTERNAL_JOB_VERSION_REQUIRED",
+            "external job requires pinned versions for: " + ", ".join(missing),
+        )
+
+
+def external_job_spec_from_run(run: dict[str, Any], *, work_root: str) -> ExternalJobSpec:
+    """把已冻结的 run 投影成 ExternalJobSpec；selected case 来自 run.case_ids。
+
+    execution_config_hash 由 manifest.external_benchmark 的规范 JSON 决定，
+    同一配置重复投影得到同一 hash。API 只创建 Run 不启动 Job；本函数在
+    分派侧调用，供 job supervisor 固定启动输入。
+    """
+    manifest = run.get("manifest") or {}
+    external = manifest.get("external_benchmark")
+    if not isinstance(external, dict) or not external:
+        raise ExecutionBackendError(
+            "EXTERNAL_BENCHMARK_CONFIG_INVALID",
+            "external job run requires manifest.external_benchmark",
+        )
+    selected = [str(case_id) for case_id in (run.get("case_ids") or [])]
+    if not selected:
+        raise ExecutionBackendError(
+            "EXTERNAL_JOB_SELECTION_EMPTY",
+            "external job run requires at least one selected case",
+        )
+    config_bytes = json.dumps(
+        external, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    try:
+        return ExternalJobSpec(
+            run_id=str(run.get("id") or ""),
+            adapter_id=str(external.get("adapter_id") or ""),
+            adapter_version=str(external.get("adapter_version") or ""),
+            runner_version=str(external.get("runner_version") or ""),
+            execution_config_hash="sha256:" + hashlib.sha256(config_bytes).hexdigest(),
+            dataset_revision=str(external.get("dataset_revision") or ""),
+            selected_case_ids=selected,
+            profile=deepcopy(external.get("profile")) or {},
+            work_root=work_root,
+            environment_digest=str(external.get("environment_digest") or ""),
+            limits=deepcopy(external.get("limits")) or {},
+            retry_policy=deepcopy(external.get("retry_policy")) or {},
+        )
+    except ValidationError as error:
+        raise ExecutionBackendError(
+            "EXTERNAL_JOB_SPEC_INVALID",
+            f"external job spec failed contract validation: {error.error_count()} error(s)",
+        ) from error
+
+
+_validate_external = validate_external_job_manifest
 
 
 def _build_external(run: dict[str, Any]) -> ExecutionHandle:
@@ -417,4 +516,5 @@ register_backend(ExecutionBackendSpec(
     build=_build_external,
     capabilities={"interactive": False, "safe_to_repeat": False},
     available=False,
+    execution_mode="job",
 ))

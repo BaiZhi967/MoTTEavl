@@ -277,6 +277,125 @@ class RunService:
             return self._fail_or_quarantine(run_id, error)
         return self._view(run_id)
 
+    def execute_external_job(
+        self,
+        run_id: str,
+        run: dict[str, Any],
+        job_entry: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """job 模式分派主流程：一次外部 Job 覆盖全部 selected case（M2-G01）。
+
+        ``job_entry`` 整 Run 只调用一次，不逐题 invoke。采集检查点、幂等导入
+        与同键冲突处理由 external job 存储（M2-T03）补齐；本方法固定单次启动
+        边界、结局→Run 状态映射，并保证每个 selected case 都有处置状态
+        （M2-G11：未尝试的 case 不消失）。
+        """
+        if run["status"] == "queued":
+            self._transition(run_id, "preparing")
+        if self._load(run_id)["status"] != "running":
+            self._transition(run_id, "running")
+        try:
+            outcome = job_entry(run)
+        except Exception as error:
+            return self._fail_or_quarantine(run_id, error)
+        cancelled = self._honor_cancellation(run_id)
+        if cancelled is not None:
+            return cancelled
+        if not isinstance(outcome, dict):
+            return self._fail(run_id, ValueError(
+                "external job entry must return an outcome object"
+            ))
+        self._transition(run_id, "collecting")
+        cancelled = self._honor_cancellation(run_id)
+        if cancelled is not None:
+            return cancelled
+        self._transition(run_id, "scoring")
+        cancelled = self._honor_cancellation(run_id)
+        if cancelled is not None:
+            return cancelled
+        rows_by_case = self._external_job_case_rows(run_id, run, outcome)
+        for case_id in list(run.get("case_ids") or []):
+            self.store.case_runs.upsert(rows_by_case[case_id])
+        rows = self.store.case_runs.list_for_run(run_id)
+        job_status = str(outcome.get("job_status") or "indeterminate")
+        errors = [
+            row["result"]["error"] for row in rows
+            if isinstance(row.get("result"), dict) and row["result"].get("error")
+        ]
+        outcome_error = outcome.get("error")
+        if isinstance(outcome_error, dict) and outcome_error:
+            errors.append(outcome_error)
+        if job_status == "cancelled":
+            final_status = "cancelled"
+        elif job_status == "indeterminate":
+            final_status = "needs_review"
+        elif job_status == "settled" and not errors:
+            final_status = "completed"
+        else:
+            # settled 带失败 case 或 job failed：部分结果已保留，终态 failed。
+            final_status = "failed"
+        try:
+            scores = self._score_results(run_id, rows, False)
+            cancelled = self._honor_cancellation(run_id)
+            if cancelled is not None:
+                return cancelled
+            self._append_scoring_pass(
+                run_id,
+                scores,
+                source="initial",
+                final_status=final_status,
+                final_error=errors[0] if errors else None,
+            )
+        except Exception as error:
+            return self._fail_or_quarantine(run_id, error)
+        return self._view(run_id)
+
+    @staticmethod
+    def _external_job_case_rows(
+        run_id: str, run: dict[str, Any], outcome: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """把 job 结局的归一化结果映射为 case 行；缺失的 selected case 记
+        not_attempted，重复出现的 case 以最后一条为准（幂等导入在 T03 收紧）。"""
+        rows: dict[str, dict[str, Any]] = {}
+        for item in outcome.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            case_id = item.get("case_id")
+            if not isinstance(case_id, str) or not case_id:
+                continue
+            status = item.get("status")
+            if status == "failed":
+                rows[case_id] = {
+                    "run_id": run_id, "case_id": case_id, "outcome": "call_failed",
+                    "result": {"error": deepcopy(item.get("error")) or {
+                        "code": "EXTERNAL_JOB_CASE_FAILED",
+                        "message": "external job reported a failed case without error detail",
+                    }},
+                }
+            elif status == "not_attempted":
+                rows[case_id] = {
+                    "run_id": run_id, "case_id": case_id,
+                    "outcome": "not_attempted", "result": None,
+                }
+            elif status == "unscored":
+                rows[case_id] = {
+                    "run_id": run_id, "case_id": case_id, "outcome": "responded",
+                    "result": deepcopy(item.get("output")),
+                    "unscored": True,
+                }
+            else:
+                rows[case_id] = {
+                    "run_id": run_id, "case_id": case_id, "outcome": "responded",
+                    "result": deepcopy(item.get("output")),
+                }
+        for case_id in run.get("case_ids") or []:
+            if case_id not in rows:
+                rows[case_id] = {
+                    "run_id": run_id, "case_id": case_id,
+                    "outcome": "not_attempted", "result": None,
+                }
+        return rows
+
     def _honor_cancellation(self, run_id: str) -> dict[str, Any] | None:
         run = self._load(run_id)
         cancellation = run.get("cancellation")

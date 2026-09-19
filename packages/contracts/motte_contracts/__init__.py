@@ -3,6 +3,7 @@ from .messages import *
 from .model import *
 from .scenario import *
 from .run import *
+from .external_job import *
 from .events import *
 from .evidence import *
 from .errors import *
