@@ -10,12 +10,24 @@ from __future__ import annotations
 import fnmatch
 import json
 
+from pathlib import PurePosixPath
 from typing import Any
 
 from motte_contracts.evaluation import MetricStatus
 
 # 会改动工作区文件的工具：写入轨迹判定的对象（R3 #6）
 _MUTATING_TOOLS = {"write_file"}
+
+
+def _canonical_relpath(path: str) -> str:
+    """与 workspace 工具同源的规范化：``./a/b`` -> ``a/b``（R4 #3）。
+
+    成功的 write_file 参数已通过 workspace 校验（无 ``..``/绝对路径/反斜杠），
+    这里只需按 PurePosixPath 语义折叠 ``.`` 与重复分隔符，防止 ``./locked.txt``
+    之类的别名绕过禁止规则匹配。
+    """
+    pure = PurePosixPath(path)
+    return "/".join(part for part in pure.parts if part != ".")
 
 
 def evaluate_tool_call(observation, metric, context):
@@ -49,10 +61,18 @@ def evaluate_tool_call(observation, metric, context):
     if args_schema is not None:
         from .observation import _base_metric, bounded_schema_validation, schema_timeout
 
-        timeout = schema_timeout(context)
         violations: list[dict[str, Any]] = []
         schema_failure: tuple[str, str] | None = None
         for call in successful:
+            # R4 #5：每次校验前重新取剩余期限；全局期限耗尽立即停止，
+            # 不允许循环内重复"领用"同一份时长绕过 eval deadline。
+            if context.expired():
+                return _base_metric(
+                    observation, metric, MetricStatus.evaluator_error,
+                    reason="eval_deadline_exceeded",
+                    details={"validated_calls": len(violations)},
+                )
+            timeout = schema_timeout(context)
             kind, value = bounded_schema_validation(
                 args_schema, call.arguments, timeout_sec=timeout,
             )
@@ -88,18 +108,20 @@ def evaluate_tool_call(observation, metric, context):
 def evaluate_no_forbidden_write(observation, metric, context):
     """按内容快照 + 写入轨迹判定 create/modify/delete/写入后恢复（R3 #6）。
 
-    需要前后内容 hash 才能证明"预置文件未被改动"；hash 缺失时对命中的
-    预置文件返回 insufficient，而不是默认未变更。终态 hash 一致只能证明
-    内容未变：轨迹完整时，成功的 write_file 命中禁写路径即违规——
-    "先覆盖、再恢复原内容"同样是禁写（轨迹不完整时退回快照口径，结论
-    只覆盖已监控范围）。
+    - 已确认的违规永远计入：轨迹里成功的 ``write_file`` 命中禁写路径即违规，
+      不因其它证据缺口（如 Artifact 采集失败）被忽略（R4 #4）；
+    - 路径按 workspace 同源规则规范化后匹配，``./locked.txt`` 别名无法绕过
+      （R4 #3）；
+    - 判"通过"需要完整证据：轨迹不完整（coverage 不全）时无法证明未违规，
+      返回 insufficient 而不是默认通过；
+    - hash 缺失时对命中的预置文件返回 insufficient，而不是默认未变更。
     """
     from .observation import _base_metric, _insufficient
 
     workspace = observation.workspace
     if workspace is None or not workspace.complete:
         return _insufficient(observation, metric, "workspace_snapshot_incomplete")
-    forbidden = list(metric["forbidden"])
+    forbidden = [_canonical_relpath(pattern) for pattern in metric["forbidden"]]
     ignore_preexisting = metric.get("ignore_preexisting", True)
     before = set(workspace.before)
     after = set(workspace.after)
@@ -133,39 +155,39 @@ def evaluate_no_forbidden_write(observation, metric, context):
             violations.append(f"{path} (modified)")
         # hash 相同：预置文件未改动，不算违规
 
-    written_restored: list[str] = []
-    if observation.coverage.complete:
-        # 轨迹完整时写入记录可证：终态一致但有成功写入 → 写入后恢复，仍违规
-        for call in observation.tool_calls:
-            arguments = call.arguments if isinstance(call.arguments, dict) else {}
-            written = arguments.get("path")
-            if (
-                call.tool_name in _MUTATING_TOOLS
-                and call.status == "succeeded"
-                and isinstance(written, str)
-                and any(fnmatch.fnmatch(written, pattern) for pattern in forbidden)
-            ):
-                written_restored.append(f"{written} (written, final state matches)")
-    violations.extend(written_restored)
+    # 写入轨迹不受 coverage 门控：已记录的成功写入是确凿的正向证据（R4 #4）
+    for call in observation.tool_calls:
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        written = arguments.get("path")
+        if (
+            call.tool_name in _MUTATING_TOOLS
+            and call.status == "succeeded"
+            and isinstance(written, str)
+            and any(fnmatch.fnmatch(_canonical_relpath(written), pattern)
+                    for pattern in forbidden)
+        ):
+            violations.append(f"{_canonical_relpath(written)} (written, final state matches)")
 
-    if unprovable and not violations:
-        return _insufficient(
-            observation, metric, "preexisting_content_unprovable",
-            details={"paths": sorted(unprovable)},
-        )
     if violations:
         return _base_metric(
             observation, metric, MetricStatus.scored, passed=False,
             reason="forbidden_write_detected",
             details={"violations": sorted(violations)},
         )
+    if unprovable:
+        return _insufficient(
+            observation, metric, "preexisting_content_unprovable",
+            details={"paths": sorted(unprovable)},
+        )
+    if not observation.coverage.complete:
+        # 轨迹不完整：没有已确认违规，但也不能证明"未写入"（R4 #4）
+        return _insufficient(observation, metric, "tool_trajectory_incomplete")
     return _base_metric(
         observation, metric, MetricStatus.scored, passed=True,
         details={
             # The pass only speaks for the monitored workspace scope.
             "scope": "workspace",
             "monitored_files": len(after),
-            **({"unprovable_preexisting": sorted(unprovable)} if unprovable else {}),
         },
     )
 
@@ -222,13 +244,12 @@ def evaluate_json_schema(observation, metric, context):
         )
     from .observation import _base_metric, bounded_schema_validation, schema_timeout
 
-    kind, value = bounded_schema_validation(
-        schema, payload, timeout_sec=schema_timeout(context),
-    )
+    timeout = schema_timeout(context)
+    kind, value = bounded_schema_validation(schema, payload, timeout_sec=timeout)
     if kind == "timeout":
         return _base_metric(
             observation, metric, MetricStatus.evaluator_error,
-            reason="schema_timeout", details={"timeout_sec": schema_timeout(context)},
+            reason="schema_timeout", details={"timeout_sec": timeout},
         )
     if kind in ("config_error", "unresolvable", "error"):
         return _base_metric(

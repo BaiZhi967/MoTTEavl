@@ -47,8 +47,8 @@ Agent Case 终止后，平台从持久证据构建 `FrozenObservation`（schema_
 | file-exists | path | 采集不完整 → insufficient(capture_incomplete)；条目不可用 → insufficient(artifact_unavailable) |
 | file-content | path + mode（exact/contains/hash/schema） | 工件缺失/损坏（hash 不符）/截断/超限 → insufficient；schema 模式同样走可终止子进程 |
 | exit-code | allowed、label | 未观测 → insufficient(exit_code_unobserved / process_not_observed) |
-| tool-call | tool、min/max_calls、args_schema、forbidden | 轨迹不完整 → insufficient(tool_trajectory_incomplete)，不能证明"从未调用"；args_schema 在可终止子进程内校验 |
-| no-forbidden-write | forbidden（fnmatch）、ignore_preexisting | 快照不完整 → insufficient(workspace_snapshot_incomplete)；结论只覆盖受控 workspace 范围（`details.scope`）。轨迹完整时结合写入记录：成功的 `write_file` 命中禁写路径即违规（"写入后恢复原内容"不因终态一致而通过）；轨迹不完整退回快照口径 |
+| tool-call | tool、min/max_calls、args_schema、forbidden | 轨迹不完整 → insufficient(tool_trajectory_incomplete)，不能证明"从未调用"；args_schema 在可终止子进程内校验，批量校验逐次取剩余期限，全局期限耗尽即停止（eval_deadline_exceeded） |
+| no-forbidden-write | forbidden（fnmatch）、ignore_preexisting | 快照不完整 → insufficient(workspace_snapshot_incomplete)；已记录的成功 `write_file` 命中禁写路径（按 workspace 同源路径规范化，`./a` 别名不绕过）永远判违规，不因其它证据缺口忽略；无违规但轨迹不完整 → insufficient(tool_trajectory_incomplete)；通过结论只覆盖受控 workspace 范围（`details.scope`） |
 
 执行边界：`max_input_bytes` / `max_artifact_bytes`（默认 1MB/10MB，上限 16MB/64MB）、`regex_timeout_sec`（默认 2s，上限 10s）、`eval_deadline_sec`（默认 30s，上限 120s）。超期剩余指标记 `evaluator_error(eval_deadline_exceeded)`，不静默跳过。
 
@@ -56,7 +56,7 @@ Agent Case 终止后，平台从持久证据构建 `FrozenObservation`（schema_
 
 ## 4. 脱敏边界
 
-- 事件 / SSE / invocation 摘要：键名（`api_key` 等）+ 值形状（`sk-…`、`ghp_…`、`AKIA…`、`Bearer …`、`xoxb-…`）双重脱敏，命中以 `[REDACTED-SECRET]` 标记，不保留正文。
+- 事件 / SSE / invocation 摘要：键名（`api_key` 等）+ 值形状（`sk-…`、`ghp_…`、`AKIA…`、`Bearer …`、`xoxb-…`）双重脱敏，命中以 `[REDACTED-SECRET]` 标记，不保留正文。值形状边界用 ASCII 字符类环视（非 `\b`）：中文相邻文本中的密钥仍命中，`task-response.txt` 一类内嵌普通词不误伤。
 - 评分输入（final_output、Artifact 字节）为冻结原文，以 evidence_hash 绑定；展示层（artifact content API）另行值形状脱敏。两套口径的差异是声明性行为，不是未声明的口径漂移。
 - gold / 隐藏断言（expected、forbidden_paths、评分规则）不进入模型输入与工具可见空间；provider case 投影只含 `input`。
 
