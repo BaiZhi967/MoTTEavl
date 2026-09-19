@@ -1,0 +1,1 @@
+{"accuracy": 50.0, "details": {"0": {"prompt": "L0", "origin_prediction": "先分析选项……ACK 与 LLC……因此正确答案是：\n**D. 最后一项**", "predictions": "A", "references": "D"}, "1": {"prompt": "L1", "origin_prediction": "答案不确定，无法判断", "predictions": "", "references": "A"}, "2": {"prompt": "L2", "origin_prediction": "选项 B 是正确的", "predictions": "B", "references": "B"}}}

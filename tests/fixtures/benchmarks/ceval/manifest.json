@@ -1,0 +1,122 @@
+{
+  "aggregate_only_subjects": [
+    "art_studies"
+  ],
+  "expected": {
+    "aggregate": {
+      "accuracy": 0.638895,
+      "ceval_hard": 1.0,
+      "ceval_humanities": 0.611122,
+      "ceval_other": 0.0,
+      "ceval_socialscience": 1.0,
+      "ceval_stem": 1.0,
+      "subject:advanced_mathematics": 1.0,
+      "subject:art_studies": 0.6667000000000001,
+      "subject:college_economics": 1.0,
+      "subject:law": 0.5,
+      "subject:logic": 0.666667,
+      "subject:plant_protection": 0.0
+    },
+    "conclusion_override_count": 1,
+    "empty_prediction_ratio": 0.25,
+    "per_subject": {
+      "advanced_mathematics": 1.0,
+      "art_studies": 0.6667000000000001,
+      "college_economics": 1.0,
+      "law": 0.5,
+      "logic": 0.666667,
+      "plant_protection": 0.0
+    },
+    "samples": [
+      {
+        "correct": true,
+        "detail_source": "results_details",
+        "extraction": "conclusion",
+        "gold": "D",
+        "official_prediction": "A",
+        "prediction": "D",
+        "sample_id": "logic-0",
+        "subject": "logic"
+      },
+      {
+        "correct": false,
+        "detail_source": "results_details",
+        "extraction": "fallback_regex",
+        "gold": "A",
+        "official_prediction": null,
+        "prediction": null,
+        "sample_id": "logic-1",
+        "subject": "logic"
+      },
+      {
+        "correct": true,
+        "detail_source": "results_details",
+        "extraction": "conclusion",
+        "gold": "B",
+        "official_prediction": null,
+        "prediction": "B",
+        "sample_id": "logic-2",
+        "subject": "logic"
+      },
+      {
+        "correct": true,
+        "detail_source": "results_details",
+        "extraction": "conclusion",
+        "gold": "C",
+        "official_prediction": null,
+        "prediction": "C",
+        "sample_id": "advanced_mathematics-0",
+        "subject": "advanced_mathematics"
+      },
+      {
+        "correct": true,
+        "detail_source": "results_details",
+        "extraction": "official",
+        "gold": "A",
+        "official_prediction": null,
+        "prediction": "A",
+        "sample_id": "college_economics-0",
+        "subject": "college_economics"
+      },
+      {
+        "correct": false,
+        "detail_source": "results_details",
+        "extraction": "fallback_regex",
+        "gold": "B",
+        "official_prediction": null,
+        "prediction": null,
+        "sample_id": "plant_protection-0",
+        "subject": "plant_protection"
+      },
+      {
+        "correct": true,
+        "detail_source": "predictions_fallback",
+        "extraction": "conclusion",
+        "gold": "B",
+        "official_prediction": null,
+        "prediction": "B",
+        "sample_id": "law-0",
+        "subject": "law"
+      },
+      {
+        "correct": false,
+        "detail_source": "predictions_fallback",
+        "extraction": "conclusion",
+        "gold": "A",
+        "official_prediction": null,
+        "prediction": "D",
+        "sample_id": "law-1",
+        "subject": "law"
+      }
+    ]
+  },
+  "predictions_fallback_subjects": [
+    "law"
+  ],
+  "provenance": {
+    "generator": "llm_agent__evaluation_platform @ b661bcdf83e1c3dfb8d6062ee78817d249e86a4c packages/benchmark-adapters/src/evalstudio_benchmark_adapters/opencompass.py (解析函数原样执行：_extract_conclusion/_resolve_prediction/_extract_option/_sample_rows_from_details/_aggregate_ceval；控制面依赖以 stub 隔离)",
+    "license_note": "旧仓库为同作者私有项目，迁移仅保留解析算法语义并逐项对照；fixture 数据为合成内容，不是官方 C-Eval 数据。",
+    "runner_version_pin": "0.4.2"
+  },
+  "schema_version": 1
+}
