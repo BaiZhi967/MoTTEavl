@@ -680,6 +680,18 @@ class RunService:
         *,
         failed: bool,
     ) -> None:
+        self._complete_open_attempt(attempt, case_run, failed=failed, emit_event=True)
+
+    def _complete_open_attempt(
+        self,
+        attempt: dict[str, Any],
+        case_run: dict[str, Any],
+        *,
+        failed: bool,
+        emit_event: bool,
+    ) -> None:
+        """完成一个开放的 case attempt 并落盘结果；emit_event=False 用于
+        事件已先行发出的补跑/落盘路径（时间线不重复报同一结果）。"""
         result = case_run.get("result")
         event_type = "case_call_failed" if failed else "model_response"
         self.store.attempts.complete(
@@ -696,7 +708,7 @@ class RunService:
                 "type": event_type,
                 "case_id": attempt["case_id"],
                 "result": deepcopy(result),
-            },
+            } if emit_event else None,
         )
         self._notify_latest_event(attempt["run_id"])
 
@@ -811,6 +823,8 @@ class RunService:
         # final run status/scores are persisted.
         stop = any(row.get("stop_run") for row in rows)
         total = len(run["case_ids"])
+        # 瞬时失败（可继续错误类）暂不落盘：attempt 保持开放，收尾前统一补跑一次。
+        pending: dict[str, tuple[int, dict[str, Any], dict[str, Any]]] = {}
         for ordinal, case_id in enumerate(run["case_ids"], 1):
             if case_id in done:
                 self._notify_progress({
@@ -818,7 +832,7 @@ class RunService:
                     "ordinal": ordinal, "total": total, "reason": "already_persisted",
                 })
                 continue
-            cancelled = self._honor_cancellation(run_id)
+            cancelled = self._cancel_checkpoint(run_id, pending)
             if cancelled is not None:
                 return cancelled
             if stop:
@@ -837,7 +851,7 @@ class RunService:
             try:
                 attempt = self._begin_case_attempt(self._load(run_id), case_id)
             except RunConflictError:
-                cancelled = self._honor_cancellation(run_id)
+                cancelled = self._cancel_checkpoint(run_id, pending)
                 if cancelled is not None:
                     return cancelled
                 raise
@@ -849,7 +863,20 @@ class RunService:
                 result = deepcopy(getattr(error, "evidence", None)) or {
                     "error": {"class": classify_exception(error), "message": str(error)}}
             error = result.get("error") if isinstance(result, dict) else None
-            stop = bool(error and error.get("class") not in CONTINUE_ERROR_CLASSES)
+            if error and error.get("class") in CONTINUE_ERROR_CLASSES:
+                pending[case_id] = (ordinal, attempt, result)
+                self._emit(run_id, "case_call_failed",
+                           {"case_id": case_id, "result": deepcopy(result)})
+                self._notify_progress({
+                    "event": "case_finished", "run_id": run_id, "case_id": case_id,
+                    "ordinal": ordinal, "total": total,
+                    "duration_ms": round((perf_counter() - started) * 1000, 3),
+                    "outcome": "call_failed", "reason": "second_chance_pending",
+                    **self._result_summary(result),
+                })
+                continue
+            # 走到这里的一定不是瞬时错误；非空 error 即持久停止标记。
+            stop = bool(error)
             entry = {"run_id": run_id, "case_id": case_id,
                      "result": result, "stop_run": stop}
             self._complete_case_attempt(attempt, entry, failed=bool(error))
@@ -860,7 +887,10 @@ class RunService:
                 "outcome": "call_failed" if error else "responded",
                 **self._result_summary(result),
             })
-        cancelled = self._honor_cancellation(run_id)
+        cancelled = self._cancel_checkpoint(run_id, pending)
+        if cancelled is not None:
+            return cancelled
+        cancelled = self._sweep_transient_failures(run_id, invoke, pending)
         if cancelled is not None:
             return cancelled
         self._transition(run_id, "collecting")
@@ -890,6 +920,82 @@ class RunService:
         except Exception as error:
             return self._fail_or_quarantine(run_id, error)
         return self._view(run_id)
+
+    def _sweep_transient_failures(
+        self, run_id: str, invoke: Callable[[str], Any],
+        pending: dict[str, tuple[int, dict[str, Any], dict[str, Any]]],
+    ) -> dict[str, Any] | None:
+        """瞬时失败题（server/network/timeout/rate_limit）收尾前补跑一次。
+
+        网关瞬时 5xx 一类的不稳定不该让整次基准一票否决：主循环全部跑完后，
+        对挂在 pending 里的瞬时失败题再调一次；补跑成功则用恢复结果完成该题
+        记账（首次错误以 first_attempt_error 嵌入结果留证），仍失败则落盘
+        最终错误。存储契约不变：每题一条 case 结果、一个 attempt 记账。
+        """
+        from motte_provider.errors import classify_exception
+
+        total = len(self._load(run_id)["case_ids"])
+        for case_id in list(pending):
+            if case_id not in pending:
+                continue  # 已因取消被统一落盘
+            cancelled = self._cancel_checkpoint(run_id, pending)
+            if cancelled is not None:
+                return cancelled
+            ordinal, attempt, first_result = pending.pop(case_id)
+            self._notify_progress({
+                "event": "case_started", "run_id": run_id, "case_id": case_id,
+                "ordinal": ordinal, "total": total, "reason": "second_chance",
+            })
+            started = perf_counter()
+            try:
+                result = invoke(case_id)
+            except Exception as error:
+                result = deepcopy(getattr(error, "evidence", None)) or {
+                    "error": {"class": classify_exception(error), "message": str(error)}}
+            error = result.get("error") if isinstance(result, dict) else None
+            if not error:
+                result = {**result,
+                          "first_attempt_error": deepcopy(first_result["error"])}
+            entry = {"run_id": run_id, "case_id": case_id,
+                     "result": result, "stop_run": bool(error)}
+            # 首次失败的 case_call_failed 事件已在主循环发过，这里只在补跑
+            # 成功时发 model_response，避免时间线重复报同一失败。
+            self._complete_open_attempt(attempt, entry, failed=bool(error),
+                                        emit_event=not error)
+            self._notify_progress({
+                "event": "case_finished", "run_id": run_id, "case_id": case_id,
+                "ordinal": ordinal, "total": total,
+                "duration_ms": round((perf_counter() - started) * 1000, 3),
+                "outcome": "call_failed" if error else "responded",
+                "reason": "second_chance",
+                **self._result_summary(result),
+            })
+        return None
+
+    def _cancel_checkpoint(
+        self, run_id: str,
+        pending: dict[str, tuple[int, dict[str, Any], dict[str, Any]]],
+    ) -> dict[str, Any] | None:
+        """取消检查点：先把挂起的瞬时失败题按首次错误落盘，取消才能到终态。"""
+        if pending and isinstance(self._load(run_id).get("cancellation"), dict):
+            self._settle_pending(run_id, pending)
+        return self._honor_cancellation(run_id)
+
+    def _settle_pending(
+        self, run_id: str,
+        pending: dict[str, tuple[int, dict[str, Any], dict[str, Any]]],
+    ) -> None:
+        """把挂起的瞬时失败题按首次错误完成记账（事件已在主循环发过）。"""
+        total = len(self._load(run_id)["case_ids"])
+        for case_id in list(pending):
+            ordinal, attempt, result = pending.pop(case_id)
+            entry = {"run_id": run_id, "case_id": case_id,
+                     "result": result, "stop_run": False}
+            self._complete_open_attempt(attempt, entry, failed=True, emit_event=False)
+            self._notify_progress({
+                "event": "case_finished", "run_id": run_id, "case_id": case_id,
+                "ordinal": ordinal, "total": total, "reason": "second_chance_aborted",
+            })
 
     @staticmethod
     def _comparable(result: Any) -> Any:
