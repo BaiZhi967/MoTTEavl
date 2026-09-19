@@ -32,6 +32,7 @@ def test_dsn_is_validated_and_normalized():
 def test_alembic_revision_chain_is_linear_and_complete():
     assert revision_ids() == [
         "0001_initial", "0002_platform_integrity", "0003_resource_publications",
+        "0004_multi_metric_score_sets",
     ]
     config = alembic_config("postgresql://user@localhost/db")
     assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)
@@ -85,6 +86,20 @@ def test_publication_migration_adds_append_only_resource_audit():
     assert "payload JSONB NOT NULL" in sql
     assert "created_at TIMESTAMPTZ NOT NULL" in sql
     assert "DROP TABLE IF EXISTS resource_publications" in drops
+
+
+def test_multi_metric_migration_extends_score_set_identity():
+    module = _load_version_module(
+        MIGRATIONS_DIR / "versions" / "0004_multi_metric_score_sets.py"
+    )
+    assert module.down_revision == "0003_resource_publications"
+    sql = "\n".join(module.UP_STATEMENTS)
+    for column in ("trial_id", "metric_id", "evaluator_id", "evaluator_version"):
+        assert column in sql
+    # 复合主键；'' 作为无 trial/metric 的规范化键，避免 NULL 唯一性差异
+    assert "PRIMARY KEY (scoring_pass_id, case_id, trial_id, metric_id, evaluator_id, evaluator_version)" in sql
+    assert "SELECT scoring_pass_id, case_id, '', '', '', '', ordinal, payload FROM score_sets" in sql
+    assert "to_regclass" in "\n".join(module.DOWN_STATEMENTS)
 
 
 def test_factory_selects_backend(monkeypatch, tmp_path):

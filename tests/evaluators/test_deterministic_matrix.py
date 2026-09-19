@@ -318,9 +318,6 @@ def test_incomplete_trajectory_cannot_prove_absence():
 def test_evaluator_exceptions_isolated_per_metric():
     from motte_eval import observation as observation_module
 
-    config = normalize_evaluator_config({
-        "metrics": [{"metric_id": "boom", "kind": "exact", "expected": "final answer text"}],
-    })
     observation = _observation()
     original = observation_module._METRIC_KINDS["exact"]
     def exploding(observation, metric, context):
