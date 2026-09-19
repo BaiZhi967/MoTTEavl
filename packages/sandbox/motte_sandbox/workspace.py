@@ -63,27 +63,43 @@ class CaseWorkspace:
         self._anchor = Path(anchor) if anchor is not None else root_path.parent
         self.root = root_path
         self.quotas = quotas or WorkspaceQuotas()
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._anchor_real, self._root_real = self._validate_chain(self._anchor)
+        # 先验证已有组件，再逐级创建缺失目录（R4 #6）：不存在"先递归 mkdir、
+        # 后校验"造成的越界副作用——预置 symlink 指向 victim 时不会在 victim
+        # 里创建任何东西。
+        self._anchor_real, self._root_real = self._ensure_chain(self._anchor)
 
     # ---------------------------------------------------------------- 目录链安全
 
-    def _validate_chain(self, anchor: Path) -> tuple[Path, Path]:
-        """校验 anchor 之下到 root 的组件链全部为真实目录。
-
-        预先存在 symlink（含 root 本身指向外部目录）在此拒绝；返回
-        (anchor 解析后路径, root 解析后路径) 供后续归属比较使用。
-        """
-        anchor_real = anchor.resolve()
+    def _relative_to_anchor(self, anchor: Path) -> Path:
         try:
-            relative = self.root.relative_to(anchor)
+            return self.root.relative_to(anchor)
         except ValueError as error:
             raise WorkspacePolicyError(
                 "workspace_chain_invalid",
                 f"workspace root {self.root} is not under anchor {anchor}",
             ) from error
+
+    @staticmethod
+    def _reject_component(part: str, info: os.stat_result, prefix: str) -> None:
+        if stat.S_ISLNK(info.st_mode):
+            raise WorkspacePolicyError(
+                "symlink_rejected", f"{prefix} component is a symlink: {part!r}"
+            )
+        if not stat.S_ISDIR(info.st_mode):
+            raise WorkspacePolicyError(
+                "workspace_chain_invalid",
+                f"{prefix} component is not a directory: {part!r}",
+            )
+
+    def _validate_chain(self, anchor: Path) -> tuple[Path, Path]:
+        """纯校验（不创建）：anchor 之下到 root 的组件链全部为真实目录。
+
+        预先存在 symlink（含 root 本身指向外部目录）在此拒绝；返回
+        (anchor 解析后路径, root 解析后路径) 供归属比较与清理前复核使用。
+        """
+        anchor_real = anchor.resolve()
         current = anchor_real
-        for part in relative.parts:
+        for part in self._relative_to_anchor(anchor).parts:
             current = current / part
             try:
                 info = current.lstat()
@@ -92,16 +108,26 @@ class CaseWorkspace:
                     "workspace_chain_invalid",
                     f"workspace chain component missing: {part!r}",
                 ) from error
-            if stat.S_ISLNK(info.st_mode):
-                raise WorkspacePolicyError(
-                    "symlink_rejected",
-                    f"workspace chain component is a symlink: {part!r}",
-                )
-            if not stat.S_ISDIR(info.st_mode):
-                raise WorkspacePolicyError(
-                    "workspace_chain_invalid",
-                    f"workspace chain component is not a directory: {part!r}",
-                )
+            self._reject_component(part, info, "workspace chain")
+        return anchor_real, current
+
+    def _ensure_chain(self, anchor: Path) -> tuple[Path, Path]:
+        """验证已有组件 + 单级创建缺失目录（不跟随竞态放置的意外对象）。"""
+        anchor.mkdir(parents=True, exist_ok=True)  # anchor 是受信配置前缀
+        anchor_real = anchor.resolve()
+        current = anchor_real
+        for part in self._relative_to_anchor(anchor).parts:
+            current = current / part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                try:
+                    current.mkdir()  # 单级创建：父链已验证为真实目录
+                except FileExistsError:
+                    # 检查后竞态放置：按当前对象重新判定，symlink 一律拒绝
+                    self._reject_component(part, current.lstat(), "workspace chain")
+                continue
+            self._reject_component(part, info, "workspace chain")
         return anchor_real, current
 
     # ---------------------------------------------------------------- 路径安全

@@ -17,17 +17,19 @@ _SECRET_KEYS = {
 }
 
 # 值形状的秘密（哨兵/泄漏检测）：命中即整段替换，保留命中标记不保留正文。
-# ``\b`` 边界避免把普通词内嵌的形状误当秘密（如文件名 "task-response.txt"
-# 内嵌 "sk-response"）；独立 token 形态的真实密钥不受影响。
+# 边界用 ASCII 字符类环视而不是 ``\b``：``\b`` 把中文也算作单词字符，
+# "密钥是sk-…" 这类中文相邻的密钥会因无边界而漏掉；ASCII 环视既允许中文/
+# 标点相邻，又拦住 "ta[sk-]response.txt" 这类内嵌普通词（R4 #2）。
 import re as _re
 
+_ASCII_TOKEN = "A-Za-z0-9_-"
 _SECRET_VALUE_PATTERNS = tuple(_re.compile(pattern) for pattern in (
-    r"\bsk-[A-Za-z0-9_-]{8,}",
-    r"\bghp_[A-Za-z0-9]{20,}",
-    r"\bgho_[A-Za-z0-9]{20,}",
-    r"\bAKIA[0-9A-Z]{16}",
+    rf"(?<![{_ASCII_TOKEN}])sk-[A-Za-z0-9_-]{{8,}}(?![{_ASCII_TOKEN}])",
+    rf"(?<![{_ASCII_TOKEN}])ghp_[A-Za-z0-9]{{20,}}(?![{_ASCII_TOKEN}])",
+    rf"(?<![{_ASCII_TOKEN}])gho_[A-Za-z0-9]{{20,}}(?![{_ASCII_TOKEN}])",
+    rf"(?<![{_ASCII_TOKEN}])AKIA[0-9A-Z]{{16}}(?![{_ASCII_TOKEN}])",
     r"Bearer\s+[A-Za-z0-9._-]{16,}",
-    r"\bxoxb-[A-Za-z0-9-]{10,}",
+    rf"(?<![{_ASCII_TOKEN}])xoxb-[A-Za-z0-9-]{{10,}}(?![{_ASCII_TOKEN}])",
 ))
 
 

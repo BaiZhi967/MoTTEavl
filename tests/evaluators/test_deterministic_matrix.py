@@ -266,8 +266,9 @@ def test_regex_catastrophic_backtracking_terminates():
 
 
 def test_incomplete_trajectory_cannot_prove_absence():
-    # 事件覆盖不完整：tool-call 不能证明"从未调用"；no-forbidden-write 的证据门是
-    # workspace 快照本身——快照完整时写入结论仍可判（M1-A11 的风险是快照/工件丢失）。
+    # 事件覆盖不完整：tool-call 不能证明"从未调用"；no-forbidden-write 同样
+    # 无法证明"未写入"——已确认违规永远计入，无违规但轨迹不完整 → insufficient
+    # （R4 #4：不得因其它证据缺失默认通过）。
     incomplete = _observation(coverage={"complete": False})
     results = _evaluate(incomplete, [
         {"metric_id": "tool-rule", "kind": "tool-call", "tool": "write_file", "min_calls": 1},
@@ -279,8 +280,9 @@ def test_incomplete_trajectory_cannot_prove_absence():
     assert tool_rule.passed is None
     assert tool_rule.reason == "tool_trajectory_incomplete"
     forbidden = _result_by_id(results, "forbidden")
-    assert forbidden.status is MetricStatus.scored and forbidden.passed is True
-    assert forbidden.details["scope"] == "workspace"  # 结论只覆盖已监控范围
+    assert forbidden.status is MetricStatus.insufficient_evidence
+    assert forbidden.passed is None
+    assert forbidden.reason == "tool_trajectory_incomplete"
 
     # workspace 快照本身失败（complete=False）：no-forbidden-write insufficient
     snap_broken = _observation(workspace=WorkspaceSnapshot(before=[], after=[], complete=False))

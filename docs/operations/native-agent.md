@@ -81,9 +81,10 @@ run 级（`agent.budget`，CLI `--max-steps/--max-tool-calls/--wall-time-sec`）
 
 - 每 Case 独立目录：`$MOTTE_AGENT_WORKSPACE_ROOT/<run_id>/<case_id>/`（默认
   `var/agent-workspaces/`）。仅接受受控相对路径；拒绝绝对路径、`..`、反斜杠、
-  symlink（目录链逐组件校验 + `O_NOFOLLOW`，防 TOCTOU 与链接逃逸——预置
-  `run/case` 目录为 symlink 指向外部时拒绝创建，清理前重校验归属）、设备/管道
-  文件；配额（单文件 1MB / 总量 10MB / 200 文件）写入前强制。
+  symlink（目录链先验证已有组件、再逐级创建缺失目录——预置 `run/case` 目录为
+  symlink 指向外部时既拒绝创建、也不在外部目录留下任何副作用；组件级
+  `O_NOFOLLOW` 防 TOCTOU；清理前重校验归属）、设备/管道文件；配额
+  （单文件 1MB / 总量 10MB / 200 文件）写入前强制。
 - Case 结束即清理 workspace；清理失败在 case 结果 `cleanup` 里报残留，不误报回收。
 - 产物冻结进 ArtifactStore（`$ARTIFACT_ROOT/agent/<run>/<case>/<path>`，SHA-256 绑定），
   读取走 `GET /api/v1/runs/{run}/cases/{case}/artifacts/content?path=`（归属校验 + 展示层脱敏）。
