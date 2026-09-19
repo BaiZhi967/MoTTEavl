@@ -6,13 +6,15 @@ created by Alembic; local SQLite tables are initialized on demand.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import Any, Callable
 
 # 资源名 → (表名, 键字段)；与 0001_initial 迁移保持一致。
 RESOURCE_TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -21,6 +23,7 @@ RESOURCE_TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
     "price_tables": ("price_tables", ("model_id", "version")),
     "datasets": ("dataset_versions", ("name", "version")),
     "scenarios": ("scenario_versions", ("name", "version")),
+    "publications": ("resource_publications", ("id",)),
 }
 
 
@@ -32,7 +35,9 @@ class ResourceConflictError(ValueError):
     """A resource version already exists with different content or cannot be deleted."""
 
 
-VERSIONED_TABLES = frozenset({"price_tables", "dataset_versions", "scenario_versions"})
+VERSIONED_TABLES = frozenset({
+    "price_tables", "dataset_versions", "scenario_versions", "resource_publications",
+})
 
 
 def _validate_client_record(record: dict[str, Any]) -> None:
@@ -40,8 +45,114 @@ def _validate_client_record(record: dict[str, Any]) -> None:
         raise ValueError("_deleted is reserved for repository tombstones")
 
 
+_PUBLICATION_FIELDS = frozenset({
+    "id", "dataset", "scenario", "dataset_fingerprint", "receipt", "receipt_sha256",
+    "actor", "entrypoint", "published_at",
+})
+_PUBLICATION_ID = re.compile(r"publication-[0-9a-f]{64}")
+_CANONICAL_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
+_RECEIPT_HASH = re.compile(r"[0-9a-f]{64}")
+_FORBIDDEN_RECEIPT_FIELDS = frozenset({"artifact_paths", "body", "secret", "secrets"})
+
+
+def _forbidden_receipt_path(value: Any, path: str = "receipt") -> str | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in _FORBIDDEN_RECEIPT_FIELDS:
+                return f"{path}.{key}"
+            nested = _forbidden_receipt_path(item, f"{path}.{key}")
+            if nested is not None:
+                return nested
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = _forbidden_receipt_path(item, f"{path}[{index}]")
+            if nested is not None:
+                return nested
+    return None
+
+
+def _canonical_publication_time(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("publication audit published_at must be non-empty")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError as error:
+        raise ValueError("publication audit published_at must be timezone-aware ISO") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("publication audit published_at must be timezone-aware ISO")
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _publication_identity(record: dict[str, Any]) -> str:
+    from motte_contracts.identity import canonical_sha256
+
+    identity = canonical_sha256({
+        "dataset": record["dataset"],
+        "scenario": record["scenario"],
+        "dataset_fingerprint": record["dataset_fingerprint"],
+        "receipt_sha256": f"sha256:{record['receipt_sha256']}",
+        "actor": record["actor"],
+        "entrypoint": record["entrypoint"],
+    })
+    return f"publication-{identity.removeprefix('sha256:')}"
+
+
+def _validate_publication(record: dict[str, Any]) -> None:
+    if set(record) != _PUBLICATION_FIELDS:
+        missing = sorted(_PUBLICATION_FIELDS - record.keys())
+        extra = sorted(record.keys() - _PUBLICATION_FIELDS)
+        raise ValueError(f"publication audit fields are not canonical: missing={missing}, extra={extra}")
+    for field in ("dataset", "scenario"):
+        value = record[field]
+        if not isinstance(value, str) or value != value.strip():
+            raise ValueError(f"publication audit {field} must be canonical")
+        name, separator, version = value.rpartition("@")
+        if not separator or not name or not version:
+            raise ValueError(f"publication audit {field} must be a name@version reference")
+    fingerprint = record["dataset_fingerprint"]
+    if not isinstance(fingerprint, str) or _CANONICAL_FINGERPRINT.fullmatch(fingerprint) is None:
+        raise ValueError("publication audit dataset_fingerprint must be a canonical sha256")
+    receipt_sha256 = record["receipt_sha256"]
+    if not isinstance(receipt_sha256, str) or _RECEIPT_HASH.fullmatch(receipt_sha256) is None:
+        raise ValueError("publication audit receipt_sha256 must be lowercase hexadecimal")
+    receipt = record["receipt"]
+    if not isinstance(receipt, dict):
+        raise ValueError("publication audit receipt must be a portable object")
+    forbidden_path = _forbidden_receipt_path(receipt)
+    if forbidden_path is not None:
+        raise ValueError(
+            f"publication audit receipt contains non-portable field: {forbidden_path}"
+        )
+    if receipt.get("dataset_fingerprint") not in (None, fingerprint):
+        raise ValueError("publication audit receipt fingerprint does not match the dataset")
+    try:
+        json.dumps(
+            receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("publication audit receipt must contain canonical JSON values") from error
+    from motte_contracts.identity import canonical_sha256
+
+    if canonical_sha256(receipt).removeprefix("sha256:") != receipt_sha256:
+        raise ValueError("publication audit receipt_sha256 does not match receipt")
+    for field in ("actor", "entrypoint"):
+        value = record[field]
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError(f"publication audit {field} must be canonical")
+    if record["published_at"] != _canonical_publication_time(record["published_at"]):
+        raise ValueError("publication audit published_at must be canonical UTC RFC3339")
+    publication_id = record["id"]
+    if not isinstance(publication_id, str) or _PUBLICATION_ID.fullmatch(publication_id) is None:
+        raise ValueError("publication audit id must be a canonical publication identity")
+    if publication_id != _publication_identity(record):
+        raise ValueError("publication audit id does not match its immutable fields")
+
+
 def _validate_managed(table: str, record: dict[str, Any]) -> None:
     """Keep managed suite schema checks independent of version immutability."""
+    if table == "resource_publications":
+        _validate_publication(record)
+        return
     if table not in ("dataset_versions", "scenario_versions"):
         return
     from motte_contracts.suites import is_managed, validate_dataset, validate_scenario
@@ -373,6 +484,176 @@ class _InMemoryResourceRepository:
             return True
 
 
+PairPublisher = Callable[
+    [dict[str, Any], dict[str, Any], dict[str, Any] | None],
+    tuple[dict[str, Any], dict[str, Any]],
+]
+
+
+def _validate_bundle_relationship(
+    dataset: dict[str, Any], scenario: dict[str, Any], *, audited: bool,
+) -> None:
+    from motte_contracts.suites import suite_of
+
+    dataset_suite = suite_of(dataset)
+    scenario_suite = suite_of(scenario)
+    managed = dataset_suite is not None or scenario_suite is not None
+    if managed and dataset_suite != scenario_suite:
+        raise ValueError("dataset and scenario suites do not match")
+    dataset_ref = f"{dataset['name']}@{dataset['version']}"
+    if managed or audited or "dataset" in scenario:
+        if scenario.get("dataset") != dataset_ref:
+            raise ValueError("scenario dataset reference does not match the bundled dataset")
+    if not managed:
+        return
+    if dataset_suite == "direct-llm":
+        if dataset.get("eval") != scenario.get("eval"):
+            raise ValueError("dataset and scenario eval contracts do not match")
+        eval_spec = dataset.get("eval") or {}
+        eval_version = eval_spec.get("version")
+        contract_version = dataset.get("contract_version")
+        plugin_version = scenario.get("plugin_version")
+        if eval_version == 2:
+            if contract_version != 2 or plugin_version != "2":
+                raise ValueError("direct-llm v2 contract and plugin versions do not match")
+        elif contract_version not in (None, 1) or plugin_version not in (None, "1"):
+            raise ValueError("direct-llm v1 contract and plugin versions do not match")
+    elif dataset_suite == "gsm8k" and dataset.get("benchmark") != scenario.get("benchmark"):
+        raise ValueError("dataset and scenario benchmark contracts do not match")
+
+
+def _validated_bundle(
+    dataset: dict[str, Any], scenario: dict[str, Any], publication: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    dataset = deepcopy(dataset)
+    scenario = deepcopy(scenario)
+    publication = deepcopy(publication)
+    _validate_client_record(dataset)
+    _validate_client_record(scenario)
+    _validate_managed("dataset_versions", dataset)
+    _validate_managed("scenario_versions", scenario)
+    _validate_bundle_relationship(dataset, scenario, audited=publication is not None)
+    if publication is not None:
+        _validate_client_record(publication)
+        _validate_managed("resource_publications", publication)
+        dataset_ref = f"{dataset['name']}@{dataset['version']}"
+        scenario_ref = f"{scenario['name']}@{scenario['version']}"
+        if publication["dataset"] != dataset_ref or publication["scenario"] != scenario_ref:
+            raise ValueError("publication audit resource references do not match the bundle")
+        if publication["dataset_fingerprint"] != dataset.get("dataset_fingerprint"):
+            raise ValueError("publication audit fingerprint does not match the dataset")
+    return dataset, scenario, publication
+
+
+def _sqlite_pair_publisher(path: str) -> PairPublisher:
+    def publish(
+        dataset: dict[str, Any], scenario: dict[str, Any],
+        publication: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        dataset, scenario, publication = _validated_bundle(dataset, scenario, publication)
+        resources = [
+            ("dataset_versions", ("name", "version"), dataset),
+            ("scenario_versions", ("name", "version"), scenario),
+        ]
+        if publication is not None:
+            resources.append(("resource_publications", ("id",), publication))
+        with closing(sqlite3.connect(path, isolation_level=None, timeout=10.0)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                missing: list[tuple[str, tuple[str, ...], dict[str, Any]]] = []
+                for table, keys, record in resources:
+                    values = [str(record[key]) for key in keys]
+                    where = " AND ".join(f"{key} = ?" for key in keys)
+                    existing = connection.execute(
+                        f"SELECT payload FROM {table} WHERE {where}", values
+                    ).fetchone()
+                    existing_record = json.loads(existing[0]) if existing else None
+                    if not _check_version(table, existing_record, record):
+                        missing.append((table, keys, record))
+                for table, keys, record in missing:
+                    fields = ", ".join([*keys, "payload"])
+                    placeholders = ", ".join("?" for _ in range(len(keys) + 1))
+                    connection.execute(
+                        f"INSERT INTO {table}({fields}) VALUES ({placeholders})",
+                        [*[str(record[key]) for key in keys], json.dumps(record, sort_keys=True)],
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return deepcopy(dataset), deepcopy(scenario)
+
+    return publish
+
+
+def _postgres_pair_publisher(dsn: str) -> PairPublisher:
+    def publish(
+        dataset: dict[str, Any], scenario: dict[str, Any],
+        publication: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        from psycopg import connect
+        from psycopg.types.json import Json
+
+        dataset, scenario, publication = _validated_bundle(dataset, scenario, publication)
+        resources = [
+            ("dataset_versions", ("name", "version"), dataset),
+            ("scenario_versions", ("name", "version"), scenario),
+        ]
+        if publication is not None:
+            resources.append(("resource_publications", ("id",), publication))
+        with connect(dsn) as connection:
+            with connection.cursor() as cursor:
+                for table, keys, record in resources:
+                    values = [str(record[key]) for key in keys]
+                    fields = ", ".join([*keys, "payload"])
+                    placeholders = ", ".join(["%s"] * (len(keys) + 1))
+                    conflict_keys = ", ".join(keys)
+                    cursor.execute(
+                        f"INSERT INTO {table}({fields}) VALUES ({placeholders}) "
+                        f"ON CONFLICT ({conflict_keys}) DO NOTHING RETURNING payload",
+                        [*values, Json(record)],
+                    )
+                    if cursor.fetchone() is not None:
+                        continue
+                    where = " AND ".join(f"{key} = %s" for key in keys)
+                    cursor.execute(
+                        f"SELECT payload FROM {table} WHERE {where} FOR UPDATE", values,
+                    )
+                    existing = cursor.fetchone()
+                    if existing is None:
+                        raise ResourceConflictError("resource version vanished while publishing")
+                    _check_version(table, existing[0], record)
+        return deepcopy(dataset), deepcopy(scenario)
+
+    return publish
+
+
+def _memory_pair_publisher(
+    datasets: _InMemoryResourceRepository, scenarios: _InMemoryResourceRepository,
+    publications: _InMemoryResourceRepository,
+) -> PairPublisher:
+    def publish(
+        dataset: dict[str, Any], scenario: dict[str, Any],
+        publication: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        dataset, scenario, publication = _validated_bundle(dataset, scenario, publication)
+        resources = [(datasets, dataset), (scenarios, scenario)]
+        if publication is not None:
+            resources.append((publications, publication))
+        with datasets._lock, scenarios._lock, publications._lock:
+            missing: list[tuple[_InMemoryResourceRepository, tuple[str, ...], dict[str, Any]]] = []
+            for repository, record in resources:
+                key = tuple(str(record[field]) for field in repository._keys)
+                existing = repository._rows.get(key)
+                if not _check_version(repository._table, existing, record):
+                    missing.append((repository, key, record))
+            for repository, key, record in missing:
+                repository._rows[key] = deepcopy(record)
+        return deepcopy(dataset), deepcopy(scenario)
+
+    return publish
+
+
 @dataclass
 class ResourceStore:
     providers: Any
@@ -380,15 +661,32 @@ class ResourceStore:
     price_tables: Any
     datasets: Any
     scenarios: Any
+    publications: Any
+    _pair_publisher: PairPublisher
+
+    def publish_dataset_scenario(
+        self, dataset: dict[str, Any], scenario: dict[str, Any], *,
+        publication: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Publish an immutable dataset, scenario, and optional audit in one transaction."""
+        return self._pair_publisher(dataset, scenario, publication)
 
 
-def _build(builder) -> ResourceStore:
+def _build(builder, publisher_builder) -> ResourceStore:
+    providers = builder(*RESOURCE_TABLES["providers"])
+    models = builder(*RESOURCE_TABLES["models"])
+    price_tables = builder(*RESOURCE_TABLES["price_tables"])
+    datasets = builder(*RESOURCE_TABLES["datasets"])
+    scenarios = builder(*RESOURCE_TABLES["scenarios"])
+    publications = builder(*RESOURCE_TABLES["publications"])
     return ResourceStore(
-        providers=builder(*RESOURCE_TABLES["providers"]),
-        models=builder(*RESOURCE_TABLES["models"]),
-        price_tables=builder(*RESOURCE_TABLES["price_tables"]),
-        datasets=builder(*RESOURCE_TABLES["datasets"]),
-        scenarios=builder(*RESOURCE_TABLES["scenarios"]),
+        providers=providers,
+        models=models,
+        price_tables=price_tables,
+        datasets=datasets,
+        scenarios=scenarios,
+        publications=publications,
+        _pair_publisher=publisher_builder(datasets, scenarios, publications),
     )
 
 
@@ -399,18 +697,22 @@ def SQLiteResourceStore(path: str | Path) -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _SQLiteResourceRepository(path, table, keys)
 
-    return _build(builder)
+    return _build(
+        builder, lambda _datasets, _scenarios, _publications: _sqlite_pair_publisher(path)
+    )
 
 
 def PostgresResourceStore(dsn: str) -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _PgResourceRepository(dsn, table, keys)
 
-    return _build(builder)
+    return _build(
+        builder, lambda _datasets, _scenarios, _publications: _postgres_pair_publisher(dsn)
+    )
 
 
 def InMemoryResourceStore() -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _InMemoryResourceRepository(keys, table)
 
-    return _build(builder)
+    return _build(builder, _memory_pair_publisher)

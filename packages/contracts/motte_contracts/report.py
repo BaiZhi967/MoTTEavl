@@ -29,8 +29,8 @@ class ReportSummary(Contract):
     not_attempted: int | None = Field(default=None, ge=0, strict=True)
     attempted: int | None = Field(default=None, ge=0, strict=True)
     responded: int | None = Field(default=None, ge=0, strict=True)
-    # These rates use the judged denominator for direct-LLM reports and can exceed 1
-    # when unjudged selections are present; accuracy/pass_rate remain bounded probabilities.
+    # Direct LLM v1 uses the judged denominator and can exceed 1 when unjudged selections
+    # are present. V2 uses selected for coverage, but the shared report remains legacy-readable.
     completion: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     attempt_rate: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     accuracy: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)

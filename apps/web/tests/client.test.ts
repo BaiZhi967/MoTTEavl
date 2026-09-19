@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  cancelRun, createBenchmarkRun, createRun, getBenchmarkCases, getRuns, importBenchmark,
-  publishModel, setCredential, updateModel, updateProvider,
+  cancelRun, createBenchmarkRun, createRun, dryRunDirectLlm, getBenchmarkCases,
+  getDirectLlmSources, getRuns, getSourceDetail, importBenchmark, publishModel, setCredential,
+  updateModel, updateProvider,
 } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
@@ -101,6 +102,40 @@ describe("api client", () => {
     await getBenchmarkCases({ dataset: "gsm8k-test@1", offset: 25, limit: 25, query: "ducks" });
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/v1/benchmarks/gsm8k/cases?dataset=gsm8k-test%401&offset=25&limit=25&query=ducks");
+  });
+
+  it("GET Direct LLM 受管来源目录使用 typed 列表端点", async () => {
+    const fetchMock = mockFetch(200, { items: [{ id: "mmlu-pro", label: "MMLU-Pro" }], total: 1 });
+    const payload = await getDirectLlmSources();
+    expect(payload.total).toBe(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/benchmarks/direct-llm/sources");
+  });
+
+  it("GET Direct LLM 来源详情编码 source id", async () => {
+    const fetchMock = mockFetch(200, { id: "managed/source", label: "Managed Source" });
+    const payload = await getSourceDetail("managed/source");
+    expect(payload.id).toBe("managed/source");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/benchmarks/direct-llm/sources/managed%2Fsource");
+  });
+
+  it("POST Direct LLM dry-run 与 run 共用 strict request body", async () => {
+    const fetchMock = mockFetch(200, {
+      dataset: "direct-v2@1", scenario: "direct-v2@1", contract_version: 2,
+      plugin_version: "direct-llm@2", selected_count: 2, case_ids_sha256: "a".repeat(64),
+      max_output_tokens: 1024, estimated: true,
+    });
+    const response = await dryRunDirectLlm({
+      model: "glm-4.7", scenario: "direct-v2@1",
+      case_selection: { mode: "profile", profile: "smoke" },
+    });
+    expect(response.selected_count).toBe(2);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/v1/benchmarks/direct-llm/dry-run");
+    expect((init as any).method).toBe("POST");
+    expect(JSON.parse((init as any).body)).toEqual({
+      model: "glm-4.7", scenario: "direct-v2@1",
+      case_selection: { mode: "profile", profile: "smoke" },
+    });
   });
 
   it("POST createBenchmarkRun 携带题目子集与思考强度", async () => {

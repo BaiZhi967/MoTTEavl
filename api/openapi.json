@@ -131,6 +131,906 @@
         "title": "CreateRunRequest",
         "type": "object"
       },
+      "DatasetProfileSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "case_ids_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Ids Sha256"
+          },
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "title": "DatasetProfileSummary",
+        "type": "object"
+      },
+      "DatasetSourceListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetSourceSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "DatasetSourceListResponse",
+        "type": "object"
+      },
+      "DatasetSourceSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "blocker_count": {
+            "minimum": 0.0,
+            "title": "Blocker Count",
+            "type": "integer"
+          },
+          "distribution_scope": {
+            "title": "Distribution Scope",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "license_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "License Ids",
+            "type": "array"
+          },
+          "official_comparability": {
+            "title": "Official Comparability",
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "stable_eligible": {
+            "title": "Stable Eligible",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tier": {
+            "title": "Tier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "tier",
+          "status",
+          "distribution_scope",
+          "stable_eligible",
+          "official_comparability",
+          "blocker_count"
+        ],
+        "title": "DatasetSourceSummary",
+        "type": "object"
+      },
+      "DatasetSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "minimum": 0.0,
+            "title": "Cases",
+            "type": "integer"
+          },
+          "cases_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cases Sha256"
+          },
+          "contract_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Version"
+          },
+          "dataset_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Fingerprint"
+          },
+          "license_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License Status"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetProfileSummary"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "scorer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "suite": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suite"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "cases"
+        ],
+        "title": "DatasetSummary",
+        "type": "object"
+      },
+      "DatasetSummaryListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "DatasetSummaryListResponse",
+        "type": "object"
+      },
+      "DirectLlmAllSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "const": "all",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "DirectLlmAllSelection",
+        "type": "object"
+      },
+      "DirectLlmDryRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "case_ids_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Case Ids Sha256",
+            "type": "string"
+          },
+          "context_window": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window"
+          },
+          "contract_version": {
+            "minimum": 1.0,
+            "title": "Contract Version",
+            "type": "integer"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "estimated": {
+            "const": true,
+            "default": true,
+            "title": "Estimated",
+            "type": "boolean"
+          },
+          "estimated_cost_upper_bound": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Conservative estimated upper bound; never an exact billed cost.",
+            "title": "Estimated Cost Upper Bound"
+          },
+          "estimation_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimation Method"
+          },
+          "max_input_tokens_upper_bound": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Input Tokens Upper Bound"
+          },
+          "max_output_tokens": {
+            "minimum": 0.0,
+            "title": "Max Output Tokens",
+            "type": "integer"
+          },
+          "max_total_tokens_upper_bound": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Tokens Upper Bound"
+          },
+          "plugin_version": {
+            "title": "Plugin Version",
+            "type": "string"
+          },
+          "price_table_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Table Version"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          },
+          "selected_count": {
+            "minimum": 1.0,
+            "title": "Selected Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scenario",
+          "dataset",
+          "contract_version",
+          "plugin_version",
+          "selected_count",
+          "case_ids_sha256",
+          "max_output_tokens"
+        ],
+        "title": "DirectLlmDryRunResponse",
+        "type": "object"
+      },
+      "DirectLlmIdsSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "case_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Case Ids",
+            "type": "array"
+          },
+          "mode": {
+            "const": "ids",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "case_ids"
+        ],
+        "title": "DirectLlmIdsSelection",
+        "type": "object"
+      },
+      "DirectLlmImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "builtin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Builtin"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "license": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "scorer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scorer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "DirectLlmImportRequest",
+        "type": "object"
+      },
+      "DirectLlmImportResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "minimum": 1.0,
+            "title": "Cases",
+            "type": "integer"
+          },
+          "cases_sha256": {
+            "title": "Cases Sha256",
+            "type": "string"
+          },
+          "dataset_fingerprint": {
+            "title": "Dataset Fingerprint",
+            "type": "string"
+          },
+          "imported": {
+            "title": "Imported",
+            "type": "string"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          },
+          "scorer": {
+            "title": "Scorer",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_sha256": {
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "suite": {
+            "title": "Suite",
+            "type": "string"
+          }
+        },
+        "required": [
+          "imported",
+          "scenario",
+          "suite",
+          "scorer",
+          "cases",
+          "source",
+          "source_sha256",
+          "cases_sha256",
+          "dataset_fingerprint"
+        ],
+        "title": "DirectLlmImportResponse",
+        "type": "object"
+      },
+      "DirectLlmOverviewItem": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "minimum": 0.0,
+            "title": "Cases",
+            "type": "integer"
+          },
+          "contract_version": {
+            "minimum": 1.0,
+            "title": "Contract Version",
+            "type": "integer"
+          },
+          "dataset": {
+            "title": "Dataset",
+            "type": "string"
+          },
+          "dataset_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Fingerprint"
+          },
+          "eval": {
+            "additionalProperties": true,
+            "title": "Eval",
+            "type": "object"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/DatasetProfileSummary"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "title": "Provenance",
+            "type": "object"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/DirectLlmOverviewRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "scenario": {
+            "title": "Scenario",
+            "type": "string"
+          },
+          "suite": {
+            "title": "Suite",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scenario",
+          "dataset",
+          "suite",
+          "contract_version",
+          "eval",
+          "provenance",
+          "cases"
+        ],
+        "title": "DirectLlmOverviewItem",
+        "type": "object"
+      },
+      "DirectLlmOverviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DirectLlmOverviewItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "DirectLlmOverviewResponse",
+        "type": "object"
+      },
+      "DirectLlmOverviewRun": {
+        "additionalProperties": false,
+        "properties": {
+          "accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracy"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "DirectLlmOverviewRun",
+        "type": "object"
+      },
+      "DirectLlmProfileSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "const": "profile",
+            "title": "Mode",
+            "type": "string"
+          },
+          "profile": {
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "profile"
+        ],
+        "title": "DirectLlmProfileSelection",
+        "type": "object"
+      },
+      "DirectLlmRandomSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "exclusiveMinimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "random",
+            "title": "Mode",
+            "type": "string"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          }
+        },
+        "required": [
+          "mode",
+          "count"
+        ],
+        "title": "DirectLlmRandomSelection",
+        "type": "object"
+      },
+      "DirectLlmRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "case_selection": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "all": "#/components/schemas/DirectLlmAllSelection",
+                    "ids": "#/components/schemas/DirectLlmIdsSelection",
+                    "profile": "#/components/schemas/DirectLlmProfileSelection",
+                    "random": "#/components/schemas/DirectLlmRandomSelection"
+                  },
+                  "propertyName": "mode"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DirectLlmAllSelection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DirectLlmIdsSelection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DirectLlmRandomSelection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DirectLlmProfileSelection"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Selection"
+          },
+          "dataset_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Name"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "reasoning_level": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Level"
+          },
+          "scenario": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "DirectLlmRunRequest",
+        "type": "object"
+      },
       "EvaluationDescriptor": {
         "additionalProperties": false,
         "properties": {
@@ -630,6 +1530,92 @@
           "failed"
         ],
         "title": "ReportSummary",
+        "type": "object"
+      },
+      "ResourcePublication": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "dataset": {
+            "minLength": 1,
+            "title": "Dataset",
+            "type": "string"
+          },
+          "dataset_fingerprint": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Dataset Fingerprint",
+            "type": "string"
+          },
+          "entrypoint": {
+            "minLength": 1,
+            "title": "Entrypoint",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "published_at": {
+            "minLength": 1,
+            "title": "Published At",
+            "type": "string"
+          },
+          "receipt": {
+            "additionalProperties": true,
+            "title": "Receipt",
+            "type": "object"
+          },
+          "receipt_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Receipt Sha256",
+            "type": "string"
+          },
+          "scenario": {
+            "minLength": 1,
+            "title": "Scenario",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dataset",
+          "scenario",
+          "dataset_fingerprint",
+          "receipt",
+          "receipt_sha256",
+          "actor",
+          "entrypoint",
+          "published_at"
+        ],
+        "title": "ResourcePublication",
+        "type": "object"
+      },
+      "ResourcePublicationListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResourcePublication"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "ResourcePublicationListResponse",
         "type": "object"
       },
       "Run": {
@@ -1416,6 +2402,658 @@
         "title": "ScoringPassListResponse",
         "type": "object"
       },
+      "SourceArtifact": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 536870912.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "enum": [
+                  "json",
+                  "jsonl",
+                  "csv",
+                  "parquet"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "logical_name": {
+            "minLength": 1,
+            "title": "Logical Name",
+            "type": "string"
+          },
+          "max_bytes": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 536870912.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Bytes"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "pattern": "^https://\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "logical_name",
+          "url",
+          "format",
+          "sha256",
+          "bytes",
+          "max_bytes",
+          "required"
+        ],
+        "title": "SourceArtifact",
+        "type": "object"
+      },
+      "SourceComparability": {
+        "additionalProperties": false,
+        "properties": {
+          "notes": {
+            "minLength": 1,
+            "title": "Notes",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "established",
+              "not-established",
+              "not-applicable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "notes"
+        ],
+        "title": "SourceComparability",
+        "type": "object"
+      },
+      "SourceConversion": {
+        "additionalProperties": false,
+        "properties": {
+          "converter": {
+            "$ref": "#/components/schemas/SourceConverter"
+          },
+          "default_split": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Split"
+          },
+          "optional_dependency": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optional Dependency"
+          },
+          "profiles": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "prompt_version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Version"
+          },
+          "scorer": {
+            "$ref": "#/components/schemas/SourceScorer"
+          },
+          "splits": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Splits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "converter",
+          "splits",
+          "default_split",
+          "prompt_version",
+          "scorer",
+          "profiles",
+          "optional_dependency"
+        ],
+        "title": "SourceConversion",
+        "type": "object"
+      },
+      "SourceConverter": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "title": "SourceConverter",
+        "type": "object"
+      },
+      "SourceGovernance": {
+        "additionalProperties": false,
+        "properties": {
+          "decision_notes": {
+            "minLength": 1,
+            "title": "Decision Notes",
+            "type": "string"
+          },
+          "distribution_scope": {
+            "enum": [
+              "public",
+              "internal-only",
+              "restricted",
+              "blocked"
+            ],
+            "title": "Distribution Scope",
+            "type": "string"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewer": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer"
+          },
+          "stable_eligible": {
+            "title": "Stable Eligible",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "approved",
+              "approved-internal",
+              "restricted",
+              "pending"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "distribution_scope",
+          "stable_eligible",
+          "reviewer",
+          "reviewed_at",
+          "decision_notes"
+        ],
+        "title": "SourceGovernance",
+        "type": "object"
+      },
+      "SourceLicense": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "minLength": 1,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "code": {
+            "$ref": "#/components/schemas/SourceLicenseEvidence"
+          },
+          "commercial_use": {
+            "minLength": 1,
+            "title": "Commercial Use",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SourceLicenseEvidence"
+          },
+          "redistribution": {
+            "minLength": 1,
+            "title": "Redistribution",
+            "type": "string"
+          },
+          "review_notes": {
+            "minLength": 1,
+            "title": "Review Notes",
+            "type": "string"
+          },
+          "share_alike": {
+            "minLength": 1,
+            "title": "Share Alike",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "code",
+          "commercial_use",
+          "redistribution",
+          "attribution",
+          "share_alike",
+          "review_notes"
+        ],
+        "title": "SourceLicense",
+        "type": "object"
+      },
+      "SourceLicenseEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "declared_ids": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Declared Ids",
+            "type": "array"
+          },
+          "evidence_urls": {
+            "items": {
+              "pattern": "^https://\\S+$",
+              "type": "string"
+            },
+            "title": "Evidence Urls",
+            "type": "array"
+          },
+          "verified_spdx": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Spdx"
+          }
+        },
+        "required": [
+          "declared_ids",
+          "verified_spdx",
+          "evidence_urls"
+        ],
+        "title": "SourceLicenseEvidence",
+        "type": "object"
+      },
+      "SourceLinks": {
+        "additionalProperties": false,
+        "properties": {
+          "citation": {
+            "anyOf": [
+              {
+                "pattern": "^https://\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citation"
+          },
+          "dataset_card": {
+            "anyOf": [
+              {
+                "pattern": "^https://\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Card"
+          },
+          "homepage": {
+            "anyOf": [
+              {
+                "pattern": "^https://\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Homepage"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "pattern": "^https://\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          }
+        },
+        "required": [
+          "homepage",
+          "repository",
+          "dataset_card",
+          "citation"
+        ],
+        "title": "SourceLinks",
+        "type": "object"
+      },
+      "SourceRevision": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "resolver": {
+            "minLength": 1,
+            "title": "Resolver",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "kind",
+          "resolver",
+          "value"
+        ],
+        "title": "SourceRevision",
+        "type": "object"
+      },
+      "SourceSafety": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_protocols": {
+            "items": {
+              "const": "https",
+              "type": "string"
+            },
+            "title": "Allowed Protocols",
+            "type": "array"
+          },
+          "archive_auto_extract": {
+            "const": false,
+            "title": "Archive Auto Extract",
+            "type": "boolean"
+          },
+          "executable_upstream_code": {
+            "const": false,
+            "title": "Executable Upstream Code",
+            "type": "boolean"
+          },
+          "network_entrypoint": {
+            "enum": [
+              "cli-only",
+              "none"
+            ],
+            "title": "Network Entrypoint",
+            "type": "string"
+          },
+          "online_rows_fallback": {
+            "const": false,
+            "title": "Online Rows Fallback",
+            "type": "boolean"
+          },
+          "trust_remote_code": {
+            "const": false,
+            "title": "Trust Remote Code",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "network_entrypoint",
+          "allowed_protocols",
+          "trust_remote_code",
+          "online_rows_fallback",
+          "executable_upstream_code",
+          "archive_auto_extract"
+        ],
+        "title": "SourceSafety",
+        "type": "object"
+      },
+      "SourceScorer": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "title": "SourceScorer",
+        "type": "object"
+      },
+      "SourceSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "blockers": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/SourceConversion"
+          },
+          "description": {
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "governance": {
+            "$ref": "#/components/schemas/SourceGovernance"
+          },
+          "id": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "license": {
+            "$ref": "#/components/schemas/SourceLicense"
+          },
+          "links": {
+            "$ref": "#/components/schemas/SourceLinks"
+          },
+          "official_comparability": {
+            "$ref": "#/components/schemas/SourceComparability"
+          },
+          "safety": {
+            "$ref": "#/components/schemas/SourceSafety"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "tier": {
+            "enum": [
+              "builtin-smoke",
+              "managed-public",
+              "generated-internal",
+              "restricted-public",
+              "advanced"
+            ],
+            "title": "Tier",
+            "type": "string"
+          },
+          "upstream": {
+            "$ref": "#/components/schemas/SourceUpstream"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "label",
+          "description",
+          "tier",
+          "governance",
+          "links",
+          "upstream",
+          "license",
+          "conversion",
+          "safety",
+          "official_comparability",
+          "blockers"
+        ],
+        "title": "SourceSpec",
+        "type": "object"
+      },
+      "SourceUpstream": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/SourceArtifact"
+            },
+            "minItems": 1,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/SourceRevision"
+          }
+        },
+        "required": [
+          "revision",
+          "artifacts"
+        ],
+        "title": "SourceUpstream",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1487,7 +3125,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DirectLlmOverviewResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -1581,17 +3221,53 @@
         "summary": "Direct Llm Cases"
       }
     },
+    "/api/v1/benchmarks/direct-llm/dry-run": {
+      "post": {
+        "operationId": "direct_llm_dry_run_api_v1_benchmarks_direct_llm_dry_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectLlmRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectLlmDryRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Dry Run"
+      }
+    },
     "/api/v1/benchmarks/direct-llm/import": {
       "post": {
-        "description": "导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。\n\n``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file\n时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。\n省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。\n同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。",
+        "description": "导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。\n\n``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file\n时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。\n省略 version 时自动选版本：完整数据集身份相同则复用，否则取下一个空号。\n同 name@version 内容不同返回 409。除 version 外，显式传入的空串不会被当成默认值。",
         "operationId": "direct_llm_import_api_v1_benchmarks_direct_llm_import_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/DirectLlmImportRequest"
               }
             }
           },
@@ -1601,7 +3277,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DirectLlmImportResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -1627,9 +3305,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/DirectLlmRunRequest"
               }
             }
           },
@@ -1656,6 +3332,63 @@
           }
         },
         "summary": "Direct Llm Run"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/sources": {
+      "get": {
+        "operationId": "direct_llm_sources_api_v1_benchmarks_direct_llm_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetSourceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Direct Llm Sources"
+      }
+    },
+    "/api/v1/benchmarks/direct-llm/sources/{source_id}": {
+      "get": {
+        "operationId": "direct_llm_source_detail_api_v1_benchmarks_direct_llm_sources__source_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceSpec"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Direct Llm Source Detail"
       }
     },
     "/api/v1/benchmarks/gsm8k": {
@@ -1892,7 +3625,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetSummaryListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2639,6 +4374,24 @@
           }
         },
         "summary": "Update Provider"
+      }
+    },
+    "/api/v1/resource-publications": {
+      "get": {
+        "operationId": "list_resource_publications_api_v1_resource_publications_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourcePublicationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Resource Publications"
       }
     },
     "/api/v1/runs": {

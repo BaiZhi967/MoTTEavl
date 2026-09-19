@@ -49,7 +49,7 @@ def test_score_answer_case_outcomes():
     assert score_answer_case(None, "北京")["outcome"] == "wrong_answer"
 
 
-def test_aggregate_uses_judged_denominator():
+def test_aggregate_uses_score_judged_flag_without_changing_v1_rate_denominators():
     scores = [
         {"case_id": "a", "outcome": "correct", "attempted": True, "responded": True, "judged": True},
         {"case_id": "b", "outcome": "wrong_answer", "attempted": True, "responded": True, "judged": True},
@@ -58,24 +58,31 @@ def test_aggregate_uses_judged_denominator():
          "judged": False},
         {"case_id": "e", "outcome": "not_attempted", "attempted": False, "responded": False,
          "judged": False},
+        # 无 expected 的调用失败仍是 call_failed，但不能由 outcome 反推成 judged。
+        {"case_id": "f", "outcome": "call_failed", "attempted": True, "responded": False,
+         "judged": False},
     ]
-    summary = aggregate_answers(scores, 5)
-    assert summary["selected"] == 5 and summary["judged"] == 3
-    assert summary["correct"] == 1 and summary["wrong_answer"] == 1 and summary["call_failed"] == 1
+    summary = aggregate_answers(scores, 6)
+    assert summary["selected"] == 6 and summary["judged"] == 3
+    assert summary["correct"] == 1 and summary["wrong_answer"] == 1 and summary["call_failed"] == 2
     assert summary["no_expectation"] == 1 and summary["not_attempted"] == 1
-    assert summary["attempted"] == 4 and summary["responded"] == 3
+    assert summary["attempted"] == 5 and summary["responded"] == 3
     assert summary["accuracy"] == pytest.approx(1 / 3)
-    assert summary["completion"] == pytest.approx(1.0)
-    assert summary["attempt_rate"] == pytest.approx(4 / 3)
+    assert summary["completion"] == pytest.approx(3 / 3)
+    assert summary["attempt_rate"] == pytest.approx(5 / 3)
     assert summary["scorer_version"] == SCORER_VERSION
 
 
-def test_aggregate_without_any_expectation_has_no_accuracy():
-    summary = aggregate_answers(
-        [{"case_id": "a", "outcome": "no_expectation", "attempted": True, "responded": True,
-          "judged": False}], 1)
-    assert summary["judged"] == 0
-    assert summary["accuracy"] is None and summary["completion"] is None
+def test_aggregate_without_any_expectation_has_no_v1_rates_or_accuracy():
+    summary = aggregate_answers([
+        {"case_id": "a", "outcome": "no_expectation", "attempted": True, "responded": True,
+         "judged": False},
+        {"case_id": "b", "outcome": "call_failed", "attempted": True, "responded": False,
+         "judged": False},
+    ], 2)
+    assert summary["judged"] == 0 and summary["call_failed"] == 1
+    assert summary["accuracy"] is None
+    assert summary["completion"] is None
     assert summary["attempt_rate"] is None
 
 

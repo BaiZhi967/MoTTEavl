@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeftIcon, MagnifyingGlassIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
 import {
@@ -21,53 +21,75 @@ export function DirectLlmCases() {
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<{ total: number; dataset_total: number; items: DirectLlmCase[] } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [selectionDataset, setSelectionDataset] = useState<string | null>(null);
   const [paste, setPaste] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
-  const preset = presets.find((item) => item.dataset === dataset) ?? presets[0];
+  const preset = presets.find((item) => item.dataset === dataset);
 
   useEffect(() => {
     getDirectLlmOverview()
       .then((payload) => setPresets(sortPresets(payload.items)))
       .catch((e) => setError(String(e)));
     const stored = loadCaseSelection();
-    if (stored) setSelected(stored.caseIds);
+    if (stored) {
+      setDataset(stored.dataset);
+      setSelected(stored.caseIds);
+      setSelectionDataset(stored.dataset);
+    }
   }, []);
 
   useEffect(() => {
-    if (!dataset && presets.length > 0) setDataset(presets[0].dataset);
-  }, [presets, dataset]);
-
-  const load = useCallback(async () => {
-    if (!dataset) return;
-    try {
-      const payload = await getDirectLlmCases({ dataset, offset, limit: PAGE_SIZE, query });
-      setPage({ total: payload.total, dataset_total: payload.dataset_total, items: payload.items });
-      setError("");
-    } catch (e) {
-      setError(String(e));
+    if (presets.length === 0 || presets.some((item) => item.dataset === dataset)) return;
+    const fallbackDataset = presets[0].dataset;
+    setDataset(fallbackDataset);
+    if (selectionDataset && selectionDataset !== fallbackDataset) {
+      setSelected([]);
+      setSelectionDataset(null);
+      clearCaseSelection();
+      setNotice(`先前选择的数据集 ${selectionDataset} 当前不可用，已清空已选题目。`);
     }
-  }, [dataset, offset, query]);
+  }, [dataset, presets, selectionDataset]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!dataset || !preset) return;
+    let active = true;
+    getDirectLlmCases({ dataset, offset, limit: PAGE_SIZE, query })
+      .then((payload) => {
+        if (!active) return;
+        setPage({ total: payload.total, dataset_total: payload.dataset_total, items: payload.items });
+        setError("");
+      })
+      .catch((e) => {
+        if (active) setError(String(e));
+      });
+    return () => { active = false; };
+  }, [dataset, offset, preset, query]);
 
   const pageIds = useMemo(() => (page?.items ?? []).map((item) => item.case_id), [page]);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((caseId) => selected.includes(caseId));
   const pages = page ? Math.max(1, Math.ceil(page.total / PAGE_SIZE)) : 1;
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
 
-  const toggle = (caseId: string) =>
-    setSelected((current) => current.includes(caseId)
-      ? current.filter((item) => item !== caseId)
-      : [...current, caseId]);
+  const replaceSelection = (caseIds: string[]) => {
+    setSelected(caseIds);
+    setSelectionDataset(caseIds.length > 0 ? dataset : null);
+  };
 
-  const togglePage = () =>
-    setSelected((current) => allOnPageSelected
-      ? current.filter((caseId) => !pageIds.includes(caseId))
-      : [...new Set([...current, ...pageIds])]);
+  const clearSelection = () => {
+    setSelected([]);
+    setSelectionDataset(null);
+    clearCaseSelection();
+  };
+
+  const toggle = (caseId: string) => replaceSelection(selected.includes(caseId)
+    ? selected.filter((item) => item !== caseId)
+    : [...selected, caseId]);
+
+  const togglePage = () => replaceSelection(allOnPageSelected
+    ? selected.filter((caseId) => !pageIds.includes(caseId))
+    : [...new Set([...selected, ...pageIds])]);
 
   const submitSearch = (form: FormEvent<HTMLFormElement>) => {
     form.preventDefault();
@@ -80,13 +102,17 @@ export function DirectLlmCases() {
     const ids = [...new Set(paste.split(/[,，\s]+/).filter(Boolean))];
     if (ids.length === 0) return;
     const merged = [...new Set([...selected, ...ids])].slice(0, MAX_CASE_IDS);
-    setSelected(merged);
+    replaceSelection(merged);
     setNotice(`已加入 ${ids.length} 个 id（共 ${merged.length} 个）；未知 id 会在发起时被服务端拒绝。`);
     setPaste("");
   };
 
   const launch = () => {
     if (!preset || selected.length === 0) return;
+    if (selectionDataset !== preset.dataset) {
+      setNotice(`已选题目属于 ${selectionDataset ?? "未知数据集"}，不能绑定到 ${preset.dataset}。`);
+      return;
+    }
     saveCaseSelection({ dataset: preset.dataset, caseIds: selected });
     navigate(ROUTES.operate);
   };
@@ -114,8 +140,17 @@ export function DirectLlmCases() {
           <select
             className="control"
             aria-label="题目数据集"
-            value={preset?.dataset ?? ""}
-            onChange={(change) => { setDataset(change.target.value); setOffset(0); }}
+            value={dataset}
+            onChange={(change) => {
+              if (change.target.value !== dataset) {
+                const hadSelection = selected.length > 0;
+                clearSelection();
+                setNotice(hadSelection ? "已切换数据集，原已选题目已清空。" : "");
+              }
+              setDataset(change.target.value);
+              setPage(null);
+              setOffset(0);
+            }}
           >
             {presets.map((item) => (
               <option key={item.dataset} value={item.dataset}>
@@ -150,7 +185,7 @@ export function DirectLlmCases() {
           <button type="button" onClick={togglePage} disabled={pageIds.length === 0}>
             {allOnPageSelected ? "取消本页" : "全选本页"}
           </button>
-          <button type="button" onClick={() => { setSelected([]); clearCaseSelection(); setNotice(""); }} disabled={selected.length === 0}>
+          <button type="button" onClick={() => { clearSelection(); setNotice(""); }} disabled={selected.length === 0}>
             清空已选
           </button>
           <span className="field-label">已选 {selected.length} 题</span>
@@ -221,7 +256,11 @@ export function DirectLlmCases() {
         <p className="hint">粘贴按 case id 精确匹配，可一次粘贴多个（逗号或空白分隔）。</p>
 
         <div className="actions">
-          <button type="button" onClick={launch} disabled={selected.length === 0 || !preset}>
+          <button
+            type="button"
+            onClick={launch}
+            disabled={selected.length === 0 || !preset || selectionDataset !== preset.dataset}
+          >
             <PlayIcon size={14} weight="bold" aria-hidden />
             用所选 {selected.length} 题发起评测
           </button>
@@ -229,8 +268,8 @@ export function DirectLlmCases() {
         </div>
         {selected.length > 0 && (
           <p className="hint">
-            已选题目来自 {preset?.dataset}；操作页若切到别的数据集，需要回来重新选择。
-            <button type="button" className="link" onClick={() => { setSelected([]); clearCaseSelection(); }}>
+            已选题目来自 {selectionDataset}；操作页若切到别的数据集，需要回来重新选择。
+            <button type="button" className="link" onClick={clearSelection}>
               <XIcon size={12} weight="bold" aria-hidden /> 清空
             </button>
           </p>

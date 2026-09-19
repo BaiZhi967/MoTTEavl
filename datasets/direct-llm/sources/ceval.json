@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "id": "ceval",
+  "label": "C-Eval",
+  "description": "Chinese multi-subject examination benchmark registered as a restricted optional Direct LLM source.",
+  "tier": "restricted-public",
+  "governance": {
+    "status": "restricted",
+    "distribution_scope": "restricted",
+    "stable_eligible": false,
+    "reviewer": null,
+    "reviewed_at": null,
+    "decision_notes": "The upstream data license claim includes non-commercial and share-alike restrictions; default download and distribution are blocked."
+  },
+  "links": {
+    "homepage": "https://github.com/SJTU-LIT/ceval",
+    "repository": "https://github.com/SJTU-LIT/ceval",
+    "dataset_card": null,
+    "citation": null
+  },
+  "upstream": {
+    "revision": {
+      "kind": "git-commit",
+      "resolver": "git-commit",
+      "value": null
+    },
+    "artifacts": [
+      {
+        "logical_name": "dataset-release",
+        "url": null,
+        "format": null,
+        "sha256": null,
+        "bytes": null,
+        "max_bytes": null,
+        "required": true
+      }
+    ]
+  },
+  "license": {
+    "data": {
+      "declared_ids": [
+        "CC-BY-NC-SA-4.0"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/SJTU-LIT/ceval/blob/main/LICENSE"
+      ]
+    },
+    "code": {
+      "declared_ids": [],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/SJTU-LIT/ceval"
+      ]
+    },
+    "commercial_use": "noncommercial-only-declared",
+    "redistribution": "restricted-declared",
+    "attribution": "required-declared",
+    "share_alike": "required-declared",
+    "review_notes": "The declared restriction is sufficient to block default commercial/stable use; a human must still verify the fixed-revision evidence and code/data boundary."
+  },
+  "conversion": {
+    "converter": {
+      "id": "ceval-to-direct",
+      "version": null
+    },
+    "splits": [],
+    "default_split": null,
+    "prompt_version": null,
+    "scorer": {
+      "id": "choice",
+      "version": "1"
+    },
+    "profiles": [
+      "smoke",
+      "regression",
+      "full"
+    ],
+    "optional_dependency": null
+  },
+  "safety": {
+    "network_entrypoint": "cli-only",
+    "allowed_protocols": [
+      "https"
+    ],
+    "trust_remote_code": false,
+    "online_rows_fallback": false,
+    "executable_upstream_code": false,
+    "archive_auto_extract": false
+  },
+  "official_comparability": {
+    "status": "not-established",
+    "notes": "Official prompts, few-shot protocol, answer extraction, and aggregation are not pinned; Direct variants must remain separately named."
+  },
+  "blockers": [
+    "Use is restricted by the declared non-commercial and share-alike terms.",
+    "No human review record or immutable upstream commit is pinned.",
+    "Artifact URL, format, SHA-256, byte count, and size limit are not pinned.",
+    "Supported splits, converter version, prompt version, and dependency are not fixed.",
+    "Official protocol parity is not established."
+  ]
+}
