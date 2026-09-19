@@ -1,4 +1,5 @@
 """Benchmark plugin registry for preparation, scoring, and aggregation."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -24,7 +25,9 @@ _BUILTINS_LOADED = False
 def register_benchmark_plugin(plugin: BenchmarkPlugin) -> BenchmarkPlugin:
     key = (plugin.suite_id, plugin.contract_version)
     if key in _PLUGINS:
-        raise ValueError(f"benchmark plugin already registered: {plugin.suite_id}@{plugin.contract_version}")
+        raise ValueError(
+            f"benchmark plugin already registered: {plugin.suite_id}@{plugin.contract_version}"
+        )
     _PLUGINS[key] = plugin
     return plugin
 
@@ -54,13 +57,23 @@ def plugin_for_scenario(scenario: dict[str, Any] | None) -> tuple[str, str] | No
         return None
     from motte_contracts import suites as contract_suites
 
-    suite = contract_suites.suite_of(scenario)
-    if suite is None:
+    identity = contract_suites.validated_scenario_identity(scenario)
+    if identity is None:
         explicit = scenario.get("suite")
         if not isinstance(explicit, str) or not explicit:
             return None
+        if explicit in contract_suites.SUITES:
+            raise ValueError(f"invalid managed benchmark scenario: {explicit}")
         suite = explicit
-    version = str(scenario.get("plugin_version") or "1")
+        if "plugin_version" in scenario:
+            marker = scenario["plugin_version"]
+            if not isinstance(marker, str) or not marker:
+                raise ValueError("explicit plugin_version must be a non-empty string")
+            version = marker
+        else:
+            version = "1"
+    else:
+        suite, version = identity
     benchmark_plugin(suite, version)
     return suite, version
 
@@ -99,9 +112,7 @@ def prepare_with_plugin(
     return resolved
 
 
-def evaluation_descriptor(
-    plugin: BenchmarkPlugin, provenance: dict[str, Any]
-) -> dict[str, Any]:
+def evaluation_descriptor(plugin: BenchmarkPlugin, provenance: dict[str, Any]) -> dict[str, Any]:
     scorer_version = str(provenance.get("scorer_version") or "unknown")
     return {
         "benchmark_id": str(provenance.get("id") or plugin.suite_id),
@@ -140,6 +151,11 @@ def _load_builtins() -> None:
     from motte_eval.gsm8k import aggregate_benchmark
     from motte_sdk.benchmark import benchmark_scores, resolve_benchmark_manifest
     from motte_sdk.direct_llm import direct_llm_scores, resolve_direct_llm_manifest
+    from motte_sdk.direct_llm_v2 import (
+        aggregate_direct_llm_v2,
+        direct_llm_v2_scores,
+        resolve_direct_llm_v2_manifest,
+    )
 
     def selected_count(run: dict[str, Any]) -> int:
         provenance = run["manifest"]["benchmark_provenance"]
@@ -148,27 +164,42 @@ def _load_builtins() -> None:
             raise ValueError("run snapshot has no selected case count")
         return selected
 
-    register_benchmark_plugin(BenchmarkPlugin(
-        suite_id=GSM8K_SUITE,
-        contract_version="1",
-        prepare_manifest=resolve_benchmark_manifest,
-        score=benchmark_scores,
-        aggregate=lambda run, scores: {
-            **aggregate_benchmark(scores, selected_count(run)),
-            "denominator": "selected_cases",
-        },
-        adapter_id="gsm8k-official-jsonl",
-        adapter_version="1",
-    ))
-    register_benchmark_plugin(BenchmarkPlugin(
-        suite_id=DIRECT_LLM_SUITE,
-        contract_version="1",
-        prepare_manifest=resolve_direct_llm_manifest,
-        score=direct_llm_scores,
-        aggregate=lambda run, scores: {
-            **aggregate_answers(scores, selected_count(run)),
-            "denominator": "judged_cases",
-        },
-        adapter_id="direct-llm-jsonl",
-        adapter_version="1",
-    ))
+    register_benchmark_plugin(
+        BenchmarkPlugin(
+            suite_id=GSM8K_SUITE,
+            contract_version="1",
+            prepare_manifest=resolve_benchmark_manifest,
+            score=benchmark_scores,
+            aggregate=lambda run, scores: {
+                **aggregate_benchmark(scores, selected_count(run)),
+                "denominator": "selected_cases",
+            },
+            adapter_id="gsm8k-official-jsonl",
+            adapter_version="1",
+        )
+    )
+    register_benchmark_plugin(
+        BenchmarkPlugin(
+            suite_id=DIRECT_LLM_SUITE,
+            contract_version="1",
+            prepare_manifest=resolve_direct_llm_manifest,
+            score=direct_llm_scores,
+            aggregate=lambda run, scores: {
+                **aggregate_answers(scores, selected_count(run)),
+                "denominator": "judged_cases",
+            },
+            adapter_id="direct-llm-jsonl",
+            adapter_version="1",
+        )
+    )
+    register_benchmark_plugin(
+        BenchmarkPlugin(
+            suite_id=DIRECT_LLM_SUITE,
+            contract_version="2",
+            prepare_manifest=resolve_direct_llm_v2_manifest,
+            score=direct_llm_v2_scores,
+            aggregate=aggregate_direct_llm_v2,
+            adapter_id="direct-llm-jsonl",
+            adapter_version="2",
+        )
+    )

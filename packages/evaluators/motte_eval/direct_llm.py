@@ -44,19 +44,24 @@ def score_answer_case(result: Any, expected: Any, scorer: str | None = None) -> 
 
 
 def aggregate_answers(scores: list[dict[str, Any]], selected_count: int) -> dict[str, Any]:
-    """按「有期望的题」算分母：``judged = correct + wrong_answer + call_failed``。
+    """聚合 v1 分数，保持历史字段分母，仅修复 judged 的事实来源。
 
-    调用失败的题只要声明了期望就计入分母（与 GSM8K 口径一致：失败不该被静默移出分母）。
+    ``judged`` 必须来自单题评分写入的标志，不能由 outcome 反推：没有期望的调用失败题
+    也是 ``call_failed``，但不应进入 accuracy 分母。有期望的调用失败题仍由其
+    ``judged=True`` 计入分母。v1 的 completion/attempt_rate 历史上也使用 judged 分母，
+    即使可能大于 1 也不在原版本内改义；v2 才改为 selected 分母并增加 coverage。
     """
     counts = {name: sum(score["outcome"] == name for score in scores)
               for name in ("correct", "wrong_answer", "no_expectation", "call_failed",
                            "not_attempted")}
-    judged = counts["correct"] + counts["wrong_answer"] + counts["call_failed"]
+    judged_scores = [score for score in scores if score.get("judged") is True]
+    judged = len(judged_scores)
+    judged_correct = sum(score["outcome"] == "correct" for score in judged_scores)
     attempted = sum(bool(score.get("attempted")) for score in scores)
     responded = sum(bool(score.get("responded")) for score in scores)
     return {**counts, "selected": selected_count, "judged": judged, "attempted": attempted,
             "responded": responded,
             "completion": responded / judged if judged else None,
             "attempt_rate": attempted / judged if judged else None,
-            "accuracy": counts["correct"] / judged if judged else None,
+            "accuracy": judged_correct / judged if judged else None,
             "scorer_version": SCORER_VERSION}

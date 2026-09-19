@@ -1,7 +1,9 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from motte_sdk.publication import publication_audit
 from motte_storage.resource_store import (
     InMemoryResourceStore,
     ResourceConflictError,
@@ -93,6 +95,204 @@ def test_version_collision_is_atomic_under_concurrency(tmp_path, backend):
         outcomes = list(pool.map(write, (1, 2)))
     assert sum(item is None for item in outcomes) == 1
     assert [row for row in outcomes if row is not None] == store.price_tables.list()
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_dataset_and_scenario_publish_atomically(tmp_path, backend):
+    store = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "atomic-resources.db"
+    )
+    existing_scenario = {"name": "bundle", "version": "1", "cases": ["old"]}
+    store.scenarios.put(existing_scenario)
+    dataset = {"name": "bundle", "version": "1", "cases": ["new"]}
+    scenario = {"name": "bundle", "version": "1", "cases": ["new"]}
+
+    with pytest.raises(ResourceConflictError, match="different content"):
+        store.publish_dataset_scenario(dataset, scenario)
+    assert store.datasets.get("bundle", "1") is None
+    assert store.scenarios.get("bundle", "1") == existing_scenario
+
+    other_dataset = {"name": "other", "version": "1", "cases": ["new"]}
+    other_scenario = {"name": "other", "version": "1", "cases": ["new"]}
+    assert store.publish_dataset_scenario(other_dataset, other_scenario) == (
+        other_dataset, other_scenario
+    )
+    assert store.publish_dataset_scenario(other_dataset, other_scenario) == (
+        other_dataset, other_scenario
+    )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_pair_publish_is_concurrent_and_never_mixes_records(tmp_path, backend):
+    store = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "concurrent-pairs.db"
+    )
+    same_pair = (
+        {"name": "same-pair", "version": "1", "value": 1},
+        {"name": "same-pair", "version": "1", "value": 1},
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(store.publish_dataset_scenario, *same_pair) for _ in range(2)]
+        assert [future.result(timeout=10) for future in futures] == [same_pair, same_pair]
+
+    pairs = [
+        (
+            {"name": "racing-pair", "version": "1", "value": value},
+            {"name": "racing-pair", "version": "1", "value": value},
+        )
+        for value in (1, 2)
+    ]
+
+    def publish(pair):
+        try:
+            return store.publish_dataset_scenario(*pair)
+        except ResourceConflictError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(publish, pair) for pair in pairs]
+        outcomes = [future.result(timeout=10) for future in futures]
+    assert sum(outcome is None for outcome in outcomes) == 1
+    winner = next(outcome for outcome in outcomes if outcome is not None)
+    assert store.datasets.get("racing-pair", "1") == winner[0]
+    assert store.scenarios.get("racing-pair", "1") == winner[1]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_pair_publish_commits_append_only_publication_audit(tmp_path, backend):
+    store = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "publication-audit.db"
+    )
+    fingerprint = "sha256:" + "1" * 64
+    dataset = {
+        "name": "audited-pair", "version": "1", "value": 1,
+        "dataset_fingerprint": fingerprint,
+    }
+    scenario = {
+        "name": "audited-pair", "version": "1", "value": 1,
+        "dataset": "audited-pair@1",
+    }
+    publication = publication_audit(
+        dataset, scenario, {"fixture": "append-only"},
+        actor="test-operator", entrypoint="cli", published_at="2026-09-19T00:00:00Z",
+    )
+
+    assert store.publish_dataset_scenario(
+        dataset, scenario, publication=publication
+    ) == (dataset, scenario)
+    assert store.publications.get(publication["id"]) == publication
+    assert store.publish_dataset_scenario(
+        dataset, scenario, publication=publication
+    ) == (dataset, scenario)
+    with pytest.raises(ResourceConflictError, match="different content"):
+        store.publish_dataset_scenario(
+            dataset, scenario,
+            publication={**publication, "published_at": "2026-09-20T00:00:00Z"},
+        )
+    assert store.publications.get(publication["id"]) == publication
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+def test_publication_repository_rejects_noncanonical_receipt_time_and_fields(tmp_path, backend):
+    store = InMemoryResourceStore() if backend == "memory" else SQLiteResourceStore(
+        tmp_path / "strict-publication.db"
+    )
+    dataset = {
+        "name": "strict-audit", "version": "1",
+        "dataset_fingerprint": "sha256:" + "1" * 64,
+    }
+    scenario = {"name": "strict-audit", "version": "1"}
+    audit = publication_audit(
+        dataset, scenario, {"fixture": "strict"},
+        actor="pytest", entrypoint="storage-test", published_at="2026-09-19T00:00:00Z",
+    )
+    invalid_records = [
+        {**audit, "unexpected": True},
+        {**audit, "published_at": "2026-09-19T00:00:00+00:00"},
+        {**audit, "receipt": {"nested": {"artifact_paths": {"data": "/tmp/private"}}}},
+        {**audit, "receipt_sha256": "f" * 64},
+        {**audit, "id": "publication-" + "0" * 64},
+    ]
+    for invalid in invalid_records:
+        with pytest.raises(ValueError):
+            store.publications.put(invalid)
+    assert store.publications.list() == []
+
+
+def test_publication_audit_must_match_published_bundle():
+    store = InMemoryResourceStore()
+    fingerprint = "sha256:" + "1" * 64
+    dataset = {
+        "name": "audited-pair", "version": "1",
+        "dataset_fingerprint": fingerprint,
+    }
+    scenario = {
+        "name": "audited-pair", "version": "1", "dataset": "audited-pair@1",
+    }
+    publication = publication_audit(
+        {**dataset, "name": "other"}, scenario, {"fixture": "wrong-reference"},
+        actor="test-operator", entrypoint="cli", published_at="2026-09-19T00:00:00Z",
+    )
+    with pytest.raises(ValueError, match="references"):
+        store.publish_dataset_scenario(dataset, scenario, publication=publication)
+    assert store.datasets.get("audited-pair", "1") is None
+    assert store.scenarios.get("audited-pair", "1") is None
+    assert store.publications.list() == []
+
+
+def test_sqlite_pair_publish_rolls_back_when_scenario_insert_fails(tmp_path):
+    path = tmp_path / "rollback-resources.db"
+    store = SQLiteResourceStore(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_scenario_insert
+            BEFORE INSERT ON scenario_versions
+            WHEN NEW.name = 'rollback-pair'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced scenario failure');
+            END
+            """
+        )
+    dataset = {"name": "rollback-pair", "version": "1", "cases": ["new"]}
+    scenario = {"name": "rollback-pair", "version": "1", "cases": ["new"]}
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced scenario failure"):
+        store.publish_dataset_scenario(dataset, scenario)
+    assert store.datasets.get("rollback-pair", "1") is None
+    assert store.scenarios.get("rollback-pair", "1") is None
+
+
+def test_sqlite_bundle_rolls_back_when_publication_insert_fails(tmp_path):
+    path = tmp_path / "rollback-publication.db"
+    store = SQLiteResourceStore(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_publication_insert
+            BEFORE INSERT ON resource_publications
+            BEGIN
+                SELECT RAISE(ABORT, 'forced publication failure');
+            END
+            """
+        )
+    fingerprint = "sha256:" + "1" * 64
+    dataset = {
+        "name": "rollback-audit", "version": "1",
+        "dataset_fingerprint": fingerprint,
+    }
+    scenario = {
+        "name": "rollback-audit", "version": "1", "dataset": "rollback-audit@1",
+    }
+    publication = publication_audit(
+        dataset, scenario, {"fixture": "rollback"},
+        actor="test-operator", entrypoint="cli", published_at="2026-09-19T00:00:00Z",
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="forced publication failure"):
+        store.publish_dataset_scenario(dataset, scenario, publication=publication)
+    assert store.datasets.get("rollback-audit", "1") is None
+    assert store.scenarios.get("rollback-audit", "1") is None
+    assert store.publications.get("rollback-audit-1") is None
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])

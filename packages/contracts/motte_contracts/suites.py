@@ -3,16 +3,17 @@
 目前登记两个套件：
 
 - ``gsm8k``：官方数学基准，记录用顶层 ``benchmark`` 键（``motte_contracts.gsm8k``）。
-- ``direct-llm``：通用直连评测，记录用顶层 ``eval`` 键（``motte_contracts.direct_llm``）。
+- ``direct-llm``：通用直连评测，按 ``eval.version`` 分派 v1/v2 严格契约。
 
 新增套件 = 在 ``SUITES`` 里加一项；资源存储的不可变/严格校验、运行创建期的 manifest 展开、
 运行后的评分都通过本模块分发，不在调用点写 ``if suite == ...``。
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import direct_llm, gsm8k
+from . import direct_llm, direct_llm_v2, gsm8k
 from .selection import CASE_SELECTION_KEY, RUN_SELECTION_KEY
 
 # 运行快照键：两种套件共用同一组 manifest 键，service/api 的执行与报告链路因此无需分叉。
@@ -26,14 +27,63 @@ def _gsm8k_match(record: Any) -> bool:
 
 
 def _direct_llm_match(record: Any) -> bool:
-    return direct_llm.is_dataset(record) or direct_llm.is_scenario(record)
+    if direct_llm.is_dataset(record) or direct_llm.is_scenario(record):
+        return True
+    if direct_llm_v2.is_dataset(record) or direct_llm_v2.is_scenario(record):
+        return True
+    if not isinstance(record, dict):
+        return False
+    eval_spec = record.get(direct_llm.EVAL_KEY)
+    if not isinstance(eval_spec, dict) or eval_spec.get("suite") != direct_llm.SUITE:
+        return False
+    # Any explicit Direct identity/version marker stays managed so unknown combinations cannot
+    # escape strict validation by changing more than one field at once.
+    explicit_identity = "id" in eval_spec or "version" in eval_spec
+    explicit_marker = "contract_version" in record or "plugin_version" in record
+    return explicit_identity or explicit_marker
+
+
+def _direct_llm_version(record: dict[str, Any]) -> int | None:
+    eval_spec = record.get(direct_llm.EVAL_KEY)
+    version = eval_spec.get("version") if isinstance(eval_spec, dict) else None
+    return version if type(version) is int else None
+
+
+def _validate_direct_llm_dataset(record: dict[str, Any]) -> None:
+    version = _direct_llm_version(record)
+    if version == direct_llm.DATASET_VERSION:
+        direct_llm.validate_dataset(record)
+        return
+    if version == direct_llm_v2.DATASET_VERSION:
+        direct_llm_v2.validate_dataset(record)
+        return
+    raise ValueError(f"unsupported direct-llm dataset contract version: {version!r}")
+
+
+def _validate_direct_llm_scenario(record: dict[str, Any]) -> None:
+    version = _direct_llm_version(record)
+    if version == direct_llm.DATASET_VERSION:
+        direct_llm.validate_scenario(record)
+        return
+    if version == direct_llm_v2.DATASET_VERSION:
+        direct_llm_v2.validate_scenario(record)
+        return
+    raise ValueError(f"unsupported direct-llm scenario contract version: {version!r}")
 
 
 # suite id → (归属判定, 数据集校验, 场景校验)
-SUITES: dict[str, tuple[Callable[[Any], bool], Callable[[dict[str, Any]], None],
-                        Callable[[dict[str, Any]], None]]] = {
+SUITES: dict[
+    str,
+    tuple[
+        Callable[[Any], bool], Callable[[dict[str, Any]], None], Callable[[dict[str, Any]], None]
+    ],
+] = {
     gsm8k.SUITE: (_gsm8k_match, gsm8k.validate_dataset, gsm8k.validate_scenario),
-    direct_llm.SUITE: (_direct_llm_match, direct_llm.validate_dataset, direct_llm.validate_scenario),
+    direct_llm.SUITE: (
+        _direct_llm_match,
+        _validate_direct_llm_dataset,
+        _validate_direct_llm_scenario,
+    ),
 }
 
 
@@ -77,6 +127,44 @@ def validate_scenario(record: dict[str, Any]) -> None:
     SUITES[suite][2](record)
 
 
-__all__ = ["CASE_SELECTION_KEY", "PROVENANCE_KEY", "RESERVED_KEYS", "RUN_SELECTION_KEY",
-           "SNAPSHOT_KEY", "SUITES", "is_managed", "suite_of", "suite_of_run",
-           "validate_dataset", "validate_scenario"]
+def _validated_identity(record: Any, *, scenario: bool) -> tuple[str, str] | None:
+    if not isinstance(record, dict):
+        return None
+    suite = suite_of(record)
+    if suite is None:
+        return None
+    if scenario:
+        validate_scenario(record)
+    else:
+        validate_dataset(record)
+    version = _direct_llm_version(record) if suite == direct_llm.SUITE else 1
+    if type(version) is not int:
+        raise ValueError(f"validated {suite} record has no integer contract version")
+    return suite, str(version)
+
+
+def validated_dataset_identity(record: Any) -> tuple[str, str] | None:
+    """Return a managed dataset identity only after its versioned contract validates."""
+    return _validated_identity(record, scenario=False)
+
+
+def validated_scenario_identity(record: Any) -> tuple[str, str] | None:
+    """Return a managed scenario identity only after its versioned contract validates."""
+    return _validated_identity(record, scenario=True)
+
+
+__all__ = [
+    "CASE_SELECTION_KEY",
+    "PROVENANCE_KEY",
+    "RESERVED_KEYS",
+    "RUN_SELECTION_KEY",
+    "SNAPSHOT_KEY",
+    "SUITES",
+    "is_managed",
+    "suite_of",
+    "suite_of_run",
+    "validate_dataset",
+    "validate_scenario",
+    "validated_dataset_identity",
+    "validated_scenario_identity",
+]

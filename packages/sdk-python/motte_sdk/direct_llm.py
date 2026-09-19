@@ -11,7 +11,7 @@ from motte_contracts.direct_llm import (EVAL_KEY, PROMPT_VERSION, SCORER_VERSION
                                         effective_scorers, normalize_scorer, scenario_for,
                                         validate_dataset, validate_scenario)
 from motte_contracts.selection import CASE_SELECTION_KEY, RUN_SELECTION_KEY
-from motte_sdk.datasets import next_dataset_version
+from motte_sdk.datasets import dataset_fingerprint, next_dataset_version
 
 BUILTIN_ENV = "MOTTE_BUILTIN_DATASET_DIR"
 BUILTIN_SUBDIR = Path("datasets") / "direct-llm"
@@ -21,6 +21,7 @@ BUILTIN_LICENSE = "internal-sample"
 SNAPSHOT_KEY = "benchmark_snapshot"
 PROVENANCE_KEY = "benchmark_provenance"
 RESERVED_KEYS = frozenset({SNAPSHOT_KEY, PROVENANCE_KEY, "benchmark_cases", "tools", "cases"})
+MAX_AUTO_VERSION_ATTEMPTS = 256
 
 
 class BuiltinUnavailable(ValueError):
@@ -110,18 +111,46 @@ def persist_direct_llm_dataset(record: dict[str, Any], resources: Any,
 
     ``version`` 为空时自动选版本（同内容复用，否则下一个空号）；场景名与数据集名一致。
     """
-    record = {**record, "version": version or next_dataset_version(record, resources)}
-    scenario = scenario_for(record, version=record["version"])
-    resources.datasets.put(record)
-    resources.scenarios.put(scenario)
-    return {"imported": f"{record['name']}@{record['version']}",
-            "scenario": f"{scenario['name']}@{scenario['version']}",
-            "suite": SUITE,
-            "scorer": record[EVAL_KEY]["scorer"],
-            "cases": len(record["cases"]),
-            "source": record["provenance"]["source"],
-            "source_sha256": record["provenance"]["source_sha256"],
-            "cases_sha256": record["cases_sha256"]}
+    from motte_storage.resource_store import ResourceConflictError
+
+    fingerprint = dataset_fingerprint(record)
+    candidate = {**record, "dataset_fingerprint": fingerprint}
+    auto_version = version is None
+    retry_version: str | None = None
+    for _ in range(MAX_AUTO_VERSION_ATTEMPTS):
+        target_version = version or retry_version or next_dataset_version(candidate, resources)
+        existing = resources.datasets.get(record["name"], target_version)
+        published = (
+            existing
+            if existing is not None and dataset_fingerprint(existing) == fingerprint
+            else {**candidate, "version": target_version}
+        )
+        scenario = scenario_for(published, version=target_version)
+        try:
+            resources.publish_dataset_scenario(published, scenario)
+        except ResourceConflictError:
+            if not auto_version:
+                raise
+            occupied = [
+                int(item["version"])
+                for repository in (resources.datasets, resources.scenarios)
+                for item in repository.list()
+                if item.get("name") == record["name"]
+                and isinstance(item.get("version"), str)
+                and item["version"].isdigit()
+            ]
+            retry_version = str(max(occupied, default=0) + 1)
+            continue
+        return {"imported": f"{published['name']}@{target_version}",
+                "scenario": f"{scenario['name']}@{scenario['version']}",
+                "suite": SUITE,
+                "scorer": published[EVAL_KEY]["scorer"],
+                "cases": len(published["cases"]),
+                "source": published["provenance"]["source"],
+                "source_sha256": published["provenance"]["source_sha256"],
+                "cases_sha256": published["cases_sha256"],
+                "dataset_fingerprint": fingerprint}
+    raise ResourceConflictError("could not allocate an atomic dataset/scenario version")
 
 
 def import_direct_llm_split(raw: bytes, *, name: str, version: str | None, license_id: str,
@@ -185,6 +214,7 @@ def resolve_direct_llm_manifest(scenario: dict[str, Any], manifest: dict[str, An
     resolved[PROVENANCE_KEY] = {
         **deepcopy(dataset[EVAL_KEY]), **deepcopy(dataset["provenance"]),
         "suite": SUITE, "dataset": scenario["dataset"], "cases_sha256": dataset["cases_sha256"],
+        "dataset_fingerprint": dataset.get("dataset_fingerprint") or dataset_fingerprint(dataset),
         "scenario": f"{scenario['name']}@{scenario['version']}",
         "prompt_version": PROMPT_VERSION,
         "max_output_tokens": budget if budget is not None else preset_budget,
