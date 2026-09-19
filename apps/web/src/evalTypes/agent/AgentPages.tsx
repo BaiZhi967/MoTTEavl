@@ -365,6 +365,7 @@ export function AgentResult() {
           passed: score.passed ?? null, reason: score.reason ?? null, value: score.value ?? null,
         })));
     } catch (err) {
+      if (passRequestSeq.current !== requestSeq) return; // 已切换到其它批次：迟到的失败也不得覆盖
       setError(err instanceof Error ? err.message : String(err));
     }
   };
@@ -384,6 +385,10 @@ export function AgentResult() {
   }, [runId]);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  // R3 #8：路由切换到另一个 Run（如重试进入子 Run）时重置样本下钻，
+  // 避免 stale 的 caseDetail 与产物缓存跨 Run 复用。
+  useEffect(() => { setCaseDetail(null); }, [runId]);
 
   const scores: ScoreRow[] = useMemo(() => {
     if (historicalScores != null) return historicalScores;
@@ -547,8 +552,9 @@ export function AgentResult() {
               ? <EmptyState text="没有捕获到文件产物。" />
               : caseDetail.artifacts.map((artifact) =>
                 artifact.available
-                  ? <ArtifactViewer key={`${caseDetail.case_id}:${artifact.path}`} runId={runId} caseId={caseDetail.case_id} path={artifact.path} />
-                  : <p key={`${caseDetail.case_id}:${artifact.path}`} className="hint warning">产物 {artifact.path} 不可用（采集失败或损坏）</p>,
+                  // R3 #8：缓存键含 Run——重试进入子 Run 后不复用父 Run 的产物内容
+                  ? <ArtifactViewer key={`${runId}:${caseDetail.case_id}:${artifact.path}`} runId={runId} caseId={caseDetail.case_id} path={artifact.path} />
+                  : <p key={`${runId}:${caseDetail.case_id}:${artifact.path}`} className="hint warning">产物 {artifact.path} 不可用（采集失败或损坏）</p>,
               )}
             <h3>事件轨迹{caseDetail.events.length >= MAX_EVENT_ROWS ? `（前 ${MAX_EVENT_ROWS} 条）` : ""}</h3>
             <ol className="timeline">

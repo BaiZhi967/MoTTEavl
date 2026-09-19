@@ -3,6 +3,8 @@
 每个 Case 独立目录；工具只接受受控相对路径。安全边界：
 - 拒绝绝对路径、``..``、反斜杠与盘符形状；
 - 逐组件拒绝 symlink（打开用 ``O_NOFOLLOW``，写前检查父链），防逃逸与 TOCTOU 替换；
+- 工作区目录链（anchor 之下的每个组件）必须是真实目录：预先存在的
+  symlink 指向外部目录时拒绝创建，cleanup 前重新校验清理对象归属（R3 #3）；
 - 拒绝设备/管道/套接字文件；
 - 每文件 / 总量 / 文件数配额在写入前强制；
 - 不挂载宿主凭据、不提供网络（文件工具本身无网络面）。
@@ -45,14 +47,62 @@ def validate_relative_path(path: str) -> str:
 
 
 class CaseWorkspace:
-    """One case's workspace directory under a run-scoped controlled root."""
+    """One case's workspace directory under a run-scoped controlled root.
+
+    ``anchor`` 是受信前缀（如平台配置的 workspace 根）：anchor 自身允许是
+    symlink（操作者配置，例如 /tmp），但 anchor 之下的每个组件必须是不含
+    symlink 的真实目录。``self.root`` 保持未解析形态，cleanup 只删除归属
+    校验通过的对象。
+    """
 
     def __init__(
         self, root: str | Path, *, quotas: WorkspaceQuotas | None = None,
+        anchor: str | Path | None = None,
     ) -> None:
-        self.root = Path(root).resolve()
+        root_path = Path(root)
+        self._anchor = Path(anchor) if anchor is not None else root_path.parent
+        self.root = root_path
         self.quotas = quotas or WorkspaceQuotas()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._anchor_real, self._root_real = self._validate_chain(self._anchor)
+
+    # ---------------------------------------------------------------- 目录链安全
+
+    def _validate_chain(self, anchor: Path) -> tuple[Path, Path]:
+        """校验 anchor 之下到 root 的组件链全部为真实目录。
+
+        预先存在 symlink（含 root 本身指向外部目录）在此拒绝；返回
+        (anchor 解析后路径, root 解析后路径) 供后续归属比较使用。
+        """
+        anchor_real = anchor.resolve()
+        try:
+            relative = self.root.relative_to(anchor)
+        except ValueError as error:
+            raise WorkspacePolicyError(
+                "workspace_chain_invalid",
+                f"workspace root {self.root} is not under anchor {anchor}",
+            ) from error
+        current = anchor_real
+        for part in relative.parts:
+            current = current / part
+            try:
+                info = current.lstat()
+            except OSError as error:
+                raise WorkspacePolicyError(
+                    "workspace_chain_invalid",
+                    f"workspace chain component missing: {part!r}",
+                ) from error
+            if stat.S_ISLNK(info.st_mode):
+                raise WorkspacePolicyError(
+                    "symlink_rejected",
+                    f"workspace chain component is a symlink: {part!r}",
+                )
+            if not stat.S_ISDIR(info.st_mode):
+                raise WorkspacePolicyError(
+                    "workspace_chain_invalid",
+                    f"workspace chain component is not a directory: {part!r}",
+                )
+        return anchor_real, current
 
     # ---------------------------------------------------------------- 路径安全
 
@@ -70,8 +120,9 @@ class CaseWorkspace:
                 raise WorkspacePolicyError(
                     "symlink_rejected", f"symlink components are not allowed: {part!r}"
                 )
+        # 归属比较用解析后的真实根（self.root 保持未解析形态供 cleanup 使用）
         resolved = target.resolve(strict=False)
-        if self.root != resolved and self.root not in resolved.parents:
+        if self._root_real != resolved and self._root_real not in resolved.parents:
             raise WorkspacePolicyError("path_escape", f"resolved path escapes workspace: {path!r}")
         if target.exists() or target.is_symlink():
             info = target.lstat()
@@ -202,9 +253,20 @@ class CaseWorkspace:
             os.close(fd)
 
     def cleanup(self) -> dict[str, Any]:
-        """删除本 case 工作区；失败时报告残留，不误报全部回收。"""
+        """删除本 case 工作区；删除前重新校验目录链归属（R3 #3）。
+
+        链路被替换为 symlink 时拒绝删除并如实上报；失败时报告残留，不误报
+        全部回收。``shutil.rmtree`` 自身也不会跟随树内 symlink。
+        """
         import shutil
 
+        try:
+            self._validate_chain(self._anchor)
+        except WorkspacePolicyError as error:
+            return {
+                "status": "failed", "residual": [],
+                "error": f"{error.code}: {error}",
+            }
         try:
             shutil.rmtree(self.root)
             return {"status": "success", "residual": []}

@@ -10,7 +10,12 @@ from __future__ import annotations
 import fnmatch
 import json
 
+from typing import Any
+
 from motte_contracts.evaluation import MetricStatus
+
+# 会改动工作区文件的工具：写入轨迹判定的对象（R3 #6）
+_MUTATING_TOOLS = {"write_file"}
 
 
 def evaluate_tool_call(observation, metric, context):
@@ -42,26 +47,33 @@ def evaluate_tool_call(observation, metric, context):
         )
     args_schema = metric.get("args_schema")
     if args_schema is not None:
-        from jsonschema.exceptions import SchemaError
+        from .observation import _base_metric, bounded_schema_validation, schema_timeout
 
-        from .observation import local_schema_validator
-
-        try:
-            validator = local_schema_validator(args_schema)
-            violations = [
-                {"call_id": call.call_id, "error": error.message}
-                for call in successful
-                for error in validator.iter_errors(call.arguments)
-            ]
-        except SchemaError as error:
-            return _base_metric(
-                observation, metric, MetricStatus.evaluator_error,
-                reason="config_error", details={"error": str(error)},
+        timeout = schema_timeout(context)
+        violations: list[dict[str, Any]] = []
+        schema_failure: tuple[str, str] | None = None
+        for call in successful:
+            kind, value = bounded_schema_validation(
+                args_schema, call.arguments, timeout_sec=timeout,
             )
-        except Exception as error:  # noqa: BLE001 - 含被禁止的远程 $ref
+            if kind == "timeout":
+                return _base_metric(
+                    observation, metric, MetricStatus.evaluator_error,
+                    reason="schema_timeout", details={"timeout_sec": timeout},
+                )
+            if kind in ("config_error", "unresolvable", "error"):
+                schema_failure = (kind, str(value))
+                break
+            violations.extend(
+                {"call_id": call.call_id, "error": message} for message in value
+            )
+        if schema_failure is not None:
+            kind, message = schema_failure
             return _base_metric(
                 observation, metric, MetricStatus.evaluator_error,
-                reason="schema_unresolvable", details={"error": str(error)},
+                reason={"config_error": "config_error",
+                        "unresolvable": "schema_unresolvable"}.get(kind, "schema_execution_error"),
+                details={"error": message},
             )
         if violations:
             return _base_metric(
@@ -74,10 +86,13 @@ def evaluate_tool_call(observation, metric, context):
 
 
 def evaluate_no_forbidden_write(observation, metric, context):
-    """按内容快照判定 create/modify/delete（#6：不只比文件名）。
+    """按内容快照 + 写入轨迹判定 create/modify/delete/写入后恢复（R3 #6）。
 
     需要前后内容 hash 才能证明"预置文件未被改动"；hash 缺失时对命中的
-    预置文件返回 insufficient，而不是默认未变更。
+    预置文件返回 insufficient，而不是默认未变更。终态 hash 一致只能证明
+    内容未变：轨迹完整时，成功的 write_file 命中禁写路径即违规——
+    "先覆盖、再恢复原内容"同样是禁写（轨迹不完整时退回快照口径，结论
+    只覆盖已监控范围）。
     """
     from .observation import _base_metric, _insufficient
 
@@ -117,6 +132,21 @@ def evaluate_no_forbidden_write(observation, metric, context):
         if before_hash != after_hash:
             violations.append(f"{path} (modified)")
         # hash 相同：预置文件未改动，不算违规
+
+    written_restored: list[str] = []
+    if observation.coverage.complete:
+        # 轨迹完整时写入记录可证：终态一致但有成功写入 → 写入后恢复，仍违规
+        for call in observation.tool_calls:
+            arguments = call.arguments if isinstance(call.arguments, dict) else {}
+            written = arguments.get("path")
+            if (
+                call.tool_name in _MUTATING_TOOLS
+                and call.status == "succeeded"
+                and isinstance(written, str)
+                and any(fnmatch.fnmatch(written, pattern) for pattern in forbidden)
+            ):
+                written_restored.append(f"{written} (written, final state matches)")
+    violations.extend(written_restored)
 
     if unprovable and not violations:
         return _insufficient(
@@ -190,28 +220,28 @@ def evaluate_json_schema(observation, metric, context):
             observation, metric, MetricStatus.scored, passed=False,
             reason="invalid_json", details={"error": str(error)},
         )
-    from jsonschema.exceptions import SchemaError
+    from .observation import _base_metric, bounded_schema_validation, schema_timeout
 
-    from .observation import local_schema_validator
-
-    try:
-        validator = local_schema_validator(schema)
-        errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.absolute_path))
-    except SchemaError as error:
+    kind, value = bounded_schema_validation(
+        schema, payload, timeout_sec=schema_timeout(context),
+    )
+    if kind == "timeout":
         return _base_metric(
             observation, metric, MetricStatus.evaluator_error,
-            reason="config_error", details={"error": str(error)},
+            reason="schema_timeout", details={"timeout_sec": schema_timeout(context)},
         )
-    except Exception as error:  # noqa: BLE001 - 含被禁止的远程 $ref
+    if kind in ("config_error", "unresolvable", "error"):
         return _base_metric(
             observation, metric, MetricStatus.evaluator_error,
-            reason="schema_unresolvable", details={"error": str(error)},
+            reason={"config_error": "config_error",
+                    "unresolvable": "schema_unresolvable"}.get(kind, "schema_execution_error"),
+            details={"error": str(value)},
         )
-    if errors:
+    if value:
         return _base_metric(
             observation, metric, MetricStatus.scored, passed=False,
             reason="schema_violation",
-            details={"violations": [error.message for error in errors[:5]]},
+            details={"violations": list(value[:5])},
         )
     return _base_metric(observation, metric, MetricStatus.scored, passed=True)
 

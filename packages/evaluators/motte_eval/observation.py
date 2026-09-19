@@ -33,6 +33,9 @@ DEFAULT_REGEX_TIMEOUT_SEC = 2.0
 MAX_REGEX_TIMEOUT_SEC = 10.0
 DEFAULT_EVAL_DEADLINE_SEC = 30.0
 MAX_EVAL_DEADLINE_SEC = 120.0
+# schema 子进程校验的兜底期限（无全局 deadline 的直调场景）；
+# 在批内执行时受剩余 eval deadline 双重约束（R3 #5）。
+MAX_SCHEMA_TIMEOUT_SEC = 10.0
 
 MetricRequest = dict[str, Any]
 
@@ -94,6 +97,16 @@ def local_schema_validator(schema: dict[str, Any]):
         raise Unresolvable(ref=uri)
 
     return jsonschema.Draft202012Validator(schema, registry=Registry(retrieve=blocked))
+
+
+def schema_timeout(context: "EvaluationContext") -> float:
+    """schema 子进程期限：剩余全局 eval deadline 与兜底上限的较小值（R3 #5）。"""
+    from time import monotonic
+
+    effective = MAX_SCHEMA_TIMEOUT_SEC
+    if context.deadline is not None:
+        effective = min(effective, max(context.deadline - monotonic(), 0.05))
+    return effective
 
 
 def _base_metric(
@@ -304,6 +317,49 @@ def bounded_regex_search(
             kind, value = "timeout", None
     except (EOFError, OSError):
         kind, value = "error", "matcher process died"
+    finally:
+        parent_conn.close()
+    if kind == "timeout":
+        process.terminate()
+        process.join(1.0)
+        if process.is_alive():
+            process.kill()
+            process.join(1.0)
+    else:
+        process.join(1.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(1.0)
+    return kind, value
+
+
+def bounded_schema_validation(
+    schema: dict[str, Any], instance: Any, *, timeout_sec: float,
+) -> tuple[str, Any]:
+    """Terminable JSON Schema validation (R3 #5).
+
+    schema 内的 ``pattern`` / ``patternProperties`` 由 CPython ``re`` 同步执行，
+    病态模式会卡死进程内校验；与 regex 相同地放进可终止的子进程执行。返回
+    ("ok", [error.message, ...]) / ("timeout", None) / ("error", str)。
+    """
+    import multiprocessing as mp
+
+    from . import _schema_worker
+
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=_schema_worker.worker_main, args=(child_conn, schema, instance), daemon=True,
+    )
+    process.start()
+    child_conn.close()
+    try:
+        if parent_conn.poll(timeout_sec):
+            kind, value = parent_conn.recv()
+        else:
+            kind, value = "timeout", None
+    except (EOFError, OSError):
+        kind, value = "error", "validator process died"
     finally:
         parent_conn.close()
     if kind == "timeout":
