@@ -73,6 +73,8 @@ def evaluate_file_content(observation: FrozenObservation, metric: MetricRequest,
     entry = _find_artifact(observation, path)
     if entry is None:
         return _insufficient(observation, metric, "artifact_not_captured")
+    if not entry.available:
+        return _insufficient(observation, metric, "artifact_unavailable", refs=_ref(observation, entry))
     loaded = _load_artifact_bytes(observation, metric, context, entry)
     if isinstance(loaded, MetricResult):
         return loaded

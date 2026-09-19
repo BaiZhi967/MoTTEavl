@@ -28,7 +28,7 @@ from motte_contracts.evaluation import (
     ToolCallRecord,
     observation_evidence_hash,
 )
-from motte_trace.redaction import redact
+from motte_trace.redaction import redact_secrets as redact
 
 
 class AgentBackendError(ValueError):

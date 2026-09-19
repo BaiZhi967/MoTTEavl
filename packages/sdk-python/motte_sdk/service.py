@@ -419,9 +419,12 @@ class RunService:
     def emit_run_event(
         self, run_id: str, event_type: str, payload: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """后端证据通道：追加一条持久 trace 事件并广播（agent 步骤等）。"""
+        """后端证据通道：追加一条持久 trace 事件并广播，返回含 seq 的存储事件。"""
         try:
-            stored = self._emit(run_id, event_type, payload or {})
+            stored = self.store.events.append({
+                "run_id": run_id, "type": event_type, **(payload or {}),
+            })
+            self._notify_event(stored)
             return stored
         except Exception:  # noqa: BLE001 - 证据通道故障不阻断执行
             return None
