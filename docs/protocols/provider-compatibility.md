@@ -18,6 +18,15 @@
 
 Benchmark runs use strict final-line Decimal scoring and a selected-case denominator. Failed runs retain partial scores, failed-call evidence and not-attempted rows; terminal benchmark rescore is offline. Generic raw-equality/replay behavior remains unchanged. Existing HTTP adapters share the prompt-only projection; synthetic fake-HTTP Worker tests verify the complete path, not official dataset authenticity or live model quality. See [GSM8K operator guide](../operations/gsm8k-smoke.md) for error policy, costs and restart limitations.
 
+## Execution Backend（M1 起）
+
+| Backend | 状态 | 说明 |
+|---|---|---|
+| `builtin-agent@1` | ✅ 已接线（`safe_to_repeat=false`） | 原生 Agent 文件任务：native-tool / legacy-json 双显式模式；native 模式要求已发布模型 `supports_tools=true`，否则创建期 422（零模型调用），不自动降级。模型请求按已发布 ModelProfile 快照构造（不再硬编码模型名）。操作见 [native-agent.md](../operations/native-agent.md)。 |
+| `direct-llm@1` | ✅ 可用 | 直连单轮评测 |
+| `replay@1` | ✅ 可用（safe_to_repeat） | 确定性回放 |
+| `external-benchmark@1` | ⛔ unavailable（未接线） | 待 M2 连接 |
+
 ## Provider
 
 | Adapter | 状态 | 传输 | strict 预检 | 计量 | 价格/成本 | canonical 脱敏 |
