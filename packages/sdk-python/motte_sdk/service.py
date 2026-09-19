@@ -99,6 +99,10 @@ class RunService:
             from .direct_llm_v2 import selected_cases_from_snapshot
 
             selected_cases_from_snapshot(run)
+        elif provenance.get("suite") == "agent-tasks":
+            from .agent_tasks import selected_agent_cases_from_snapshot
+
+            selected_agent_cases_from_snapshot(run)
 
     def create_run(
         self,
@@ -411,6 +415,16 @@ class RunService:
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
         return self.store.events.list_for_run(run_id)
+
+    def emit_run_event(
+        self, run_id: str, event_type: str, payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """后端证据通道：追加一条持久 trace 事件并广播（agent 步骤等）。"""
+        try:
+            stored = self._emit(run_id, event_type, payload or {})
+            return stored
+        except Exception:  # noqa: BLE001 - 证据通道故障不阻断执行
+            return None
 
     def events_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
         return self.store.events.list_after(run_id, seq)
@@ -885,7 +899,12 @@ class RunService:
                 result = deepcopy(getattr(error, "evidence", None)) or {
                     "error": {"class": classify_exception(error), "message": str(error)}}
             error = result.get("error") if isinstance(result, dict) else None
-            if error and error.get("class") in CONTINUE_ERROR_CLASSES:
+            # agent 后端有文件副作用：dispatch 后结果不确定的整段补跑被禁止，
+            # 瞬态失败立即落盘交由操作员显式 retry（M1-G09）。
+            allow_second_chance = (
+                run.get("manifest", {}).get("execution", {}).get("backend_id") != "builtin-agent"
+            )
+            if error and error.get("class") in CONTINUE_ERROR_CLASSES and allow_second_chance:
                 pending[case_id] = (ordinal, attempt, result)
                 self._emit(run_id, "case_call_failed",
                            {"case_id": case_id, "result": deepcopy(result)})

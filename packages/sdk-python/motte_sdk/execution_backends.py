@@ -26,6 +26,8 @@ class ExecutionHandle:
     backend_version: str
     invoke: Callable[[str], Any]
     capabilities: dict[str, bool] = field(default_factory=dict)
+    # 可选：dispatch 前把 RunService 上下文接到后端（事件通道 / 调用日志 / 取消探测）
+    attach: Callable[[Any, str], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -118,12 +120,22 @@ def resolve_execution(
     resolved = deepcopy(manifest)
     requested = resolved.get("execution")
     runtime_fields = [name for name in ("agent", "skills", "harness", "pi") if resolved.get(name)]
-    if runtime_fields and requested is None:
+    scenario_mode = (scenario or {}).get("mode")
+    agent_requested = bool(resolved.get("agent")) or scenario_mode == "agent-tasks"
+    if runtime_fields and requested is None and not agent_requested:
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_UNSUPPORTED",
             "manifest declares runtime fields without a registered execution backend: "
             + ", ".join(runtime_fields),
         )
+    if agent_requested and requested is None:
+        non_agent_fields = [name for name in ("skills", "harness", "pi") if resolved.get(name)]
+        if non_agent_fields:
+            raise ExecutionBackendError(
+                "EXECUTION_BACKEND_UNSUPPORTED",
+                "builtin-agent does not support runtime fields: " + ", ".join(non_agent_fields),
+            )
+        requested = {"backend_id": "builtin-agent", "backend_version": "1"}
     if requested is None:
         provider = resolved.get("provider")
         mode = (scenario or {}).get("mode")
@@ -360,6 +372,41 @@ register_backend(ExecutionBackendSpec(
     validate=_validate_replay,
     build=_build_replay,
     capabilities={"interactive": False, "safe_to_repeat": True},
+))
+def _validate_agent(manifest: dict[str, Any]) -> None:
+    from .agent_backend import AgentBackendError, validate_agent_manifest
+
+    try:
+        validate_agent_manifest(manifest)
+    except AgentBackendError as error:
+        raise ExecutionBackendError(error.code, str(error)) from error
+
+
+def _build_agent(run: dict[str, Any]) -> ExecutionHandle:
+    from .agent_backend import AgentCaseExecutor, build_agent_provider
+
+    provider = build_agent_provider(run.get("manifest") or {})
+    executor = AgentCaseExecutor(run, provider_complete=provider.provider.complete)
+
+    def attach(service: Any, run_id: str) -> None:
+        executor.bind_service(service)
+
+    return ExecutionHandle(
+        backend_id="builtin-agent",
+        backend_version="1",
+        invoke=executor.invoke,
+        capabilities=dict(_SPECS[("builtin-agent", "1")].capabilities),
+        attach=attach,
+    )
+
+
+register_backend(ExecutionBackendSpec(
+    id="builtin-agent",
+    version="1",
+    validate=_validate_agent,
+    build=_build_agent,
+    capabilities={"interactive": False, "safe_to_repeat": False},
+    available=True,
 ))
 register_backend(ExecutionBackendSpec(
     id="external-benchmark",

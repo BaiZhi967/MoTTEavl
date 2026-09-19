@@ -80,6 +80,9 @@ class RunDispatcher:
                     dispatched["manifest"], selected_case_ids
                 )
             handle = build_execution_handle(dispatched)
+            attach = getattr(handle, "attach", None)
+            if attach is not None:
+                attach(self.service, run_id)
         except UnsupportedParameterError as error:
             return self.service.mark_unsupported(
                 run_id, "UNSUPPORTED_PARAMETER", message=str(error)

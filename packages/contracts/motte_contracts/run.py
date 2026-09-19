@@ -87,6 +87,7 @@ class ResolvedManifest(Contract):
     benchmark_provenance: dict[str, Any] | None = None
     replay_fixture: dict[str, ReplayCase] | None = None
     agent: str | None = None
+    agent_config: dict[str, Any] | None = None
     skills: list[str] = Field(default_factory=list)
     harness: str | None = None
     sandbox: dict[str, Any] | None = None
