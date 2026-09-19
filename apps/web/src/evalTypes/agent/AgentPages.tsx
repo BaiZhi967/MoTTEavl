@@ -17,6 +17,7 @@ import {
   getAgentCaseDetail,
   getAgentTasksOverview,
   getModels,
+  getReport,
   getRun,
   getScoringPasses,
   retryRun,
@@ -340,9 +341,29 @@ export function AgentResult() {
   const [run, setRun] = useState<RunRecord | null>(null);
   const [passes, setPasses] = useState<Array<{ id: string; summary: Record<string, any> }>>([]);
   const [selectedPass, setSelectedPass] = useState<string>("");
+  // 历史 pass 的只读分数（null = 展示 current pass 的 run.scores）
+  const [historicalScores, setHistoricalScores] = useState<ScoreRow[] | null>(null);
   const [caseDetail, setCaseDetail] = useState<AgentCaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const onPassChange = async (passId: string) => {
+    setSelectedPass(passId);
+    setHistoricalScores(null);
+    if (!passId || !run || passId === run.current_scoring_pass_id) return;
+    try {
+      const report = await getReport(runId, passId);
+      setHistoricalScores((report.scores as any[] ?? [])
+        .filter((score) => typeof score.metric_id === "string")
+        .map((score) => ({
+          case_id: score.case_id, metric_id: score.metric_id,
+          metric_status: score.metric_status ?? "scored",
+          passed: score.passed ?? null, reason: score.reason ?? null, value: score.value ?? null,
+        })));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const reload = useCallback(async () => {
     try {
@@ -361,6 +382,7 @@ export function AgentResult() {
   useEffect(() => { void reload(); }, [reload]);
 
   const scores: ScoreRow[] = useMemo(() => {
+    if (historicalScores != null) return historicalScores;
     const current = run?.scores ?? [];
     return current
       .filter((score: any) => typeof score.metric_id === "string")
@@ -369,7 +391,7 @@ export function AgentResult() {
         metric_status: score.metric_status ?? "scored",
         passed: score.passed ?? null, reason: score.reason ?? null, value: score.value ?? null,
       }));
-  }, [run]);
+  }, [run, historicalScores]);
 
   const active = run != null && !["completed", "failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(run.status);
   const retryable = run != null && ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(run.status);
@@ -436,7 +458,7 @@ export function AgentResult() {
         <Panel title="评分批次（历史不可变）">
           <label className="field">
             <span>查看批次</span>
-            <select value={selectedPass} onChange={(event) => setSelectedPass(event.target.value)}>
+            <select value={selectedPass} onChange={(event) => void onPassChange(event.target.value)}>
               {passes.map((passItem, index) => (
                 <option key={passItem.id} value={passItem.id}>
                   #{index + 1} {passItem.id.slice(0, 12)}…
@@ -445,7 +467,10 @@ export function AgentResult() {
               ))}
             </select>
           </label>
-          <p className="hint">切换只读历史批次；读取与切换不会重新评分或调用模型。</p>
+          <p className="hint">
+            切换只读历史批次（当前显示：{historicalScores != null ? "历史批次" : "当前批次"}）；
+            读取与切换不会重新评分或调用模型。
+          </p>
         </Panel>
       )}
 
