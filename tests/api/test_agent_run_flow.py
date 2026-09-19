@@ -109,29 +109,6 @@ def app_env(tmp_path, monkeypatch):
     return client, application, provider
 
 
-def _drain(client, application):  # noqa: ANN001
-    service = application.state.run_service
-    from motte_sdk.dispatcher import RunDispatcher
-
-    dispatcher = RunDispatcher(service)
-    while True:
-        claimed = dispatcher.claim()
-        if claimed is None:
-            break
-        dispatcher.execute_claimed(claimed)
-
-
-def _scripted_invoke(provider):  # noqa: ANN001
-    original = provider
-
-    def invoke(case_id):  # noqa: ANN001
-        original.bind(case_id)
-        # 延迟重新绑定：executor 在 invoke 内部从 provider.provider.complete 取调用
-        return original
-
-    return invoke
-
-
 def test_agent_api_cli_web_same_pass(app_env):
     client, application, provider = app_env
 

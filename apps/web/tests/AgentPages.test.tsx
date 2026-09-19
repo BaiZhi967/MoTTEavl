@@ -16,7 +16,7 @@ const clientMocks = vi.hoisted(() => ({
   getRunInvocations: vi.fn(async () => ({ items: [], total: 0 })),
   getRun: vi.fn(),
   getScoringPasses: vi.fn(async () => ({ items: [], total: 0 })),
-  getReport: vi.fn(),
+  getReport: vi.fn(async () => ({ summary: {}, scores: [] })),
   cancelRun: vi.fn(),
   retryRun: vi.fn(),
   getRuns: vi.fn(),
@@ -166,8 +166,20 @@ describe("AgentResult", () => {
     // 历史 pass 下拉存在且包含当前标记
     const passSelect = screen.getByLabelText(/查看批次/) as HTMLSelectElement;
     expect(passSelect.value).toBe("pass-2");
+    // 切到历史批次：按 pass id 只读拉取该批分数（不重新评分）
+    clientMocks.getReport.mockResolvedValue({
+      summary: {},
+      scores: [
+        { case_id: "case-1", metric_id: "file-content:report.json",
+          metric_status: "scored", passed: false, reason: "content_mismatch" },
+      ],
+    });
     fireEvent.change(passSelect, { target: { value: "pass-1" } });
-    expect(passSelect.value).toBe("pass-1"); // 只读切换，不触发评分
+    await waitFor(() => expect(clientMocks.getReport).toHaveBeenCalledWith(
+      "run-agent-view", "pass-1",
+    ));
+    await waitFor(() => expect(screen.getByText(/当前显示：历史批次/)).toBeTruthy());
+    expect(screen.getByText("content_mismatch")).toBeTruthy();
     expect(clientMocks.getRun).toHaveBeenCalledTimes(1);
   });
 

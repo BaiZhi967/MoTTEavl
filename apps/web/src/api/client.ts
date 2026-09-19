@@ -133,7 +133,8 @@ export const rescoreRun = (id: string) => request<RunRecord>(`/api/v1/runs/${id}
 export const replayRun = (id: string, cases: Record<string, any>) =>
   request<RunRecord>(`/api/v1/runs/${id}/replay`, jsonBody({ cases }));
 
-export const getReport = (id: string) => request<RunReport>(`/api/v1/runs/${id}/report`);
+export const getReport = (id: string, scoringPassId?: string) =>
+  request<RunReport>(`/api/v1/runs/${id}/report${scoringPassId ? `?scoring_pass_id=${encodeURIComponent(scoringPassId)}` : ""}`);
 
 export const getScoringPasses = (id: string) =>
   request<{ items: Array<Record<string, any>>; total: number }>(`/api/v1/runs/${id}/scoring-passes`);

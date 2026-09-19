@@ -147,6 +147,21 @@ def _workspace_tools(workspace) -> dict[str, Any]:
     }
 
 
+def _read_nofollow(path) -> bytes:  # noqa: ANN001
+    """O_NOFOLLOW 读取产物字节：列表与读取之间链接替换不生效。"""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
 def _bounded_events(events: list[dict[str, Any]], limit: int = 500) -> list[dict[str, Any]]:
     bounded = [redact(deepcopy(event)) for event in events[:limit]]
     if len(events) > limit:
@@ -386,7 +401,7 @@ class AgentCaseExecutor:
         for rel in sorted(after_files):
             artifact_id = f"agent/{self.run['id']}/{case['case_id']}/{rel}"
             try:
-                data = (workspace.root / rel).read_bytes()
+                data = _read_nofollow(workspace.root / rel)
                 artifact_store.put_bytes(
                     artifact_id, data, kind="case-artifact",
                     media_type=_guess_media_type(rel),
