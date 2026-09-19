@@ -80,55 +80,93 @@ class CaseWorkspace:
             ) from error
 
     @staticmethod
-    def _reject_component(part: str, info: os.stat_result, prefix: str) -> None:
-        if stat.S_ISLNK(info.st_mode):
-            raise WorkspacePolicyError(
-                "symlink_rejected", f"{prefix} component is a symlink: {part!r}"
-            )
-        if not stat.S_ISDIR(info.st_mode):
+    def _chain_error(parent_fd: int, part: str, error: OSError) -> WorkspacePolicyError:
+        import errno
+
+        if error.errno in (errno.ELOOP, errno.ENOTDIR):
+            # ELOOP=Linux 的 O_NOFOLLOW symlink；macOS 对 symlink+O_DIRECTORY
+            # 返回 ENOTDIR——用 fstatat(follow_symlinks=False) 区分真因
+            try:
+                info = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError:
+                info = None
+            if info is not None and stat.S_ISLNK(info.st_mode):
+                return WorkspacePolicyError(
+                    "symlink_rejected",
+                    f"workspace chain component is a symlink: {part!r}",
+                )
+        return WorkspacePolicyError(
+            "workspace_chain_invalid",
+            f"workspace chain component rejected: {part!r} ({error})",
+        )
+
+    def _open_or_create_component(self, parent_fd: int, part: str, *, create: bool) -> int:
+        """相对父目录 fd 打开一个组件；缺失时（允许的话）单级创建后重开。
+
+        一切按 fd 相对执行，不按路径重新解析父目录（R5 #2）：父目录在校验后
+        被替换成 symlink，也无法把创建/打开重定向到外部目录。O_NOFOLLOW +
+        O_DIRECTORY 拒绝 symlink 与非目录组件（错误码平台差异见 _chain_error）。
+        """
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            return os.open(part, flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            if not create:
+                raise WorkspacePolicyError(
+                    "workspace_chain_invalid",
+                    f"workspace chain component missing: {part!r}",
+                ) from None
+        except OSError as error:
+            raise self._chain_error(parent_fd, part, error) from error
+        try:
+            os.mkdir(part, 0o755, dir_fd=parent_fd)
+        except FileExistsError:
+            pass  # 竞态放置：重开并按当前对象类型判定
+        except OSError as error:
             raise WorkspacePolicyError(
                 "workspace_chain_invalid",
-                f"{prefix} component is not a directory: {part!r}",
-            )
+                f"cannot create workspace component {part!r}: {error}",
+            ) from error
+        try:
+            return os.open(part, flags, dir_fd=parent_fd)
+        except OSError as error:
+            raise self._chain_error(parent_fd, part, error) from error
+
+    def _open_chain_fd(self, anchor: Path, *, create: bool) -> tuple[int, Path, Path]:
+        """从 anchor 逐级（按 fd）打开/创建到 root；返回 (root_fd, anchor_real, root_real)。
+
+        返回的 root_fd 指向最终验证过的目录 inode，调用方负责 close。
+        """
+        anchor.mkdir(parents=True, exist_ok=True)  # anchor 是受信配置前缀
+        anchor_real = anchor.resolve()
+        current_path = anchor_real
+        fd = os.open(anchor, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            for part in self._relative_to_anchor(anchor).parts:
+                child = self._open_or_create_component(fd, part, create=create)
+                os.close(fd)
+                fd = child
+                current_path = current_path / part
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd, anchor_real, current_path
 
     def _validate_chain(self, anchor: Path) -> tuple[Path, Path]:
-        """纯校验（不创建）：anchor 之下到 root 的组件链全部为真实目录。
+        """纯校验（不创建，按 fd 打开）：anchor 之下到 root 全部为真实目录。
 
         预先存在 symlink（含 root 本身指向外部目录）在此拒绝；返回
         (anchor 解析后路径, root 解析后路径) 供归属比较与清理前复核使用。
         """
-        anchor_real = anchor.resolve()
-        current = anchor_real
-        for part in self._relative_to_anchor(anchor).parts:
-            current = current / part
-            try:
-                info = current.lstat()
-            except OSError as error:
-                raise WorkspacePolicyError(
-                    "workspace_chain_invalid",
-                    f"workspace chain component missing: {part!r}",
-                ) from error
-            self._reject_component(part, info, "workspace chain")
-        return anchor_real, current
+        fd, anchor_real, root_real = self._open_chain_fd(anchor, create=False)
+        os.close(fd)
+        return anchor_real, root_real
 
     def _ensure_chain(self, anchor: Path) -> tuple[Path, Path]:
-        """验证已有组件 + 单级创建缺失目录（不跟随竞态放置的意外对象）。"""
-        anchor.mkdir(parents=True, exist_ok=True)  # anchor 是受信配置前缀
-        anchor_real = anchor.resolve()
-        current = anchor_real
-        for part in self._relative_to_anchor(anchor).parts:
-            current = current / part
-            try:
-                info = current.lstat()
-            except FileNotFoundError:
-                try:
-                    current.mkdir()  # 单级创建：父链已验证为真实目录
-                except FileExistsError:
-                    # 检查后竞态放置：按当前对象重新判定，symlink 一律拒绝
-                    self._reject_component(part, current.lstat(), "workspace chain")
-                continue
-            self._reject_component(part, info, "workspace chain")
-        return anchor_real, current
+        """验证已有组件 + 单级创建缺失目录（全部相对受信 fd 执行）。"""
+        fd, anchor_real, root_real = self._open_chain_fd(anchor, create=True)
+        os.close(fd)
+        return anchor_real, root_real
 
     # ---------------------------------------------------------------- 路径安全
 
