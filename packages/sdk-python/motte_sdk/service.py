@@ -899,6 +899,10 @@ class RunService:
                     raise ValueError("benchmark requires an execution backend invoke hook")
                 result = invoke(case_id)
             except Exception as error:
+                if getattr(error, "quarantine", False):
+                    # 副作用后证据边界失败：不确定状态走隔离（needs_review），
+                    # attempt 仍处 dispatching → _fail_or_quarantine 判定为不确定。
+                    return self._fail_or_quarantine(run_id, error)
                 result = deepcopy(getattr(error, "evidence", None)) or {
                     "error": {"class": classify_exception(error), "message": str(error)}}
             error = result.get("error") if isinstance(result, dict) else None

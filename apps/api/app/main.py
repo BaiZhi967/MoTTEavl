@@ -375,7 +375,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     )
     def get_run(run_id: str):
         try:
-            return adapt_legacy_run(service.get_run(run_id))
+            return adapt_legacy_run(_redact_agent_run_view(service.get_run(run_id)))
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
 
@@ -639,7 +639,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             run["scores"] = service.store.score_sets.list_for_pass(scoring_pass_id)
             run["current_scoring_pass_id"] = scoring_pass_id
             run["scoring_pass"] = selected
-        return adapt_legacy_report(_build_report(adapt_legacy_run(run)))
+        return adapt_legacy_report(_build_report(adapt_legacy_run(_redact_agent_run_view(run))))
 
     @application.get("/api/v1/runs/{run_id}/scoring-passes", response_model=ScoringPassListResponse)
     def list_scoring_passes(run_id: str):
@@ -2042,6 +2042,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         )
 
     def _agent_case_row(run_id: str, case_id: str) -> JSONResponse | dict[str, Any]:
+        """稳定结构的 case 详情（#17：无结果也返回全部数组字段）。"""
+        from motte_trace.redaction import redact_secrets
+
         run = service.get_run(run_id)
         if case_id not in (run.get("case_ids") or []):
             return JSONResponse(
@@ -2052,18 +2055,27 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         row = service.store.case_runs.get(run_id, case_id)
         if row is None:
-            return {"run_id": run_id, "case_id": case_id, "result": None, "outcome": None}
+            return {
+                "run_id": run_id, "case_id": case_id, "result": None, "outcome": None,
+                "agent": None, "events": [], "capture_errors": [], "cleanup": None,
+                "observation": None, "artifacts": [], "pending": True,
+            }
         result = row.get("result") or {}
         observation = result.get("observation") or {}
+        agent = result.get("agent")
+        if isinstance(agent, dict):
+            # #5：公共展示统一脱敏 final_output；冻结评分输入不受影响
+            agent = {**agent, "final_output": redact_secrets(agent.get("final_output"))}
         return {
             "run_id": run_id, "case_id": case_id,
             "outcome": row.get("outcome"),
-            "agent": result.get("agent"),
-            "events": result.get("events") or [],
+            "agent": agent,
+            "events": redact_secrets(result.get("events") or []),
             "capture_errors": result.get("capture_errors") or [],
             "cleanup": result.get("cleanup"),
-            "observation": observation,
-            "artifacts": observation.get("artifact_refs") or [],
+            "observation": redact_secrets(observation) if observation else observation,
+            "artifacts": (observation.get("artifact_refs") or []) if observation else [],
+            "pending": False,
         }
 
     @application.get("/api/v1/runs/{run_id}/cases/{case_id}/agent")
@@ -2190,6 +2202,34 @@ def _run_model_label(run: dict[str, Any]) -> str | None:
     if isinstance(provider, dict) and isinstance(provider.get("model"), str):
         return provider["model"]
     return None
+
+
+def _redact_agent_run_view(run: dict[str, Any]) -> dict[str, Any]:
+    """agent 运行的公共 Run 详情：case 结果中的 final_output 统一脱敏（#5）。
+
+    只影响展示视图；持久化证据与冻结评分输入不变。非 agent 运行原样返回。
+    """
+    manifest = run.get("manifest") or {}
+    backend = (manifest.get("execution") or {}).get("backend_id")
+    if backend != "builtin-agent":
+        return run
+    from copy import deepcopy as _deepcopy
+
+    from motte_trace.redaction import redact_secrets
+
+    view = _deepcopy(run)
+    for case in view.get("cases") or []:
+        result = case.get("result")
+        if not isinstance(result, dict):
+            continue
+        agent = result.get("agent")
+        if isinstance(agent, dict):
+            agent["final_output"] = redact_secrets(agent.get("final_output"))
+        observation = result.get("observation")
+        if isinstance(observation, dict):
+            observation["final_output"] = redact_secrets(observation.get("final_output"))
+        result["events"] = redact_secrets(result.get("events") or [])
+    return view
 
 
 def _build_report(run: dict[str, Any]) -> dict[str, Any]:

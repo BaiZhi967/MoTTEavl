@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowClockwiseIcon,
@@ -346,13 +346,17 @@ export function AgentResult() {
   const [caseDetail, setCaseDetail] = useState<AgentCaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // #18：迟到响应不得覆盖新选择——按请求序号丢弃过期结果
+  const passRequestSeq = useRef(0);
 
   const onPassChange = async (passId: string) => {
+    const requestSeq = ++passRequestSeq.current;
     setSelectedPass(passId);
     setHistoricalScores(null);
     if (!passId || !run || passId === run.current_scoring_pass_id) return;
     try {
       const report = await getReport(runId, passId);
+      if (passRequestSeq.current !== requestSeq) return; // 已切换到其它批次
       setHistoricalScores((report.scores as any[] ?? [])
         .filter((score) => typeof score.metric_id === "string")
         .map((score) => ({
@@ -508,6 +512,12 @@ export function AgentResult() {
           </select>
         </label>
         {!caseDetail && <EmptyState text="选择任务查看终止原因、事件轨迹与文件产物。" />}
+        {caseDetail && caseDetail.pending && (
+          <p className="hint">该任务尚未产生结果（运行进行中或未执行到该任务）。</p>
+        )}
+        {caseDetail && !caseDetail.pending && caseDetail.agent == null && (
+          <p className="hint warning">该任务没有 Agent 执行记录（可能是未尝试或调用失败）。</p>
+        )}
         {caseDetail && (
           <>
             <dl className="kv">
@@ -537,8 +547,8 @@ export function AgentResult() {
               ? <EmptyState text="没有捕获到文件产物。" />
               : caseDetail.artifacts.map((artifact) =>
                 artifact.available
-                  ? <ArtifactViewer key={artifact.path} runId={runId} caseId={caseDetail.case_id} path={artifact.path} />
-                  : <p key={artifact.path} className="hint warning">产物 {artifact.path} 不可用（采集失败或损坏）</p>,
+                  ? <ArtifactViewer key={`${caseDetail.case_id}:${artifact.path}`} runId={runId} caseId={caseDetail.case_id} path={artifact.path} />
+                  : <p key={`${caseDetail.case_id}:${artifact.path}`} className="hint warning">产物 {artifact.path} 不可用（采集失败或损坏）</p>,
               )}
             <h3>事件轨迹{caseDetail.events.length >= MAX_EVENT_ROWS ? `（前 ${MAX_EVENT_ROWS} 条）` : ""}</h3>
             <ol className="timeline">

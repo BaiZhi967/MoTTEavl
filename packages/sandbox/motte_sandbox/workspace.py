@@ -169,12 +169,37 @@ class CaseWorkspace:
             self.write_text(path, content)
 
     def snapshot(self) -> dict[str, Any]:
-        """工作区文件清单快照；listing 自身失败时 complete=False。"""
+        """工作区文件清单 + 内容 hash 快照；listing 或 hash 失败时 complete=False。
+
+        内容 hash 供 forbidden-write 评分区分"预置文件未动"与"覆盖/删除"。
+        """
+        import hashlib
+
         try:
             files = self.list_files()
-            return {"complete": True, "files": files}
         except OSError:
-            return {"complete": False, "files": []}
+            return {"complete": False, "files": [], "hashes": {}}
+        hashes: dict[str, str] = {}
+        for rel in files:
+            try:
+                data = self._read_bytes_nofollow(rel)
+            except OSError:
+                return {"complete": False, "files": [], "hashes": {}}
+            hashes[rel] = hashlib.sha256(data).hexdigest()
+        return {"complete": True, "files": files, "hashes": hashes}
+
+    def _read_bytes_nofollow(self, path: str) -> bytes:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self._safe_target(path), flags)
+        try:
+            chunks = []
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+        finally:
+            os.close(fd)
 
     def cleanup(self) -> dict[str, Any]:
         """删除本 case 工作区；失败时报告残留，不误报全部回收。"""

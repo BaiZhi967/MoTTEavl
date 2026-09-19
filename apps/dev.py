@@ -134,6 +134,10 @@ class Child:
             # Job membership survives the helper exiting; never kill by a stale parent PID.
             self.job.close()
         else:
+            # 0-signal probe of OUR group never raises EPERM for a same-uid caller:
+            # EPERM here means the pgid was recycled by an unrelated process group,
+            # i.e. our group has already dissolved. Polling must stop, not crash
+            # (and the trailing SIGKILL must never touch the recycled group).
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
                 deadline = time.monotonic() + 3
@@ -143,6 +147,9 @@ class Child:
                     time.sleep(POLL_INTERVAL)
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
+                pass
+            except PermissionError:
+                # pgid recycled by another owner: our group is gone; nothing to signal.
                 pass
         self.process.wait(timeout=5)
 

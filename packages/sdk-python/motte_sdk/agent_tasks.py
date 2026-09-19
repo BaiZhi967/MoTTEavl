@@ -279,7 +279,10 @@ def agent_tasks_scores(run: dict[str, Any], results: list[dict[str, Any]]) -> li
                 score = metric_result_to_score(_gap_metric(metric, reason), case_id)
                 scores.append(score)
             continue
-        from motte_contracts.evaluation import FrozenObservation
+        from motte_contracts.evaluation import (
+            FrozenObservation,
+            observation_evidence_hash,
+        )
 
         try:
             frozen = FrozenObservation.model_validate(observation)
@@ -287,6 +290,25 @@ def agent_tasks_scores(run: dict[str, Any], results: list[dict[str, Any]]) -> li
             for metric in metrics:
                 scores.append(metric_result_to_score(
                     _gap_metric(metric, "observation_invalid"), case_id,
+                ))
+            continue
+        # #10：重算 evidence_hash 并校验归属——篡改 run/case/workspace/产物清单
+        # 而保留旧 hash 的观察一律拒评
+        hash_payload = {
+            key: value for key, value in observation.items()
+            if key not in {"evidence_hash", "recorded_at"}
+        }
+        ownership_error: str | None = None
+        if observation_evidence_hash(hash_payload) != observation.get("evidence_hash"):
+            ownership_error = "observation_hash_mismatch"
+        elif frozen.run_id != run.get("id"):
+            ownership_error = "observation_run_mismatch"
+        elif frozen.case_id != case_id:
+            ownership_error = "observation_case_mismatch"
+        if ownership_error is not None:
+            for metric in metrics:
+                scores.append(metric_result_to_score(
+                    _gap_metric(metric, ownership_error), case_id,
                 ))
             continue
         evaluated = evaluate_observation(

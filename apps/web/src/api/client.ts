@@ -421,6 +421,7 @@ export interface AgentCaseDetail {
   run_id: string;
   case_id: string;
   outcome: string | null;
+  pending?: boolean;
   agent: {
     final_output?: unknown;
     termination_reason: string;

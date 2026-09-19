@@ -109,6 +109,13 @@ class ExecutionBudget:
     def wall_elapsed(self) -> float:
         return time.monotonic() - self._started_monotonic
 
+    def per_call_deadline(self, *, now: float | None = None) -> float | None:
+        """本次模型调用的单调时钟期限；未配置返回 None。"""
+        if self.per_call_timeout_sec is None:
+            return None
+        current = time.monotonic() if now is None else now
+        return current + self.per_call_timeout_sec
+
     def record_usage(self, usage: dict[str, Any] | None, cost: dict[str, Any] | None) -> None:
         """Provider 报告的 usage/cost 事后计量；不报告则保持 unknown。"""
         total = usage.get("total_tokens") if isinstance(usage, dict) else None
@@ -149,7 +156,7 @@ class ExecutionBudget:
                 ),
             },
             "max_output_tokens": {"limit": self.max_output_tokens, "enforcement":
-                                  "not_configured" if self.max_output_tokens is None else usage_dependent},
+                                  "not_configured" if self.max_output_tokens is None else ENFORCED},
             "total_token_limit": {"limit": self.total_token_limit, "enforcement":
                                   "not_configured" if self.total_token_limit is None else usage_dependent},
             "observed_cost_limit": {"limit": self.observed_cost_limit, "enforcement":
