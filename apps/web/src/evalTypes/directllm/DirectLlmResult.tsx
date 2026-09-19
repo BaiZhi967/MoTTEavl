@@ -5,6 +5,7 @@ import { MetricCards, type MetricItem } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { StatusBadge } from "../../components/StatusBadge";
 import { RunAuditSummary } from "../../components/RunAuditSummary";
+import { RunErrorBanner } from "../../components/RunErrorBanner";
 import { runSelectionLabel } from "../selection";
 import { scorerShort } from "./presets";
 
@@ -239,11 +240,7 @@ export function DirectLlmResult() {
             </button>
           </div>
         </div>
-        {run.error && (
-          <p className="error">
-            {run.error.code ?? run.error.type ?? ""} {run.error.message ?? ""}
-          </p>
-        )}
+        {run.error && <RunErrorBanner run={run} />}
         {selection && <p className="hint">本次题目：{selection}</p>}
         {scorerShort(datasetScorerName) !== "—" && (
           <p className="hint mono">评分器 {scorerShort(datasetScorerName)}（数据集默认，单题可覆盖）</p>

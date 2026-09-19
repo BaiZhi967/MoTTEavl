@@ -6,6 +6,7 @@ import { StatusBadge } from "../../components/StatusBadge";
 import { RunTimeline } from "../../components/RunTimeline";
 import { ScoreTable } from "../../components/ScoreTable";
 import { RunAuditSummary } from "../../components/RunAuditSummary";
+import { RunErrorBanner } from "../../components/RunErrorBanner";
 
 /** 未匹配类型 run 的通用过程页：状态 + 时间线 + 取消/重试。 */
 export function FallbackMonitorPage() {
@@ -133,6 +134,7 @@ export function FallbackResultPage() {
           </div>
         </div>
         {error && <p className="error">{error}</p>}
+        {run?.error && <RunErrorBanner run={run} />}
         {run && (
           <dl className="kv">
             <dt>场景</dt><dd className="mono">{run.scenario_version}</dd>

@@ -5,6 +5,7 @@ import { MetricCards } from "../../components/MetricCards";
 import { CaseDrillTable, type DrillRow } from "../../components/CaseDrillTable";
 import { StatusBadge } from "../../components/StatusBadge";
 import { RunAuditSummary } from "../../components/RunAuditSummary";
+import { RunErrorBanner } from "../../components/RunErrorBanner";
 import { runSelectionLabel } from "./selection";
 
 /* 词汇表对齐真实 scorer（packages/evaluators/motte_eval/gsm8k.py）五种 outcome。 */
@@ -96,11 +97,7 @@ export function Gsm8kResult() {
             </button>
           </div>
         </div>
-        {run.error && (
-          <p className="error">
-            {run.error.code ?? run.error.type ?? ""} {run.error.message ?? ""}
-          </p>
-        )}
+        {run.error && <RunErrorBanner run={run} />}
         {selection && <p className="hint">本次题目：{selection}</p>}
         <MetricCards items={[
           { label: `accuracy · ${passed}/${scores.length}`, value: accuracy == null ? "—" : `${accuracy}%`, tone: run.status === "completed" ? "success" : "neutral" },
