@@ -1,0 +1,2588 @@
+{
+  "schema_version": 1,
+  "planning_baseline": "b6c402b62f0a19f79cde719af60c8bb73672c877",
+  "implementation_status": "planned",
+  "verification_status": "not_run",
+  "milestones": [
+    {
+      "id": "M1",
+      "goals": 18,
+      "work_packages": 10,
+      "acceptance_scenarios": 15,
+      "effort_person_days": [
+        27,
+        45
+      ],
+      "goal_owners": {
+        "M1-G01": [
+          "M1-T04"
+        ],
+        "M1-G02": [
+          "M1-T04",
+          "M1-T05"
+        ],
+        "M1-G03": [
+          "M1-T04"
+        ],
+        "M1-G04": [
+          "M1-T04",
+          "M1-T06"
+        ],
+        "M1-G05": [
+          "M1-T07",
+          "M1-T08"
+        ],
+        "M1-G06": [
+          "M1-T05"
+        ],
+        "M1-G07": [
+          "M1-T05",
+          "M1-T07"
+        ],
+        "M1-G08": [
+          "M1-T07"
+        ],
+        "M1-G09": [
+          "M1-T07"
+        ],
+        "M1-G10": [
+          "M1-T06",
+          "M1-T08"
+        ],
+        "M1-G11": [
+          "M1-T01",
+          "M1-T02",
+          "M1-T03"
+        ],
+        "M1-G12": [
+          "M1-T02"
+        ],
+        "M1-G13": [
+          "M1-T03"
+        ],
+        "M1-G14": [
+          "M1-T06",
+          "M1-T08"
+        ],
+        "M1-G15": [
+          "M1-T09"
+        ],
+        "M1-G16": [
+          "M1-T10"
+        ],
+        "M1-G17": [
+          "M1-T03",
+          "M1-T10"
+        ],
+        "M1-G18": [
+          "M1-T10"
+        ]
+      },
+      "acceptance_owners": {
+        "M1-A01": "M1-T10",
+        "M1-A02": "M1-T05",
+        "M1-A03": "M1-T05",
+        "M1-A04": "M1-T02",
+        "M1-A05": "M1-T05",
+        "M1-A06": "M1-T04",
+        "M1-A07": "M1-T06",
+        "M1-A08": "M1-T07",
+        "M1-A09": "M1-T07",
+        "M1-A10": "M1-T03",
+        "M1-A11": "M1-T08",
+        "M1-A12": "M1-T06",
+        "M1-A13": "M1-T05",
+        "M1-A14": "M1-T03",
+        "M1-A15": "M1-T10"
+      },
+      "section_owners": {
+        "1": [
+          "M1-T04",
+          "M1-T10"
+        ],
+        "2": [
+          "M1-T01",
+          "M1-T02",
+          "M1-T03",
+          "M1-T04",
+          "M1-T05",
+          "M1-T06",
+          "M1-T07",
+          "M1-T08",
+          "M1-T09",
+          "M1-T10"
+        ],
+        "3": [
+          "M1-T01",
+          "M1-T02",
+          "M1-T03",
+          "M1-T04",
+          "M1-T05",
+          "M1-T06",
+          "M1-T07",
+          "M1-T08",
+          "M1-T09"
+        ],
+        "4": [
+          "M1-T01",
+          "M1-T03",
+          "M1-T04",
+          "M1-T05",
+          "M1-T07",
+          "M1-T08"
+        ],
+        "5": [
+          "M1-T02"
+        ],
+        "6": [
+          "M1-T05",
+          "M1-T06",
+          "M1-T07"
+        ],
+        "7": [
+          "M1-T01",
+          "M1-T02",
+          "M1-T03",
+          "M1-T04",
+          "M1-T05",
+          "M1-T06",
+          "M1-T07",
+          "M1-T08",
+          "M1-T09",
+          "M1-T10"
+        ],
+        "8": [
+          "M1-T10"
+        ],
+        "9": [
+          "M1-T09"
+        ],
+        "10": [
+          "M1-T03",
+          "M1-T10"
+        ],
+        "11": [
+          "M1-T10"
+        ]
+      }
+    },
+    {
+      "id": "M2",
+      "goals": 17,
+      "work_packages": 11,
+      "acceptance_scenarios": 15,
+      "effort_person_days": [
+        27,
+        46
+      ],
+      "goal_owners": {
+        "M2-G01": [
+          "M2-T01",
+          "M2-T02"
+        ],
+        "M2-G02": [
+          "M2-T02",
+          "M2-T03"
+        ],
+        "M2-G03": [
+          "M2-T02",
+          "M2-T03"
+        ],
+        "M2-G04": [
+          "M2-T03"
+        ],
+        "M2-G05": [
+          "M2-T04",
+          "M2-T07"
+        ],
+        "M2-G06": [
+          "M2-T04",
+          "M2-T05"
+        ],
+        "M2-G07": [
+          "M2-T04",
+          "M2-T06"
+        ],
+        "M2-G08": [
+          "M2-T05",
+          "M2-T06"
+        ],
+        "M2-G09": [
+          "M2-T05"
+        ],
+        "M2-G10": [
+          "M2-T06"
+        ],
+        "M2-G11": [
+          "M2-T03",
+          "M2-T06"
+        ],
+        "M2-G12": [
+          "M2-T05"
+        ],
+        "M2-G13": [
+          "M2-T10"
+        ],
+        "M2-G14": [
+          "M2-T08"
+        ],
+        "M2-G15": [
+          "M2-T09"
+        ],
+        "M2-G16": [
+          "M2-T06"
+        ],
+        "M2-G17": [
+          "M2-T10"
+        ]
+      },
+      "acceptance_owners": {
+        "M2-A01": "M2-T07",
+        "M2-A02": "M2-T10",
+        "M2-A03": "M2-T06",
+        "M2-A04": "M2-T06",
+        "M2-A05": "M2-T03",
+        "M2-A06": "M2-T03",
+        "M2-A07": "M2-T02",
+        "M2-A08": "M2-T03",
+        "M2-A09": "M2-T03",
+        "M2-A10": "M2-T09",
+        "M2-A11": "M2-T06",
+        "M2-A12": "M2-T04",
+        "M2-A13": "M2-T06",
+        "M2-A14": "M2-T09",
+        "M2-A15": "M2-T10"
+      },
+      "section_owners": {
+        "1": [
+          "M2-T01",
+          "M2-T04",
+          "M2-T10",
+          "M2-T11"
+        ],
+        "2": [
+          "M2-T01",
+          "M2-T02",
+          "M2-T03",
+          "M2-T04",
+          "M2-T05",
+          "M2-T06",
+          "M2-T07",
+          "M2-T08",
+          "M2-T09",
+          "M2-T10",
+          "M2-T11"
+        ],
+        "3": [
+          "M2-T01",
+          "M2-T03",
+          "M2-T04",
+          "M2-T06",
+          "M2-T07",
+          "M2-T08",
+          "M2-T09"
+        ],
+        "4": [
+          "M2-T01",
+          "M2-T02",
+          "M2-T03"
+        ],
+        "5": [
+          "M2-T04",
+          "M2-T05",
+          "M2-T06"
+        ],
+        "6": [
+          "M2-T02",
+          "M2-T05",
+          "M2-T10"
+        ],
+        "7": [
+          "M2-T01",
+          "M2-T02",
+          "M2-T03",
+          "M2-T04",
+          "M2-T05",
+          "M2-T06",
+          "M2-T07",
+          "M2-T08",
+          "M2-T09",
+          "M2-T10",
+          "M2-T11"
+        ],
+        "8": [
+          "M2-T10"
+        ],
+        "9": [
+          "M2-T07",
+          "M2-T08"
+        ],
+        "10": [
+          "M2-T03",
+          "M2-T10"
+        ],
+        "11": [
+          "M2-T06",
+          "M2-T10"
+        ]
+      }
+    },
+    {
+      "id": "M3",
+      "goals": 18,
+      "work_packages": 10,
+      "acceptance_scenarios": 15,
+      "effort_person_days": [
+        26,
+        41
+      ],
+      "goal_owners": {
+        "M3-G01": [
+          "M3-T01",
+          "M3-T03"
+        ],
+        "M3-G02": [
+          "M3-T01"
+        ],
+        "M3-G03": [
+          "M3-T01"
+        ],
+        "M3-G04": [
+          "M3-T02"
+        ],
+        "M3-G05": [
+          "M3-T02"
+        ],
+        "M3-G06": [
+          "M3-T03"
+        ],
+        "M3-G07": [
+          "M3-T06"
+        ],
+        "M3-G08": [
+          "M3-T04",
+          "M3-T08"
+        ],
+        "M3-G09": [
+          "M3-T08"
+        ],
+        "M3-G10": [
+          "M3-T04",
+          "M3-T06"
+        ],
+        "M3-G11": [
+          "M3-T07"
+        ],
+        "M3-G12": [
+          "M3-T07"
+        ],
+        "M3-G13": [
+          "M3-T04"
+        ],
+        "M3-G14": [
+          "M3-T05"
+        ],
+        "M3-G15": [
+          "M3-T08"
+        ],
+        "M3-G16": [
+          "M3-T09"
+        ],
+        "M3-G17": [
+          "M3-T10"
+        ],
+        "M3-G18": [
+          "M3-T10"
+        ]
+      },
+      "acceptance_owners": {
+        "M3-A01": "M3-T10",
+        "M3-A02": "M3-T01",
+        "M3-A03": "M3-T02",
+        "M3-A04": "M3-T04",
+        "M3-A05": "M3-T05",
+        "M3-A06": "M3-T07",
+        "M3-A07": "M3-T06",
+        "M3-A08": "M3-T07",
+        "M3-A09": "M3-T07",
+        "M3-A10": "M3-T04",
+        "M3-A11": "M3-T04",
+        "M3-A12": "M3-T08",
+        "M3-A13": "M3-T05",
+        "M3-A14": "M3-T03",
+        "M3-A15": "M3-T08"
+      },
+      "section_owners": {
+        "1": [
+          "M3-T01",
+          "M3-T10"
+        ],
+        "2": [
+          "M3-T01",
+          "M3-T02",
+          "M3-T03",
+          "M3-T04",
+          "M3-T05",
+          "M3-T06",
+          "M3-T07",
+          "M3-T08",
+          "M3-T09",
+          "M3-T10"
+        ],
+        "3": [
+          "M3-T01",
+          "M3-T02",
+          "M3-T03",
+          "M3-T04",
+          "M3-T05",
+          "M3-T06",
+          "M3-T07",
+          "M3-T08",
+          "M3-T09"
+        ],
+        "4": [
+          "M3-T01",
+          "M3-T02",
+          "M3-T08"
+        ],
+        "5": [
+          "M3-T03",
+          "M3-T05",
+          "M3-T06",
+          "M3-T07"
+        ],
+        "6": [
+          "M3-T04",
+          "M3-T08"
+        ],
+        "7": [
+          "M3-T04",
+          "M3-T08",
+          "M3-T09"
+        ],
+        "8": [
+          "M3-T01",
+          "M3-T02",
+          "M3-T03",
+          "M3-T04",
+          "M3-T05",
+          "M3-T06",
+          "M3-T07",
+          "M3-T08",
+          "M3-T09",
+          "M3-T10"
+        ],
+        "9": [
+          "M3-T10"
+        ],
+        "10": [
+          "M3-T02",
+          "M3-T07",
+          "M3-T10"
+        ],
+        "11": [
+          "M3-T01",
+          "M3-T04",
+          "M3-T10"
+        ]
+      }
+    },
+    {
+      "id": "M4",
+      "goals": 18,
+      "work_packages": 11,
+      "acceptance_scenarios": 15,
+      "effort_person_days": [
+        33,
+        53
+      ],
+      "goal_owners": {
+        "M4-G01": [
+          "M4-T01"
+        ],
+        "M4-G02": [
+          "M4-T01",
+          "M4-T08"
+        ],
+        "M4-G03": [
+          "M4-T02",
+          "M4-T03"
+        ],
+        "M4-G04": [
+          "M4-T04",
+          "M4-T05"
+        ],
+        "M4-G05": [
+          "M4-T03",
+          "M4-T04"
+        ],
+        "M4-G06": [
+          "M4-T02",
+          "M4-T06",
+          "M4-T07"
+        ],
+        "M4-G07": [
+          "M4-T02",
+          "M4-T06",
+          "M4-T07"
+        ],
+        "M4-G08": [
+          "M4-T03",
+          "M4-T06",
+          "M4-T07"
+        ],
+        "M4-G09": [
+          "M4-T05"
+        ],
+        "M4-G10": [
+          "M4-T05",
+          "M4-T09"
+        ],
+        "M4-G11": [
+          "M4-T04",
+          "M4-T05"
+        ],
+        "M4-G12": [
+          "M4-T04",
+          "M4-T06",
+          "M4-T07"
+        ],
+        "M4-G13": [
+          "M4-T01",
+          "M4-T06",
+          "M4-T07"
+        ],
+        "M4-G14": [
+          "M4-T01",
+          "M4-T08"
+        ],
+        "M4-G15": [
+          "M4-T08"
+        ],
+        "M4-G16": [
+          "M4-T09"
+        ],
+        "M4-G17": [
+          "M4-T10"
+        ],
+        "M4-G18": [
+          "M4-T10"
+        ]
+      },
+      "acceptance_owners": {
+        "M4-A01": "M4-T02",
+        "M4-A02": "M4-T03",
+        "M4-A03": "M4-T04",
+        "M4-A04": "M4-T06",
+        "M4-A05": "M4-T05",
+        "M4-A06": "M4-T05",
+        "M4-A07": "M4-T07",
+        "M4-A08": "M4-T05",
+        "M4-A09": "M4-T05",
+        "M4-A10": "M4-T07",
+        "M4-A11": "M4-T10",
+        "M4-A12": "M4-T10",
+        "M4-A13": "M4-T05",
+        "M4-A14": "M4-T06",
+        "M4-A15": "M4-T09"
+      },
+      "section_owners": {
+        "1": [
+          "M4-T01",
+          "M4-T09",
+          "M4-T10",
+          "M4-T11"
+        ],
+        "2": [
+          "M4-T01",
+          "M4-T02",
+          "M4-T03",
+          "M4-T04",
+          "M4-T05",
+          "M4-T06",
+          "M4-T07",
+          "M4-T08",
+          "M4-T09",
+          "M4-T10",
+          "M4-T11"
+        ],
+        "3": [
+          "M4-T01",
+          "M4-T03",
+          "M4-T04",
+          "M4-T05",
+          "M4-T06",
+          "M4-T07",
+          "M4-T08",
+          "M4-T10",
+          "M4-T11"
+        ],
+        "4": [
+          "M4-T01"
+        ],
+        "5": [
+          "M4-T02",
+          "M4-T03",
+          "M4-T04"
+        ],
+        "6": [
+          "M4-T02",
+          "M4-T05",
+          "M4-T06",
+          "M4-T07"
+        ],
+        "7": [
+          "M4-T10"
+        ],
+        "8": [
+          "M4-T01",
+          "M4-T02",
+          "M4-T03",
+          "M4-T04",
+          "M4-T05",
+          "M4-T06",
+          "M4-T07",
+          "M4-T08",
+          "M4-T09",
+          "M4-T10",
+          "M4-T11"
+        ],
+        "9": [
+          "M4-T09",
+          "M4-T10"
+        ],
+        "10": [
+          "M4-T09",
+          "M4-T10",
+          "M4-T11"
+        ],
+        "11": [
+          "M4-T02",
+          "M4-T11"
+        ]
+      }
+    },
+    {
+      "id": "M5",
+      "goals": 22,
+      "work_packages": 12,
+      "acceptance_scenarios": 18,
+      "effort_person_days": [
+        33,
+        54
+      ],
+      "goal_owners": {
+        "M5-G01": [
+          "M5-T01",
+          "M5-T05"
+        ],
+        "M5-G02": [
+          "M5-T01",
+          "M5-T03"
+        ],
+        "M5-G03": [
+          "M5-T01"
+        ],
+        "M5-G04": [
+          "M5-T02"
+        ],
+        "M5-G05": [
+          "M5-T03"
+        ],
+        "M5-G06": [
+          "M5-T03"
+        ],
+        "M5-G07": [
+          "M5-T05",
+          "M5-T07"
+        ],
+        "M5-G08": [
+          "M5-T04"
+        ],
+        "M5-G09": [
+          "M5-T02",
+          "M5-T04"
+        ],
+        "M5-G10": [
+          "M5-T06",
+          "M5-T07"
+        ],
+        "M5-G11": [
+          "M5-T06",
+          "M5-T07"
+        ],
+        "M5-G12": [
+          "M5-T07"
+        ],
+        "M5-G13": [
+          "M5-T08"
+        ],
+        "M5-G14": [
+          "M5-T08"
+        ],
+        "M5-G15": [
+          "M5-T09"
+        ],
+        "M5-G16": [
+          "M5-T09"
+        ],
+        "M5-G17": [
+          "M5-T09"
+        ],
+        "M5-G18": [
+          "M5-T10"
+        ],
+        "M5-G19": [
+          "M5-T10"
+        ],
+        "M5-G20": [
+          "M5-T12"
+        ],
+        "M5-G21": [
+          "M5-T11"
+        ],
+        "M5-G22": [
+          "M5-T12"
+        ]
+      },
+      "acceptance_owners": {
+        "M5-A01": "M5-T12",
+        "M5-A02": "M5-T04",
+        "M5-A03": "M5-T02",
+        "M5-A04": "M5-T03",
+        "M5-A05": "M5-T01",
+        "M5-A06": "M5-T03",
+        "M5-A07": "M5-T05",
+        "M5-A08": "M5-T02",
+        "M5-A09": "M5-T07",
+        "M5-A10": "M5-T06",
+        "M5-A11": "M5-T06",
+        "M5-A12": "M5-T08",
+        "M5-A13": "M5-T09",
+        "M5-A14": "M5-T09",
+        "M5-A15": "M5-T09",
+        "M5-A16": "M5-T09",
+        "M5-A17": "M5-T10",
+        "M5-A18": "M5-T09"
+      },
+      "section_owners": {
+        "1": [
+          "M5-T01",
+          "M5-T05",
+          "M5-T12"
+        ],
+        "2": [
+          "M5-T01",
+          "M5-T02",
+          "M5-T03",
+          "M5-T04",
+          "M5-T05",
+          "M5-T06",
+          "M5-T07",
+          "M5-T08",
+          "M5-T09",
+          "M5-T10",
+          "M5-T11",
+          "M5-T12"
+        ],
+        "3": [
+          "M5-T01",
+          "M5-T02",
+          "M5-T03",
+          "M5-T04",
+          "M5-T05",
+          "M5-T06",
+          "M5-T07",
+          "M5-T08",
+          "M5-T09",
+          "M5-T10",
+          "M5-T11"
+        ],
+        "4": [
+          "M5-T01",
+          "M5-T03",
+          "M5-T05"
+        ],
+        "5": [
+          "M5-T02",
+          "M5-T04",
+          "M5-T05"
+        ],
+        "6": [
+          "M5-T06",
+          "M5-T07",
+          "M5-T08"
+        ],
+        "7": [
+          "M5-T09",
+          "M5-T10"
+        ],
+        "8": [
+          "M5-T01",
+          "M5-T02",
+          "M5-T03",
+          "M5-T04",
+          "M5-T05",
+          "M5-T06",
+          "M5-T07",
+          "M5-T08",
+          "M5-T09",
+          "M5-T10",
+          "M5-T11",
+          "M5-T12"
+        ],
+        "9": [
+          "M5-T12"
+        ],
+        "10": [
+          "M5-T11"
+        ],
+        "11": [
+          "M5-T05",
+          "M5-T06",
+          "M5-T09",
+          "M5-T12"
+        ],
+        "12": [
+          "M5-T01",
+          "M5-T06",
+          "M5-T12"
+        ]
+      }
+    },
+    {
+      "id": "M6",
+      "goals": 21,
+      "work_packages": 11,
+      "acceptance_scenarios": 20,
+      "effort_person_days": [
+        28,
+        46
+      ],
+      "goal_owners": {
+        "M6-G01": [
+          "M6-T04"
+        ],
+        "M6-G02": [
+          "M6-T04",
+          "M6-T05"
+        ],
+        "M6-G03": [
+          "M6-T05"
+        ],
+        "M6-G04": [
+          "M6-T01"
+        ],
+        "M6-G05": [
+          "M6-T01"
+        ],
+        "M6-G06": [
+          "M6-T01"
+        ],
+        "M6-G07": [
+          "M6-T02"
+        ],
+        "M6-G08": [
+          "M6-T02"
+        ],
+        "M6-G09": [
+          "M6-T02",
+          "M6-T03"
+        ],
+        "M6-G10": [
+          "M6-T06"
+        ],
+        "M6-G11": [
+          "M6-T06"
+        ],
+        "M6-G12": [
+          "M6-T02",
+          "M6-T08"
+        ],
+        "M6-G13": [
+          "M6-T03",
+          "M6-T07"
+        ],
+        "M6-G14": [
+          "M6-T07"
+        ],
+        "M6-G15": [
+          "M6-T03",
+          "M6-T08"
+        ],
+        "M6-G16": [
+          "M6-T08",
+          "M6-T10"
+        ],
+        "M6-G17": [
+          "M6-T03",
+          "M6-T08"
+        ],
+        "M6-G18": [
+          "M6-T01",
+          "M6-T08"
+        ],
+        "M6-G19": [
+          "M6-T09",
+          "M6-T10"
+        ],
+        "M6-G20": [
+          "M6-T10"
+        ],
+        "M6-G21": [
+          "M6-T07",
+          "M6-T11"
+        ]
+      },
+      "acceptance_owners": {
+        "M6-A01": "M6-T01",
+        "M6-A02": "M6-T01",
+        "M6-A03": "M6-T02",
+        "M6-A04": "M6-T02",
+        "M6-A05": "M6-T02",
+        "M6-A06": "M6-T01",
+        "M6-A07": "M6-T05",
+        "M6-A08": "M6-T05",
+        "M6-A09": "M6-T07",
+        "M6-A10": "M6-T07",
+        "M6-A11": "M6-T06",
+        "M6-A12": "M6-T06",
+        "M6-A13": "M6-T06",
+        "M6-A14": "M6-T02",
+        "M6-A15": "M6-T08",
+        "M6-A16": "M6-T08",
+        "M6-A17": "M6-T10",
+        "M6-A18": "M6-T10",
+        "M6-A19": "M6-T11",
+        "M6-A20": "M6-T05"
+      },
+      "section_owners": {
+        "1": [
+          "M6-T01",
+          "M6-T02",
+          "M6-T03",
+          "M6-T11"
+        ],
+        "2": [
+          "M6-T01",
+          "M6-T02",
+          "M6-T03",
+          "M6-T04",
+          "M6-T05",
+          "M6-T06",
+          "M6-T07",
+          "M6-T08",
+          "M6-T09",
+          "M6-T10",
+          "M6-T11"
+        ],
+        "3": [
+          "M6-T01",
+          "M6-T02",
+          "M6-T03",
+          "M6-T04",
+          "M6-T05",
+          "M6-T06",
+          "M6-T07",
+          "M6-T08",
+          "M6-T09",
+          "M6-T10"
+        ],
+        "4": [
+          "M6-T04",
+          "M6-T05"
+        ],
+        "5": [
+          "M6-T01",
+          "M6-T07"
+        ],
+        "6": [
+          "M6-T02",
+          "M6-T06"
+        ],
+        "7": [
+          "M6-T03",
+          "M6-T07"
+        ],
+        "8": [
+          "M6-T03",
+          "M6-T08",
+          "M6-T10"
+        ],
+        "9": [
+          "M6-T01",
+          "M6-T02",
+          "M6-T03",
+          "M6-T04",
+          "M6-T05",
+          "M6-T06",
+          "M6-T07",
+          "M6-T08",
+          "M6-T09",
+          "M6-T10",
+          "M6-T11"
+        ],
+        "10": [
+          "M6-T11"
+        ],
+        "11": [
+          "M6-T09",
+          "M6-T10",
+          "M6-T11"
+        ],
+        "12": [
+          "M6-T01",
+          "M6-T02",
+          "M6-T03",
+          "M6-T11"
+        ]
+      }
+    },
+    {
+      "id": "M7",
+      "goals": 23,
+      "work_packages": 12,
+      "acceptance_scenarios": 21,
+      "effort_person_days": [
+        37,
+        59
+      ],
+      "goal_owners": {
+        "M7-G01": [
+          "M7-T01"
+        ],
+        "M7-G02": [
+          "M7-T01",
+          "M7-T02",
+          "M7-T03"
+        ],
+        "M7-G03": [
+          "M7-T01"
+        ],
+        "M7-G04": [
+          "M7-T03"
+        ],
+        "M7-G05": [
+          "M7-T02"
+        ],
+        "M7-G06": [
+          "M7-T04"
+        ],
+        "M7-G07": [
+          "M7-T04"
+        ],
+        "M7-G08": [
+          "M7-T05"
+        ],
+        "M7-G09": [
+          "M7-T05"
+        ],
+        "M7-G10": [
+          "M7-T06",
+          "M7-T08"
+        ],
+        "M7-G11": [
+          "M7-T06",
+          "M7-T07"
+        ],
+        "M7-G12": [
+          "M7-T07"
+        ],
+        "M7-G13": [
+          "M7-T07"
+        ],
+        "M7-G14": [
+          "M7-T08"
+        ],
+        "M7-G15": [
+          "M7-T09"
+        ],
+        "M7-G16": [
+          "M7-T09",
+          "M7-T11"
+        ],
+        "M7-G17": [
+          "M7-T10"
+        ],
+        "M7-G18": [
+          "M7-T10"
+        ],
+        "M7-G19": [
+          "M7-T10",
+          "M7-T11"
+        ],
+        "M7-G20": [
+          "M7-T11"
+        ],
+        "M7-G21": [
+          "M7-T12"
+        ],
+        "M7-G22": [
+          "M7-T11",
+          "M7-T12"
+        ],
+        "M7-G23": [
+          "M7-T12"
+        ]
+      },
+      "acceptance_owners": {
+        "M7-A01": "M7-T05",
+        "M7-A02": "M7-T01",
+        "M7-A03": "M7-T01",
+        "M7-A04": "M7-T03",
+        "M7-A05": "M7-T02",
+        "M7-A06": "M7-T04",
+        "M7-A07": "M7-T04",
+        "M7-A08": "M7-T06",
+        "M7-A09": "M7-T08",
+        "M7-A10": "M7-T07",
+        "M7-A11": "M7-T06",
+        "M7-A12": "M7-T08",
+        "M7-A13": "M7-T08",
+        "M7-A14": "M7-T09",
+        "M7-A15": "M7-T09",
+        "M7-A16": "M7-T09",
+        "M7-A17": "M7-T10",
+        "M7-A18": "M7-T10",
+        "M7-A19": "M7-T11",
+        "M7-A20": "M7-T11",
+        "M7-A21": "M7-T12"
+      },
+      "section_owners": {
+        "1": [
+          "M7-T01",
+          "M7-T05",
+          "M7-T09",
+          "M7-T10",
+          "M7-T12"
+        ],
+        "2": [
+          "M7-T01",
+          "M7-T02",
+          "M7-T03",
+          "M7-T04",
+          "M7-T05",
+          "M7-T06",
+          "M7-T07",
+          "M7-T08",
+          "M7-T09",
+          "M7-T10",
+          "M7-T11",
+          "M7-T12"
+        ],
+        "3": [
+          "M7-T01",
+          "M7-T02",
+          "M7-T03",
+          "M7-T04",
+          "M7-T05",
+          "M7-T06",
+          "M7-T07",
+          "M7-T08",
+          "M7-T09",
+          "M7-T10",
+          "M7-T11"
+        ],
+        "4": [
+          "M7-T01",
+          "M7-T02",
+          "M7-T03"
+        ],
+        "5": [
+          "M7-T04"
+        ],
+        "6": [
+          "M7-T06",
+          "M7-T07",
+          "M7-T08"
+        ],
+        "7": [
+          "M7-T09",
+          "M7-T10",
+          "M7-T11"
+        ],
+        "8": [
+          "M7-T10"
+        ],
+        "9": [
+          "M7-T05",
+          "M7-T11"
+        ],
+        "10": [
+          "M7-T01",
+          "M7-T02",
+          "M7-T03",
+          "M7-T04",
+          "M7-T05",
+          "M7-T06",
+          "M7-T07",
+          "M7-T08",
+          "M7-T09",
+          "M7-T10",
+          "M7-T11",
+          "M7-T12"
+        ],
+        "11": [
+          "M7-T11",
+          "M7-T12"
+        ],
+        "12": [
+          "M7-T12"
+        ],
+        "13": [
+          "M7-T11",
+          "M7-T12"
+        ],
+        "14": [
+          "M7-T06",
+          "M7-T12"
+        ]
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "deps": [],
+      "files": [
+        "packages/contracts/motte_contracts/evidence.py",
+        "packages/contracts/motte_contracts/evaluation.py",
+        "packages/contracts/motte_contracts/compat.py",
+        "packages/contracts/motte_contracts/identity.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/contract/test_observation_v1.py"
+      ],
+      "id": "M1-T01"
+    },
+    {
+      "deps": [
+        "M1-T01"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/scorer_registry.py",
+        "packages/evaluators/motte_eval/deterministic.py",
+        "packages/evaluators/motte_eval/direct_llm.py",
+        "packages/evaluators/motte_eval/observation.py",
+        "packages/evaluators/motte_eval/files.py",
+        "packages/evaluators/motte_eval/tools.py",
+        "packages/contracts/motte_contracts/jsonschema.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/evaluators/test_deterministic_matrix.py"
+      ],
+      "id": "M1-T02"
+    },
+    {
+      "deps": [
+        "M1-T01",
+        "M1-T02"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/service.py",
+        "packages/storage/motte_storage/audit_store.py",
+        "packages/storage/motte_storage/pg_audit_store.py",
+        "packages/storage/motte_storage/integrity.py",
+        "packages/storage/motte_storage/run_store.py",
+        "packages/storage/motte_storage/models.py",
+        "apps/worker/motte_worker/reporting.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/runtime/test_agent_scoring_passes.py"
+      ],
+      "id": "M1-T03"
+    },
+    {
+      "deps": [
+        "M1-T01"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/agent_backend.py",
+        "packages/sdk-python/motte_sdk/execution_backends.py",
+        "packages/sdk-python/motte_sdk/resolve.py",
+        "packages/agent-runtime/motte_agent/runtime.py",
+        "packages/contracts/motte_contracts/scenario.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/runtime/test_builtin_agent_backend.py"
+      ],
+      "id": "M1-T04"
+    },
+    {
+      "deps": [
+        "M1-T04"
+      ],
+      "files": [
+        "packages/agent-runtime/motte_agent/builtin_react.py",
+        "packages/agent-runtime/motte_agent/native_tools.py",
+        "packages/agent-runtime/motte_agent/budget.py",
+        "packages/contracts/motte_contracts/messages.py"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/runtime/test_agent_tool_history.py"
+      ],
+      "id": "M1-T05"
+    },
+    {
+      "deps": [
+        "M1-T04"
+      ],
+      "files": [
+        "packages/sandbox/motte_sandbox/tools.py",
+        "packages/sandbox/motte_sandbox/policy.py",
+        "packages/sandbox/motte_sandbox/runner.py",
+        "packages/sandbox/motte_sandbox/docker.py",
+        "packages/sandbox/motte_sandbox/workspace.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/sandbox/test_agent_workspace_policy.py"
+      ],
+      "id": "M1-T06"
+    },
+    {
+      "deps": [
+        "M1-T05",
+        "M1-T06"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/evaluation.py",
+        "packages/sdk-python/motte_sdk/service.py",
+        "packages/sdk-python/motte_sdk/agent_backend.py",
+        "packages/storage/motte_storage/invocations.py",
+        "packages/agent-runtime/motte_agent/budget.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/runtime/test_agent_interruption.py"
+      ],
+      "id": "M1-T07"
+    },
+    {
+      "deps": [
+        "M1-T01",
+        "M1-T06",
+        "M1-T07"
+      ],
+      "files": [
+        "packages/trace/motte_trace/sink.py",
+        "packages/trace/motte_trace/redaction.py",
+        "packages/storage/motte_storage/artifacts.py",
+        "packages/evaluators/motte_eval/observation.py",
+        "packages/sdk-python/motte_sdk/agent_backend.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/trace/test_agent_observation_capture.py"
+      ],
+      "id": "M1-T08"
+    },
+    {
+      "deps": [
+        "M1-T03",
+        "M1-T05",
+        "M1-T07",
+        "M1-T08"
+      ],
+      "files": [
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py",
+        "packages/cli/motte_cli/main.py",
+        "apps/web/src/evalTypes/agent/AgentPages.tsx",
+        "apps/web/src/evalTypes/registry.ts",
+        "apps/web/src/api/client.ts"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/api/test_agent_run_flow.py",
+        "apps/web/tests/AgentPages.test.tsx"
+      ],
+      "id": "M1-T09"
+    },
+    {
+      "deps": [
+        "M1-T09"
+      ],
+      "files": [
+        "tests/integration/test_native_agent_slice.py",
+        "docs/operations/native-agent.md",
+        "docs/protocols/provider-compatibility.md",
+        "docs/PROGRESS.md",
+        "docs/verification/M1.md"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_native_agent_slice.py"
+      ],
+      "id": "M1-T10"
+    },
+    {
+      "deps": [
+        "M1-T01",
+        "M1-T03"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/external_job.py",
+        "packages/sdk-python/motte_sdk/execution_backends.py",
+        "packages/sdk-python/motte_sdk/dispatcher.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/contract/test_external_job.py"
+      ],
+      "id": "M2-T01"
+    },
+    {
+      "deps": [
+        "M2-T01",
+        "M1-T07"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/protocol.py",
+        "packages/benchmark-runtime/motte_benchmark/process.py",
+        "packages/benchmark-runtime/motte_benchmark/registry.py",
+        "packages/sdk-python/motte_sdk/external_jobs.py",
+        "packages/benchmark-runtime/pyproject.toml"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/runtime/test_external_job_lifecycle.py"
+      ],
+      "id": "M2-T02"
+    },
+    {
+      "deps": [
+        "M2-T02"
+      ],
+      "files": [
+        "packages/storage/motte_storage/external_jobs.py",
+        "packages/storage/motte_storage/run_store.py",
+        "packages/storage/motte_storage/postgres.py",
+        "packages/sdk-python/motte_sdk/external_jobs.py",
+        "packages/sdk-python/motte_sdk/service.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/storage/test_external_job_store.py"
+      ],
+      "id": "M2-T03"
+    },
+    {
+      "deps": [
+        "M2-T01"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/benchmark_catalog.py",
+        "packages/sdk-python/motte_sdk/dataset_sources.py",
+        "packages/sdk-python/motte_sdk/managed_sources.py",
+        "packages/sdk-python/motte_sdk/adapters/restricted_chinese.py",
+        "packages/contracts/motte_contracts/dataset_sources.py",
+        "packages/benchmark-runtime/motte_benchmark/opencompass/profiles.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/benchmarks/test_ceval_prepare.py"
+      ],
+      "id": "M2-T04"
+    },
+    {
+      "deps": [
+        "M2-T04"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/opencompass/config.py",
+        "packages/benchmark-runtime/motte_benchmark/opencompass/profiles.py",
+        "packages/sdk-python/motte_sdk/context_preflight.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/benchmarks/test_opencompass_config.py"
+      ],
+      "id": "M2-T05"
+    },
+    {
+      "deps": [
+        "M2-T04"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/opencompass/parser.py",
+        "packages/evaluators/motte_eval/ceval.py",
+        "tests/fixtures/benchmarks/ceval/manifest.json"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/benchmarks/test_ceval_parser_parity.py"
+      ],
+      "id": "M2-T06"
+    },
+    {
+      "deps": [
+        "M2-T03",
+        "M2-T05",
+        "M2-T06"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/benchmark_plugins.py",
+        "packages/sdk-python/motte_sdk/benchmark_catalog.py",
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py",
+        "packages/cli/motte_cli/main.py",
+        "packages/benchmark-runtime/motte_benchmark/opencompass/adapter.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/api/test_ceval_run.py"
+      ],
+      "id": "M2-T07"
+    },
+    {
+      "deps": [
+        "M2-T07",
+        "M2-T09"
+      ],
+      "files": [
+        "apps/web/src/evalTypes/ceval/CevalPages.tsx",
+        "apps/web/src/evalTypes/registry.ts",
+        "apps/web/src/api/client.ts",
+        "apps/web/src/App.tsx"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "apps/web/tests/CevalPages.test.tsx"
+      ],
+      "id": "M2-T08"
+    },
+    {
+      "deps": [
+        "M2-T07",
+        "M6-T01",
+        "M6-T02",
+        "M6-T03"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/benchmark_catalog.py",
+        "apps/api/app/main.py",
+        "tests/evaluators/test_benchmark_gate_lite.py"
+      ],
+      "effort": "1-2",
+      "tests": [
+        "tests/evaluators/test_benchmark_gate_lite.py"
+      ],
+      "id": "M2-T09"
+    },
+    {
+      "deps": [
+        "M2-T08",
+        "M2-T09"
+      ],
+      "files": [
+        "tests/integration/test_ceval_external_job.py",
+        "docs/operations/ceval.md",
+        "docs/protocols/external-jobs.md",
+        "docs/verification/M2.md"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_ceval_external_job.py"
+      ],
+      "id": "M2-T10"
+    },
+    {
+      "deps": [
+        "M2-T10"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/opencompass/cmmlu.py",
+        "packages/benchmark-runtime/motte_benchmark/opencompass/profiles.py",
+        "packages/sdk-python/motte_sdk/adapters/restricted_chinese.py",
+        "tests/benchmarks/test_cmmlu_external_profile.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/benchmarks/test_cmmlu_external_profile.py"
+      ],
+      "id": "M2-T11"
+    },
+    {
+      "deps": [
+        "M2-T01",
+        "M2-T03"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/trial.py",
+        "packages/benchmark-runtime/motte_benchmark/harbor/tasks.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/benchmarks/test_harbor_task_identity.py"
+      ],
+      "id": "M3-T01"
+    },
+    {
+      "deps": [
+        "M3-T01",
+        "M1-T03"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/trial.py",
+        "packages/storage/motte_storage/trials.py",
+        "packages/storage/motte_storage/audit_store.py",
+        "packages/storage/motte_storage/pg_audit_store.py",
+        "packages/storage/motte_storage/models.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/storage/test_trial_store.py"
+      ],
+      "id": "M3-T02"
+    },
+    {
+      "deps": [
+        "M3-T02"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/harbor/config.py",
+        "packages/benchmark-runtime/motte_benchmark/harbor/adapter.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/benchmarks/test_harbor_config.py"
+      ],
+      "id": "M3-T03"
+    },
+    {
+      "deps": [
+        "M3-T02"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/harbor/parser.py",
+        "packages/evaluators/motte_eval/harbor.py",
+        "tests/fixtures/benchmarks/harbor/manifest.json"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/benchmarks/test_harbor_parser.py"
+      ],
+      "id": "M3-T04"
+    },
+    {
+      "deps": [
+        "M3-T03"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/harbor/environment.py",
+        "packages/sandbox/motte_sandbox/policy.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/benchmarks/test_harbor_preflight.py"
+      ],
+      "id": "M3-T05"
+    },
+    {
+      "deps": [
+        "M3-T03",
+        "M3-T04",
+        "M3-T05",
+        "M2-T03"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/harbor/adapter.py",
+        "packages/sdk-python/motte_sdk/external_jobs.py",
+        "packages/sdk-python/motte_sdk/benchmark_plugins.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_harbor_job_fixture.py"
+      ],
+      "id": "M3-T06"
+    },
+    {
+      "deps": [
+        "M3-T06"
+      ],
+      "files": [
+        "packages/benchmark-runtime/motte_benchmark/harbor/environment.py",
+        "packages/benchmark-runtime/motte_benchmark/harbor/adapter.py",
+        "packages/sdk-python/motte_sdk/external_jobs.py"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/runtime/test_harbor_recovery.py"
+      ],
+      "id": "M3-T07"
+    },
+    {
+      "deps": [
+        "M3-T02",
+        "M3-T04",
+        "M6-T02"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/harbor.py",
+        "packages/evaluators/motte_eval/coverage.py",
+        "apps/worker/motte_worker/reporting.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/evaluators/test_harbor_metrics.py"
+      ],
+      "id": "M3-T08"
+    },
+    {
+      "deps": [
+        "M3-T07",
+        "M3-T08"
+      ],
+      "files": [
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py",
+        "packages/cli/motte_cli/main.py",
+        "apps/web/src/evalTypes/terminalbench/TerminalBenchPages.tsx",
+        "apps/web/src/evalTypes/registry.ts"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/api/test_terminalbench_flow.py",
+        "apps/web/tests/TerminalBenchPages.test.tsx"
+      ],
+      "id": "M3-T09"
+    },
+    {
+      "deps": [
+        "M3-T09"
+      ],
+      "files": [
+        "tests/integration/test_harbor_calibration.py",
+        "docs/operations/terminal-bench.md",
+        "docs/protocols/task-trial-identity.md",
+        "docs/operations/harbor-cleanup.md",
+        "docs/verification/M3.md"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_harbor_calibration.py"
+      ],
+      "id": "M3-T10"
+    },
+    {
+      "deps": [
+        "M1-T01",
+        "M1-T04",
+        "M1-T07"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/runtime.py",
+        "packages/contracts/motte_contracts/scenario.py",
+        "packages/sdk-python/motte_sdk/runtime_backends.py",
+        "packages/sdk-python/motte_sdk/resolve.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/contract/test_runtime_profile.py"
+      ],
+      "id": "M4-T01"
+    },
+    {
+      "deps": [
+        "M4-T01"
+      ],
+      "files": [
+        "packages/harness-runtime/motte_harness/install.py",
+        "packages/harness-runtime/motte_harness/probe.py",
+        "bridges/pi/package.json",
+        "pnpm-lock.yaml",
+        "docs/protocols/provider-compatibility.md"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/protocol/test_runtime_compatibility.py"
+      ],
+      "id": "M4-T02"
+    },
+    {
+      "deps": [
+        "M4-T02"
+      ],
+      "files": [
+        "bridges/pi/bridge.mjs",
+        "bridges/pi/selftest.mjs",
+        "packages/agent-runtime/motte_agent/pi.py",
+        "packages/agent-runtime/motte_agent/protocol.py"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/protocol/test_pi_real_adapter.py",
+        "tests/protocol/test_pi_bridge_hardening.py"
+      ],
+      "id": "M4-T03"
+    },
+    {
+      "deps": [
+        "M4-T03",
+        "M1-T08"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/runtime_backends.py",
+        "packages/agent-runtime/motte_agent/pi.py",
+        "packages/sdk-python/motte_sdk/execution_backends.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/integration/test_pi_run_backend.py"
+      ],
+      "id": "M4-T04"
+    },
+    {
+      "deps": [
+        "M4-T01",
+        "M1-T07"
+      ],
+      "files": [
+        "packages/harness-runtime/motte_harness/process.py",
+        "packages/harness-runtime/motte_harness/session.py",
+        "packages/harness-runtime/motte_harness/protocol.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/harness/test_supervised_process.py"
+      ],
+      "id": "M4-T05"
+    },
+    {
+      "deps": [
+        "M4-T02",
+        "M4-T05"
+      ],
+      "files": [
+        "packages/harness-runtime/motte_harness/claude.py",
+        "packages/harness-runtime/motte_harness/parsers/claude.py",
+        "packages/sdk-python/motte_sdk/runtime_backends.py"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/harness/test_claude_batch.py"
+      ],
+      "id": "M4-T06"
+    },
+    {
+      "deps": [
+        "M4-T02",
+        "M4-T05"
+      ],
+      "files": [
+        "packages/harness-runtime/motte_harness/codex.py",
+        "packages/harness-runtime/motte_harness/parsers/codex.py",
+        "packages/sdk-python/motte_sdk/runtime_backends.py"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/harness/test_codex_batch.py"
+      ],
+      "id": "M4-T07"
+    },
+    {
+      "deps": [
+        "M4-T04",
+        "M4-T06",
+        "M4-T07"
+      ],
+      "files": [
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py",
+        "packages/cli/motte_cli/main.py",
+        "apps/web/src/evalTypes/harness/HarnessPages.tsx",
+        "apps/web/src/evalTypes/registry.ts",
+        "packages/provider-runtime/motte_provider/base.py",
+        "packages/provider-runtime/motte_provider/transport.py",
+        "packages/provider-runtime/motte_provider/openai_chat.py",
+        "packages/provider-runtime/motte_provider/openai_responses.py",
+        "packages/provider-runtime/motte_provider/anthropic_messages.py",
+        "packages/contracts/motte_contracts/messages.py"
+      ],
+      "effort": "6-10",
+      "tests": [
+        "tests/api/test_harness_runs.py",
+        "apps/web/tests/HarnessPages.test.tsx",
+        "tests/provider/test_streaming_contracts.py"
+      ],
+      "id": "M4-T08"
+    },
+    {
+      "deps": [
+        "M4-T08"
+      ],
+      "files": [
+        "tests/integration/test_external_runtime_slice.py",
+        "docs/operations/pi.md",
+        "docs/operations/cli-harnesses.md",
+        "docs/protocols/runtime-events.md",
+        "docs/verification/M4.md"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_external_runtime_slice.py"
+      ],
+      "id": "M4-T09"
+    },
+    {
+      "deps": [
+        "M4-T09"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/commands.py",
+        "packages/storage/motte_storage/audit_store.py",
+        "packages/storage/motte_storage/pg_audit_store.py",
+        "packages/harness-runtime/motte_harness/channel.py",
+        "apps/web/src/evalTypes/harness/HarnessPages.tsx"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/runtime/test_command_delivery.py"
+      ],
+      "id": "M4-T10"
+    },
+    {
+      "deps": [
+        "M4-T01",
+        "M1-T03",
+        "M1-T08"
+      ],
+      "files": [
+        "packages/harness-runtime/motte_harness/inspect.py",
+        "packages/harness-runtime/motte_harness/parsers/inspect.py",
+        "apps/api/app/main.py",
+        "packages/cli/motte_cli/main.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/harness/test_inspect_log_import.py"
+      ],
+      "id": "M4-T11"
+    },
+    {
+      "deps": [
+        "M1-T01"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/scenario.py",
+        "packages/contracts/motte_contracts/workflow.py",
+        "packages/scenario-runtime/motte_scenario/conditions.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/contract/test_workflow_spec.py"
+      ],
+      "id": "M5-T01"
+    },
+    {
+      "deps": [
+        "M5-T01",
+        "M1-T06"
+      ],
+      "files": [
+        "packages/scenario-runtime/motte_scenario/fixtures.py",
+        "packages/scenario-runtime/motte_scenario/state.py",
+        "packages/scenario-runtime/pyproject.toml"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/scenario/test_fixture_lifecycle.py"
+      ],
+      "id": "M5-T02"
+    },
+    {
+      "deps": [
+        "M5-T01",
+        "M5-T02",
+        "M1-T05",
+        "M1-T07"
+      ],
+      "files": [
+        "packages/scenario-runtime/motte_scenario/engine.py",
+        "packages/scenario-runtime/motte_scenario/targets.py",
+        "packages/scenario-runtime/motte_scenario/conditions.py"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/scenario/test_workflow_engine.py"
+      ],
+      "id": "M5-T03"
+    },
+    {
+      "deps": [
+        "M5-T03",
+        "M1-T02"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/workflow.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/evaluators/test_workflow_assertions.py"
+      ],
+      "id": "M5-T04"
+    },
+    {
+      "deps": [
+        "M5-T03",
+        "M5-T04",
+        "M1-T03"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/scenario_backend.py",
+        "packages/sdk-python/motte_sdk/execution_backends.py",
+        "packages/sdk-python/motte_sdk/resolve.py",
+        "packages/sdk-python/motte_sdk/service.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/integration/test_scenario_run_backend.py"
+      ],
+      "id": "M5-T05"
+    },
+    {
+      "deps": [
+        "M1-T01"
+      ],
+      "files": [
+        "packages/skill-runtime/motte_skill/manifest.py",
+        "packages/skill-runtime/motte_skill/registry.py",
+        "packages/contracts/motte_contracts/skill.py",
+        "packages/sdk-python/motte_sdk/publication.py",
+        "packages/storage/motte_storage/resource_store.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/skill/test_skill_versions.py"
+      ],
+      "id": "M5-T06"
+    },
+    {
+      "deps": [
+        "M5-T06",
+        "M5-T02",
+        "M1-T06"
+      ],
+      "files": [
+        "packages/skill-runtime/motte_skill/injection.py",
+        "packages/skill-runtime/motte_skill/fixtures.py",
+        "packages/sdk-python/motte_sdk/agent_backend.py"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/skill/test_skill_injection_fixture.py"
+      ],
+      "id": "M5-T07"
+    },
+    {
+      "deps": [
+        "M5-T05",
+        "M5-T07",
+        "M6-T01",
+        "M6-T02"
+      ],
+      "files": [
+        "packages/skill-runtime/motte_skill/fixtures.py",
+        "packages/sdk-python/motte_sdk/skill_experiments.py",
+        "tests/integration/test_skill_ablation.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/integration/test_skill_ablation.py"
+      ],
+      "id": "M5-T08"
+    },
+    {
+      "deps": [
+        "M1-T03",
+        "M1-T07"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/judge.py",
+        "packages/evaluators/motte_eval/rubrics.py",
+        "packages/contracts/motte_contracts/judge.py",
+        "packages/sdk-python/motte_sdk/scoring_jobs.py",
+        "packages/storage/motte_storage/scoring_jobs.py"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/evaluators/test_judge_execution.py"
+      ],
+      "id": "M5-T09"
+    },
+    {
+      "deps": [
+        "M5-T09"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/calibration.py",
+        "packages/sdk-python/motte_sdk/scoring_jobs.py",
+        "packages/storage/motte_storage/audit_store.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/evaluators/test_judge_calibration.py"
+      ],
+      "id": "M5-T10"
+    },
+    {
+      "deps": [
+        "M5-T05",
+        "M5-T08",
+        "M5-T10"
+      ],
+      "files": [
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py",
+        "packages/cli/motte_cli/main.py",
+        "apps/web/src/evalTypes/scenario/ScenarioPages.tsx",
+        "apps/web/src/evalTypes/skill/SkillPages.tsx",
+        "apps/web/src/pages/judges/JudgesPage.tsx"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/api/test_scenario_skill_flow.py",
+        "apps/web/tests/ScenarioPages.test.tsx",
+        "apps/web/tests/SkillPages.test.tsx",
+        "apps/web/tests/JudgesPage.test.tsx"
+      ],
+      "id": "M5-T11"
+    },
+    {
+      "deps": [
+        "M5-T11"
+      ],
+      "files": [
+        "tests/integration/test_business_regression_slice.py",
+        "docs/protocols/scenario-workflow.md",
+        "docs/operations/scenarios.md",
+        "docs/operations/skills.md",
+        "docs/operations/judges.md",
+        "docs/verification/M5.md"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_business_regression_slice.py"
+      ],
+      "id": "M5-T12"
+    },
+    {
+      "deps": [
+        "M1-T01",
+        "M1-T03"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/comparison.py",
+        "packages/evaluators/motte_eval/comparison.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/evaluators/test_comparability.py"
+      ],
+      "id": "M6-T01"
+    },
+    {
+      "deps": [
+        "M1-T03"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/coverage.py",
+        "packages/evaluators/motte_eval/aggregate.py",
+        "packages/contracts/motte_contracts/report.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/evaluators/test_metric_coverage.py"
+      ],
+      "id": "M6-T02"
+    },
+    {
+      "deps": [
+        "M6-T01",
+        "M6-T02"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/comparison.py",
+        "packages/evaluators/motte_eval/gates.py",
+        "packages/storage/motte_storage/baselines.py",
+        "packages/sdk-python/motte_sdk/comparisons.py",
+        "apps/api/app/main.py",
+        "packages/cli/motte_cli/main.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/evaluators/test_gate_lite.py"
+      ],
+      "id": "M6-T03"
+    },
+    {
+      "deps": [
+        "M6-T03"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/experiment.py",
+        "packages/sdk-python/motte_sdk/experiments.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/contract/test_experiment_spec.py"
+      ],
+      "id": "M6-T04"
+    },
+    {
+      "deps": [
+        "M6-T04"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/experiments.py",
+        "packages/storage/motte_storage/experiments.py",
+        "packages/storage/motte_storage/run_store.py",
+        "packages/storage/motte_storage/postgres.py",
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/storage/test_experiment_allocation.py"
+      ],
+      "id": "M6-T05"
+    },
+    {
+      "deps": [
+        "M3-T02",
+        "M3-T08",
+        "M6-T02"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/statistics.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/evaluators/test_statistics.py"
+      ],
+      "id": "M6-T06"
+    },
+    {
+      "deps": [
+        "M6-T03",
+        "M6-T05"
+      ],
+      "files": [
+        "packages/storage/motte_storage/baselines.py",
+        "packages/sdk-python/motte_sdk/comparisons.py",
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/storage/test_baseline_history.py"
+      ],
+      "id": "M6-T07"
+    },
+    {
+      "deps": [
+        "M6-T06",
+        "M6-T07",
+        "M5-T10",
+        "M4-T01"
+      ],
+      "files": [
+        "packages/evaluators/motte_eval/gates.py",
+        "packages/evaluators/motte_eval/comparison.py",
+        "packages/sdk-python/motte_sdk/comparisons.py",
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/evaluators/test_regression_gate.py"
+      ],
+      "id": "M6-T08"
+    },
+    {
+      "deps": [
+        "M6-T05",
+        "M6-T07",
+        "M6-T08"
+      ],
+      "files": [
+        "apps/web/src/pages/experiments/ExperimentsPage.tsx",
+        "apps/web/src/pages/compare/ComparisonPage.tsx",
+        "apps/web/src/api/client.ts",
+        "apps/web/src/App.tsx"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "apps/web/tests/Experiments.test.tsx",
+        "apps/web/tests/Comparison.test.tsx"
+      ],
+      "id": "M6-T09"
+    },
+    {
+      "deps": [
+        "M6-T08"
+      ],
+      "files": [
+        "packages/cli/motte_cli/main.py",
+        "packages/sdk-python/motte_sdk/export.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/cli/test_gate_exit_codes.py"
+      ],
+      "id": "M6-T10"
+    },
+    {
+      "deps": [
+        "M6-T09",
+        "M6-T10",
+        "M2-T09",
+        "M5-T12"
+      ],
+      "files": [
+        "tests/integration/test_experiment_gate_slice.py",
+        "docs/protocols/experiments-and-comparison.md",
+        "docs/operations/gates-and-ci.md",
+        "docs/operations/statistical-policies.md",
+        "docs/verification/M6.md"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/integration/test_experiment_gate_slice.py"
+      ],
+      "id": "M6-T11"
+    },
+    {
+      "deps": [
+        "M1-T03",
+        "M6-T03",
+        "M6-T07"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/client.py",
+        "packages/sdk-python/motte_sdk/client_errors.py",
+        "packages/sdk-python/motte_sdk/client_types.py",
+        "apps/api/app/main.py",
+        "apps/api/app/schemas.py",
+        "packages/storage/motte_storage/requests.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/sdk/test_client_contract.py"
+      ],
+      "id": "M7-T01"
+    },
+    {
+      "deps": [
+        "M7-T01"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/client.py",
+        "packages/sdk-python/motte_sdk/client_types.py",
+        "apps/api/app/main.py",
+        "apps/web/src/hooks/useRunEvents.ts"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/sdk/test_wait_and_events.py"
+      ],
+      "id": "M7-T02"
+    },
+    {
+      "deps": [
+        "M7-T01",
+        "M7-T02",
+        "M6-T10"
+      ],
+      "files": [
+        "packages/cli/motte_cli/main.py",
+        "packages/cli/motte_cli/commands.py",
+        "packages/sdk-python/motte_sdk/client.py"
+      ],
+      "effort": "2-3",
+      "tests": [
+        "tests/cli/test_remote_parity.py"
+      ],
+      "id": "M7-T03"
+    },
+    {
+      "deps": [
+        "M7-T03",
+        "M6-T10"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/tracing.py",
+        "packages/sdk-python/motte_sdk/pytest_plugin.py",
+        "packages/sdk-python/motte_sdk/export.py",
+        "packages/sdk-python/pyproject.toml"
+      ],
+      "effort": "2-4",
+      "tests": [
+        "tests/sdk/test_pytest_and_exports.py"
+      ],
+      "id": "M7-T04"
+    },
+    {
+      "deps": [
+        "M7-T01"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/__init__.py",
+        "packages/sdk-python/pyproject.toml",
+        "pyproject.toml",
+        "infra/docker-compose.yml",
+        ".github/workflows/ci.yml"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/packaging/test_clean_install.py"
+      ],
+      "id": "M7-T05"
+    },
+    {
+      "deps": [
+        "M5-T01",
+        "M5-T06"
+      ],
+      "files": [
+        "packages/contracts/motte_contracts/imports.py",
+        "packages/sdk-python/motte_sdk/migration/plan.py",
+        "packages/sdk-python/motte_sdk/migration/sources.py"
+      ],
+      "effort": "3-4",
+      "tests": [
+        "tests/migration/test_import_plan.py"
+      ],
+      "id": "M7-T06"
+    },
+    {
+      "deps": [
+        "M7-T06",
+        "M3-T02",
+        "M5-T06",
+        "M6-T07"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/migration/apply.py",
+        "packages/sdk-python/motte_sdk/migration/transforms.py",
+        "packages/storage/motte_storage/imports.py",
+        "packages/sdk-python/motte_sdk/dispatcher.py"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/migration/test_legacy_import.py"
+      ],
+      "id": "M7-T07"
+    },
+    {
+      "deps": [
+        "M7-T07"
+      ],
+      "files": [
+        "packages/sdk-python/motte_sdk/migration/apply.py",
+        "packages/sdk-python/motte_sdk/migration/rollback.py",
+        "packages/storage/motte_storage/imports.py"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/migration/test_import_resume_rollback.py"
+      ],
+      "id": "M7-T08"
+    },
+    {
+      "deps": [
+        "M1-T03",
+        "M7-T06"
+      ],
+      "files": [
+        "packages/storage/motte_storage/maintenance.py",
+        "packages/storage/motte_storage/artifacts.py",
+        "packages/sdk-python/motte_sdk/service.py",
+        "apps/api/app/main.py",
+        "apps/worker/motte_worker/runtime.py"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/integration/test_backup_restore_consistency.py",
+        "tests/storage/test_maintenance.py"
+      ],
+      "id": "M7-T09"
+    },
+    {
+      "deps": [
+        "M1-T06",
+        "M1-T08",
+        "M6-T07",
+        "M7-T09"
+      ],
+      "files": [
+        "apps/api/app/main.py",
+        "apps/api/app/dependencies.py",
+        "packages/storage/motte_storage/maintenance.py",
+        "packages/storage/motte_storage/artifacts.py",
+        "infra/docker-compose.yml",
+        ".github/workflows/ci.yml"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/security/test_single_user_boundary.py"
+      ],
+      "id": "M7-T10"
+    },
+    {
+      "deps": [
+        "M7-T04",
+        "M7-T05",
+        "M7-T08",
+        "M7-T10",
+        "M1-T10",
+        "M2-T10",
+        "M3-T10",
+        "M4-T09",
+        "M5-T12",
+        "M6-T11"
+      ],
+      "files": [
+        "tests/integration/test_release_smoke.py",
+        "infra/docker-compose.yml",
+        ".github/workflows/ci.yml",
+        "docs/release/support-matrix.md",
+        "docs/operations/upgrade.md",
+        "docs/operations/rollback.md"
+      ],
+      "effort": "4-6",
+      "tests": [
+        "tests/integration/test_release_smoke.py"
+      ],
+      "id": "M7-T11"
+    },
+    {
+      "deps": [
+        "M7-T11",
+        "M2-T11",
+        "M4-T10",
+        "M4-T11"
+      ],
+      "files": [
+        "tests/integration/test_cutover_readiness.py",
+        "docs/migration/legacy-capability-map.md",
+        "docs/release/cutover.md",
+        "docs/release/release-notes.md",
+        "docs/operations/sdk-and-cli.md",
+        "docs/operations/import-legacy.md",
+        "docs/operations/backup-restore.md",
+        "docs/verification/M7.md"
+      ],
+      "effort": "3-5",
+      "tests": [
+        "tests/integration/test_cutover_readiness.py"
+      ],
+      "id": "M7-T12"
+    }
+  ]
+}
