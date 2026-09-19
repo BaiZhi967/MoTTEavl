@@ -374,6 +374,15 @@ class RunService:
         import_view = outcome.get("import")
         if isinstance(import_view, dict):
             metrics = import_view.get("metrics") or {}
+        outcome_error_view = outcome.get("error")
+        runner_exit_code = (
+            (outcome_error_view.get("details") or {}).get("exit_code")
+            if isinstance(outcome_error_view, dict) else None
+        )
+        if runner_exit_code is None:
+            runner_exit_code = (
+                (outcome.get("handle") or {}).get("owned_resources", {}).get("exit_code")
+            )
         if metrics:
             # native/diagnostic 双口径进入版本化指标事实（review R09）：
             # 持久 run 事件 + Job checkpoint（分派侧），供报告与 UI 查询。
@@ -401,10 +410,7 @@ class RunService:
                 aggregate_context={
                     "external_outcome": {
                         "job_status": job_status,
-                        "runner_exit_code": (
-                            (outcome_error or {}).get("details", {}).get("exit_code")
-                            if isinstance(outcome_error, dict) else None
-                        ),
+                        "runner_exit_code": runner_exit_code,
                     },
                 },
             )

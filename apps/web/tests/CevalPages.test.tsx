@@ -12,9 +12,13 @@ import {
 
 const clientMocks = vi.hoisted(() => ({
   getExternalCatalog: vi.fn(),
+  prepareExternalDataset: vi.fn(),
   prepareCevalDataset: vi.fn(),
+  getExternalPreflight: vi.fn(),
   getCevalPreflight: vi.fn(),
+  getExternalCases: vi.fn(),
   getCevalCases: vi.fn(),
+  createExternalRun: vi.fn(),
   createCevalRun: vi.fn(),
   getExternalJobs: vi.fn(),
   compareRuns: vi.fn(),
@@ -39,6 +43,13 @@ beforeEach(() => {
       blockers: ["RUNNER_NOT_CONNECTED"],
       dataset: { state: "ready", provenance: "user-supplied", revision: "rev-1", rows: 4, gold_rows: 4, unscored: false },
     }],
+  });
+  clientMocks.getExternalCases.mockResolvedValue({
+    cases: [
+      { case_id: "logic-1", subject: "logic", has_gold: true },
+      { case_id: "logic-2", subject: "logic", has_gold: false },
+    ],
+    total: 2,
   });
   clientMocks.getCevalCases.mockResolvedValue({
     cases: [
@@ -129,7 +140,7 @@ describe("CevalPages", () => {
   });
 
   it("操作页：创建被拒时保留表单并显示错误（无绕过按钮）", async () => {
-    clientMocks.createCevalRun.mockRejectedValue(new Error("422 RUNNER_NOT_CONNECTED"));
+    clientMocks.createExternalRun.mockRejectedValue(new Error("422 RUNNER_NOT_CONNECTED"));
     render(wrap(<CevalOperate />));
     await waitFor(() => expect(screen.getByTestId("catalog-status").textContent).toBe("prepared"));
     fireEvent.click(screen.getByRole("button", { name: "排队执行" }));

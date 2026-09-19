@@ -16,8 +16,24 @@ uv run python -m apps.worker.motte_worker --once # 分派：一个 Run 一个 Jo
 GET  /api/v1/runs/{id}/external-jobs             # Job 记录（状态/token）
 ```
 
-CLI：`motte ceval prepare|preflight|run`（与 API 共用同一服务）。
+CLI：`motte ceval prepare|preflight|run`（与 API 共用同一服务；`--split/
+--few-shot/--few-shot-split` 等参数与创建预检一致）。准备结果持久化
+（`benchmark_datasets` 表），重启/第二个 API 实例不丢。
 Web：`/ceval` 五页（操作/题目/监控/结果/比较）。
+
+**Runner 接入（review R01）**：创建入口会把冻结的
+`runner-config.json`（模型快照/逐题 prompt/few-shot/凭据引用/config_hash）
+写入 Job 工作目录。adapter 注册经同一受控配置加载：
+
+```
+# var/runner/adapters.json（或 MOTTE_RUNNER_CONFIG 指向的文件）
+{"adapters": [{"benchmark": "ceval", "argv": ["/opt/motte-runner/bin/opencompass-entry"]}]}
+```
+
+固定环境 wrapper 模板见 `scripts/runner/opencompass-entry`（钉
+`opencompass==0.4.2` 环境；结束时原子写 `.motte-job-complete` 完成标记，
+恢复路径只信该标记）。无配置且 wrapper 不存在 → RUNNER_NOT_CONNECTED，
+创建在提交前 422。
 
 ## 2. 数据与来源治理
 
@@ -34,13 +50,21 @@ Web：`/ceval` 五页（操作/题目/监控/结果/比较）。
 
 - Profile 钉住：dataset revision、split、学科选择、few-shot（必须来自与
   评测 split 不同的合法分区）、prompt/提取器/聚合版本、Runner 版本
-  （`opencompass-0.4.2` 基线，自旧适配器迁移）、环境 digest。
+  （`opencompass-0.4.2` 基线，自旧适配器迁移）、环境 digest（覆盖
+  runner/adapter/parser/benchmark 身份）。
+- **学科白名单**：C-Eval 只接受官方 52 学科，未知学科在 prepare 阶段
+  拒绝（不静默聚合失败）。
+- **入队前统一预检（review R14）**：模型须 published；split 必须是准备
+  数据的实际分区；few-shot 需有足够 dev 示例；scope=full 必须覆盖分区
+  全部行；上下文预算校验。失败 422（`RUN_REQUEST_INVALID` + reasons），
+  0 Job 启动。GET preflight 与创建共用同一校验与输入。
 - 凭据按引用（`{"ref": "env:NAME"}`）传入 Runner 配置；任何原始值拒绝。
-- scope ∈ smoke / custom-subset / full，始终随配置与报告。
+- scope ∈ smoke / custom-subset / full，始终随配置与报告；零结果的
+  选择集不能伪装 completed（`EXTERNAL_EMPTY_RESULTS`）。
 - 指标双命名空间：`native.*`（OpenCompass 原始聚合）与 `diagnostic.*`
   （平台重算，提取器=结论优先两段式，迁移自旧适配器 b661bcdf 并有 golden
   对照，见 `docs/migration/ceval-parser-parity.md`）；两者不一致记
-  discrepancy，不互相覆盖。
+  discrepancy，不互相覆盖。评分 gold 以冻结 `case_expectations` 为权威。
 
 ## 4. 分层验收清单
 

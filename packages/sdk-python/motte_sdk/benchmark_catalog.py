@@ -469,7 +469,6 @@ def dataset_from_payload(payload: Mapping[str, Any]) -> PreparedBenchmarkDataset
     known = {
         "benchmark_id", "benchmark_version", "dataset_revision", "state", "reasons",
         "provenance", "unscored", "license_evidence", "row_count", "gold_count",
-        "dataset_splits",
     }
     fields = {key: value for key, value in data.items() if key in known}
     return PreparedBenchmarkDataset(
@@ -694,20 +693,12 @@ def validate_external_run_request(
             f"SPLIT_NOT_IN_DATASET:{split} (prepared: {list(dataset.dataset_splits)})",
         )
     if few_shot:
-        if few_shot_split not in dataset.dataset_splits:
+        dev_rows = [row for row in dataset.rows if str(row.get("split")) == few_shot_split]
+        if len(dev_rows) < few_shot:
             reasons.append(
-                f"FEWSHOT_SPLIT_NOT_IN_DATASET:{few_shot_split} "
-                f"(prepared: {list(dataset.dataset_splits)})",
+                f"FEWSHOT_EXAMPLES_INSUFFICIENT:{len(dev_rows)} < {few_shot} "
+                f"(source split {few_shot_split!r}; prepared: {list(dataset.dataset_splits)})",
             )
-        else:
-            dev_rows = [
-                row for row in dataset.rows
-                if str(row.get("split")) == few_shot_split
-            ]
-            if len(dev_rows) < few_shot:
-                reasons.append(
-                    f"FEWSHOT_EXAMPLES_INSUFFICIENT:{len(dev_rows)} < {few_shot}",
-                )
         if few_shot_split == split:
             reasons.append(
                 f"FEWSHOT_SPLIT_CONFLICT:few-shot partition {few_shot_split!r} "

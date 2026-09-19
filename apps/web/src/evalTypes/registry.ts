@@ -76,11 +76,19 @@ const CEVAL_SUITE: EvalTypeSuite = {
   icon: GraduationCapIcon,
   matchRun: (run) =>
     run.scenario_version.startsWith("ceval-external@")
-      || run.manifest?.execution?.backend_id === "external-benchmark",
+    || run.manifest?.execution?.backend_id === "external-benchmark",
+};
+
+const CMMLU_SUITE: EvalTypeSuite = {
+  id: "cmmlu",
+  label: "CMMLU 外部基准",
+  icon: GraduationCapIcon,
+  matchRun: (run) => run.scenario_version.startsWith("cmmlu-external@"),
 };
 
 export const EVAL_SUITES: EvalTypeSuite[] = [
   AGENT_TASKS_SUITE,
+  CMMLU_SUITE,
   CEVAL_SUITE,
   GSM8K_SUITE,
   DIRECT_LLM_SUITE,

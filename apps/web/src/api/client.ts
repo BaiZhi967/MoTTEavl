@@ -571,6 +571,15 @@ export interface ExternalJobRecord {
   run_id: string;
   status: string;
   launch_token: string;
+  metrics?: {
+    parser_version?: string | null;
+    ceval_native?: Record<string, unknown>;
+    ceval_diagnostic?: {
+      per_subject?: Record<string, number>;
+      aggregate?: Record<string, number>;
+    };
+  };
+  evidence?: Record<string, unknown>;
 }
 
 export interface ComparisonReportView {
@@ -589,24 +598,48 @@ export interface GateResultView {
 export const getExternalCatalog = () =>
   request<{ benchmarks: ExternalCatalogBenchmark[] }>("/api/v1/benchmarks/external/catalog");
 
-export const prepareCevalDataset = (body: Record<string, unknown>) =>
+// 通用外部基准入口（review R16：ceval/cmmlu 同一 API 面）。
+export const prepareExternalDataset = (benchmarkId: string, body: Record<string, unknown>) =>
   request<{ state: string; provenance: string; revision: string; rows: number; unscored: boolean }>(
-    "/api/v1/benchmarks/external/ceval/prepare",
+    `/api/v1/benchmarks/external/${encodeURIComponent(benchmarkId)}/prepare`,
     jsonBody(body),
   );
 
-export const getCevalPreflight = (model: string) =>
-  request<ExternalPreflightReport>(
-    `/api/v1/benchmarks/external/ceval/preflight?model=${encodeURIComponent(model)}`,
+export const getExternalPreflight = (
+  benchmarkId: string, params: { model?: string; scope?: string; split?: string },
+) => {
+  const query = new URLSearchParams();
+  if (params.model) query.set("model", params.model);
+  if (params.scope) query.set("scope", params.scope);
+  if (params.split) query.set("split", params.split);
+  return request<ExternalPreflightReport>(
+    `/api/v1/benchmarks/external/${encodeURIComponent(benchmarkId)}/preflight?${query.toString()}`,
   );
+};
+
+export const getExternalCases = (benchmarkId: string, query = "", offset = 0, limit = 50) =>
+  request<{ cases: { case_id: string; subject: string; has_gold: boolean }[]; total: number }>(
+    `/api/v1/benchmarks/external/${encodeURIComponent(benchmarkId)}/cases?offset=${offset}&limit=${limit}&query=${encodeURIComponent(query)}`,
+  );
+
+export const createExternalRun = (benchmarkId: string, body: Record<string, unknown>) =>
+  request<RunRecord>(
+    `/api/v1/benchmarks/external/${encodeURIComponent(benchmarkId)}/runs`,
+    jsonBody(body),
+  );
+
+// C-Eval 兼容封装（既有页面/测试引用）。
+export const prepareCevalDataset = (body: Record<string, unknown>) =>
+  prepareExternalDataset("ceval", body);
+
+export const getCevalPreflight = (model: string) =>
+  getExternalPreflight("ceval", { model });
 
 export const getCevalCases = (query = "", offset = 0, limit = 50) =>
-  request<{ cases: { case_id: string; subject: string; has_gold: boolean }[]; total: number }>(
-    `/api/v1/benchmarks/external/ceval/cases?offset=${offset}&limit=${limit}&query=${encodeURIComponent(query)}`,
-  );
+  getExternalCases("ceval", query, offset, limit);
 
 export const createCevalRun = (body: Record<string, unknown>) =>
-  request<RunRecord>("/api/v1/benchmarks/external/ceval/runs", jsonBody(body));
+  createExternalRun("ceval", body);
 
 export const getExternalJobs = (runId: string) =>
   request<{ jobs: ExternalJobRecord[] }>(`/api/v1/runs/${runId}/external-jobs`);

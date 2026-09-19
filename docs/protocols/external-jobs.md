@@ -152,17 +152,60 @@ PG 表来自 alembic `0006_external_jobs`）：
 上述存储，作为 job 模式 `run_job` 入口：
 
 1. **一个 Run 只启动一个 Job**：已存在 Job 记录时绝不 start。活跃
-   （launching/active/collecting）→ 只恢复观察；终态（采集后、最终化前
-   崩溃）→ 从已导入记录重建 outcome，再次导入为 no-op。
-2. 原始 outcome 先冻结为受控不可变 Artifact
-   （`external-jobs/<run>/<job>/outcome.json`），再逐条导入。
-3. 导入冲突 → 结局改 failed（`EXTERNAL_IMPORT_CONFLICT`），停止最终化并
+   （launching/active/collecting）→ 只恢复观察；**终态且
+   `checkpoint.import_completed`** → 从已导入记录重建 outcome（快路径）；
+   **终态但导入未完成**（最终化前崩溃）→ 重新观察/采集并幂等补齐，
+   绝不二次启动（review R04）。
+2. 最终化顺序固定（review R04）：
+   **证据冻结 → 幂等导入 → checkpoint（cursor 指标 + 证据引用 +
+   `import_completed`）→ 最后写终态**。导入中途崩溃时 Job 仍非终态，
+   恢复路径重新采集并补齐；原始完整证据不被截断版本覆盖。
+3. 原始 outcome 冻结为**内容寻址**受控 Artifact
+   （`external-jobs/<run>/<job>/outcome-<hash16>.json`），原始输出树
+   另存 evidence bundle（`evidence/raw-<hash16>.json`，受预算内含内容、
+   超预算仅 hash）——解析前先快照 hash，工作目录清理后仍可审计与重新
+   解析（review R09）。native/diagnostic 指标随 checkpoint 持久化，
+   并以 `external_job_metrics` run 事件与 scoring pass summary 暴露。
+4. 导入冲突 → 结局改 failed（`EXTERNAL_IMPORT_CONFLICT`），停止最终化并
    保留两份摘要（M2-A06）。
-4. 操作员取消：`RunService.cancel` 先持久化取消请求，再经注册的
-   `interrupt_run` 中断本 Run 拥有的进程；中断后迟到的 failed/indeterminate
-   观察不覆盖 Job 的 cancelled 状态，Run 终态不复活（M2-A09）。
-5. 迟到结果只走 `import_late_results`：写审计事件
+5. 操作员取消：`RunService.cancel` 先持久化取消请求，再经注册的
+   `interrupt_run` 中断本 Run 拥有的进程；**观察循环同时消费持久取消
+   请求（`should_cancel`）**——API 与 Worker 分进程时，另一实例落库的
+   取消也能在有限时间内中断挂起 Job（review R05）。中断后迟到的
+   failed/indeterminate 观察不覆盖 Job 的 cancelled 状态，Run 终态不
+   复活（M2-A09）。未声明 `max_wall_seconds` 的 Job 默认上限 3600s。
+6. 迟到结果只走 `import_late_results`：写审计事件
    `external_job_late_results`（audit_only），不改 Run 状态、不新增评分。
 
 `launching` 状态但进程不可核验（崩溃于 start 前后）→ recover 观察 →
 indeterminate → Run needs_review；禁止仅凭“没有 results”重新执行（M2-A07）。
+
+## 9. 完成标记与可信恢复（review R10）
+
+- wrapper/Runner 承诺在结束时**原子写完成标记**
+  `<work_dir>/.motte-job-complete`：`{"exit_code": <int>, "completed": true}`
+  （先写 `.partial` 再 rename；`scripts/runner/opencompass-entry` 与假
+  Runner 均遵循）。
+- 进程不可核验时，poll 只信完成标记：标记 exit 0 → settled、非零 →
+  failed；**没有标记而只有部分输出 → indeterminate**，部分采集保留为
+  审计证据，不升级为成功。存在 results.json 不再等同于成功退出。
+
+## 10. Runner 配置与受控 adapter 加载（review R01/R13）
+
+- 创建入口（API/CLI 共用 `prepare_external_run_inputs`）把
+  `build_opencompass_config` 的完整配置（模型快照、逐题 prompt、few-shot、
+  凭据**引用**、config_hash）冻结进 `manifest.external_benchmark.runner_config`，
+  并同步冻结平台侧 gold 来源 `manifest.case_expectations`；adapter
+  `prepare` 将其写入受控目录 `runner-config.json`（真实 Runner 的输入）。
+  缺 `runner_config.cases` 的外部 Run 在创建/分派层拒绝
+  （`EXTERNAL_JOB_VERSION_REQUIRED`）。
+- adapter 注册只经 `motte_benchmark.runner_config.ensure_builtin_adapters()`：
+  读 `MOTTE_RUNNER_CONFIG` 指向的受控 JSON（`{"adapters": [{"benchmark":
+  "ceval"|"cmmlu", "argv"|[...]}|"module": "..."}]}`），或固定环境 wrapper
+  `/opt/motte-runner/bin/opencompass-entry` 实际存在时注册；两者皆无则
+  RUNNER_NOT_CONNECTED，绝不静默落到不可执行 argv。API/Worker/CLI 启动时
+  各自调用，配置同源。
+- 结果采集按 `runner-config.json` 的冻结 case 顺序映射
+  `(subject, 行序) → CaseID`；未知/越界/重复映射隔离为 unmapped 记录并使
+  Run failed，绝不串题（review R03）。评分 gold 以 `case_expectations`
+  为权威，Runner 报告 gold 分歧记入 score details。

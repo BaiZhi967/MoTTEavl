@@ -25,3 +25,6 @@ var/datasets/
 
 # 脑暴视觉伴侣会话产物
 .superpowers/
+
+# Mimosa 扫描会话状态（不入库）
+.mimosa/

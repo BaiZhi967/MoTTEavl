@@ -144,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
         _write_marker(work, 1 if mode == "fail" else 0)
         return 1 if mode == "fail" else 0
 
+    if mode == "partial_quiet":
+        # 写部分 results.json 但不写完成标记（review R10 反例）：恢复路径
+        # 只能保持不确定，不能凭部分输出升级为成功。
+        (work / "results.json").write_text(
+            json.dumps({"records": _FULL_RECORDS[:2]}), encoding="utf-8",
+        )
+        return 0
+
     if mode == "slow_ok":
         time.sleep(1.5)
         (work / "results.json").write_text(

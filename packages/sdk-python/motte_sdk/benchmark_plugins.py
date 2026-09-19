@@ -270,9 +270,12 @@ def _load_builtins() -> None:
         run: dict[str, Any], results: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         # gold 以冻结的 case_expectations 为准（review R03）；Runner 报告的
-        # gold 只作对账证据，出现分歧记进 details 不改变判定。
+        # gold 只作对账证据，出现分歧记进 details 不改变判定。未尝试的行
+        # 不是记录（保持 NOT_ATTEMPTED，不伪装成答错）。
         records = []
         for row in results:
+            if row.get("outcome") == "not_attempted":
+                continue
             payload = row.get("result") if isinstance(row.get("result"), dict) else {}
             records.append({
                 "case_id": row.get("case_id"),
@@ -296,7 +299,10 @@ def _load_builtins() -> None:
                 continue
             runner_gold = record.get("runner_gold")
             details = {}
-            if runner_gold is not None and str(runner_gold).strip().upper() != str(gold).strip().upper():
+            if (
+                isinstance(runner_gold, str) and runner_gold.strip()
+                and runner_gold.strip().upper() != str(gold).strip().upper()
+            ):
                 details["gold_source_mismatch"] = {
                     "frozen": gold, "runner_reported": runner_gold,
                     "authority": "case_expectations",
@@ -317,6 +323,8 @@ def _load_builtins() -> None:
         expectations = manifest.get("case_expectations") or {}
         records = []
         for row in run.get("cases") or []:
+            if row.get("outcome") == "not_attempted":
+                continue
             payload = row.get("result") if isinstance(row.get("result"), dict) else {}
             case_id = row.get("case_id")
             records.append({

@@ -9,6 +9,7 @@ import { CevalCompare } from "./evalTypes/ceval/CevalPages";
 import { CevalMonitor } from "./evalTypes/ceval/CevalPages";
 import { CevalOperate } from "./evalTypes/ceval/CevalPages";
 import { CevalResult } from "./evalTypes/ceval/CevalPages";
+import { makeExternalPages } from "./evalTypes/external/ExternalBenchmarkPages";
 import { Gsm8kCases } from "./evalTypes/gsm8k/Gsm8kCases";
 import { Gsm8kCompare } from "./evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
@@ -21,6 +22,12 @@ import { DirectLlmOperate } from "./evalTypes/directllm/DirectLlmOperate";
 import { DirectLlmResult } from "./evalTypes/directllm/DirectLlmResult";
 import { AgentCompare, AgentMonitor, AgentOperate, AgentResult } from "./evalTypes/agent/AgentPages";
 import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
+
+const CmmluPages = makeExternalPages("cmmlu", {
+  title: "CMMLU（独立身份的外部基准）",
+  operateAria: "CMMLU 外部基准",
+  preparePlaceholder: "每行一题 JSON（id/subject/question/A-D/answer；subject 需在 CMMLU 67 学科清单）",
+});
 
 const GENERAL_NAV = [
   { to: "/runs", label: "运行", icon: StackIcon },
@@ -71,6 +78,11 @@ export default function App() {
           <Route path="/ceval/monitor" element={<CevalMonitor />} />
           <Route path="/ceval/runs/:runId/result" element={<CevalResult />} />
           <Route path="/ceval/compare" element={<CevalCompare />} />
+          <Route path="/cmmlu" element={<CmmluPages.Operate />} />
+          <Route path="/cmmlu/cases" element={<CmmluPages.Cases />} />
+          <Route path="/cmmlu/monitor" element={<CmmluPages.Monitor />} />
+          <Route path="/cmmlu/runs/:runId/result" element={<CmmluPages.Result />} />
+          <Route path="/cmmlu/compare" element={<CmmluPages.Compare />} />
           <Route path="/gsm8k" element={<Gsm8kOperate />} />
           <Route path="/gsm8k/cases" element={<Gsm8kCases />} />
           <Route path="/gsm8k/monitor" element={<Gsm8kMonitor />} />

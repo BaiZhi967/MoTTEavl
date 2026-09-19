@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { EVAL_SUITES, suiteForRun, suiteRoutes } from "../src/evalTypes/registry";
 
 describe("evalTypes 注册表", () => {
-  it("注册五个套件且 id 唯一", () => {
+  it("注册六个套件且 id 唯一", () => {
     expect(EVAL_SUITES.map((suite) => suite.id)).toEqual([
-      "agent-tasks", "ceval", "gsm8k", "direct-llm", "replay",
+      "agent-tasks", "cmmlu", "ceval", "gsm8k", "direct-llm", "replay",
     ]);
   });
 
@@ -14,6 +14,12 @@ describe("evalTypes 注册表", () => {
     expect(suiteForRun({ scenario_version: "direct-llm-classify@1" })?.id).toBe("direct-llm");
     expect(suiteForRun({ scenario_version: "replay@1" })?.id).toBe("replay");
     expect(suiteForRun({ scenario_version: "json_extract@1" })?.id).toBe("replay");
+    expect(suiteForRun({ scenario_version: "ceval-external@1" })?.id).toBe("ceval");
+    // CMMLU 独立身份：不落进 ceval 的 external-benchmark 兜底（review R16）。
+    expect(suiteForRun({
+      scenario_version: "cmmlu-external@1",
+      manifest: { execution: { backend_id: "external-benchmark" } },
+    })?.id).toBe("cmmlu");
     expect(suiteForRun({ scenario_version: "unknown@9" })).toBeNull();
   });
 
