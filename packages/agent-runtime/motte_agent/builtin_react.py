@@ -9,17 +9,23 @@
   一次响应的多个工具调用按声明顺序执行，重复 call_id 拒绝二次执行。
 
 工具结果以 observation / tool 消息回灌；预算（步数 / 工具次数 / 单调时钟 /
-可观察 token 与 cost）每轮与每次调用前检查，停止原因具体化。
+单次调用期限 / 可观察 token 与 cost）每轮与每次调用前检查，停止原因具体化。
+- 单次调用期限在运行时以线程期限强制：到期即停止循环（终止原因
+  per_call_timeout）；被放弃的底层调用由 Provider 传输超时兜底。
+- ``max_output_tokens`` 预算直接进入 ModelRequest（Provider 侧再约束上限）。
+- ``AgentFatalError``（副作用后证据边界失败）不被当作工具错误回灌，直接中止。
 ``run(prompt)`` 保留 M0 兼容返回；新链路使用 ``run_agent`` 拿完整结果。
 """
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Callable
 
 from motte_contracts.messages import Message, ModelRequest
 
 from .budget import ExecutionBudget
+from .errors import AgentFatalError
 from .native_tools import (
     TOOL_DECLARATIONS,
     parse_tool_arguments,
@@ -70,17 +76,21 @@ class BuiltinReActRuntime(AgentRuntime):
             raise ValueError(f"unsupported agent mode: {mode!r}")
         self._complete = complete
         self.tools = dict(tools or {})
-        self.max_steps = max_steps
         self._system_prompt = system_prompt
         self.model = model
         self.mode = mode
-        self.budget = budget or ExecutionBudget(max_steps=max_steps)
-        if self.budget.max_steps != max_steps and budget is None:
+        # 步数预算只有一份事实源：显式 budget 优先；兼容入口的 max_steps 参数
+        # 在未提供 budget 时才生效（#15：不允许出现第二套步数上限）。
+        if budget is not None:
+            self.budget = budget
+        else:
             self.budget = ExecutionBudget(max_steps=max_steps)
+        self.max_steps = self.budget.max_steps
         self._event_sink = event_sink
         self._should_cancel = should_cancel
         self.declared_tools = declared_tools or tuple(sorted(self.tools))
         self.events: list[dict[str, Any]] = []
+        self._legacy_call_seq = 0
 
     # ------------------------------------------------------------ M0 兼容入口
 
@@ -114,7 +124,7 @@ class BuiltinReActRuntime(AgentRuntime):
 
             envelope = self._call_model(context, step)
             if envelope is None:
-                # _call_model 已记录具体终止原因（取消 / 预算）
+                # _call_model 已记录具体终止原因（单次调用期限 / 证据故障）
                 termination_reason = self._last_call_stop or "error"
                 break
             self.budget.record_usage(envelope.get("usage"), envelope.get("cost"))
@@ -161,7 +171,7 @@ class BuiltinReActRuntime(AgentRuntime):
                     role="user",
                     content="observation: invalid response; reply with a single JSON object",
                 ))
-                if step >= self.max_steps:
+                if step >= self.budget.max_steps:
                     termination_reason, detail = "max_steps", "invalid responses exhausted budget"
                 continue
             context.append(Message(role="assistant", content=str(assistant_content)))
@@ -170,11 +180,16 @@ class BuiltinReActRuntime(AgentRuntime):
                 self._record("final_answer", step=step, answer=final_output)
                 termination_reason = "final_answer"
                 break
+            # 模型响应返回后、工具执行前再次检查取消（#3：不允许取消后仍执行写入）
+            if self._cancelled():
+                termination_reason = "cancelled"
+                detail = "cancelled between model response and tool execution"
+                break
             stop = self._run_legacy_tool(context, decision, step)
             if stop is not None:
                 termination_reason, detail = stop, "stopped during tool call"
                 break
-            if step >= self.max_steps:
+            if step >= self.budget.max_steps:
                 termination_reason, detail = "max_steps", "budget exhausted"
                 break
 
@@ -205,15 +220,56 @@ class BuiltinReActRuntime(AgentRuntime):
             system=self._build_system_prompt(),
             tools=[TOOL_DECLARATIONS[name] for name in self.declared_tools
                    if name in TOOL_DECLARATIONS] if self.mode == "native-tool" else [],
+            # 输出预算进入请求（#4）；Provider 侧 ceiling 校验兜底
+            **({"max_output_tokens": self.budget.max_output_tokens}
+               if self.budget.max_output_tokens is not None else {}),
         )
         self._record("model_request", step=step,
-                     messages=len(context), tools=len(request.tools))
-        envelope = self._complete(request)
+                     messages=len(context), tools=len(request.tools),
+                     **({"max_output_tokens": self.budget.max_output_tokens}
+                        if self.budget.max_output_tokens is not None else {}))
+        envelope = self._dispatch_model_call(request, step)
+        if envelope is None:
+            return None  # 终止原因已记录（per_call_timeout）
         self._record("model_response", step=step,
                      finish_reason=envelope.get("finish_reason"),
                      usage=envelope.get("usage") or None)
         self._last_call_stop = None
         return envelope
+
+    def _dispatch_model_call(self, request: ModelRequest, step: int) -> dict[str, Any] | None:
+        """执行一次模型调用；配置了单次调用期限时用线程期限强制（#4）。
+
+        到期后循环立即停止（终止原因 per_call_timeout）；被放弃的底层调用由
+        Provider 传输超时兜底回收，其结果被丢弃。
+        """
+        deadline = self.budget.per_call_deadline()
+        if deadline is None:
+            return self._complete(request)
+        import time as _time
+
+        box: dict[str, Any] = {}
+
+        def runner() -> None:
+            try:
+                box["envelope"] = self._complete(request)
+            except BaseException as error:  # noqa: BLE001 - 线程边界内原样传递
+                box["error"] = error
+
+        thread = threading.Thread(target=runner, daemon=True, name="agent-model-call")
+        thread.start()
+        remaining = deadline - _time.monotonic()
+        thread.join(timeout=max(0.0, remaining))
+        if thread.is_alive():
+            self._record("model_call_timeout", step=step,
+                         timeout_sec=self.budget.per_call_timeout_sec)
+            self._last_call_stop = "per_call_timeout"
+            self.budget.per_call_timeout_enforced = True
+            return None
+        if "error" in box:
+            raise box["error"]
+        self.budget.per_call_timeout_enforced = True
+        return box.get("envelope")
 
     def _run_native_tool_call(
         self, context: list[Message], call: dict[str, Any], step: int,
@@ -283,15 +339,21 @@ class BuiltinReActRuntime(AgentRuntime):
                 role="user", content=f"observation: tool not available: {name}"
             ))
             return None
+        # legacy 模式也生成唯一 call_id（#13）：tool_call/tool_error/tool_result 匹配
+        self._legacy_call_seq += 1
+        call_id = f"legacy-{step}-{self._legacy_call_seq}"
         self.budget.record_tool_call()
-        self._record("tool_call", step=step, tool=name, input=argument)
+        self._record("tool_call", step=step, tool=name, call_id=call_id, input=argument)
         try:
             result = handler(argument)
+        except AgentFatalError:
+            raise  # 证据边界失败不是工具失败：中止整个执行
         except Exception as error:  # 工具失败作为 observation 回灌，不终止循环
-            self._record("tool_error", step=step, tool=name, error=str(error))
+            self._record("tool_error", step=step, tool=name, call_id=call_id,
+                         error=str(error))
             context.append(Message(role="user", content=f"observation: tool error: {error}"))
             return None
-        self._record("tool_result", step=step, tool=name,
+        self._record("tool_result", step=step, tool=name, call_id=call_id,
                      result=self._bounded_result(result))
         context.append(Message(role="user", content=f"observation: {self._bounded_result(result)}"))
         return None
@@ -304,12 +366,13 @@ class BuiltinReActRuntime(AgentRuntime):
         self._record("tool_call", step=step, tool=name, call_id=call_id, arguments=arguments)
         try:
             result = self.tools[name](arguments)
+        except AgentFatalError:
+            raise  # 证据边界失败不是工具失败：中止整个执行
         except Exception as error:  # 工具失败回灌，不终止循环
             self._record("tool_error", step=step, tool=name, call_id=call_id, error=str(error))
             context.append(Message(
                 role="tool", content=f"tool error: {error}", tool_call_id=call_id,
             ))
-            self.budget.record_tool_call()
             return None
         text = self._bounded_result(result)
         self._record("tool_result", step=step, tool=name, call_id=call_id, result=text)

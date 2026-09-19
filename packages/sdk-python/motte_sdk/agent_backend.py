@@ -91,9 +91,25 @@ def build_agent_provider(manifest: dict[str, Any]):
     return build_case_provider(provider_config, projected.get("cases"))
 
 
+def _safe_path_component(value: str, label: str) -> str:
+    """run/case 身份必须是单一安全路径组件（#1：不允许绝对路径/穿越串目录）。"""
+    if (
+        not isinstance(value, str) or not value
+        or value in {".", ".."}
+        or "/" in value or "\\" in value
+        or value.startswith(".")
+        or len(value) > 128
+    ):
+        raise AgentBackendError(
+            "CASE_ID_INVALID",
+            f"{label} must be a single safe path component: {value!r}",
+        )
+    return value
+
+
 def _workspace_root(run_id: str, case_id: str) -> Path:
     base = Path(os.environ.get("MOTTE_AGENT_WORKSPACE_ROOT", "var/agent-workspaces"))
-    return base / run_id / case_id
+    return base / _safe_path_component(run_id, "run_id") / _safe_path_component(case_id, "case_id")
 
 
 def _artifact_store():
@@ -269,6 +285,7 @@ class AgentCaseExecutor:
         )
 
         started = monotonic()
+        pending_error: BaseException | None = None
         try:
             outcome = runtime.run_agent(case["input"])
         except WorkspacePolicyError as error:
@@ -281,13 +298,25 @@ class AgentCaseExecutor:
                 "usage": budget.observed_usage(),
                 "budget": budget.enforcement_report(),
             }
+        except Exception as error:  # noqa: BLE001 - #9：异常路径也要采集证据并清理
+            pending_error = error
+            outcome = {
+                "final_output": None,
+                "termination_reason": "error",
+                "termination_detail": f"{type(error).__name__}: {error}",
+                "steps": state["step"], "tool_calls": budget.tool_calls_made(),
+                "events": list(runtime.events), "messages": [],
+                "usage": budget.observed_usage(),
+                "budget": budget.enforcement_report(),
+            }
         duration_ms = round((monotonic() - started) * 1000, 3)
 
+        # 终止（含异常）后一律采集 + 清理；清理失败如实上报残留
         observation, capture_errors = self._capture(
             workspace, case, outcome, before, evidence,
         )
         cleanup = workspace.cleanup()
-        return {
+        envelope = {
             "agent": {
                 "final_output": outcome.get("final_output"),
                 "termination_reason": outcome.get("termination_reason"),
@@ -305,6 +334,19 @@ class AgentCaseExecutor:
             "capture_errors": capture_errors,
             "cleanup": cleanup,
         }
+        if pending_error is not None:
+            if not getattr(pending_error, "quarantine", False):
+                # #9：异常路径的采集证据随异常带回，服务层把 evidence 落成 case 结果；
+                # 附带 error 标记使该 case 记为失败而不是成功响应。
+                pending_error.evidence = {
+                    **envelope,
+                    "error": {
+                        "class": type(pending_error).__name__,
+                        "message": str(pending_error),
+                    },
+                }
+            raise pending_error
+        return envelope
 
     # ------------------------------------------------------------ 证据通道
 
@@ -349,42 +391,63 @@ class AgentCaseExecutor:
         self, case_id: str, kind: str, step: int, summary: dict[str, Any], *,
         tool_name: str | None = None,
     ) -> dict[str, Any] | None:
+        from motte_agent.errors import AgentFatalError
+
         invocations = self._invocations()
         if invocations is None:
             return None
-        record = invocations.create({
-            "id": f"inv-{uuid4().hex}",
-            "run_id": self.run["id"],
-            "case_id": case_id,
-            "kind": kind,
-            "step": max(1, int(step)),
-            "status": "prepared",
-            "tool_name": tool_name,
-            "model": self._model_name if kind == "model" else None,
-            "request_summary": redact(deepcopy(summary)),
-            "prepared_at": datetime.now(UTC).isoformat(),
-        })
-        return invocations.transition(
-            record["id"], expected_revision=record["revision"],
-            expected_status="prepared", status="dispatching",
-            changes={"dispatched_at": datetime.now(UTC).isoformat()},
-        )
+        try:
+            record = invocations.create({
+                "id": f"inv-{uuid4().hex}",
+                "run_id": self.run["id"],
+                "case_id": case_id,
+                "kind": kind,
+                "step": max(1, int(step)),
+                "status": "prepared",
+                "tool_name": tool_name,
+                "model": self._model_name if kind == "model" else None,
+                "request_summary": redact(deepcopy(summary)),
+                "prepared_at": datetime.now(UTC).isoformat(),
+            })
+            return invocations.transition(
+                record["id"], expected_revision=record["revision"],
+                expected_status="prepared", status="dispatching",
+                changes={"dispatched_at": datetime.now(UTC).isoformat()},
+            )
+        except AgentFatalError:
+            raise
+        except Exception as error:  # noqa: BLE001 - 证据边界失败：不确定状态
+            raise AgentFatalError(
+                f"invocation prepared/dispatching boundary failed: {error}",
+                code="INVOCATION_PERSISTENCE_FAILED",
+            ) from error
 
     def _settle_invocation(
         self, invocation: dict[str, Any] | None, outcome: str, summary: dict[str, Any],
     ) -> None:
+        """settle 是持久边界：失败意味着副作用已发生但结果不可证（#2）。"""
+        from motte_agent.errors import AgentFatalError
+
         invocations = self._invocations()
         if invocations is None or invocation is None:
             return
-        invocations.transition(
-            invocation["id"], expected_revision=invocation["revision"],
-            expected_status="dispatching", status="settled",
-            changes={
-                "outcome": outcome,
-                "result_summary": redact(deepcopy(summary)),
-                "settled_at": datetime.now(UTC).isoformat(),
-            },
-        )
+        try:
+            invocations.transition(
+                invocation["id"], expected_revision=invocation["revision"],
+                expected_status="dispatching", status="settled",
+                changes={
+                    "outcome": outcome,
+                    "result_summary": redact(deepcopy(summary)),
+                    "settled_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        except AgentFatalError:
+            raise
+        except Exception as error:  # noqa: BLE001 - settle 失败：不确定状态
+            raise AgentFatalError(
+                f"invocation settle failed after dispatch: {error}",
+                code="INVOCATION_SETTLE_FAILED",
+            ) from error
 
     # ------------------------------------------------------------ Observation
 
@@ -473,6 +536,9 @@ class AgentCaseExecutor:
                 "complete": bool(
                     before.get("complete", True) and after.get("complete", True)
                 ),
+                # 内容 hash：forbidden-write 需要区分"未动"与"覆盖/删除"（#6）
+                "before_hashes": dict(before.get("hashes") or {}),
+                "after_hashes": dict(after.get("hashes") or {}),
             },
             "processes": [],
         }

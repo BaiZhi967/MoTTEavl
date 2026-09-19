@@ -31,7 +31,8 @@ def case_ids_sha256(case_ids: list[str]) -> str:
 
 
 class AgentTaskCase(Contract):
-    case_id: str = Field(min_length=1)
+    # case_id 同时用作 workspace 目录名：只允许单一安全路径组件
+    case_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     input: str = Field(min_length=1)
     fixture: dict[str, str] = Field(default_factory=dict)
     expected: dict[str, Any] | None = None

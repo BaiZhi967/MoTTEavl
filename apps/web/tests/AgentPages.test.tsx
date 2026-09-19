@@ -252,3 +252,102 @@ describe("AgentCompare", () => {
     expect(screen.getAllByText("未通过").length).toBe(1);
   });
 });
+
+describe("AgentResult review-round2 fixes", () => {
+  const RUN = {
+    id: "run-r2", status: "completed", scenario_version: "r2@1",
+    case_ids: ["case-a", "case-b"],
+    current_scoring_pass_id: "pass-2",
+    manifest: { agent_config: { mode: "native-tool" }, agent: "builtin-agent@1" },
+    scores: [
+      { case_id: "case-a", metric_id: "file-content:report.txt", metric_status: "scored", passed: true, reason: null },
+    ],
+    error: null,
+  };
+
+  function setup() {
+    clientMocks.getRun.mockResolvedValue(RUN);
+    clientMocks.getScoringPasses.mockResolvedValue({
+      items: [
+        { id: "pass-1", summary: {} },
+        { id: "pass-2", summary: {} },
+      ],
+      total: 2,
+    });
+  }
+
+  it("#16 切换 Case 后产物内容按 case+path 重新加载", async () => {
+    setup();
+    const artifactsFor = (caseId: string) => ([
+      { artifact_id: `a/${caseId}/report.txt`, path: "report.txt", available: true },
+    ]);
+    clientMocks.getAgentCaseDetail.mockImplementation(async (_runId, caseId) => ({
+      run_id: "run-r2", case_id: caseId, outcome: null, pending: false,
+      // steps 随 case 区分，供断言等待 case-b 详情真正渲染完成
+      agent: { termination_reason: "final_answer",
+               steps: caseId === "case-a" ? 1 : 2, tool_calls: 1 },
+      events: [], capture_errors: [], cleanup: { status: "success" },
+      observation: {}, artifacts: artifactsFor(caseId),
+    }));
+    clientMocks.getAgentArtifactContent.mockImplementation(
+      async (_runId, caseId, _path) => ({ path: "report.txt", sha256_matches: true, content: `content-of-${caseId}` }),
+    );
+    renderAt("/agent-tasks/runs/run-r2/result", <AgentResult />);
+    const caseSelect = await screen.findByLabelText(/任务/);
+    fireEvent.change(caseSelect, { target: { value: "case-a" } });
+    const toggleA = await screen.findByText("report.txt", { selector: "button *, button" });
+    fireEvent.click(toggleA);
+    await waitFor(() => expect(screen.getByText(/content-of-case-a/)).toBeTruthy());
+    // 切到 case-b：同名产物必须请求并显示 case-b 的内容
+    fireEvent.change(caseSelect, { target: { value: "case-b" } });
+    // 等 case-b 详情真正渲染（steps=2 的特征出现）再展开同名产物
+    await waitFor(() => expect(screen.getByText(/2 \/ 1/)).toBeTruthy());
+    const toggleB = screen.getByText("report.txt", { selector: "button *, button" });
+    fireEvent.click(toggleB);
+    await waitFor(() => expect(screen.getByText(/content-of-case-b/)).toBeTruthy());
+    expect(clientMocks.getAgentArtifactContent).toHaveBeenCalledWith("run-r2", "case-b", "report.txt");
+    expect(screen.queryByText(/content-of-case-a/)).toBeNull(); // 不再串显 case-a 内容
+  });
+
+  it("#17 尚未执行的 case 显示等待态且不崩溃", async () => {
+    setup();
+    clientMocks.getAgentCaseDetail.mockResolvedValue({
+      run_id: "run-r2", case_id: "case-a", outcome: null, pending: true,
+      agent: null, events: [], capture_errors: [], cleanup: null,
+      observation: null, artifacts: [],
+    });
+    renderAt("/agent-tasks/runs/run-r2/result", <AgentResult />);
+    const caseSelect = await screen.findByLabelText(/任务/);
+    fireEvent.change(caseSelect, { target: { value: "case-a" } });
+    await waitFor(() => expect(screen.getByText(/尚未产生结果/)).toBeTruthy());
+  });
+
+  it("#18 迟到的历史批次响应不得覆盖新选择", async () => {
+    setup();
+    renderAt("/agent-tasks/runs/run-r2/result", <AgentResult />);
+    const passSelect = await screen.findByLabelText(/查看批次/);
+    expect(passSelect.value).toBe("pass-2");
+    let resolveOld: (value: unknown) => void = () => {};
+    const oldRequest = new Promise((resolve) => { resolveOld = resolve; });
+    clientMocks.getReport.mockImplementation(async (_id, passId) => {
+      if (passId === "pass-1") {
+        await oldRequest; // pass-1 的响应被挂起
+        return {
+          summary: {},
+          scores: [{ case_id: "case-a", metric_id: "stale-metric",
+                     metric_status: "scored", passed: true, reason: null }],
+        };
+      }
+      return { summary: {}, scores: [] };
+    });
+    // 选择 pass-1（请求被挂起），随即切回 pass-2（不发新请求）
+    fireEvent.change(passSelect, { target: { value: "pass-1" } });
+    fireEvent.change(passSelect, { target: { value: "pass-2" } });
+    await waitFor(() => expect(clientMocks.getReport).toHaveBeenCalledTimes(1));
+    expect(clientMocks.getReport).toHaveBeenCalledWith("run-r2", "pass-1");
+    resolveOld({}); // 迟到的 pass-1 响应到达
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.queryByText("stale-metric")).toBeNull(); // 不覆盖当前批次
+    expect(screen.getByText(/当前显示：当前批次/)).toBeTruthy();
+  });
+});

@@ -98,7 +98,8 @@ class ArtifactEntry(Contract):
 
 TerminationReason = Literal[
     "final_answer", "max_steps", "max_tool_calls", "wall_time",
-    "token_limit", "cost_limit", "cancelled", "error", "invalid_state",
+    "token_limit", "cost_limit", "per_call_timeout",
+    "cancelled", "error", "invalid_state",
 ]
 
 
@@ -141,12 +142,25 @@ class WorkspaceSnapshot(Contract):
     """Before/after file listing of the case workspace (safe relative paths).
 
     ``complete=False`` means the listing itself failed; evaluators must not
-    conclude "no forbidden write" from an incomplete snapshot.
+    conclude "no forbidden write" from an incomplete snapshot. The optional
+    ``*_hashes`` maps carry per-file content digests so forbidden-write checks
+    can detect modification/deletion of pre-existing files, not just creation.
     """
 
     before: list[str] = Field(default_factory=list)
     after: list[str] = Field(default_factory=list)
     complete: bool = True
+    before_hashes: dict[str, str] = Field(default_factory=dict)
+    after_hashes: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def hash_keys_are_safe(self) -> "WorkspaceSnapshot":
+        for path in [*self.before_hashes, *self.after_hashes]:
+            validate_safe_relative_path(path)
+        for digest in [*self.before_hashes.values(), *self.after_hashes.values()]:
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                raise ValueError("workspace hashes must be 64-char lowercase hex digests")
+        return self
 
 
 class ProcessRecord(Contract):

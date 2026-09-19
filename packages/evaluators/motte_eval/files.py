@@ -45,6 +45,9 @@ def evaluate_file_exists(observation: FrozenObservation, metric: MetricRequest, 
         )
     if not entry.available:
         return _insufficient(observation, metric, "artifact_unavailable", refs=_ref(observation, entry))
+    # 不只信冻结清单：实际读一次字节（#11：Artifact 丢失时降为证据不足）
+    if context.read_artifact(entry.artifact_id) is None:
+        return _insufficient(observation, metric, "artifact_unavailable", refs=_ref(observation, entry))
     return _base_metric(observation, metric, MetricStatus.scored, passed=True)
 
 
@@ -124,7 +127,6 @@ def evaluate_file_content(observation: FrozenObservation, metric: MetricRequest,
             reason="config_error", details={"error": "schema mode requires a schema object"},
             refs=refs,
         )
-    from jsonschema import Draft202012Validator
     from jsonschema.exceptions import SchemaError
 
     try:
@@ -142,13 +144,20 @@ def evaluate_file_content(observation: FrozenObservation, metric: MetricRequest,
             observation, metric, MetricStatus.scored, passed=False,
             reason="invalid_json", details={"error": str(error)}, refs=refs,
         )
+    from .observation import local_schema_validator
+
     try:
-        validator = Draft202012Validator(schema)
+        validator = local_schema_validator(schema)
         errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.absolute_path))
     except SchemaError as error:
         return _base_metric(
             observation, metric, MetricStatus.evaluator_error,
             reason="config_error", details={"error": str(error)}, refs=refs,
+        )
+    except Exception as error:  # noqa: BLE001 - 含被禁止的远程 $ref 等解析失败
+        return _base_metric(
+            observation, metric, MetricStatus.evaluator_error,
+            reason="schema_unresolvable", details={"error": str(error)}, refs=refs,
         )
     if errors:
         return _base_metric(

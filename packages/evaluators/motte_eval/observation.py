@@ -84,6 +84,18 @@ class EvaluationContext:
         return self.deadline is not None and monotonic() > self.deadline
 
 
+def local_schema_validator(schema: dict[str, Any]):
+    """构造禁止一切远程 $ref 的 schema 校验器（#8：评分不得发起网络请求）。"""
+    import jsonschema
+    from referencing import Registry
+    from referencing.exceptions import Unresolvable
+
+    def blocked(uri: str):
+        raise Unresolvable(ref=uri)
+
+    return jsonschema.Draft202012Validator(schema, registry=Registry(retrieve=blocked))
+
+
 def _base_metric(
     observation: FrozenObservation,
     metric: MetricRequest,
@@ -233,10 +245,24 @@ def evaluate_regex(observation: FrozenObservation, metric: MetricRequest, contex
             reason="input_too_large",
             details={"size_bytes": len(encoded), "max_input_bytes": max_bytes},
         )
+    from time import monotonic
+
+    # 单指标超时受配置上限与剩余全局期限双重约束（#7：不允许绕过 eval deadline）
+    requested_timeout = float(metric.get(
+        "timeout_sec", context.limits.regex_timeout_sec,
+    ))
+    effective_timeout = min(requested_timeout, context.limits.regex_timeout_sec)
+    if context.deadline is not None:
+        remaining = context.deadline - monotonic()
+        if remaining <= 0:
+            return _base_metric(
+                observation, metric, MetricStatus.evaluator_error,
+                reason="eval_deadline_exceeded",
+                details={"requested_timeout_sec": requested_timeout},
+            )
+        effective_timeout = min(effective_timeout, remaining)
     outcome, value = bounded_regex_search(
-        pattern, output, flags, timeout_sec=metric.get(
-            "timeout_sec", context.limits.regex_timeout_sec
-        ),
+        pattern, output, flags, timeout_sec=effective_timeout,
     )
     if outcome == "timeout":
         return _base_metric(
@@ -371,6 +397,14 @@ def _validate_metric(metric: Any) -> MetricRequest:
         "sensitive", "insensitive"
     ):
         raise EvaluatorConfigError("case_policy must be sensitive or insensitive")
+    if kind == "regex":
+        metric_timeout = metric.get("timeout_sec")
+        if metric_timeout is not None:
+            if isinstance(metric_timeout, bool) or not isinstance(metric_timeout, (int, float)) \
+                    or metric_timeout <= 0 or metric_timeout > MAX_REGEX_TIMEOUT_SEC:
+                raise EvaluatorConfigError(
+                    f"regex timeout_sec must be positive and <= {MAX_REGEX_TIMEOUT_SEC}"
+                )
     if kind == "file-content" and metric.get("mode") not in (
         "exact", "contains", "hash", "schema"
     ):
