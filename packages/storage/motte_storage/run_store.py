@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS run_commands (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_commands_run_idx ON run_commands(run_id);
+CREATE TABLE IF NOT EXISTS agent_invocations (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  case_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  step INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_invocations_run_idx ON agent_invocations(run_id);
 """
 
 # Worker 崩溃后卡住的中间态；重启时回收回 queued。
@@ -564,6 +575,7 @@ class RunStore:
     scoring_passes: Any = None
     score_sets: Any = None
     commands: Any = None
+    invocations: Any = None
 
 
 def _upgrade_score_sets(connection: sqlite3.Connection) -> None:
@@ -606,6 +618,8 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
             if "revision" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
             _upgrade_score_sets(connection)
+    from .invocations import SQLiteInvocations
+
     return RunStore(
         runs=_SQLiteRuns(path),
         case_runs=_SQLiteCaseRuns(path),
@@ -615,6 +629,7 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         scoring_passes=SQLiteScoringPasses(path),
         score_sets=SQLiteScoreSets(path),
         commands=SQLiteCommands(path),
+        invocations=SQLiteInvocations(path),
     )
 
 
@@ -627,6 +642,8 @@ def InMemoryRunStore() -> RunStore:
     cases = _InMemoryCaseRuns(lock)
     score_sets = MemoryScoreSets(lock)
     attempts = MemoryAttempts(runs, cases, events, lock)
+    from .invocations import MemoryInvocations
+
     return RunStore(
         runs=runs,
         case_runs=cases,
@@ -636,4 +653,5 @@ def InMemoryRunStore() -> RunStore:
         scoring_passes=MemoryScoringPasses(runs, events, score_sets, attempts, cases, lock),
         score_sets=score_sets,
         commands=MemoryCommands(lock),
+        invocations=MemoryInvocations(lock),
     )

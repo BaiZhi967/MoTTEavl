@@ -192,6 +192,24 @@ def _load_builtins() -> None:
             adapter_version="1",
         )
     )
+    from motte_contracts.agent_tasks import SUITE as AGENT_TASKS_SUITE
+    from motte_sdk.agent_tasks import (
+        aggregate_agent_tasks,
+        agent_tasks_scores,
+        resolve_agent_tasks_manifest,
+    )
+
+    register_benchmark_plugin(
+        BenchmarkPlugin(
+            suite_id=AGENT_TASKS_SUITE,
+            contract_version="1",
+            prepare_manifest=resolve_agent_tasks_manifest,
+            score=agent_tasks_scores,
+            aggregate=aggregate_agent_tasks,
+            adapter_id="builtin-agent-file-tasks",
+            adapter_version="1",
+        )
+    )
     register_benchmark_plugin(
         BenchmarkPlugin(
             suite_id=DIRECT_LLM_SUITE,

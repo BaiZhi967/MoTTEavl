@@ -325,7 +325,13 @@ class PostgresRunStore(RunStore):
 
 def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRunStore:
     """Construct a PostgreSQL store; run Alembic first when migrate=True."""
-    from .pg_audit_store import PgAttempts, PgCommands, PgScoreSets, PgScoringPasses
+    from .pg_audit_store import (
+        PgAttempts,
+        PgCommands,
+        PgInvocations,
+        PgScoreSets,
+        PgScoringPasses,
+    )
 
     normalized = normalize_dsn(dsn)
     if migrate:
@@ -340,4 +346,5 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         scoring_passes=PgScoringPasses(normalized),
         score_sets=PgScoreSets(normalized),
         commands=PgCommands(normalized),
+        invocations=PgInvocations(normalized),
     )

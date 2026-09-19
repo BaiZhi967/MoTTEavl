@@ -504,6 +504,94 @@ class PgScoreSets:
         return deepcopy(row[0]) if row else None
 
 
+class PgInvocations:
+    """PostgreSQL invocation boundary log (prepared -> dispatching -> settled)."""
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def create(self, record: dict[str, Any]) -> dict[str, Any]:
+        from .invocations import validate_invocation
+
+        stored = validate_invocation({**record, "status": record.get("status", "prepared")})
+        try:
+            with _connect(self._dsn) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "INSERT INTO agent_invocations(id, run_id, case_id, kind, step, "
+                        "status, revision, payload) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        (stored["id"], stored["run_id"], stored["case_id"], stored["kind"],
+                         stored["step"], stored["status"], stored["revision"], Json(stored)),
+                    )
+        except UniqueViolation as error:
+            raise RunConflictError(f"invocation already exists: {stored['id']}") from error
+        return deepcopy(stored)
+
+    def get(self, invocation_id: str) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM agent_invocations WHERE id = %s", (invocation_id,)
+                )
+                row = cursor.fetchone()
+        return deepcopy(row[0]) if row else None
+
+    def transition(
+        self, invocation_id: str, *, expected_revision: int, expected_status: str,
+        status: str, changes: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .invocations import INVOCATION_TRANSITIONS, validate_invocation
+
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM agent_invocations WHERE id = %s FOR UPDATE",
+                    (invocation_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RunConflictError(f"invocation missing: {invocation_id}")
+                current = row[0]
+                if current.get("revision") != expected_revision or current.get("status") != expected_status:
+                    raise RunConflictError(
+                        f"invocation revision or status changed: {invocation_id}"
+                    )
+                if status not in INVOCATION_TRANSITIONS.get(expected_status, set()):
+                    raise ValueError(f"invalid invocation transition: {expected_status} -> {status}")
+                stored = validate_invocation({
+                    **current, **deepcopy(changes or {}), "status": status,
+                    "revision": expected_revision + 1,
+                })
+                cursor.execute(
+                    "UPDATE agent_invocations SET payload = %s, status = %s, revision = %s "
+                    "WHERE id = %s AND status = %s AND revision = %s",
+                    (Json(stored), status, stored["revision"], invocation_id,
+                     expected_status, expected_revision),
+                )
+                if cursor.rowcount != 1:
+                    raise RunConflictError(
+                        f"invocation revision or status changed: {invocation_id}"
+                    )
+        return deepcopy(stored)
+
+    def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM agent_invocations WHERE run_id = %s ORDER BY position",
+                    (run_id,),
+                )
+                rows = cursor.fetchall()
+        return [deepcopy(row[0]) for row in rows]
+
+    def list_for_case(self, run_id: str, case_id: str) -> list[dict[str, Any]]:
+        return [item for item in self.list_for_run(run_id) if item["case_id"] == case_id]
+
+    def list_unsettled(self, run_id: str) -> list[dict[str, Any]]:
+        return [item for item in self.list_for_run(run_id)
+                if item["status"] in {"prepared", "dispatching"}]
+
+
 class PgCommands:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
