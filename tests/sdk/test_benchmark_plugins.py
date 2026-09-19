@@ -15,6 +15,7 @@ from motte_sdk.benchmark_plugins import (
 
 def test_builtin_plugins_are_registered_without_service_branches():
     assert [(item.suite_id, item.contract_version) for item in registered_benchmark_plugins()] == [
+        ("agent-tasks", "1"),
         ("direct-llm", "1"),
         ("direct-llm", "2"),
         ("gsm8k", "1"),

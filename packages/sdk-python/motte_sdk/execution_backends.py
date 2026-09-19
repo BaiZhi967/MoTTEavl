@@ -121,7 +121,9 @@ def resolve_execution(
     requested = resolved.get("execution")
     runtime_fields = [name for name in ("agent", "skills", "harness", "pi") if resolved.get(name)]
     scenario_mode = (scenario or {}).get("mode")
-    agent_requested = bool(resolved.get("agent")) or scenario_mode == "agent-tasks"
+    agent_requested = (
+        resolved.get("agent") in (None, "builtin-agent@1") and scenario_mode == "agent-tasks"
+    ) or resolved.get("agent") == "builtin-agent@1"
     if runtime_fields and requested is None and not agent_requested:
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_UNSUPPORTED",
