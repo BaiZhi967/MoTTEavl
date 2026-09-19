@@ -18,7 +18,7 @@ class RunReportRef(Contract):
 
     run_id: str = Field(min_length=1)
     scoring_pass_id: str = Field(min_length=1)
-    schema: str = Field(min_length=1)
+    report_schema: str = Field(min_length=1)
     evidence_hash: str = Field(min_length=1)
 
 

@@ -46,7 +46,7 @@ class ComparisonService:
         return RunReportRef(
             run_id=run_id,
             scoring_pass_id=_current_pass_id(self.store, run_id),
-            schema="report-v1",
+            report_schema="report-v1",
             evidence_hash="sha256:" + digest,
         )
 

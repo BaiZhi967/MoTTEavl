@@ -13,7 +13,7 @@ from motte_eval.comparison import compare_run_reports
 
 def _ref(run_id, **extra):
     return RunReportRef(
-        run_id=run_id, scoring_pass_id=f"pass-{run_id}", schema="report-v1",
+        run_id=run_id, scoring_pass_id=f"pass-{run_id}", report_schema="report-v1",
         evidence_hash="sha256:" + run_id, **extra,
     )
 
