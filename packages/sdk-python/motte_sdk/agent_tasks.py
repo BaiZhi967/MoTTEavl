@@ -279,8 +279,18 @@ def agent_tasks_scores(run: dict[str, Any], results: list[dict[str, Any]]) -> li
                 score = metric_result_to_score(_gap_metric(metric, reason), case_id)
                 scores.append(score)
             continue
+        from motte_contracts.evaluation import FrozenObservation
+
+        try:
+            frozen = FrozenObservation.model_validate(observation)
+        except Exception:  # noqa: BLE001 - 观察损坏按缺证据处理
+            for metric in metrics:
+                scores.append(metric_result_to_score(
+                    _gap_metric(metric, "observation_invalid"), case_id,
+                ))
+            continue
         evaluated = evaluate_observation(
-            observation, {"metrics": metrics},
+            frozen, {"metrics": metrics},
             artifact_reader=artifact_store.read_bytes,
         )
         for metric in evaluated:

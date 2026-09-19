@@ -70,11 +70,15 @@ class EvaluationContext:
         known = {
             entry.artifact_id: entry for entry in self.observation.artifact_refs
         }
-        if artifact_id not in known:
+        entry = known.get(artifact_id)
+        if entry is None or not entry.available:
             return None
         if self.artifact_reader is None:
             return None
-        return self.artifact_reader(artifact_id)
+        try:
+            return self.artifact_reader(artifact_id)
+        except Exception:  # noqa: BLE001 - 读取失败按不可得处理，不升级为评分器故障
+            return None
 
     def expired(self) -> bool:
         return self.deadline is not None and monotonic() > self.deadline
