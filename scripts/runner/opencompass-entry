@@ -3,10 +3,12 @@
 #
 # 契约（与 motte_benchmark.process.ProcessJobAdapter 对齐）：
 #   - 环境变量 MOTTE_WORK_DIR  : 受控工作目录（prepare 阶段创建）。
-#   - 环境变量 MOTTE_LAUNCH_TOKEN / MOTTE_JOB_ID / MOTTE_RUN_ID : 启动身份，
-#     由桥接层记录，绝不作为参数透传给上游 OpenCompass CLI（0.4.2 不支持）。
+#   - 环境变量 MOTTE_LAUNCH_TOKEN / MOTTE_JOB_ID / MOTTE_RUN_ID : 启动身份。
+#     wrapper 把 token 注入桥接层的 argv 并 exec——token 保留在最终进程
+#     参数里，跨实例身份核验（argv 匹配）在 Worker 重启后仍可认领活进程
+#     （review R3-03）；桥接层消费身份，绝不作为参数透传给上游 CLI。
 #   - $MOTTE_WORK_DIR/runner-config.json : 冻结的平台配置（模型快照/逐题
-#     数据/few-shot/凭据引用/config_hash）。
+#     数据（含结构化题目与 few-shot 示例）/凭据引用/config_hash）。
 #   - 桥接（motte_benchmark.opencompass.entry）负责：按学科导出本地数据、
 #     渲染 0.4.2 形态的 Python 配置、以位置参数调用 opencompass、定位
 #     时间戳实验目录并写 outputs/experiment.json 指针（R2-02）、原子写
@@ -29,4 +31,7 @@ if [ ! -x "$PYTHON_BIN" ]; then
     exit 4
 fi
 
-exec "$PYTHON_BIN" -m motte_benchmark.opencompass.entry
+exec "$PYTHON_BIN" -m motte_benchmark.opencompass.entry \
+    --launch-token "${MOTTE_LAUNCH_TOKEN:-}" \
+    --job-id "${MOTTE_JOB_ID:-}" \
+    --run-id "${MOTTE_RUN_ID:-}"

@@ -124,14 +124,19 @@ def _review_service(tmp_path, mode, monkeypatch):
 def test_r2_01_bridge_renders_opencompass_config_with_credential_refs(tmp_path):
     work = tmp_path / "job"
     work.mkdir()
+    # 使用生产 runner-config 的 case 形态（question/options/prompt；
+    # review R3-02：桥接消费结构化字段，目标 gold 不随 case 导出）。
     platform = {
         "benchmark_id": "ceval",
         "model": {"model": "gpt-r2", "parameters": {"temperature": 0.0}},
         "credentials": {"api_key": {"ref": "env:MOTTE_TEST_KEY"}},
         "few_shot": {"count": 0, "source_split": "dev"},
         "cases": [
-            {"case_id": "logic-1", "subject": "logic", "question": "Q?",
-             "A": "1", "B": "2", "C": "3", "D": "4", "answer": "B"},
+            {
+                "case_id": "logic-1", "subject": "logic", "question": "Q?",
+                "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+                "prompt": "…Q?…Answer:",
+            },
         ],
     }
     data_files = export_subject_files(work, platform)
@@ -143,7 +148,9 @@ def test_r2_01_bridge_renders_opencompass_config_with_credential_refs(tmp_path):
     assert "sk-plain" not in source
     assert "opencompass-cli" not in source
     exported = [json.loads(line) for line in data_files["logic"].read_text().splitlines()]
-    assert exported[0]["id"] == "logic-1" and exported[0]["answer"] == "B"
+    assert exported[0]["id"] == "logic-1"
+    assert exported[0]["question"] == "Q?" and exported[0]["B"] == "2"
+    assert "answer" not in exported[0]  # 目标 gold 不进 Runner 数据
 
 
 def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_path, monkeypatch):
@@ -155,8 +162,11 @@ def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_
         "credentials": {},
         "few_shot": {"count": 0},
         "cases": [
-            {"case_id": "logic-1", "subject": "logic", "question": "Q?",
-             "A": "1", "B": "2", "C": "3", "D": "4", "answer": "B"},
+            {
+                "case_id": "logic-1", "subject": "logic", "question": "Q?",
+                "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
+                "prompt": "…Q?…Answer:",
+            },
         ],
     }), encoding="utf-8")
     # 假 pinned 解释器：记录 argv，模拟 0.4.2 CLI 的时间戳目录行为。
@@ -173,7 +183,7 @@ def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_
     stub.chmod(0o755)
     monkeypatch.setenv("MOTTE_WORK_DIR", str(work))
     monkeypatch.setenv("MOTTE_RUNNER_PYTHON", str(stub))
-    exit_code = entry_main()
+    exit_code = entry_main([])
     assert exit_code == 0
     argv = (work / "cli-argv.txt").read_text().split("\n")[0].split()
     # 固定版 CLI 调用形态：-m opencompass.cli.main <config(位置参数)>

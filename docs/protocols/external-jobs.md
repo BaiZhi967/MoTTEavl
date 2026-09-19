@@ -218,15 +218,31 @@ indeterminate → Run needs_review；禁止仅凭“没有 results”重新执�
   决定导入哪些记录、不改变身份（R2-03）。未知/越界/重复映射隔离为
   unmapped 记录并使 Run failed。评分 gold 以 `case_expectations` 为权威。
 
-## 11. 先冻结后解析与证据一致性（review R2-06/R2-07）
+## 11. 先冻结后解析与证据一致性（review R2-06/R2-07 + R3-04/05/06/07/08/09）
 
-- 采集顺序固定为：**读取完整输出字节 → 冻结内容寻址 Artifact → 从同一份
-  冻结内容解析**。正式分数、原始证据与恢复重放绑定同一内容 hash；
-  解析后对工作目录的改写/删除不影响已导入结果。证据 bundle 超出预算时
-  如实标记 `complete=false`（hash 仍在），不冒充完整证据。
+- 采集顺序固定为：**按白名单读取输出字节（fd 锚定）→ 冻结内容寻址
+  Artifact → 从同一份冻结内容解析**。正式分数、原始证据与恢复重放绑定
+  同一内容 hash；解析后对工作目录的改写/删除不影响已导入结果。
+- **读取安全（R3-04）**：生产读取入口沿工作目录 fd 逐组件
+  `O_NOFOLLOW` 打开（`_TrustedDir`）；输出边界内任何 symlink（根级、
+  父链、文件）显式拒绝，"清单后父目录替换"竞态在 fd 链打开层关闭。
+- **证据白名单（R3-05）**：只收集 `outputs/**/results|predictions/**`、
+  `outputs/experiment.json` 与 `runner-config.json`（映射随输入一并
+  冻结）；上游 dump 的解析后密钥配置（`configs/*.py`）在读取层排除，
+  不进入永久 Artifact。
+- **冻结映射（R3-06）**：Case 映射取自冻结 bundle 内的
+  `runner-config.json`；修改工作目录配置不改变 Case 身份。
+- **实验指针（R3-09）**：adapter 从冻结证据读取 `experiment.json` 并把
+  同一固定选择交给解析器；无效指针/无指针多候选拒绝合并。
+- **超预算（R3-08）**：冻结内容超出单文件 8 MiB / 总量 64 MiB 预算 →
+  `EVIDENCE_INCOMPLETE` 在正式导入/评分前失败；持久 hash 不冒充完整
+  输入，正式结果必须可从证据重建。零文件证据（取消/空输出）不在此列。
 - 旧协议 adapter（无字节级读取）退回“解析前快照 hash + 最终化前重读”
   的交叉核验；两次内容不一致 → `EVIDENCE_INCONSISTENT`，Job failed 且
   保留两份 hash 供审计。
-- 导入完成（`checkpoint.import_completed`）后的恢复**复用原 Artifact、
-  指标与错误事实**：不重读可清理的工作目录、不替换 checkpoint 的证据
-  引用（R2-07）。中断恢复依赖已冻结产物，不依赖工作目录存活。
+- **导入前持久化可恢复引用（R3-07）**：证据引用/指标/outcome 状态在
+  幂等导入**之前**写入 checkpoint（`import_completed=False`）。导入
+  中断的恢复优先从已冻结 raw bundle 重建（`frozen-artifact` 路径，
+  从头重采 + 幂等导入），不依赖工作目录存活、绝不二次启动；导入完成
+  后的恢复（R2-07）复用原 Artifact、指标与错误事实，不替换证据引用。
+

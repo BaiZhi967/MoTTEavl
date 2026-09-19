@@ -523,25 +523,20 @@ class BenchmarkCatalog:
         if self._store is not None:
             from datetime import UTC, datetime
 
-            existing = self._store.get(benchmark_id, dataset.dataset_revision)
-            if existing is not None:
-                existing_files = {
-                    str(item.get("logical_name")): str(item.get("sha256"))
-                    for item in existing.get("files") or []
-                }
-                new_files = {item.logical_name: item.sha256 for item in dataset.files}
-                if existing_files != new_files:
-                    # 同 revision 重写不同内容会让历史 Run 的内容身份失真
-                    # （review R2-05）：拒绝，要求换 revision 或恢复同内容。
-                    raise ValueError(
-                        "DATASET_REVISION_REUSED: benchmark "
-                        f"{benchmark_id}@{dataset.dataset_revision} was already "
-                        "prepared with different file content; use a new dataset "
-                        "revision instead of rewriting"
-                    )
+            # 不可变 revision 在存储事务内判定（review R3-11）：两个实例
+            # 同时"读到不存在"也只有第一个 created，后写者冲突——SDK 层
+            # 不再做可竞争的 get→比较→put。
             payload = dataset_to_payload(dataset)
             payload["created_at"] = datetime.now(UTC).isoformat()
-            self._store.put(payload)
+            try:
+                self._store.put_immutable(payload)
+            except ValueError as error:
+                raise ValueError(
+                    "DATASET_REVISION_REUSED: benchmark "
+                    f"{benchmark_id}@{dataset.dataset_revision} was already "
+                    "prepared with different file content; use a new dataset "
+                    "revision instead of rewriting"
+                ) from error
         self._entry(benchmark_id).dataset = dataset
 
     def dataset(self, benchmark_id: str) -> PreparedBenchmarkDataset | None:
@@ -765,15 +760,12 @@ def validate_external_run_request(
         if isinstance(context_window, int) and context_window > 0 and dataset.rows:
             from motte_benchmark.opencompass.config import render_mcq_prompt
 
-            def _row_chars(row: dict[str, Any]) -> int:
-                return len(render_mcq_prompt(
-                    subject=str(row.get("subject") or ""),
-                    question=str(row.get("question", "")),
-                    options={label: str(row.get(label, "")) for label in ("A", "B", "C", "D")},
-                    few_shot=[],
-                ))
-
-            base = max(_row_chars(row) for row in dataset.rows)
+            # 对最终 selected cases 逐题用同一 few-shot/模板渲染取最大
+            # （review R3-10）：题目重排不得改变预检结论——不再"第一题带
+            # few-shot、其余题不带"取 max。字符数为保守上界（非精确 token）。
+            selected_rows = resolve_selection(
+                dataset, scope=scope, split=split, case_ids=case_ids,
+            ) or list(dataset.rows)
             dev_rows = [
                 row for row in dataset.rows
                 if str(row.get("split")) == few_shot_split
@@ -786,14 +778,15 @@ def validate_external_run_request(
                 }
                 for row in dev_rows[:max(few_shot, 0)]
             ]
-            probe = next(iter(dataset.rows))
-            estimate = len(render_mcq_prompt(
-                subject=str(probe.get("subject") or ""),
-                question=str(probe.get("question", "")),
-                options={label: str(probe.get(label, "")) for label in ("A", "B", "C", "D")},
-                few_shot=few_shot_rows,
-            ))
-            estimate = max(estimate, base)
+            estimate = max(
+                len(render_mcq_prompt(
+                    subject=str(row.get("subject") or ""),
+                    question=str(row.get("question", "")),
+                    options={label: str(row.get(label, "")) for label in ("A", "B", "C", "D")},
+                    few_shot=few_shot_rows,
+                ))
+                for row in selected_rows
+            )
             if isinstance(effective_output, int):
                 if estimate + effective_output > context_window:
                     reasons.append(

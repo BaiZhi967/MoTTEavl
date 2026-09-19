@@ -447,13 +447,18 @@ class DurableExternalJobRunner:
                     "recovered_from": "job-store",
                 }
             else:
-                # 非终态，或终态但导入未完成（R04）：重新观察/采集，幂等补齐。
+                # 非终态，或终态但导入未完成（R04）：优先从**已冻结工件**
+                # 幂等补齐（R3-07：不依赖可清理的工作目录），否则重新观察。
                 handle = ExternalJobHandle.model_validate(persisted.get("handle") or {})
                 job_id = str(persisted.get("job_id") or handle.job_id)
-                outcome = self.supervisor.recover(
-                    spec, handle,
-                    should_cancel=lambda: self._should_cancel(spec.run_id, job_id),
-                )
+                artifact_outcome = self._recover_from_frozen_artifact(persisted, handle)
+                if artifact_outcome is not None:
+                    outcome = artifact_outcome
+                else:
+                    outcome = self.supervisor.recover(
+                        spec, handle,
+                        should_cancel=lambda: self._should_cancel(spec.run_id, job_id),
+                    )
                 if status == "cancelled":
                     # 取消是操作员终局：观察到的其他结局只作审计，不复活。
                     outcome["job_status"] = "cancelled"
@@ -471,6 +476,46 @@ class DurableExternalJobRunner:
         return self._settle(spec, outcome)
 
     # -------------------------------------------------------------- 证据冻结
+
+    def _recover_from_frozen_artifact(
+        self, persisted: dict[str, Any], handle: ExternalJobHandle,
+    ) -> dict[str, Any] | None:
+        """从已冻结的 raw bundle 重建 outcome（review R3-07）。
+
+        导入中途崩溃时，完整结果在导入前已冻结为工件；此处直接从工件
+        内容重新解析（同一内容 hash），不依赖可清理的工作目录，也绝不
+        再次启动进程。工件缺失/不完整/解析失败 → 返回 None 走观察恢复。
+        """
+        checkpoint = persisted.get("checkpoint") or {}
+        evidence = checkpoint.get("evidence") or {}
+        bundle_id = evidence.get("raw_bundle_artifact")
+        if not bundle_id or self.artifacts is None:
+            return None
+        collector = getattr(self.supervisor.adapter, "collect_from_files", None)
+        if not callable(collector):
+            return None
+        try:
+            bundle = json.loads(self.artifacts.read_bytes(bundle_id))
+            files = {
+                rel: entry["content"]
+                for rel, entry in (bundle.get("files") or {}).items()
+                if isinstance(entry, dict) and entry.get("content") is not None
+            }
+            if not files:
+                return None
+            # 从头重采（导入幂等）：checkpoint 里的 records_consumed 是崩溃
+            # 前的解析进度，直接沿用会把全部样本切掉。
+            results, cursor = collector(handle, {}, files)
+        except Exception:  # noqa: BLE001 - 工件恢复失败退回观察恢复
+            return None
+        return {
+            "job_status": checkpoint.get("outcome_status") or "settled",
+            "results": [item.model_dump(mode="json") for item in results],
+            "error": checkpoint.get("outcome_error") or None,
+            "handle": persisted.get("handle") or handle.model_dump(mode="json"),
+            "cursor": cursor,
+            "recovered_from": "frozen-artifact",
+        }
 
     def _raw_output_bundle(self, handle: dict[str, Any]) -> dict[str, Any]:
         """受控工作目录里的原始输出（hash+受预算内容），供重新解析/审计。"""
@@ -522,7 +567,11 @@ class DurableExternalJobRunner:
 
         # (0) 导入已完成的恢复（R2-07）：复用原 Artifact/指标/错误事实，
         # 不重读可清理的工作目录、不替换 checkpoint 里的证据引用。
-        if outcome.get("recovered_from") == "job-store" and checkpoint.get("import_completed"):
+        # frozen-artifact 恢复（R3-07）在导入补齐后再次进入时同样适用。
+        if (
+            outcome.get("recovered_from") in ("job-store", "frozen-artifact")
+            and checkpoint.get("import_completed")
+        ):
             evidence = checkpoint.get("evidence") or {}
             outcome["import"] = {
                 "job_id": job_id,
@@ -537,13 +586,21 @@ class DurableExternalJobRunner:
             }
             return outcome
 
+        # 冻结工件恢复且导入未完成（R3-07）：证据引用已持久化，直接补导入，
+        # 不重新派生证据、不重读工作目录。
+        recovery_reuse = outcome.get("recovered_from") == "frozen-artifact"
+        if recovery_reuse:
+            evidence = checkpoint.get("evidence") or {}
+
         # (1) 证据（R2-06）：优先使用解析前冻结的字节 bundle；旧协议
         # adapter（无字节级读取）退回"再读工作目录 + 与解析前快照 hash
         # 交叉核验"，不一致即拒绝最终化。
         frozen = cursor.get("frozen_evidence") if isinstance(cursor.get("frozen_evidence"), dict) else None
         evidence: dict[str, Any] = {}
         evidence_inconsistent = False
-        if frozen is not None:
+        if recovery_reuse:
+            pass
+        elif frozen is not None:
             evidence = {
                 "raw_bundle_artifact": frozen.get("artifact"),
                 "raw_bundle_hash": frozen.get("hash"),
@@ -579,7 +636,7 @@ class DurableExternalJobRunner:
                 "complete": bool(bundle.get("complete")),
                 "frozen_before_parse": False,
             }
-        if evidence:
+        if evidence and not recovery_reuse:
             # outcome 内容寻址冻结（同内容同路径；不同内容不互相覆盖）。
             if self.artifacts is not None:
                 frozen_outcome = {
@@ -626,6 +683,60 @@ class DurableExternalJobRunner:
             }
             return outcome
 
+        # (1.5) 超预算证据不能冒充完整（R3-08）：冻结内容缺失时在正式
+        # 导入/评分前明确失败——持久 hash 不代替完整输入，正式结果必须
+        # 可从证据重建。零文件证据（如取消/空输出）不在此列，由
+        # EXTERNAL_EMPTY_RESULTS 等语义处理；cancelled 不被降级。
+        if (
+            not recovery_reuse
+            and evidence
+            and evidence.get("complete") is False
+            and bool(evidence.get("raw_files"))
+            and status != "cancelled"
+        ):
+            outcome["job_status"] = "failed"
+            outcome["error"] = {
+                "code": "EVIDENCE_INCOMPLETE",
+                "message": (
+                    "frozen evidence exceeds the persistence budget; official "
+                    "results must be rebuildable from persisted bytes, so "
+                    "finalization is refused before import/scoring"
+                ),
+                "details": {"evidence": evidence},
+            }
+            self.job_store.update_job(job_id, {
+                "status": "failed",
+                "checkpoint": {
+                    **checkpoint, "import_completed": True,
+                    "outcome_status": status, "outcome_error": outcome["error"],
+                    "evidence": evidence,
+                },
+                "handle": handle,
+            }, guard_status_not="cancelled")
+            outcome["import"] = {
+                "job_id": job_id, "imported": 0, "conflicts": [],
+                "evidence": evidence, "parser_version": self.parser_version,
+                "metrics": {},
+            }
+            return outcome
+
+        # (1.6) 导入前先持久化可恢复引用（R3-07）：冻结成功后立刻把证据
+        # 引用/指标/outcome 状态落 checkpoint（import_completed=False），
+        # 导入中途崩溃的恢复据此从工件补齐，不依赖工作目录。
+        if not recovery_reuse and evidence:
+            self.job_store.update_job(job_id, {"checkpoint": {
+                **checkpoint,
+                "cursor": {
+                    "parser_version": cursor.get("parser_version"),
+                    "ceval_native": cursor.get("ceval_native"),
+                    "ceval_diagnostic": cursor.get("ceval_diagnostic"),
+                    "records_consumed": cursor.get("records_consumed"),
+                },
+                "evidence": evidence,
+                "outcome_status": status,
+                "import_completed": False,
+            }})
+
         # (2) 幂等导入（R04：终态之前；崩溃时 Job 仍非终态，恢复可补齐）。
         imported = 0
         conflicts: list[dict[str, Any]] = []
@@ -656,6 +767,7 @@ class DurableExternalJobRunner:
                 "records_consumed": cursor.get("records_consumed"),
             },
             "evidence": evidence,
+            "outcome_status": status,
             "import_completed": True,
         })
         if conflicts:

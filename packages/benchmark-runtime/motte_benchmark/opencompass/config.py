@@ -160,14 +160,27 @@ def build_opencompass_config(
         cases.append({
             "case_id": str(row.get("id") or ""),
             "subject": str(row.get("subject") or ""),
-            # 目标 gold 不进入 prompt；仅保留在 dataset 侧供本地评分。
+            # 渲染后的完整 prompt（含合法 few-shot）是 Runner 的实际输入；
+            # 结构化字段供桥接导出本地数据集（review R3-02），两者同源。
             "prompt": render_mcq_prompt(
                 subject=str(row.get("subject") or ""),
-                question=str(row.get("question") or ""),
+                question=str(row.get("question", "")),
                 options=options,
                 few_shot=list(few_shot_rows),
             ),
+            "question": str(row.get("question", "")),
+            "options": options,
         })
+    # few-shot 示例内容随配置冻结（review R3-02）：桥接按学科导出为数据集
+    # 的示例来源；目标样本 gold 只保留在 dataset 侧，不进入 prompt。
+    few_shot_examples: list[dict[str, Any]] = [
+        {
+            "question": str(example.get("question", "")),
+            "options": {label: str(example.get(label, "")) for label in _ANSWER_LABELS},
+            "answer": example.get("answer") or "",
+        }
+        for example in few_shot_rows
+    ]
 
     retry = {
         "runner": int((retry_policy or {}).get("runner", 0)),
@@ -196,6 +209,7 @@ def build_opencompass_config(
         "model": model_section,
         "retry": retry,
         "credentials": credential_refs,
+        "few_shot_examples": few_shot_examples,
         "transport_owner": transport_owner,
         # runner-native 调用路径的观测缺口：未观测的请求身份/费用记 unknown，
         # 不补填为已核验（T07/T10 的 Provider 桥接可消除）。

@@ -113,35 +113,57 @@ class OpenCompassJobAdapter:
 
     # ------------------------------------------------------------------ 证据
 
-    def _workspace(self, handle: ExternalJobHandle):
-        from motte_sandbox.workspace import CaseWorkspace
+    @staticmethod
+    def _evidence_rels(rel: str) -> bool:
+        """证据白名单（review R3-05）：只收集结果/预测/实验指针/冻结映射。
 
-        return CaseWorkspace(
-            Path(handle.work_dir), anchor=Path(handle.work_dir).parent,
-        )
+        上游会把**解析后的配置**（含运行时解析的密钥）dump 到实验目录
+        ``configs/*.py``；无差别归档会把密钥写进永久 raw bundle。此处只
+        允许：``outputs/**/results/**``、``outputs/**/predictions/**``、
+        ``outputs/experiment.json`` 与 ``runner-config.json``（映射随输入
+        一并冻结，R3-06）。
+        """
+        parts = rel.split("/")
+        if rel == RUNNER_CONFIG_NAME:
+            return True
+        if not rel.startswith("outputs/"):
+            return False
+        if rel == "outputs/experiment.json":
+            return True
+        return any(part in ("results", "predictions") for part in parts[:-1])
 
     def read_output_files(self, handle: ExternalJobHandle) -> dict[str, str]:
-        """受信读取 outputs/ 全部常规文件（fd 锚定；symlink 已被排除）。
+        """fd 锚定读取证据白名单文件（review R3-04/R3-05）。
 
-        返回 ``{相对 work_dir 的路径: 文本}``；供持久层在**解析之前**冻结
-        完整输入字节（review R2-06），再经 ``collect_from_files`` 从同一份
-        冻结内容解析——正式分数与原始证据绑定同一内容。
+        沿已打开的工作目录 fd 逐组件 ``O_NOFOLLOW`` 打开（复用 Parser 的
+        ``_TrustedDir``）：父目录/根目录在读取间被替换成 symlink 时，
+        fd 链上的打开直接失败——不存在"先字符串检查再 os.open"的竞态。
+        symlink 出现在输出边界内立即拒绝。返回 ``{相对路径: 文本}`` 供
+        持久层在**解析之前**冻结完整输入字节（review R2-06/R3-06）。
         """
-        from motte_sandbox.workspace import WorkspacePolicyError
+        from .parser import _TrustedDir
 
-        workspace = self._workspace(handle)
-        files: dict[str, str] = {}
+        work_root = Path(handle.work_dir)
+        limit = int(self._process.default_limits["max_result_bytes"])
         try:
-            rels = [
-                rel for rel in workspace.list_files() if rel.startswith("outputs/")
-            ]
-            for rel in sorted(rels):
-                files[rel] = workspace.read_text(
-                    rel, max_bytes=self._process.default_limits["max_result_bytes"],
-                )
-        except (WorkspacePolicyError, OSError) as error:
+            with _TrustedDir(work_root) as trusted:
+                files, symlinks = trusted.list_files()
+                for link in symlinks:
+                    if link == "outputs" or link.startswith("outputs/") or link == RUNNER_CONFIG_NAME:
+                        raise ValueError(
+                            "symlink inside evidence boundary rejected: " + link,
+                        )
+                wanted = [rel for rel in files if self._evidence_rels(rel)]
+                evidence: dict[str, str] = {}
+                for rel in sorted(wanted):
+                    evidence[rel] = trusted.read_bytes(rel, max_bytes=limit).decode(
+                        "utf-8",
+                    )
+                return evidence
+        except ValueError:
+            raise
+        except Exception as error:  # noqa: BLE001 - 读取失败进入证据
             raise ValueError(f"cannot read controlled outputs: {error}") from error
-        return files
 
     def snapshot_outputs(self, handle: ExternalJobHandle) -> dict[str, Any]:
         """原始输出文件的受信清单（字节级 sha256），解析前冻结证据用（R09）。"""
@@ -151,7 +173,7 @@ class OpenCompassJobAdapter:
             snap = self._workspace(handle).snapshot()
             files = {
                 rel: digest for rel, digest in (snap.get("hashes") or {}).items()
-                if rel.startswith("outputs/")
+                if self._evidence_rels(rel)
             }
         except (WorkspacePolicyError, OSError):
             return {"complete": False, "files": {}}
@@ -159,18 +181,11 @@ class OpenCompassJobAdapter:
 
     # ------------------------------------------------------------------ 采集
 
-    def _frozen_case_order(self, handle: ExternalJobHandle) -> dict[str, list[str]]:
-        """从受控目录里的冻结配置读 subject → 有序 case_id 映射（R03）。"""
-        try:
-            raw = self._workspace(handle).read_text(
-                RUNNER_CONFIG_NAME, max_bytes=32 * 1024 * 1024,
-            )
-        except Exception as error:  # noqa: BLE001 - 缺冻结映射：拒绝采集而非串题
-            raise ValueError(
-                f"frozen case mapping unavailable: {error}",
-            ) from error
-        config = json.loads(raw)
-        cases = config.get("cases") if isinstance(config, dict) else None
+    @staticmethod
+    def _case_order_from_config(config: Any) -> dict[str, list[str]]:
+        if not isinstance(config, dict):
+            raise ValueError("frozen runner config is not an object")
+        cases = config.get("cases")
         if not isinstance(cases, list) or not cases:
             raise ValueError(
                 "frozen runner config has no cases; cannot map runner rows to case ids"
@@ -184,6 +199,22 @@ class OpenCompassJobAdapter:
             if case_id and subject:
                 order.setdefault(subject, []).append(case_id)
         return order
+
+    @staticmethod
+    def _experiment_from_files(files: dict[str, str]) -> str | None:
+        """从冻结证据中读取实验指针（review R3-09：选择信息进入解析）。"""
+        pointer = files.get("outputs/experiment.json")
+        if pointer is None:
+            return None
+        try:
+            payload = json.loads(pointer)
+        except ValueError as error:
+            raise ValueError(
+                f"experiment pointer is not valid JSON: {error}",
+            ) from error
+        if isinstance(payload, dict) and isinstance(payload.get("experiment"), str):
+            return payload["experiment"]
+        return None
 
     @staticmethod
     def _row_index_of(sample: dict[str, Any], subject: str) -> int | None:
@@ -204,13 +235,29 @@ class OpenCompassJobAdapter:
         cursor: dict[str, Any],
         files: dict[str, str],
     ) -> tuple[list[NormalizedCaseResult], dict[str, Any]]:
-        """从**冻结字节**解析 + 按原始行号映射（review R2-03/R2-06）。"""
+        """从**冻结字节**解析 + 按原始行号映射（R2-03/R2-06/R3-06/R3-09）。
+
+        映射来自冻结 bundle 内的 ``runner-config.json``（与结果字节同一份
+        内容 hash 覆盖）——修改工作目录里的配置不改变 Case 身份；实验选择
+        来自冻结的 ``outputs/experiment.json`` 指针。
+        """
         cursor = dict(cursor or {})
+        raw_config = files.get(RUNNER_CONFIG_NAME)
+        if raw_config is None:
+            raise ValueError(
+                "frozen case mapping unavailable: runner-config.json is not part "
+                "of the frozen evidence; refuse to attribute runner rows"
+            )
+        try:
+            case_order = self._case_order_from_config(json.loads(raw_config))
+        except ValueError as error:
+            raise ValueError(f"frozen case mapping unavailable: {error}") from error
+        experiment = self._experiment_from_files(files)
         parsed = parse_opencompass_files(
             files, dataset=self.dataset, base_parts=("outputs",),
+            experiment=experiment,
         )
         self.last_parsed = parsed
-        case_order = self._frozen_case_order(handle)
         consumed = int(cursor.get("records_consumed", 0))
         used: set[str] = set()
         results: list[NormalizedCaseResult] = []
@@ -296,11 +343,14 @@ class OpenCompassJobAdapter:
         outputs = Path(handle.work_dir) / "outputs"
         if not outputs.is_dir():
             return ([], dict(cursor or {}))
-        # 缺冻结映射先拒绝（fail fast），不进入字节读取。
-        self._frozen_case_order(handle)
-        # 先读完整输出字节，再从同一份内容解析（R2-06 语义在持久层落地；
-        # 直接调用本方法时同样不经过二次读取）。
+        # 先按白名单读完整证据字节（含 runner-config 与实验指针），再从
+        # 同一份内容解析（R2-06/R3-05/R3-06）；缺冻结映射先拒绝。
         files = self.read_output_files(handle)
+        if RUNNER_CONFIG_NAME not in files:
+            raise ValueError(
+                "frozen case mapping unavailable: runner-config.json is missing "
+                "in the controlled work dir"
+            )
         return self.collect_from_files(handle, dict(cursor or {}), files)
 
 

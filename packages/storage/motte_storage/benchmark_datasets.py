@@ -48,6 +48,23 @@ def _record_id(benchmark_id: str, dataset_revision: str) -> str:
     return benchmark_id + "@" + dataset_revision
 
 
+class RevisionConflictError(ValueError):
+    """同 revision 不同内容的并发/顺序覆盖尝试（review R3-11）。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+def _content_identity(record: dict[str, Any]) -> str:
+    """(benchmark, revision) 的内容身份：排序后的 (logical_name, sha256)。"""
+    files = record.get("files") or []
+    pairs = sorted(
+        (str(item.get("logical_name")), str(item.get("sha256")))
+        for item in files if isinstance(item, dict)
+    )
+    return json.dumps(pairs, sort_keys=True)
+
+
 class MemoryBenchmarkDatasets:
     def __init__(self, lock: RLock | None = None) -> None:
         self._lock = lock or RLock()
@@ -61,6 +78,30 @@ class MemoryBenchmarkDatasets:
         with self._lock:
             self._records[(benchmark_id, dataset_revision)] = stored
         return deepcopy(stored)
+
+    def put_immutable(self, record: dict[str, Any]) -> dict[str, Any]:
+        """同 revision 同内容幂等、异内容冲突（review R3-11，事务语义）。
+
+        返回 ``{"status": "created"|"identical", "record": ...}``；异内容
+        抛 :class:`RevisionConflictError`（不写入，既有记录不被覆盖）。
+        """
+        stored = _validate(record)
+        benchmark_id = str(stored.get("benchmark_id"))
+        dataset_revision = str(stored.get("dataset_revision"))
+        stored = {**stored, "id": _record_id(benchmark_id, dataset_revision)}
+        identity = _content_identity(stored)
+        message = (
+            "benchmark dataset revision already exists with different content: "
+            + _record_id(benchmark_id, dataset_revision)
+        )
+        with self._lock:
+            existing = self._records.get((benchmark_id, dataset_revision))
+            if existing is None:
+                self._records[(benchmark_id, dataset_revision)] = stored
+                return {"status": "created", "record": deepcopy(stored)}
+            if _content_identity(existing) == identity:
+                return {"status": "identical", "record": deepcopy(existing)}
+            raise RevisionConflictError(message)
 
     def get(self, benchmark_id: str, dataset_revision: str) -> dict[str, Any] | None:
         with self._lock:
@@ -112,6 +153,45 @@ class SQLiteBenchmarkDatasets:
             )
         return deepcopy(stored)
 
+    def put_immutable(self, record: dict[str, Any]) -> dict[str, Any]:
+        """同 revision 同内容幂等、异内容冲突（review R3-11）。
+
+        判定与写入在**同一事务**（BEGIN IMMEDIATE 串行化并发写）：
+        两个实例同时"读到不存在"也只有第一个 created，另一个 conflict，
+        后写者不能覆盖先写者。
+        """
+        stored = _validate(record)
+        stored = {
+            **stored,
+            "id": _record_id(str(stored.get("benchmark_id")), str(stored.get("dataset_revision"))),
+            "created_at": str(stored.get("created_at") or _now_iso()),
+        }
+        benchmark_id = str(stored.get("benchmark_id"))
+        dataset_revision = str(stored.get("dataset_revision"))
+        identity = _content_identity(stored)
+        payload_json = json.dumps(stored, sort_keys=True)
+        created_at = str(stored.get("created_at"))
+        message = (
+            "benchmark dataset revision already exists with different content: "
+            + _record_id(benchmark_id, dataset_revision)
+        )
+        with closing(_connect(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM benchmark_datasets WHERE benchmark_id = ? AND dataset_revision = ?",  # noqa: E501
+                (benchmark_id, dataset_revision),
+            ).fetchone()
+            if row is not None:
+                existing = json.loads(row[0])
+                if _content_identity(existing) == identity:
+                    return {"status": "identical", "record": existing}
+                raise RevisionConflictError(message)
+            connection.execute(
+                "INSERT INTO benchmark_datasets(benchmark_id, dataset_revision, payload, created_at) VALUES (?, ?, ?, ?)",  # noqa: E501
+                (benchmark_id, dataset_revision, payload_json, created_at),
+            )
+        return {"status": "created", "record": deepcopy(stored)}
+
     def get(self, benchmark_id: str, dataset_revision: str) -> dict[str, Any] | None:
         with closing(_connect(self._path)) as connection:
             row = connection.execute(
@@ -150,6 +230,7 @@ def dataset_record_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "MemoryBenchmarkDatasets",
+    "RevisionConflictError",
     "SQLiteBenchmarkDatasets",
     "dataset_record_from_payload",
 ]
