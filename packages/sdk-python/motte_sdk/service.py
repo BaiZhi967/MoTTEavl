@@ -321,7 +321,7 @@ class RunService:
         cancelled = self._honor_cancellation(run_id)
         if cancelled is not None:
             return cancelled
-        rows_by_case = self._external_job_case_rows(run_id, run, outcome)
+        rows_by_case, unmapped = self._external_job_case_rows(run_id, run, outcome)
         for case_id in list(run.get("case_ids") or []):
             self.store.case_runs.upsert(rows_by_case[case_id])
         rows = self.store.case_runs.list_for_run(run_id)
@@ -335,6 +335,32 @@ class RunService:
         outcome_error = outcome.get("error")
         if isinstance(outcome_error, dict) and outcome_error:
             errors.append(outcome_error)
+        if unmapped:
+            # 冻结映射之外的 Runner 行（R03）：可见、可审计，且不让 Run 假装
+            # 干净完成。
+            errors.append({
+                "code": "EXTERNAL_UNMAPPED_RESULTS",
+                "message": (
+                    "runner produced rows outside the frozen case mapping; "
+                    "they are quarantined and never attributed to other cases"
+                ),
+                "details": {"unmapped": unmapped[:10], "count": len(unmapped)},
+            })
+        selected_ids = list(run.get("case_ids") or [])
+        responded = sum(
+            1 for row in rows
+            if row.get("outcome") == "responded" and row.get("case_id") in set(selected_ids)
+        )
+        if selected_ids and responded == 0:
+            # 零结果不能伪装成功完成可计分任务（review R11）；正常无 gold 的
+            # 预测任务 responded>0，仍按 unscored 完成而非执行失败。
+            errors.append({
+                "code": "EXTERNAL_EMPTY_RESULTS",
+                "message": (
+                    "external job returned no case results for a non-empty "
+                    "selection; run cannot be finalized as completed"
+                ),
+            })
         if job_status == "cancelled":
             final_status = "cancelled"
         elif job_status == "indeterminate":
@@ -344,6 +370,20 @@ class RunService:
         else:
             # settled 带失败 case 或 job failed：部分结果已保留，终态 failed。
             final_status = "failed"
+        metrics = {}
+        import_view = outcome.get("import")
+        if isinstance(import_view, dict):
+            metrics = import_view.get("metrics") or {}
+        if metrics:
+            # native/diagnostic 双口径进入版本化指标事实（review R09）：
+            # 持久 run 事件 + Job checkpoint（分派侧），供报告与 UI 查询。
+            self.emit_run_event(run_id, "external_job_metrics", {
+                "job_id": import_view.get("job_id"),
+                "parser_version": metrics.get("parser_version"),
+                "native": metrics.get("native"),
+                "diagnostic": metrics.get("diagnostic"),
+                "evidence": import_view.get("evidence"),
+            })
         try:
             scores = self._score_results(run_id, rows, False)
             cancelled = self._honor_cancellation(run_id)
@@ -355,6 +395,18 @@ class RunService:
                 source="initial",
                 final_status=final_status,
                 final_error=errors[0] if errors else None,
+                extra_summary=(
+                    {"external_job_metrics": metrics} if metrics else None
+                ),
+                aggregate_context={
+                    "external_outcome": {
+                        "job_status": job_status,
+                        "runner_exit_code": (
+                            (outcome_error or {}).get("details", {}).get("exit_code")
+                            if isinstance(outcome_error, dict) else None
+                        ),
+                    },
+                },
             )
         except Exception as error:
             return self._fail_or_quarantine(run_id, error)
@@ -363,15 +415,25 @@ class RunService:
     @staticmethod
     def _external_job_case_rows(
         run_id: str, run: dict[str, Any], outcome: dict[str, Any],
-    ) -> dict[str, dict[str, Any]]:
+    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
         """把 job 结局的归一化结果映射为 case 行；缺失的 selected case 记
-        not_attempted，重复出现的 case 以最后一条为准（幂等导入在 T03 收紧）。"""
+        not_attempted。冻结选样之外的 Runner 行（unmapped/映射冲突）被隔离
+        成审计记录，绝不归属到其它题目（review R03）。"""
+        selected = set(run.get("case_ids") or [])
         rows: dict[str, dict[str, Any]] = {}
+        unmapped: list[dict[str, Any]] = []
         for item in outcome.get("results") or []:
             if not isinstance(item, dict):
                 continue
             case_id = item.get("case_id") or item.get("source_case_id")
             if not isinstance(case_id, str) or not case_id:
+                continue
+            if case_id not in selected:
+                unmapped.append({
+                    "case_id": case_id,
+                    "stable_case_key": item.get("stable_case_key"),
+                    "error": item.get("error"),
+                })
                 continue
             status = item.get("status")
             if status == "failed":
@@ -404,7 +466,7 @@ class RunService:
                     "run_id": run_id, "case_id": case_id,
                     "outcome": "not_attempted", "result": None,
                 }
-        return rows
+        return (rows, unmapped)
 
     def _honor_cancellation(self, run_id: str) -> dict[str, Any] | None:
         run = self._load(run_id)
@@ -618,6 +680,8 @@ class RunService:
         skip_aggregate: bool = False,
         allow_aggregate_failure: bool = False,
         case_rows: list[dict[str, Any]] | None = None,
+        extra_summary: dict[str, Any] | None = None,
+        aggregate_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run = self._load(run_id)
         scores = validate_scores(deepcopy(scores))
@@ -677,8 +741,15 @@ class RunService:
         if provenance and not skip_aggregate:
             from .benchmark_plugins import aggregate_with_plugin
 
+            # 聚合消费固定 Run 事实 + 当前已持久化的 case 行 + 调用方给的
+            # 外部结局上下文（退出码等），不依赖调用前未落库的中间态。
+            run_view = {
+                **run,
+                "cases": self.store.case_runs.list_for_run(run_id),
+                **(deepcopy(aggregate_context) or {}),
+            }
             try:
-                aggregate = aggregate_with_plugin(run, scores)
+                aggregate = aggregate_with_plugin(run_view, scores)
                 if not isinstance(aggregate, dict):
                     raise ValueError("benchmark aggregate must be an object")
                 from motte_contracts.report import ReportSummary
@@ -759,6 +830,7 @@ class RunService:
                 "passed": passed,
                 **({"multi_metric": True, "metrics": metric_summary} if metric_summary else {}),
                 **({"aggregate": deepcopy(aggregate)} if aggregate is not None else {}),
+                **(deepcopy(extra_summary) if extra_summary else {}),
             },
             "scores": deepcopy(scores),
         }

@@ -72,7 +72,9 @@ def test_ceval_preflight_and_enqueue():
 
         response = client.post("/api/v1/benchmarks/external/ceval/runs", json={"model": "m1"})
         assert response.status_code == 422
-        assert response.json()["error"]["code"] == "MODEL_IDENTITY_MISSING"
+        body = response.json()["error"]
+        assert body["code"] == "RUN_REQUEST_INVALID"
+        assert any(reason.startswith("MODEL_") for reason in body["details"]["reasons"])
 
         # 发布一个模型档案后：202 真实排队。
         resources = InMemoryResourceStore()
@@ -96,7 +98,6 @@ def test_ceval_preflight_and_enqueue():
 
         # 分派：一个 Job 终态；无 Provider 调用（假 Runner 离线）。
         from motte_sdk.dispatcher import RunDispatcher
-        from apps.api.app.main import create_app as _create  # noqa: F401
 
         service = client2.app.state.run_service
         finished = RunDispatcher(service).dispatch(run_id)
@@ -107,6 +108,31 @@ def test_ceval_preflight_and_enqueue():
         assert jobs_response[0]["launch_token"].startswith("launch-")
         # 模型调用 0：run 的执行后端是外部 Job，不经 Provider。
         assert finished["manifest"]["execution"]["backend_id"] == "external-benchmark"
+        # review R02：公开入口生成冻结评分身份，生产 Run 落不可变 ScoreSet，
+        # 有 gold 的结果实际评分（不再 scores=[]）。
+        assert finished["manifest"]["benchmark_provenance"]["suite"] == "ceval-external"
+        assert finished["manifest"]["evaluation"]["scorer_version"]
+        assert finished["scores"], "managed scorer must produce real scores"
+        passed_by_case = {
+            score["case_id"]: score["passed"] for score in finished["scores"]
+        }
+        assert set(passed_by_case) == {"logic-1", "logic-2"}
+        # fake Runner：logic-1 答 B（gold B，对）、logic-2 答 A（gold B，错）。
+        assert passed_by_case == {"logic-1": True, "logic-2": False}
+        aggregate = finished["scoring_pass"]["summary"]["aggregate"]
+        assert aggregate["selected"] == 2
+        assert aggregate["correct"] == 1
+        assert aggregate["accuracy"] == 0.5
+        # review R09：native 指标进入版本化指标事实（Job checkpoint + run 事件）。
+        assert jobs_response[0]["metrics"]["ceval_native"]["ceval_logic/accuracy"] == 0.5
+        stored_events = [event["type"] for event in service.events(run_id)]
+        assert "external_job_metrics" in stored_events
+        # review R01：Runner 拿到可消费的冻结配置（题目/模型/配置 hash）。
+        runner_config = finished["manifest"]["external_benchmark"]["runner_config"]
+        assert [case["case_id"] for case in runner_config["cases"]] == ["logic-1", "logic-2"]
+        assert runner_config["model"]["model"] == "gpt-test"
+        assert runner_config["config_hash"].startswith("sha256:")
+        assert finished["manifest"]["case_expectations"] == {"logic-1": "B", "logic-2": "B"}
     finally:
         adapter_registry.unregister_adapter("ceval-opencompass")
 

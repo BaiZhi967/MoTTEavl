@@ -23,6 +23,7 @@ def coverage_summary(
     failed_after_attempt: int = 0,
     metric_value: float | None = None,
     cost: dict[str, Any] | None = None,
+    metric_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if attempted is None:
         attempted = judged + failed_after_attempt
@@ -78,6 +79,8 @@ def coverage_summary(
         "passable": coverage is not None and coverage > 0,
         "metric_value": metric_value,
         "metric_passable": metric_value is None or not math.isnan(float(metric_value)),
+        # 注册指标 → 数值（review R07）：Gate 按指标身份取值，不重算。
+        **({"metric_values": dict(metric_values)} if metric_values else {}),
         "cost": {**cost_view, "per_success_usd": per_success},
         "cost_passable": cost_view["known"],
     }

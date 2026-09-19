@@ -87,6 +87,9 @@ class ExternalJobSpec(Contract):
     environment_digest: StrictStr = Field(min_length=1)
     limits: dict[str, Any] = Field(default_factory=dict)
     retry_policy: ExternalRetryPolicy = Field(default_factory=ExternalRetryPolicy)
+    # Runner 可消费的完整配置（review R01）：模型快照、逐题 prompt、few-shot、
+    # 凭据引用与配置 hash；由创建入口经 build_opencompass_config 冻结。
+    runner_config: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(
         "runner_version", "dataset_revision", "environment_digest", "execution_config_hash",

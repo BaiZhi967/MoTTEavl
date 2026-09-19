@@ -32,6 +32,72 @@ def _profile(manifest: dict[str, Any]) -> dict[str, Any]:
     return profile if isinstance(profile, dict) else {}
 
 
+# 冻结 Profile 里除 model（合法变量）外不允许变化的口径字段（review R08）。
+_PROFILE_INVARIANTS: tuple[tuple[str, str], ...] = (
+    ("benchmark_id", "BENCHMARK_IDENTITY_CHANGED"),
+    ("benchmark_version", "BENCHMARK_IDENTITY_CHANGED"),
+    ("dataset_revision", "DATASET_REVISION_CHANGED"),
+    ("split", "SPLIT_CHANGED"),
+    ("few_shot", "FEWSHOT_CHANGED"),
+    ("prompt_template_version", "EXTRACTOR_OR_PROMPT_CHANGED"),
+    ("answer_extractor", "EXTRACTOR_OR_PROMPT_CHANGED"),
+    ("extractor_version", "EXTRACTOR_OR_PROMPT_CHANGED"),
+    ("aggregation", "AGGREGATION_CHANGED"),
+    ("aggregation_version", "AGGREGATION_CHANGED"),
+    ("seed", "SEED_CHANGED"),
+    ("runner_version", "RUNNER_CHANGED"),
+    ("environment_digest", "ENVIRONMENT_CHANGED"),
+)
+
+
+def _compare_invariants(
+    baseline_manifest: dict[str, Any],
+    candidate_manifest: dict[str, Any],
+    policy: ComparisonPolicy,
+) -> list[str]:
+    """逐字段判定评测口径；缺失身份不默认相等（review R08）。"""
+    reasons: list[str] = []
+    if baseline_manifest.get("model") != candidate_manifest.get("model"):
+        if "model" not in policy.allowed_factors:
+            reasons.append(
+                f"FACTOR_NOT_ALLOWED:model: {baseline_manifest.get('model')!r} -> "
+                f"{candidate_manifest.get('model')!r}",
+            )
+    base_external = _external(baseline_manifest)
+    cand_external = _external(candidate_manifest)
+    base_profile = _profile(baseline_manifest)
+    cand_profile = _profile(candidate_manifest)
+    for invariant_field, code in _PROFILE_INVARIANTS:
+        base_value = (
+            base_profile.get(invariant_field, base_external.get(invariant_field))
+            if invariant_field == "dataset_revision" else base_profile.get(invariant_field)
+        )
+        cand_value = (
+            cand_profile.get(invariant_field, cand_external.get(invariant_field))
+            if invariant_field == "dataset_revision" else cand_profile.get(invariant_field)
+        )
+        if (base_value is None) != (cand_value is None):
+            # 缺失身份不默认相等（review R08）：一侧冻结、一侧没有 → 阻断。
+            reasons.append(
+                f"IDENTITY_MISSING:{invariant_field}: {base_value!r} vs {cand_value!r}"
+            )
+        elif base_value is not None and base_value != cand_value:
+            reasons.append(
+                f"{code}:{invariant_field}: {base_value!r} -> {cand_value!r}"
+            )
+
+    base_eval = baseline_manifest.get("evaluation")
+    cand_eval = candidate_manifest.get("evaluation")
+    if isinstance(base_eval, dict) and isinstance(cand_eval, dict):
+        for field in ("scorer_id", "scorer_version"):
+            if base_eval.get(field) != cand_eval.get(field):
+                reasons.append(
+                    f"SCORER_CHANGED:{field}: {base_eval.get(field)!r} -> "
+                    f"{cand_eval.get(field)!r}",
+                )
+    return reasons
+
+
 def compare_run_reports(
     baseline_ref: RunReportRef,
     candidate_ref: RunReportRef,
@@ -45,29 +111,8 @@ def compare_run_reports(
     reasons: list[str] = []
     metric_eligibility: dict[str, bool] = {}
 
-    # 逐条件：允许因子之外的差异都阻断整体资格。
-    if baseline_manifest.get("model") != candidate_manifest.get("model"):
-        if "model" not in policy.allowed_factors:
-            reasons.append(
-                f"FACTOR_NOT_ALLOWED:model: {baseline_manifest.get('model')!r} -> "
-                f"{candidate_manifest.get('model')!r}",
-            )
-    base_external = _external(baseline_manifest)
-    cand_external = _external(candidate_manifest)
-    if base_external.get("dataset_revision") != cand_external.get("dataset_revision"):
-        reasons.append(
-            "DATASET_REVISION_CHANGED: "
-            f"{base_external.get('dataset_revision')!r} -> "
-            f"{cand_external.get('dataset_revision')!r}",
-        )
-    base_profile = _profile(baseline_manifest)
-    cand_profile = _profile(candidate_manifest)
-    for key in ("answer_extractor", "extractor_version", "prompt_template_version"):
-        if base_profile.get(key) != cand_profile.get(key):
-            reasons.append(
-                f"EXTRACTOR_OR_PROMPT_CHANGED:{key}: "
-                f"{base_profile.get(key)!r} -> {cand_profile.get(key)!r}",
-            )
+    # 逐条件：允许因子之外的差异都阻断整体资格（R08 的完整字段清单）。
+    reasons.extend(_compare_invariants(baseline_manifest, candidate_manifest, policy))
 
     base_cases = list(baseline_manifest.get("case_ids") or [])
     cand_cases = list(candidate_manifest.get("case_ids") or [])

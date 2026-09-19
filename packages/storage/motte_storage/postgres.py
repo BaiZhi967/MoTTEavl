@@ -327,6 +327,8 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
     """Construct a PostgreSQL store; run Alembic first when migrate=True."""
     from .pg_audit_store import (
         PgAttempts,
+        PgBaselines,
+        PgBenchmarkDatasets,
         PgCommands,
         PgExternalJobs,
         PgInvocations,
@@ -349,4 +351,6 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         commands=PgCommands(normalized),
         invocations=PgInvocations(normalized),
         external_jobs=PgExternalJobs(normalized),
+        benchmark_datasets=PgBenchmarkDatasets(normalized),
+        baselines=PgBaselines(normalized),
     )

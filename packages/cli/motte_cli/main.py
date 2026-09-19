@@ -45,32 +45,61 @@ def _harness_installations() -> dict:
     return reports
 
 
-def _handle_ceval(args: argparse.Namespace) -> int:
-    """C-Eval 外部基准：与 API 共用 benchmark_catalog/预检服务（M2-T07）。"""
+def _load_external_files(items: list[str]) -> tuple[dict[str, bytes] | None, str | None]:
+    files: dict[str, bytes] = {}
+    for item in items:
+        name, sep, path = item.partition("=")
+        if not sep or not name or not path:
+            return (None, "--files 需要 logical_name=path 形式：" + item)
+        files[name] = open(path, "rb").read()  # noqa: SIM115 - CLI 短命令
+    return (files, None)
+
+
+def _handle_external_benchmark(args: argparse.Namespace, benchmark_id: str) -> int:
+    """外部基准（ceval/cmmlu）：与 API 共用 catalog/校验/构造服务。
+
+    准备结果持久化到同一存储（review R13）；run 入队前跑同一校验服务
+    （review R14）；adapter 从同一受控配置加载（review R01）。
+    """
     import json as _json
 
     from motte_benchmark.registry import registered_adapter_ids
-    from motte_sdk.benchmark_catalog import BenchmarkCatalog, prepare_ceval_external_dataset
+    from motte_benchmark.runner_config import ensure_builtin_adapters
+    from motte_sdk.benchmark_catalog import (
+        BENCHMARK_DESCRIPTORS,
+        BenchmarkCatalog,
+        prepare_external_dataset,
+    )
 
-    catalog = BenchmarkCatalog()
-    catalog.register("ceval", benchmark_version="1")
-    adapter_connected = "ceval-opencompass" in registered_adapter_ids()
+    ensure_builtin_adapters()
+    descriptor = BENCHMARK_DESCRIPTORS[benchmark_id]
+    adapter_connected = descriptor.adapter_id in registered_adapter_ids()
+    from motte_storage.factory import create_run_store
 
-    if args.ceval_command == "prepare":
-        files: dict[str, bytes] = {}
-        for item in args.files:
-            name, sep, path = item.partition("=")
-            if not sep or not name or not path:
-                print(f"--files 需要 logical_name=path 形式：{item}", file=sys.stderr)
-                return 2
-            files[name] = open(path, "rb").read()  # noqa: SIM115 - CLI 短命令
-        prepared = prepare_ceval_external_dataset(
+    db_path = getattr(args, "db", None) or os.environ.get("MOTTE_DB_PATH") or "var/runs.db"
+    store = create_run_store(db_path)
+    catalog = BenchmarkCatalog(getattr(store, "benchmark_datasets", None))
+    catalog.register(benchmark_id, benchmark_version=descriptor.benchmark_version)
+
+    command = (
+        getattr(args, "ceval_command", None)
+        or getattr(args, "cmmlu_command", None)
+        or getattr(args, "benchmark_command", None)
+    )
+
+    if command == "prepare":
+        files, usage_error = _load_external_files(args.files)
+        if usage_error:
+            print(usage_error, file=sys.stderr)
+            return 2
+        prepared = prepare_external_dataset(
             files=files, dataset_revision=args.revision,
             provenance_target=args.provenance,
+            benchmark_id=benchmark_id,
         )
-        catalog.update_dataset("ceval", prepared)
-        catalog.mark_profile_validated("ceval", prepared.state == "ready")
-        catalog.mark_runner_connected("ceval", adapter_connected)
+        catalog.update_dataset(benchmark_id, prepared)
+        catalog.mark_profile_validated(benchmark_id, prepared.state == "ready")
+        catalog.mark_runner_connected(benchmark_id, adapter_connected)
         print(_json.dumps({
             "state": prepared.state,
             "provenance": prepared.provenance,
@@ -83,35 +112,57 @@ def _handle_ceval(args: argparse.Namespace) -> int:
         }, ensure_ascii=False))
         return 0 if prepared.state == "ready" else 1
 
-    if args.ceval_command == "preflight":
-        from motte_sdk.context_preflight import external_benchmark_preflight
-        from motte_benchmark.opencompass.parser import RUNNER_VERSION_PIN
-        import hashlib as _hashlib
+    if command == "preflight":
+        # 预检与创建共用同一校验服务与同一输入（review R14），不再固定
+        # state=unprepared。
+        from motte_sdk.benchmark_catalog import validate_external_run_request
 
-        runner_version = f"opencompass-{RUNNER_VERSION_PIN}"
-        report = external_benchmark_preflight(
-            {"selected_subjects": [], "split": "val",
-             "runner_version": runner_version,
-             "environment_digest": "sha256:" + _hashlib.sha256(runner_version.encode()).hexdigest()},
-            {"model": args.model} if args.model else {},
-            dataset={"state": "unprepared", "subjects": [], "split": "val"},
+        dataset = catalog.dataset(benchmark_id)
+        if dataset is None:
+            from motte_sdk.benchmark_catalog import PreparedBenchmarkDataset
+
+            dataset = PreparedBenchmarkDataset(
+                benchmark_id=benchmark_id,
+                benchmark_version=descriptor.benchmark_version,
+                dataset_revision="unprepared",
+                state="unprepared",
+            )
+        resources = _resources(args) if hasattr(args, "db") else None
+        model_record = None
+        model_id = getattr(args, "model", None)
+        if model_id and resources is not None:
+            try:
+                model_record = resources.models.get(model_id)
+            except Exception:  # noqa: BLE001 - 未知模型给原因而不是崩溃
+                model_record = None
+        reasons = validate_external_run_request(
+            dataset,
+            benchmark_id=benchmark_id,
+            model_record=model_record,
+            scope=getattr(args, "scope", "custom-subset") or "custom-subset",
+            split=getattr(args, "split", None),
+            few_shot=int(getattr(args, "few_shot", 0) or 0),
+            few_shot_split=getattr(args, "few_shot_split", None),
             runner_connected=adapter_connected,
         )
-        print(_json.dumps(report, ensure_ascii=False))
-        return 0
+        print(_json.dumps({
+            "ok": not reasons,
+            "reasons": reasons,
+            "runner_connected": adapter_connected,
+            "dataset_state": dataset.state,
+        }, ensure_ascii=False))
+        return 0 if not reasons else 1
 
-    if args.ceval_command == "run":
-        from motte_sdk.benchmark_catalog import prepare_ceval_run_inputs
+    if command == "run":
+        from motte_sdk.benchmark_catalog import prepare_external_run_inputs
 
-        files: dict[str, bytes] = {}
-        for item in args.files:
-            name, sep, path = item.partition("=")
-            if not sep or not name or not path:
-                print(f"--files 需要 logical_name=path 形式：{item}", file=sys.stderr)
-                return 2
-            files[name] = open(path, "rb").read()  # noqa: SIM115 - CLI 短命令
-        prepared = prepare_ceval_external_dataset(
+        files, usage_error = _load_external_files(args.files)
+        if usage_error:
+            print(usage_error, file=sys.stderr)
+            return 2
+        prepared = prepare_external_dataset(
             files=files, dataset_revision=args.revision,
+            benchmark_id=benchmark_id,
         )
         if prepared.state != "ready":
             print(_json.dumps({"error": "DATASET_PREPARE_FAILED",
@@ -119,25 +170,38 @@ def _handle_ceval(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             return 1
         if not adapter_connected:
-            print("RUNNER_NOT_CONNECTED: ceval-opencompass adapter 未注册", file=sys.stderr)
+            print(
+                f"RUNNER_NOT_CONNECTED: {descriptor.adapter_id} adapter 未注册"
+                "（配置 MOTTE_RUNNER_CONFIG 或部署固定环境 wrapper）",
+                file=sys.stderr,
+            )
             return 1
+        resources = _resources(args)
+        model_record = resources.models.get(args.model)
         try:
-            inputs = prepare_ceval_run_inputs(
-                prepared, model_id=args.model, few_shot=args.few_shot,
-                seed=args.seed, scope=args.scope,
+            inputs = prepare_external_run_inputs(
+                prepared,
+                benchmark_id=benchmark_id,
+                model_id=args.model,
+                model_record=model_record,
+                few_shot=int(args.few_shot or 0),
+                seed=int(args.seed or 0),
+                scope=args.scope,
+                split=getattr(args, "split", None),
+                few_shot_split=getattr(args, "few_shot_split", None),
+                resources=resources,
             )
         except ValueError as error:
-            print(f"PROFILE_INVALID: {error}", file=sys.stderr)
+            print(f"RUN_REQUEST_INVALID: {error}", file=sys.stderr)
             return 1
         from motte_sdk.execution_backends import resolve_execution
         from motte_sdk.service import RunService
-        from motte_storage.factory import create_run_store
 
-        db_path = args.db or os.environ.get("MOTTE_DB_PATH") or "var/runs.db"
-        service = RunService(create_run_store(db_path))
-        resolved = resolve_execution(inputs["scenario_version"], inputs["manifest"])
+        service = RunService(store)
+        # 入队前再过一次后端契约（版本钉齐/runner_config 存在），失败即退出。
+        resolve_execution(inputs["scenario_version"], inputs["manifest"])
         run = service.create_run(
-            inputs["scenario_version"], resolved, inputs["case_ids"],
+            inputs["scenario_version"], inputs["manifest"], inputs["case_ids"],
             requested_manifest={"model": args.model, "scope": args.scope},
         )
         print(_json.dumps({"id": run["id"], "status": run["status"],
@@ -146,6 +210,11 @@ def _handle_ceval(args: argparse.Namespace) -> int:
                           ensure_ascii=False))
         return 0
     return 2
+
+
+def _handle_ceval(args: argparse.Namespace) -> int:
+    """C-Eval 外部基准：真实实现见 _handle_external_benchmark。"""
+    return _handle_external_benchmark(args, "ceval")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -232,25 +301,40 @@ def _build_parser() -> argparse.ArgumentParser:
     bench_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     bench_run.add_argument("--json", action="store_true")
 
+    def _add_external_benchmark_subcommands(
+        group: argparse.ArgumentParser, dest: str,
+    ) -> None:
+        subparsers = group.add_subparsers(dest=dest, required=True)
+        prepare = subparsers.add_parser("prepare", help="校验并准备本地 JSONL 数据（来源治理门禁；结果持久化）")
+        prepare.add_argument("--files", required=True, nargs="+",
+                             help="logical_name=path 形式的 JSONL 文件（如 logic_val=./logic.jsonl）")
+        prepare.add_argument("--revision", required=True, help="数据集 revision（非占位）")
+        prepare.add_argument("--provenance", choices=("user-supplied", "verified-official"),
+                             default="user-supplied")
+        preflight = subparsers.add_parser("preflight", help="静态预检（与创建同一校验服务，不触发模型调用）")
+        preflight.add_argument("--model", help="模型档案 id")
+        preflight.add_argument("--scope", choices=("smoke", "custom-subset", "full"), default="custom-subset")
+        preflight.add_argument("--split", help="评测分区（缺省取基准默认）")
+        preflight.add_argument("--few-shot", type=int, default=0)
+        run = subparsers.add_parser("run", help="创建 job-based queued Run（由 Worker 执行，一次一个外部 Job）")
+        run.add_argument("--model", required=True, help="已发布模型档案 id")
+        run.add_argument("--files", required=True, nargs="+",
+                         help="logical_name=path 形式的 JSONL 文件（与 prepare 同一校验服务）")
+        run.add_argument("--revision", required=True, help="数据集 revision")
+        run.add_argument("--few-shot", type=int, default=0)
+        run.add_argument("--few-shot-split", dest="few_shot_split", help="few-shot 示例来源分区")
+        run.add_argument("--split", help="评测分区（缺省取基准默认）")
+        run.add_argument("--seed", type=int, default=0)
+        run.add_argument("--scope", choices=("smoke", "custom-subset", "full"), default="custom-subset")
+        run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+        for command in (prepare, preflight):
+            command.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
     ceval = sub.add_parser("ceval", help="C-Eval 外部基准（job-based；数据准备/预检/创建运行）")
-    ceval_sub = ceval.add_subparsers(dest="ceval_command", required=True)
-    ceval_prepare = ceval_sub.add_parser("prepare", help="校验并准备本地 JSONL 数据（来源治理门禁）")
-    ceval_prepare.add_argument("--files", required=True, nargs="+",
-                               help="logical_name=path 形式的 JSONL 文件（如 logic_val=./logic.jsonl）")
-    ceval_prepare.add_argument("--revision", required=True, help="数据集 revision（非占位）")
-    ceval_prepare.add_argument("--provenance", choices=("user-supplied", "verified-official"),
-                               default="user-supplied")
-    ceval_preflight = ceval_sub.add_parser("preflight", help="静态预检（不触发模型调用）")
-    ceval_preflight.add_argument("--model", help="模型档案 id")
-    ceval_run = ceval_sub.add_parser("run", help="创建 job-based queued Run（由 Worker 执行，一次一个外部 Job）")
-    ceval_run.add_argument("--model", required=True, help="已发布模型档案 id")
-    ceval_run.add_argument("--files", required=True, nargs="+",
-                           help="logical_name=path 形式的 JSONL 文件（与 prepare 同一校验服务）")
-    ceval_run.add_argument("--revision", required=True, help="数据集 revision")
-    ceval_run.add_argument("--few-shot", type=int, default=0)
-    ceval_run.add_argument("--seed", type=int, default=0)
-    ceval_run.add_argument("--scope", choices=("smoke", "custom-subset", "full"), default="custom-subset")
-    ceval_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    _add_external_benchmark_subcommands(ceval, "ceval_command")
+
+    cmmlu = sub.add_parser("cmmlu", help="CMMLU 外部基准（独立身份；数据准备/预检/创建运行）")
+    _add_external_benchmark_subcommands(cmmlu, "cmmlu_command")
 
     direct = sub.add_parser("direct-llm", help="Direct LLM 通用直连评测（导入 JSONL 数据集，创建运行）")
     direct_sub = direct.add_subparsers(dest="direct_command", required=True)
@@ -1021,6 +1105,9 @@ def main(argv=None):
 
     if args.command == "ceval":
         return _handle_ceval(args)
+
+    if args.command == "cmmlu":
+        return _handle_external_benchmark(args, "cmmlu")
 
     if args.command == "benchmark":
         from motte_sdk.benchmark import import_benchmark_split

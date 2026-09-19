@@ -33,7 +33,7 @@ def test_alembic_revision_chain_is_linear_and_complete():
     assert revision_ids() == [
         "0001_initial", "0002_platform_integrity", "0003_resource_publications",
         "0004_multi_metric_score_sets", "0005_agent_invocations",
-        "0006_external_jobs",
+        "0006_external_jobs", "0007_benchmark_datasets",
     ]
     config = alembic_config("postgresql://user@localhost/db")
     assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)

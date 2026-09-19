@@ -43,7 +43,7 @@ def _jsonl(rows):
 
 GOOD_FILES = {
     "logic_val.jsonl": _jsonl([_row("logic-1", "logic"), _row("logic-2", "logic", "B")]),
-    "math_val.jsonl": _jsonl([_row("math-1", "math", "C")]),
+    "law_val.jsonl": _jsonl([_row("law-1", "law", "C")]),
 }
 
 
@@ -157,11 +157,11 @@ def test_prepare_rejects_corrupt_duplicate_and_partial():
     # 声明 checksum 与内容不符 → 不 ready。
     import hashlib
 
-    math_hash = hashlib.sha256(GOOD_FILES["math_val.jsonl"]).hexdigest()
+    law_hash = hashlib.sha256(GOOD_FILES["law_val.jsonl"]).hexdigest()
     mismatched = prepare_ceval_external_dataset(
         files=GOOD_FILES,
         dataset_revision="rev-1",
-        declared_sha256={"logic_val.jsonl": "0" * 64, "math_val.jsonl": math_hash},
+        declared_sha256={"logic_val.jsonl": "0" * 64, "law_val.jsonl": law_hash},
     )
     assert mismatched.state == "failed"
     assert any(reason.startswith("CHECKSUM_MISMATCH") for reason in mismatched.reasons)
@@ -171,7 +171,7 @@ def test_prepare_rejects_corrupt_duplicate_and_partial():
 
     # 重复 case ID（跨学科）→ 不 ready。
     duplicated = dict(GOOD_FILES)
-    duplicated["math_val.jsonl"] = _jsonl([_row("logic-1", "math")])
+    duplicated["law_val.jsonl"] = _jsonl([_row("logic-1", "law")])
     duplicate = prepare_ceval_external_dataset(
         files=duplicated, dataset_revision="rev-1",
     )
@@ -180,7 +180,7 @@ def test_prepare_rejects_corrupt_duplicate_and_partial():
 
     # 半下载：截断 JSONL → 不 ready。
     truncated = dict(GOOD_FILES)
-    truncated["math_val.jsonl"] = GOOD_FILES["math_val.jsonl"][:20]
+    truncated["law_val.jsonl"] = GOOD_FILES["law_val.jsonl"][:20]
     partial = prepare_ceval_external_dataset(
         files=truncated, dataset_revision="rev-1",
     )
@@ -189,7 +189,7 @@ def test_prepare_rejects_corrupt_duplicate_and_partial():
 
     # 空文件 / 声明了却缺失的文件 → 不 ready。
     empty = dict(GOOD_FILES)
-    empty["math_val.jsonl"] = b""
+    empty["law_val.jsonl"] = b""
     no_rows = prepare_ceval_external_dataset(files=empty, dataset_revision="rev-1")
     assert no_rows.state == "failed"
 
@@ -197,10 +197,18 @@ def test_prepare_rejects_corrupt_duplicate_and_partial():
     missing = prepare_ceval_external_dataset(
         files={"logic_val.jsonl": GOOD_FILES["logic_val.jsonl"]},
         dataset_revision="rev-1",
-        declared_sha256={"logic_val.jsonl": logic_hash, "math_val.jsonl": "1" * 64},
+        declared_sha256={"logic_val.jsonl": logic_hash, "law_val.jsonl": "1" * 64},
     )
     assert missing.state == "failed"
-    assert "MISSING_ARTIFACT:math_val.jsonl" in missing.reasons
+    assert "MISSING_ARTIFACT:law_val.jsonl" in missing.reasons
+
+    # 未知学科（不在官方 52 学科清单）→ 拒绝，不静默聚合（review R16 收紧）。
+    alien = prepare_ceval_external_dataset(
+        files={"alien_val.jsonl": _jsonl([_row("x-1", "not-a-ceval-subject")])},
+        dataset_revision="rev-1",
+    )
+    assert alien.state == "failed"
+    assert any(reason.startswith("UNKNOWN_SUBJECT") for reason in alien.reasons)
 
 
 def test_no_gold_partition_marks_unscored():

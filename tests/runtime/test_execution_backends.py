@@ -205,7 +205,8 @@ def test_external_backend_resolves_but_fails_closed_without_adapter():
             "external_benchmark": {"adapter_id": "future", "adapter_version": "1",
                                    "runner_version": "r", "dataset_revision": "rev",
                                    "environment_digest": "d",
-                                   "profile": {"benchmark_id": "b", "benchmark_version": "1"}},
+                                   "profile": {"benchmark_id": "b", "benchmark_version": "1"},
+                                   "runner_config": {"cases": [{"case_id": "c1", "subject": "s"}]}},
             "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
         },
     )

@@ -577,6 +577,8 @@ class RunStore:
     commands: Any = None
     invocations: Any = None
     external_jobs: Any = None
+    benchmark_datasets: Any = None
+    baselines: Any = None
 
 
 def _upgrade_score_sets(connection: sqlite3.Connection) -> None:
@@ -619,6 +621,8 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
             if "revision" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
             _upgrade_score_sets(connection)
+    from .baselines import SQLiteBaselines
+    from .benchmark_datasets import SQLiteBenchmarkDatasets
     from .external_jobs import SQLiteExternalJobs
     from .invocations import SQLiteInvocations
 
@@ -633,6 +637,8 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         commands=SQLiteCommands(path),
         invocations=SQLiteInvocations(path),
         external_jobs=SQLiteExternalJobs(path),
+        benchmark_datasets=SQLiteBenchmarkDatasets(path),
+        baselines=SQLiteBaselines(path),
     )
 
 
@@ -645,6 +651,8 @@ def InMemoryRunStore() -> RunStore:
     cases = _InMemoryCaseRuns(lock)
     score_sets = MemoryScoreSets(lock)
     attempts = MemoryAttempts(runs, cases, events, lock)
+    from .baselines import MemoryBaselines
+    from .benchmark_datasets import MemoryBenchmarkDatasets
     from .external_jobs import MemoryExternalJobs
     from .invocations import MemoryInvocations
 
@@ -659,4 +667,6 @@ def InMemoryRunStore() -> RunStore:
         commands=MemoryCommands(lock),
         invocations=MemoryInvocations(lock),
         external_jobs=MemoryExternalJobs(lock),
+        benchmark_datasets=MemoryBenchmarkDatasets(lock),
+        baselines=MemoryBaselines(lock),
     )

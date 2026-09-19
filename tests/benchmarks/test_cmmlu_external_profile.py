@@ -53,11 +53,15 @@ def test_cmmlu_has_own_identity_and_evidence():
     assert catalog.status("ceval")["status"] == "registered"  # 未继承 ceval 数据
     assert catalog.status("ceval")["blockers"] == ["DATASET_UNPREPARED", "RUNNER_NOT_CONNECTED", "PROFILE_NOT_VALIDATED"]
 
-    # 样本 hash 独立：同内容不同 benchmark 的 manifest 记录互不覆盖。
+    # 学科白名单独立（review R16 收紧）：C-Eval 准备 CMMLU 学科数据被拒，
+    # 不会静默聚合出跨基准清单。
     ceval_prepared = prepare_external_dataset(
         benchmark_id="ceval", files=_files(), dataset_revision="cmmlu-rev-1",
     )
-    assert ceval_prepared.manifest[0].case_id == prepared.manifest[0].case_id
+    assert ceval_prepared.state == "failed"
+    assert any(
+        reason.startswith("UNKNOWN_SUBJECT") for reason in ceval_prepared.reasons
+    )
     assert ceval_prepared.benchmark_id == "ceval"
 
     # 受限官方路径：无受信核验器 → 阻断（独立生效，不读 ceval 结论）。

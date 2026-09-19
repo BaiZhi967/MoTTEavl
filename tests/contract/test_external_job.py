@@ -42,6 +42,10 @@ COMPLETE_EXTERNAL_CONFIG = {
     "profile": {"benchmark_id": "fake-bench", "benchmark_version": "1"},
     "retry_policy": {"runner": 0, "provider_transport": 0, "operator": 0},
     "limits": {"max_wall_seconds": 600},
+    # Runner 可消费的冻结输入（review R01：创建/分派层契约）。
+    "runner_config": {
+        "cases": [{"case_id": f"s-a:{index}", "subject": "s"} for index in range(1, 5)],
+    },
 }
 
 REPLAY_MANIFEST = {

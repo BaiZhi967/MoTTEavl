@@ -850,3 +850,108 @@ class PgExternalJobs:
                 "detected_at": str(row[6]),
             })
         return conflicts
+
+
+class PgBenchmarkDatasets:
+    """PostgreSQL 外部 Benchmark 数据准备结果仓库（review M2-R13）。
+
+    表结构来自 alembic ``0007_benchmark_datasets``；payload 为准备结果的
+    完整 JSON dump（清单/逐行内容/治理证据），按
+    ``(benchmark_id, dataset_revision)`` 幂等覆盖。
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def put(self, record: dict[str, Any]) -> dict[str, Any]:
+        stored = deepcopy(record)
+        benchmark_id = str(stored.get("benchmark_id"))
+        dataset_revision = str(stored.get("dataset_revision"))
+        stored.setdefault("created_at", _utc_now())
+        created_at = str(stored.get("created_at"))
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO benchmark_datasets(benchmark_id, dataset_revision, payload, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (benchmark_id, dataset_revision) DO UPDATE SET payload = EXCLUDED.payload, created_at = EXCLUDED.created_at",  # noqa: E501
+                    (benchmark_id, dataset_revision, Json(stored), created_at),
+                )
+        return deepcopy(stored)
+
+    def get(self, benchmark_id: str, dataset_revision: str) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s AND dataset_revision = %s",  # noqa: E501
+                    (benchmark_id, dataset_revision),
+                )
+                row = cursor.fetchone()
+        return _as_payload(row[0]) if row is not None else None
+
+    def latest(self, benchmark_id: str) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s ORDER BY created_at DESC, position DESC LIMIT 1",  # noqa: E501
+                    (benchmark_id,),
+                )
+                row = cursor.fetchone()
+        return _as_payload(row[0]) if row is not None else None
+
+    def list(self, benchmark_id: str | None = None) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                if benchmark_id is None:
+                    cursor.execute(
+                        "SELECT payload FROM benchmark_datasets ORDER BY position",
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s ORDER BY position",  # noqa: E501
+                        (benchmark_id,),
+                    )
+                rows = cursor.fetchall()
+        return [_as_payload(row[0]) for row in rows]
+
+
+class PgBaselines:
+    """PostgreSQL baseline 快照仓库（review M2-R12）；写入后不可变。"""
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def put(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        stored = deepcopy(snapshot)
+        snapshot_id = str(stored.get("id"))
+        run_id = str(stored.get("run_id"))
+        pass_id = str(stored.get("scoring_pass_id"))
+        stored.setdefault("created_at", _utc_now())
+        message = "baseline snapshots are immutable: " + snapshot_id
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM baseline_snapshots WHERE id = %s", (snapshot_id,))
+                if cursor.fetchone() is not None:
+                    raise ValueError(message)
+                cursor.execute(
+                    "INSERT INTO baseline_snapshots(id, run_id, scoring_pass_id, metrics, payload) VALUES (%s, %s, %s, %s, %s)",  # noqa: E501
+                    (snapshot_id, run_id, pass_id, Json(stored.get("metrics")), Json(stored)),
+                )
+        return deepcopy(stored)
+
+    def get(self, snapshot_id: str) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM baseline_snapshots WHERE id = %s", (snapshot_id,),
+                )
+                row = cursor.fetchone()
+        return _as_payload(row[0]) if row is not None else None
+
+    def get_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM baseline_snapshots WHERE run_id = %s ORDER BY position",  # noqa: E501
+                    (run_id,),
+                )
+                rows = cursor.fetchall()
+        return [_as_payload(row[0]) for row in rows]

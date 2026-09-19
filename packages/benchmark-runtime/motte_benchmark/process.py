@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import sys
 import threading
 from collections.abc import Mapping
@@ -44,6 +45,9 @@ from motte_sandbox.workspace import CaseWorkspace, WorkspacePolicyError
 from .protocol import DEFAULT_JOB_LIMITS, BenchmarkRuntimeError
 
 RESULTS_NAME = "results.json"
+# 受 wrapper/Runner 承诺的完成标记（review R10）：恢复路径只信该标记——
+# 存在部分输出而无标记一律 indeterminate，不升级为成功。
+COMPLETION_MARKER = ".motte-job-complete"
 TOKEN_ENV = "MOTTE_LAUNCH_TOKEN"
 _WIN_CREATE_NEW_PROCESS_GROUP = 0x00000200
 _READ_CHUNK = 65536
@@ -149,22 +153,6 @@ class ProcessJobAdapter:
                 merged[key] = value
         return merged
 
-    def _resolved_argv(
-        self, spec: ExternalJobSpec, handle: ExternalJobHandle,
-    ) -> list[str]:
-        base = (
-            self._argv
-            if self._argv is not None
-            else [sys.executable, "-m", self._module]
-        )
-        replacements = {
-            "work_dir": handle.work_dir,
-            "job_id": handle.job_id,
-            "run_id": spec.run_id,
-            "launch_token": handle.launch_token,
-        }
-        return [part.format(**replacements) for part in base]
-
     def start(
         self, spec: ExternalJobSpec, handle: ExternalJobHandle,
     ) -> ExternalJobHandle:
@@ -172,24 +160,33 @@ class ProcessJobAdapter:
             raise BenchmarkRuntimeError(
                 "START_TOKEN_MISSING", "start requires a persisted launch_token",
             )
-        if not os.path.isdir(handle.work_dir):
+        # 子进程拿到的 work_dir 一律绝对化：相对 work_root 下 cwd 即工作目录，
+        # 相对 MOTTE_WORK_DIR 会在 child 里解析到错误位置（review R01 链路）。
+        work_dir = os.path.abspath(handle.work_dir)
+        if not os.path.isdir(work_dir):
             raise BenchmarkRuntimeError(
-                "WORKDIR_INVALID", f"work dir is not prepared: {handle.work_dir}",
+                "WORKDIR_INVALID", f"work dir is not prepared: {work_dir}",
             )
-        argv = self._resolved_argv(spec, handle)
+        replacements = {
+            "work_dir": work_dir,
+            "job_id": handle.job_id,
+            "run_id": spec.run_id,
+            "launch_token": handle.launch_token,
+        }
+        argv = [part.format(**replacements) for part in self._base_argv()]
         child_env = {
             **os.environ,
             **self._extra_env,
             TOKEN_ENV: handle.launch_token,
             "MOTTE_JOB_ID": handle.job_id,
             "MOTTE_RUN_ID": spec.run_id,
-            "MOTTE_WORK_DIR": handle.work_dir,
+            "MOTTE_WORK_DIR": work_dir,
         }
 
         def _spawn() -> Any:
             async def go() -> Any:
                 options: dict[str, Any] = {
-                    "cwd": handle.work_dir,
+                    "cwd": work_dir,
                     "env": child_env,
                     "stdout": asyncio.subprocess.PIPE,
                     "stderr": asyncio.subprocess.PIPE,
@@ -238,6 +235,13 @@ class ProcessJobAdapter:
                 "observed_via": "argv-token",
             },
         })
+
+    def _base_argv(self) -> list[str]:
+        return (
+            self._argv
+            if self._argv is not None
+            else [sys.executable, "-m", str(self._module)]
+        )
 
     def spawned_processes(self) -> list[int]:
         return list(self._pid_order)
@@ -362,6 +366,34 @@ class ProcessJobAdapter:
         except OSError:
             return False
 
+    def _completion_marker(self, handle: ExternalJobHandle) -> dict[str, Any] | None:
+        """读取可信完成标记；缺失/损坏/symlink 一律视为无标记（R10）。"""
+        try:
+            target = Path(handle.work_dir) / COMPLETION_MARKER
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(target, flags)
+        except OSError:
+            return None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+                return None
+            with os.fdopen(fd, "r", encoding="utf-8") as handle_file:
+                fd = -1
+                data = json.loads(handle_file.read())
+        except (OSError, ValueError):
+            return None
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        if (
+            isinstance(data, dict)
+            and data.get("completed") is True
+            and isinstance(data.get("exit_code"), int)
+        ):
+            return data
+        return None
+
     def poll(self, handle: ExternalJobHandle) -> ExternalJobHandle:
         proc = self._owned_proc(handle)
         if proc is not None:
@@ -376,20 +408,27 @@ class ProcessJobAdapter:
         if pid is not None and self._verify_identity(pid, handle.launch_token):
             # 进程仍在且 argv 携带本 token：只观察，不重启。
             return handle.model_copy(update={"status": ExternalJobStatus.active})
-        if self._results_present(handle):
-            # 进程已不在（或 PID 已被复用），但本 Job 的受控产物存在。
+        marker = self._completion_marker(handle)
+        if marker is not None:
+            # 进程不可核验，但 wrapper 落了可信完成标记：按标记的退出码定级。
+            exit_code = int(marker["exit_code"])
+            resources = {**handle.owned_resources, "exit_code": exit_code}
+            status = ExternalJobStatus.settled if exit_code == 0 else ExternalJobStatus.failed
             return handle.model_copy(update={
-                "status": ExternalJobStatus.settled,
+                "status": status,
+                "owned_resources": resources,
                 "launch_identity": {
                     **handle.launch_identity,
-                    "observed_via": "results-only",
-                    "exit_code_unobserved": True,
+                    "observed_via": "completion-marker",
+                    "exit_code_unobserved": False,
                 },
             })
         self.events.append({
             "event": "identity_unverified", "job_id": handle.job_id,
             "pid": pid, "at": _now_iso(),
+            "partial_outputs": self._results_present(handle),
         })
+        # 无可信完成标记：部分输出不能证明成功退出，保持不确定（R10）。
         return handle.model_copy(update={"status": ExternalJobStatus.indeterminate})
 
     # ------------------------------------------------------------------ 中断

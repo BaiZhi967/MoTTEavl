@@ -399,6 +399,15 @@ def validate_external_job_manifest(manifest: dict[str, Any]) -> None:
             for name in ("benchmark_id", "benchmark_version")
             if not str(profile.get(name) or "").strip()
         )
+    runner_config = external.get("runner_config")
+    if (
+        not isinstance(runner_config, dict)
+        or not isinstance(runner_config.get("cases"), list)
+        or not runner_config.get("cases")
+    ):
+        # Runner 必须拿到可消费的冻结输入（review R01）：没有逐题配置的
+        # 外部 Run 在创建层拒绝，不留到分派时空跑。
+        missing.append("runner_config.cases")
     if missing:
         raise ExecutionBackendError(
             "EXTERNAL_JOB_VERSION_REQUIRED",
@@ -443,6 +452,7 @@ def external_job_spec_from_run(run: dict[str, Any], *, work_root: str) -> Extern
             environment_digest=str(external.get("environment_digest") or ""),
             limits=deepcopy(external.get("limits")) or {},
             retry_policy=deepcopy(external.get("retry_policy")) or {},
+            runner_config=deepcopy(external.get("runner_config")) or {},
         )
     except ValidationError as error:
         raise ExecutionBackendError(

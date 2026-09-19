@@ -25,7 +25,8 @@ DEFAULT_JOB_LIMITS: dict[str, Any] = {
     "max_result_bytes": 10_485_760,
     # interrupt 的 TERM→KILL 宽限秒数。
     "interrupt_grace_seconds": 5.0,
-    # supervisor 轮询间隔与总执行期限；max_wall_seconds=None 表示不限时。
+    # supervisor 轮询间隔与总执行期限。公开创建路径未声明时也给挂起 Job
+    # 一个有限上界（review R05：不能无限占用资源/持续调用模型）。
     "poll_interval_seconds": 0.1,
-    "max_wall_seconds": None,
+    "max_wall_seconds": 3600.0,
 }

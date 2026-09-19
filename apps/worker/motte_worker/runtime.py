@@ -36,6 +36,11 @@ class WorkerLoop:
         self.dispatcher = RunDispatcher(service)
         self.reporter = reporter or WorkerReporter()
         self._execution_lock_held = execution_lock_held
+        # Worker 与 API/CLI 从同一受控配置加载外部 Job adapter（review R01）：
+        # 未配置时 adapter 不注册，外部 Run 在分派层 RUNNER_NOT_CONNECTED。
+        from motte_benchmark.runner_config import ensure_builtin_adapters
+
+        ensure_builtin_adapters()
         self._db_path = getattr(service.store.runs, "_path", None)
         self._postgres_dsn = getattr(service.store.runs, "_dsn", None)
         self._storage_backend = "postgres" if self._postgres_dsn is not None else (

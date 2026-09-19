@@ -39,6 +39,13 @@ EXTERNAL_CONFIG = {
     "profile": {"benchmark_id": "fake-bench", "benchmark_version": "1"},
     "retry_policy": {"runner": 0, "provider_transport": 0, "operator": 0},
     "limits": {"poll_interval_seconds": 0.05},
+    # 创建/分派层要求 Runner 可消费的冻结输入（review R01）；
+    # process-fake 适配器不读取它，仅满足契约。
+    "runner_config": {
+        "cases": [
+            {"case_id": f"s-a:{index}", "subject": "s"} for index in range(1, 5)
+        ],
+    },
 }
 
 RECORD_A = {"case_id": "s-a:1", "status": "succeeded", "output": {"prediction": "A"}}
@@ -203,8 +210,8 @@ def test_durable_dispatch_import_and_crash_recovery(tmp_path):
         job_rows = jobs.jobs_for_run(run["id"])
         assert len(job_rows) == 1 and job_rows[0]["status"] == "settled"
         assert len(jobs.list_records(job_rows[0]["job_id"])) == 4
-        # 冻结的 outcome 工件存在且可读回。
-        outcome_files = list((tmp_path / "artifacts").rglob("outcome.json"))
+        # 冻结的 outcome 工件存在且可读回（内容寻址路径，review R04）。
+        outcome_files = list((tmp_path / "artifacts").rglob("outcome-*.json"))
         assert len(outcome_files) == 1
         payload = json.loads(outcome_files[0].read_text(encoding="utf-8"))
         assert payload["job_status"] == "settled"

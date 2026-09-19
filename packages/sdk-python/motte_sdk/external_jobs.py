@@ -2,10 +2,21 @@
 
 应用层持有调度主权：先持久化启动意图（含 launch_token）再调用
 adapter.start；恢复路径只观察/采集，绝不重启。``DurableExternalJobRunner``
-把 supervisor 装配到 Job 存储与 Artifact 冻结上：outcome 先冻结为受控
-不可变工件，再按 job_id + record key + parser_version 幂等导入；同键不同
-内容是 conflict，停止最终化并保留两份摘要。取消后的迟到结果只作审计
-证据，终态不复活。
+把 supervisor 装配到 Job 存储与 Artifact 冻结上。
+
+review 修复后的最终化顺序（R04）：
+
+1. **证据冻结**（内容寻址，同内容同路径、不同内容不同路径——绝不把
+   原始完整证据覆盖成截断版本）：outcome 与原始输出 bundle 先落受控
+   不可变 Artifact；
+2. **幂等导入**（同键同内容 no-op，同键不同内容 conflict 并保留两份摘要）；
+3. **checkpoint 提交**（cursor 指标、证据引用、``import_completed`` 标记）；
+4. **最后才写终态**。导入中途崩溃时 Job 仍是非终态，恢复路径重新采集
+   并幂等补齐，不重复启动。
+
+观察循环消费**持久取消**请求（R05）：跨进程的 cancel 只落库也能在有
+限时间内中断已核验所有权的进程。取消后的迟到结果只作审计证据，终态
+不复活。
 """
 from __future__ import annotations
 
@@ -26,6 +37,11 @@ from motte_contracts.external_job import (
 # 通用进程 Job 的导入 parser 版本；C-Eval/CMMLU 迁入后由各自 parser 提供。
 GENERIC_PARSER_VERSION = "process-generic@1"
 
+_TERMINAL_JOB_STATUSES = {"settled", "failed", "cancelled", "indeterminate"}
+# 原始证据 bundle 的内容预算：单文件 8 MiB、总量 64 MiB；超出只存 hash。
+_RAW_FILE_BUDGET = 8 * 1024 * 1024
+_RAW_TOTAL_BUDGET = 64 * 1024 * 1024
+
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
@@ -40,11 +56,15 @@ def _canonical_hash(payload: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _short(digest: str) -> str:
+    return digest.replace("sha256:", "")[:16]
+
+
 class ExternalJobSupervisor:
     """单 Job 生命周期监督：launch / run / recover。
 
-    ``intent_journal`` 是启动意图的持久化通道（T03 替换为 Job 存储事务）；
-    写入顺序必须是 launch_intent → adapter.start → launch_started。
+    ``intent_journal`` 是启动意图的持久化通道；写入顺序必须是
+    launch_intent → adapter.start → launch_started。
     """
 
     def __init__(
@@ -95,14 +115,20 @@ class ExternalJobSupervisor:
         })
         return started
 
-    def run(self, spec: ExternalJobSpec) -> dict[str, Any]:
+    def run(
+        self, spec: ExternalJobSpec,
+        *, should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """一次完整执行：launch 后观察至终态并采集。"""
         handle = self.launch(spec)
-        return self.observe(spec, handle)
+        return self.observe(spec, handle, should_cancel=should_cancel)
 
-    def recover(self, spec: ExternalJobSpec, persisted_handle: ExternalJobHandle) -> dict[str, Any]:
+    def recover(
+        self, spec: ExternalJobSpec, persisted_handle: ExternalJobHandle,
+        *, should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """崩溃恢复：只观察/采集，不 start；token 不可核验时 indeterminate。"""
-        return self.observe(spec, persisted_handle)
+        return self.observe(spec, persisted_handle, should_cancel=should_cancel)
 
     def interrupt(self, spec: ExternalJobSpec, handle: ExternalJobHandle) -> dict[str, Any]:
         """操作员取消：先中断本 Job 拥有的进程，再尽力采集部分工件。"""
@@ -119,17 +145,35 @@ class ExternalJobSupervisor:
     # ------------------------------------------------------------------ 观察
 
     def observe(
-        self, spec: ExternalJobSpec, handle: ExternalJobHandle,
+        self,
+        spec: ExternalJobSpec,
+        handle: ExternalJobHandle,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         poll_interval = float(
             spec.limits.get("poll_interval_seconds", self.poll_interval_seconds),
         )
-        max_wall = spec.limits.get("max_wall_seconds")
+        max_wall = spec.limits.get(
+            "max_wall_seconds", self.adapter.default_limits.get("max_wall_seconds")
+            if hasattr(self.adapter, "default_limits") else None,
+        )
         deadline = (
             self._monotonic() + float(max_wall)
             if isinstance(max_wall, (int, float)) else None
         )
         while True:
+            # 持久取消请求（R05）：另一进程/实例落库的取消在这里被消费。
+            if should_cancel is not None and should_cancel():
+                cancelled = self.adapter.interrupt(handle)
+                results, error = self._collect_quiet(cancelled)
+                return {
+                    "job_status": "cancelled",
+                    "results": results,
+                    "error": error,
+                    "handle": cancelled.model_dump(mode="json"),
+                    "cursor": dict(self.last_cursor or {}),
+                }
             handle = self.adapter.poll(handle)
             if handle.status != ExternalJobStatus.active:
                 break
@@ -150,17 +194,22 @@ class ExternalJobSupervisor:
             self._sleep(max(poll_interval, 0.01))
 
         if handle.status == ExternalJobStatus.indeterminate:
+            # 无可信完成标记：保留部分采集为审计证据，结论保持不确定（R10）。
+            results, collect_error = self._collect_quiet(handle)
             return {
                 "job_status": "indeterminate",
-                "results": [],
+                "results": results,
                 "error": {
                     "code": "JOB_OUTCOME_INDETERMINATE",
                     "message": (
                         "job process cannot be verified by launch token and no "
-                        "controlled results exist; never restarted automatically"
+                        "trusted completion marker exists; partial results are "
+                        "kept as audit evidence; never restarted automatically"
                     ),
+                    "details": {"collect_error": collect_error},
                 },
                 "handle": handle.model_dump(mode="json"),
+                "cursor": dict(self.last_cursor or {}),
             }
 
         results, collect_error = self._collect_quiet(handle)
@@ -183,18 +232,24 @@ class ExternalJobSupervisor:
     def _collect_quiet(
         self, handle: ExternalJobHandle,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        """采集并转成 outcome 载荷；采集失败记录错误而不是抛出。"""
+        """采集并转成 outcome 载荷；解析前先快照原始输出 hash（R09）。"""
+        cursor = dict(handle.collection_cursor or {})
+        snapshotter = getattr(self.adapter, "snapshot_outputs", None)
+        if callable(snapshotter):
+            try:
+                cursor["raw_evidence"] = snapshotter(handle)
+            except Exception:  # noqa: BLE001 - 快照失败不阻断采集
+                cursor["raw_evidence"] = {"complete": False, "files": {}}
         try:
-            results, cursor = self.adapter.collect(
-                handle, dict(handle.collection_cursor or {}),
-            )
+            results, collected = self.adapter.collect(handle, cursor)
         except Exception as error:  # noqa: BLE001 - 采集失败进入证据
+            self.last_cursor = cursor
             return ([], {
                 "code": getattr(error, "code", "JOB_COLLECT_FAILED"),
                 "message": str(error),
             })
         payload = [item.model_dump(mode="json") for item in results]
-        self.last_cursor = dict(cursor or {})
+        self.last_cursor = dict(collected or {})
         return (payload, None)
 
 
@@ -202,9 +257,9 @@ class DurableExternalJobRunner:
     """job 模式入口装配：supervisor + Job 存储 + Artifact 冻结 + 幂等导入。
 
     作为 ``ExecutionHandle.run_job`` 使用：同一 Run 再次进入（崩溃后重派）
-    时，已有可恢复 Job 只观察/采集，绝不重新启动；outcome 先冻结为受控
-    Artifact，再逐条幂等导入（同键同内容 no-op，同键不同内容 conflict 并
-    把结局改为 failed）。取消后 ``import_late_results`` 只写审计事件。
+    时，已有可恢复 Job 只观察/采集，绝不重新启动；终态且
+    ``checkpoint.import_completed`` 的 Job 从已导入记录重建 outcome（快路径），
+    终态但导入未完成的 Job 重新采集并幂等补齐（R04）。
     """
 
     def __init__(
@@ -251,7 +306,7 @@ class DurableExternalJobRunner:
                 "launch_token": handle.get("launch_token"),
                 "spec": record.get("spec") or {},
                 "handle": handle,
-                "checkpoint": {},
+                "checkpoint": {"import_completed": False},
             })
         elif event == "launch_started":
             handle = record.get("handle") or {}
@@ -274,6 +329,24 @@ class DurableExternalJobRunner:
 
     # ---------------------------------------------------------------- 执行
 
+    def _should_cancel(self, run_id: str, job_id: str) -> bool:
+        """跨进程持久取消（R05）：消费 run 的 cancellation 与 job 的取消状态。"""
+        if self._service is not None:
+            store = getattr(self._service, "store", None)
+            runs = getattr(store, "runs", None)
+            if runs is not None:
+                try:
+                    run = runs.get(run_id)
+                except Exception:  # noqa: BLE001 - 读取失败不影响观察
+                    run = None
+                if run is not None and run.get("cancellation"):
+                    return True
+        if job_id:
+            job = self.job_store.get_job(job_id)
+            if job is not None and str(job.get("status")) == "cancelled":
+                return True
+        return False
+
     def __call__(self, run: dict[str, Any]) -> dict[str, Any]:
         from .execution_backends import external_job_spec_from_run
 
@@ -283,26 +356,78 @@ class DurableExternalJobRunner:
             # 一个 Run 只启动一个 Job：已有记录就绝不再次 start。
             persisted = existing[-1]
             status = str(persisted.get("status") or "")
-            if status in {"launching", "active", "collecting"}:
-                handle = ExternalJobHandle.model_validate(persisted.get("handle") or {})
-                outcome = self.supervisor.recover(spec, handle)
-            else:
-                # 终态 Job（采集后、最终化前崩溃）：从已导入记录重建 outcome，
-                # 再次导入同键同内容为 no-op，不产生重复评分/工件关联。
+            checkpoint = persisted.get("checkpoint") or {}
+            if status in _TERMINAL_JOB_STATUSES and checkpoint.get("import_completed"):
+                # 快路径：终态且导入完成，从已导入记录重建 outcome。
                 records = self.job_store.list_records(str(persisted.get("job_id") or ""))
                 outcome = {
                     "job_status": status,
                     "results": [dict(record.get("payload") or {}) for record in records],
-                    "error": None,
+                    "error": (checkpoint.get("outcome_error") or None),
                     "handle": persisted.get("handle") or {},
+                    "cursor": dict(checkpoint.get("cursor") or {}),
                     "recovered_from": "job-store",
                 }
+            else:
+                # 非终态，或终态但导入未完成（R04）：重新观察/采集，幂等补齐。
+                handle = ExternalJobHandle.model_validate(persisted.get("handle") or {})
+                job_id = str(persisted.get("job_id") or handle.job_id)
+                outcome = self.supervisor.recover(
+                    spec, handle,
+                    should_cancel=lambda: self._should_cancel(spec.run_id, job_id),
+                )
+                if status == "cancelled":
+                    # 取消是操作员终局：观察到的其他结局只作审计，不复活。
+                    outcome["job_status"] = "cancelled"
         else:
-            # 启动意图（含新 launch_token）先落 Job 存储再 start。
+            # 启动意图（含新 launch_token）先落 Job 存储再 start；observe 的
+            # should_cancel 绑定到实际 job_id，消费跨进程持久取消（R05）。
             self.supervisor.intent_journal = self._journal
-            outcome = self.supervisor.run(spec)
-        outcome = self._settle(spec, outcome)
-        return outcome
+            launched = self.supervisor.launch(spec)
+            outcome = self.supervisor.observe(
+                spec, launched,
+                should_cancel=lambda: self._should_cancel(
+                    spec.run_id, str(launched.job_id),
+                ),
+            )
+        return self._settle(spec, outcome)
+
+    # -------------------------------------------------------------- 证据冻结
+
+    def _raw_output_bundle(self, handle: dict[str, Any]) -> dict[str, Any]:
+        """受控工作目录里的原始输出（hash+受预算内容），供重新解析/审计。"""
+        work_dir = str(handle.get("work_dir") or "")
+        if not work_dir:
+            return {"complete": False, "files": {}, "note": "no work dir"}
+        try:
+            from motte_sandbox.workspace import CaseWorkspace
+
+            workspace = CaseWorkspace(Path(work_dir), anchor=Path(work_dir).parent)
+            rels = sorted(
+                rel for rel in workspace.list_files() if rel.startswith("outputs/")
+            )
+        except Exception:  # noqa: BLE001 - 工作目录缺失/被清理：如实记录
+            return {"complete": False, "files": {}, "note": "work dir unavailable"}
+        files: dict[str, Any] = {}
+        total = 0
+        for rel in rels:
+            try:
+                content = workspace.read_text(rel, max_bytes=_RAW_FILE_BUDGET + 1)
+            except Exception:  # noqa: BLE001 - 单文件读取失败保留其余证据
+                files[rel] = {"sha256": None, "size": None, "content": None,
+                              "note": "unreadable"}
+                continue
+            encoded = content.encode("utf-8")
+            digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
+            entry: dict[str, Any] = {"sha256": digest, "size": len(encoded)}
+            if len(encoded) <= _RAW_FILE_BUDGET and total + len(encoded) <= _RAW_TOTAL_BUDGET:
+                entry["content"] = content
+                total += len(encoded)
+            else:
+                entry["content"] = None
+                entry["note"] = "content over budget; hash only"
+            files[rel] = entry
+        return {"complete": bool(files), "files": files}
 
     def _settle(self, spec: ExternalJobSpec, outcome: dict[str, Any]) -> dict[str, Any]:
         handle = outcome.get("handle") or {}
@@ -310,30 +435,51 @@ class DurableExternalJobRunner:
         status = str(outcome.get("job_status") or "indeterminate")
         if not job_id:
             return outcome
-        if status in {"settled", "failed", "cancelled", "indeterminate"}:
-            # cancelled 是操作员终局：中断后迟到的 failed/indeterminate 观察
-            # 不覆盖取消状态（原子条件更新，终态不复活也不降级）。
-            applied = self.job_store.update_job(
-                job_id, {"status": status, "handle": handle},
-                guard_status_not="cancelled",
-            )
-            if applied is None:
-                self.job_store.update_job(job_id, {"handle": handle})
-        # 原始 outcome 先冻结为受控不可变 Artifact，再进入导入。
-        artifact_id: str | None = None
+        cursor = dict(outcome.get("cursor") or {})
+
+        # (1) 证据冻结（R04/R09）：内容寻址路径，同内容幂等、不同内容不覆盖。
+        evidence: dict[str, Any] = {}
         if self.artifacts is not None:
-            frozen = {
+            frozen_outcome = {
                 "job_status": status,
                 "results": outcome.get("results") or [],
                 "error": outcome.get("error"),
                 "spec": spec.model_dump(mode="json"),
                 "handle": handle,
+                "cursor": {
+                    key: value for key, value in cursor.items()
+                    if key != "raw_evidence"
+                },
             }
-            artifact = self.artifacts.put_bytes(
-                f"external-jobs/{spec.run_id}/{job_id}/outcome.json",
-                json.dumps(frozen, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            outcome_digest = _canonical_hash(frozen_outcome)
+            outcome_path = (
+                f"external-jobs/{spec.run_id}/{job_id}/outcome-{_short(outcome_digest)}.json"
             )
-            artifact_id = artifact.id
+            outcome_artifact = self.artifacts.put_bytes(
+                outcome_path,
+                json.dumps(frozen_outcome, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            )
+            bundle = self._raw_output_bundle(handle)
+            pre_snapshot = cursor.get("raw_evidence") or {}
+            if isinstance(pre_snapshot, dict):
+                bundle["hashes_before_parse"] = pre_snapshot
+            bundle_digest = _canonical_hash(bundle)
+            bundle_path = (
+                f"external-jobs/{spec.run_id}/{job_id}/evidence/raw-{_short(bundle_digest)}.json"
+            )
+            bundle_artifact = self.artifacts.put_bytes(
+                bundle_path,
+                json.dumps(bundle, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            )
+            evidence = {
+                "outcome_artifact": outcome_artifact.id,
+                "outcome_sha256": outcome_artifact.sha256,
+                "raw_bundle_artifact": bundle_artifact.id,
+                "raw_bundle_sha256": bundle_artifact.sha256,
+                "raw_files": sorted(bundle.get("files") or {}),
+            }
+
+        # (2) 幂等导入（R04：终态之前；崩溃时 Job 仍非终态，恢复可补齐）。
         imported = 0
         conflicts: list[dict[str, Any]] = []
         for item in outcome.get("results") or []:
@@ -352,7 +498,8 @@ class DurableExternalJobRunner:
                     "existing": result.get("existing"),
                     "incoming": result.get("incoming"),
                 })
-        cursor = outcome.get("cursor") or {}
+
+        # (3) checkpoint：cursor 指标 + 证据引用 + import_completed（R04/R09）。
         metrics: dict[str, Any] = {}
         if isinstance(cursor.get("ceval_native"), dict):
             metrics["native"] = cursor["ceval_native"]
@@ -360,11 +507,40 @@ class DurableExternalJobRunner:
             metrics["diagnostic"] = cursor["ceval_diagnostic"]
         if isinstance(cursor.get("parser_version"), str):
             metrics["parser_version"] = cursor["parser_version"]
+        current = self.job_store.get_job(job_id) or {}
+        checkpoint = dict(current.get("checkpoint") or {})
+        checkpoint.update({
+            "cursor": {
+                "parser_version": cursor.get("parser_version"),
+                "ceval_native": cursor.get("ceval_native"),
+                "ceval_diagnostic": cursor.get("ceval_diagnostic"),
+                "records_consumed": cursor.get("records_consumed"),
+            },
+            "evidence": evidence,
+            "import_completed": True,
+        })
+        if conflicts:
+            checkpoint["import_error"] = {
+                "code": "EXTERNAL_IMPORT_CONFLICT",
+                "conflicts": conflicts[:10],
+            }
+        self.job_store.update_job(job_id, {"checkpoint": checkpoint})
+
+        # (4) 终态最后写（R04）：cancelled 原子保护，终态不复活也不降级。
+        if status in _TERMINAL_JOB_STATUSES:
+            applied = self.job_store.update_job(
+                job_id, {"status": status, "handle": handle},
+                guard_status_not="cancelled",
+            )
+            if applied is None:
+                self.job_store.update_job(job_id, {"handle": handle})
+
         outcome["import"] = {
             "job_id": job_id,
             "imported": imported,
             "conflicts": conflicts,
-            "artifact": artifact_id,
+            "artifact": evidence.get("outcome_artifact"),
+            "evidence": evidence,
             "parser_version": self.parser_version,
             "metrics": metrics,
         }
@@ -377,6 +553,9 @@ class DurableExternalJobRunner:
                            "both summaries are preserved in the conflict ledger",
                 "details": {"conflicts": conflicts[:10]},
             }
+            self.job_store.update_job(job_id, {"checkpoint": {
+                **checkpoint, "outcome_error": outcome["error"],
+            }})
         return outcome
 
     # -------------------------------------------------------------- 取消

@@ -33,6 +33,15 @@ def _ceval_run(service, model, case_ids, scores_by_case, extractor="e1", revisio
             "run_id": run["id"], "case_id": case_id,
             "outcome": "responded", "result": {"prediction": "A", "gold": "A"},
         })
+    # 固定报告（review R12）：比较/Gate 消费不可变 ScoringPass，而非现场
+    # 重算 case_runs——没有 pass 的 Run 不能冒充已固定报告。
+    service._append_scoring_pass(
+        run["id"],
+        [{"case_id": case_id, "passed": passed}
+         for case_id, passed in scores_by_case.items()],
+        source="test-fixation",
+        final_status="completed",
+    )
     return run
 
 

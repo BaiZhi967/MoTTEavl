@@ -1480,23 +1480,38 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         return service.create_run(scenario, prepared, case_ids, requested_manifest=manifest)
 
-    # ------------------------------------------- 外部 Benchmark（job-based C-Eval，M2-T07）
+    # ------------------------------------------- 外部 Benchmark（job-based C-Eval/CMMLU，M2-T07 + review R01/R13/R14/R16）
 
     from motte_benchmark.registry import registered_adapter_ids
-    from motte_sdk.benchmark_catalog import BenchmarkCatalog, prepare_ceval_external_dataset
+    from motte_benchmark.runner_config import ensure_builtin_adapters
+    from motte_sdk.benchmark_catalog import (
+        BENCHMARK_DESCRIPTORS,
+        BenchmarkCatalog,
+        external_environment_digest,
+        external_runner_version,
+        prepare_external_dataset,
+        prepare_external_run_inputs,
+        validate_external_run_request,
+    )
 
-    CEVAL_ADAPTER_ID = "ceval-opencompass"
-
-    application.state.external_catalog = external_catalog = BenchmarkCatalog()
-    external_catalog.register("ceval", benchmark_version="1")
-
-    def _external_catalog_sync() -> None:
-        external_catalog.mark_runner_connected(
-            "ceval", CEVAL_ADAPTER_ID in registered_adapter_ids(),
+    # API/Worker/CLI 从同一受控配置加载 adapter（review R01/R13）。
+    ensure_builtin_adapters()
+    _EXTERNAL_BENCHMARKS = ("ceval", "cmmlu")
+    external_catalog = BenchmarkCatalog(getattr(service.store, "benchmark_datasets", None))
+    for _benchmark_id in _EXTERNAL_BENCHMARKS:
+        external_catalog.register(
+            _benchmark_id,
+            benchmark_version=BENCHMARK_DESCRIPTORS[_benchmark_id].benchmark_version,
         )
 
-    @application.post("/api/v1/benchmarks/external/ceval/prepare")
-    def external_ceval_prepare(body: dict):
+    def _external_catalog_sync() -> None:
+        for benchmark_id in _EXTERNAL_BENCHMARKS:
+            external_catalog.mark_runner_connected(
+                benchmark_id,
+                BENCHMARK_DESCRIPTORS[benchmark_id].adapter_id in registered_adapter_ids(),
+            )
+
+    def _external_prepare(benchmark_id: str, body: dict):
         rejected = _reject_secret_fields(body)
         if rejected is not None:
             return rejected
@@ -1528,7 +1543,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                                    "message": "dataset_revision is required"}},
             )
         declared = body.get("declared_sha256")
-        prepared = prepare_ceval_external_dataset(
+        default_split = body.get("default_split")
+        prepared = prepare_external_dataset(
             files=files,
             dataset_revision=revision,
             declared_sha256=declared if isinstance(declared, dict) else None,
@@ -1536,6 +1552,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             approval_evidence=body.get("approval_evidence"),
             approval_verifier=None,
             license_evidence=body.get("license_evidence"),
+            benchmark_id=benchmark_id,
+            default_split=default_split if isinstance(default_split, str) else None,
         )
         if prepared.state != "ready":
             return JSONResponse(
@@ -1546,8 +1564,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "details": {"reasons": list(prepared.reasons)},
                 }},
             )
-        external_catalog.update_dataset("ceval", prepared)
-        external_catalog.mark_profile_validated("ceval", True)
+        # 准备结果持久化（review R13）：重启/第二个实例不再丢失。
+        external_catalog.update_dataset(benchmark_id, prepared)
+        external_catalog.mark_profile_validated(benchmark_id, True)
         _external_catalog_sync()
         return {
             "state": prepared.state,
@@ -1558,93 +1577,115 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             "unscored": prepared.unscored,
         }
 
-    @application.get("/api/v1/benchmarks/external/catalog")
-    def external_catalog_list():
-        _external_catalog_sync()
-        return {"benchmarks": [external_catalog.status("ceval")]}
-
-    @application.get("/api/v1/benchmarks/external/ceval/cases")
-    def external_ceval_cases(offset: int = 0, limit: int = 50, query: str = ""):
-        dataset = external_catalog._entry("ceval").dataset  # noqa: SLF001 - 同进程目录
+    def _external_cases_view(benchmark_id: str, offset: int, limit: int, query: str):
+        dataset = external_catalog.dataset(benchmark_id)
         if dataset is None:
             return {"cases": [], "total": 0}
         entries = [
-            {"case_id": entry.case_id, "subject": entry.subject, "has_gold": entry.has_gold}
+            {
+                "case_id": entry.case_id, "subject": entry.subject,
+                "has_gold": entry.has_gold, "split": entry.split,
+            }
             for entry in dataset.manifest
             if not query or query in entry.case_id or query in entry.subject
         ]
         window = entries[offset:offset + max(1, min(limit, 200))]
         return {"cases": window, "total": len(entries)}
 
-    @application.get("/api/v1/benchmarks/external/ceval/preflight")
-    def external_ceval_preflight(model: str):
-        from motte_sdk.context_preflight import external_benchmark_preflight
-
-        _external_catalog_sync()
-        entry = external_catalog.status("ceval")
-        dataset_entry = entry.get("dataset") or {}
-        model_record = resources.models.get(model) if model else None
-        profile = {
-            "selected_subjects": _ceval_subjects(),
-            "split": "val",
-            "runner_version": _ceval_runner_version(),
-            "environment_digest": _ceval_environment_digest(),
-        }
-        report = external_benchmark_preflight(
-            profile,
-            model_record or {},
-            dataset={
-                "state": dataset_entry.get("state") or "unprepared",
-                "subjects": _ceval_subjects(),
-                "split": "val",
-            },
-            runner_connected=CEVAL_ADAPTER_ID in registered_adapter_ids(),
-        )
-        return report
-
-    def _ceval_subjects() -> list[str]:
-        dataset = external_catalog._entry("ceval").dataset  # noqa: SLF001 - 同进程目录
-        if dataset is None:
-            return []
-        return sorted({entry_subject.subject for entry_subject in dataset.manifest})
-
-    def _ceval_runner_version() -> str:
-        from motte_benchmark.opencompass.parser import RUNNER_VERSION_PIN
-
-        return f"opencompass-{RUNNER_VERSION_PIN}"
-
-    def _ceval_environment_digest() -> str:
-        import hashlib
-
-        return "sha256:" + hashlib.sha256(
-            _ceval_runner_version().encode("utf-8"),
-        ).hexdigest()
-
-    @application.post("/api/v1/benchmarks/external/ceval/runs", status_code=202)
-    def external_ceval_run(body: dict):
-        rejected = _reject_secret_fields(body)
-        if rejected is not None:
-            return rejected
-        _external_catalog_sync()
-        model_id = body.get("model")
+    def _external_run_model_record(model_id: Any):
         if not isinstance(model_id, str) or not model_id:
             return JSONResponse(
                 status_code=422,
                 content={"error": {"code": "MODEL_REQUIRED",
                                    "message": "model profile id is required"}},
             )
-        entry = external_catalog.status("ceval")
-        dataset = external_catalog._entry("ceval").dataset  # noqa: SLF001
+        return resources.models.get(model_id)
+
+    def _external_preflight_view(benchmark_id: str, params: dict):
+        """GET 预检与创建共用同一校验服务/同一输入（review R14）。"""
+        from motte_sdk.context_preflight import external_benchmark_preflight
+
+        _external_catalog_sync()
+        model_id = params.get("model")
+        model_record = resources.models.get(model_id) if isinstance(model_id, str) and model_id else None
+        dataset = external_catalog.dataset(benchmark_id)
+        descriptor = BENCHMARK_DESCRIPTORS[benchmark_id]
+        split = params.get("split") or descriptor.default_split
+        few_shot = int(params.get("few_shot") or 0)
+        few_shot_split = params.get("few_shot_split") or descriptor.default_few_shot_split
+        scope = params.get("scope") or "custom-subset"
+        case_ids = params.get("case_ids")
+        runner_connected = descriptor.adapter_id in registered_adapter_ids()
+        reasons = validate_external_run_request(
+            dataset if dataset is not None else _empty_dataset(benchmark_id),
+            benchmark_id=benchmark_id,
+            model_record=model_record,
+            scope=scope,
+            split=split,
+            few_shot=few_shot,
+            few_shot_split=few_shot_split,
+            case_ids=case_ids if isinstance(case_ids, list) else None,
+            runner_connected=runner_connected,
+        )
+        profile = {
+            "selected_subjects": (
+                sorted({entry.subject for entry in dataset.manifest})
+                if dataset else []
+            ),
+            "split": split,
+            "runner_version": external_runner_version(),
+            "environment_digest": external_environment_digest(benchmark_id),
+        }
+        report = external_benchmark_preflight(
+            profile,
+            model_record if isinstance(model_record, dict) else {},
+            dataset={
+                "state": (dataset.state if dataset else "unprepared"),
+                "subjects": sorted({entry.subject for entry in dataset.manifest}) if dataset else [],
+                "split": split,
+            },
+            runner_connected=runner_connected,
+        )
+        merged = list(dict.fromkeys([*reasons, *report["reasons"]]))
+        return {
+            "ok": not merged,
+            "reasons": merged,
+            "checks": report["checks"],
+        }
+
+    def _empty_dataset(benchmark_id: str):
+        from motte_sdk.benchmark_catalog import PreparedBenchmarkDataset
+
+        return PreparedBenchmarkDataset(
+            benchmark_id=benchmark_id,
+            benchmark_version=BENCHMARK_DESCRIPTORS[benchmark_id].benchmark_version,
+            dataset_revision="unprepared",
+            state="unprepared",
+        )
+
+    def _external_run_create(benchmark_id: str, body: dict):
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        _external_catalog_sync()
+        descriptor = BENCHMARK_DESCRIPTORS[benchmark_id]
+        model_id = body.get("model")
+        model_missing = _external_run_model_record(model_id)
+        if isinstance(model_missing, JSONResponse):
+            return model_missing
+        model_record = model_missing
+        entry = external_catalog.status(benchmark_id)
+        dataset = external_catalog.dataset(benchmark_id)
         if dataset is None or dataset.state != "ready":
             return JSONResponse(
                 status_code=422,
                 content={"error": {
                     "code": "DATASET_UNPREPARED",
-                    "message": "ceval dataset is not prepared",
+                    "message": f"{benchmark_id} dataset is not prepared",
                     "details": {"blockers": entry["blockers"]},
                 }},
             )
-        if CEVAL_ADAPTER_ID not in registered_adapter_ids():
+        if descriptor.adapter_id not in registered_adapter_ids():
             return JSONResponse(
                 status_code=422,
                 content={"error": {
@@ -1652,93 +1693,195 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "message": "external benchmark adapter is not registered",
                 }},
             )
-        model_record = resources.models.get(model_id)
-        if model_record is None:
+        # 入队前统一预检（review R14）：生命周期/split/few-shot/scope 失败 422，0 Job。
+        reasons = validate_external_run_request(
+            dataset,
+            benchmark_id=benchmark_id,
+            model_record=model_record,
+            scope=str(body.get("scope") or "custom-subset"),
+            split=body.get("split") if isinstance(body.get("split"), str) else None,
+            few_shot=int(body.get("few_shot") or 0),
+            few_shot_split=(
+                body.get("few_shot_split")
+                if isinstance(body.get("few_shot_split"), str) else None
+            ),
+            case_ids=body.get("case_ids") if isinstance(body.get("case_ids"), list) else None,
+            runner_connected=True,
+        )
+        if reasons:
             return JSONResponse(
                 status_code=422,
                 content={"error": {
-                    "code": "MODEL_IDENTITY_MISSING",
-                    "message": "published model profile not found",
+                    "code": "RUN_REQUEST_INVALID",
+                    "message": "run request rejected by shared validation",
+                    "details": {"reasons": reasons},
                 }},
             )
-        from motte_benchmark.opencompass.profiles import ceval_external_profile
-
+        credentials = body.get("credentials")
         try:
-            profile = ceval_external_profile(
-                dataset_revision=dataset.dataset_revision,
-                subjects=_ceval_subjects(),
-                split=str(body.get("split") or "val"),
+            inputs = prepare_external_run_inputs(
+                dataset,
+                benchmark_id=benchmark_id,
+                model_id=model_id,
+                model_record=model_record,
                 few_shot=int(body.get("few_shot") or 0),
-                few_shot_split=str(body.get("few_shot_split") or "dev"),
                 seed=int(body.get("seed") or 0),
-                runner_version=_ceval_runner_version(),
-                environment_digest=_ceval_environment_digest(),
+                scope=str(body.get("scope") or "custom-subset"),
+                split=body.get("split") if isinstance(body.get("split"), str) else None,
+                few_shot_split=(
+                    body.get("few_shot_split")
+                    if isinstance(body.get("few_shot_split"), str) else None
+                ),
+                credentials=credentials if isinstance(credentials, dict) else None,
+                case_ids=body.get("case_ids") if isinstance(body.get("case_ids"), list) else None,
+                resources=resources,
             )
         except ValueError as error:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "PROFILE_INVALID", "message": str(error)}},
+                content={"error": {"code": "RUN_REQUEST_INVALID", "message": str(error)}},
             )
-        scope = str(body.get("scope") or "custom-subset")
-        manifest: dict[str, Any] = {
-            "model": model_id,
-            "scope": scope,
-            "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
-            "external_benchmark": {
-                "adapter_id": CEVAL_ADAPTER_ID,
-                "adapter_version": "1",
-                "runner_version": profile["runner_version"],
-                "dataset_revision": dataset.dataset_revision,
-                "environment_digest": profile["environment_digest"],
-                "profile": profile,
-                "limits": {"poll_interval_seconds": 0.1},
-                "parser_version": "ceval-opencompass-parser@1",
-            },
-        }
         from motte_sdk.execution_backends import (
             ExecutionBackendError,
             resolve_execution,
         )
 
         try:
-            resolved = resolve_execution("ceval-external@1", manifest)
+            resolved = resolve_execution(inputs["scenario_version"], inputs["manifest"])
         except ExecutionBackendError as error:
             return JSONResponse(
                 status_code=422,
                 content={"error": {"code": error.code, "message": str(error)}},
             )
-        case_ids = [sample.case_id for sample in dataset.manifest]
         return service.create_run(
-            "ceval-external@1", resolved, case_ids, requested_manifest=body,
+            inputs["scenario_version"], resolved, inputs["case_ids"],
+            requested_manifest=body,
         )
+
+    @application.post("/api/v1/benchmarks/external/ceval/prepare")
+    def external_ceval_prepare(body: dict):
+        return _external_prepare("ceval", body)
+
+    @application.post("/api/v1/benchmarks/external/{benchmark_id}/prepare")
+    def external_benchmark_prepare(benchmark_id: str, body: dict):
+        if benchmark_id not in _EXTERNAL_BENCHMARKS:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "BENCHMARK_UNKNOWN", "message": benchmark_id}},
+            )
+        return _external_prepare(benchmark_id, body)
+
+    @application.get("/api/v1/benchmarks/external/catalog")
+    def external_catalog_list():
+        _external_catalog_sync()
+        return {
+            "benchmarks": [
+                external_catalog.status(benchmark_id)
+                for benchmark_id in _EXTERNAL_BENCHMARKS
+            ],
+        }
+
+    @application.get("/api/v1/benchmarks/external/ceval/cases")
+    def external_ceval_cases(offset: int = 0, limit: int = 50, query: str = ""):
+        return _external_cases_view("ceval", offset, limit, query)
+
+    @application.get("/api/v1/benchmarks/external/{benchmark_id}/cases")
+    def external_benchmark_cases(
+        benchmark_id: str, offset: int = 0, limit: int = 50, query: str = "",
+    ):
+        if benchmark_id not in _EXTERNAL_BENCHMARKS:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "BENCHMARK_UNKNOWN", "message": benchmark_id}},
+            )
+        return _external_cases_view(benchmark_id, offset, limit, query)
+
+    @application.get("/api/v1/benchmarks/external/ceval/preflight")
+    def external_ceval_preflight(
+        model: str = "",
+        scope: str = "custom-subset",
+        split: str = "",
+        few_shot: int = 0,
+        few_shot_split: str = "",
+    ):
+        return _external_preflight_view("ceval", {
+            "model": model, "scope": scope, "split": split or None,
+            "few_shot": few_shot, "few_shot_split": few_shot_split or None,
+        })
+
+    @application.get("/api/v1/benchmarks/external/{benchmark_id}/preflight")
+    def external_benchmark_preflight_route(
+        benchmark_id: str,
+        model: str = "",
+        scope: str = "custom-subset",
+        split: str = "",
+        few_shot: int = 0,
+        few_shot_split: str = "",
+    ):
+        if benchmark_id not in _EXTERNAL_BENCHMARKS:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "BENCHMARK_UNKNOWN", "message": benchmark_id}},
+            )
+        return _external_preflight_view(benchmark_id, {
+            "model": model, "scope": scope, "split": split or None,
+            "few_shot": few_shot, "few_shot_split": few_shot_split or None,
+        })
+
+    @application.post("/api/v1/benchmarks/external/ceval/runs", status_code=202)
+    def external_ceval_run(body: dict):
+        return _external_run_create("ceval", body)
+
+    @application.post("/api/v1/benchmarks/external/{benchmark_id}/runs", status_code=202)
+    def external_benchmark_run(benchmark_id: str, body: dict):
+        if benchmark_id not in _EXTERNAL_BENCHMARKS:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "BENCHMARK_UNKNOWN", "message": benchmark_id}},
+            )
+        return _external_run_create(benchmark_id, body)
 
     @application.get("/api/v1/runs/{run_id}/external-jobs")
     def run_external_jobs(run_id: str):
         external_jobs = getattr(service.store, "external_jobs", None)
         if external_jobs is None:
             return {"jobs": []}
-        return {"jobs": external_jobs.jobs_for_run(run_id)}
+        jobs = external_jobs.jobs_for_run(run_id)
+        for job in jobs:
+            checkpoint = job.get("checkpoint") or {}
+            if isinstance(checkpoint, dict):
+                job["metrics"] = checkpoint.get("cursor") or {}
+                job["evidence"] = checkpoint.get("evidence") or {}
+        return {"jobs": jobs}
 
     # ------------------------------------------- 比较/门禁（M6-Lite 公共服务，只读）
 
-    from motte_sdk.comparisons import ComparisonService
+    from motte_sdk.comparisons import ComparisonError, ComparisonService
 
     application.state.comparisons = comparisons_service = ComparisonService(
         service.store,
+        baselines=getattr(service.store, "baselines", None),
     )
 
     @application.get("/api/v1/comparisons")
-    def compare_runs(baseline: str, candidate: str, factors: str = "model"):
+    def compare_runs(
+        baseline: str,
+        candidate: str,
+        factors: str = "model",
+        baseline_pass: str | None = None,
+        candidate_pass: str | None = None,
+    ):
         try:
             result = comparisons_service.compare(
                 baseline, candidate, allowed_factors=factors.split(","),
+                baseline_pass_id=baseline_pass, candidate_pass_id=candidate_pass,
             )
         except KeyError as error:
             return JSONResponse(
                 status_code=404,
                 content={"error": {"code": "RUN_NOT_FOUND", "message": str(error)}},
             )
-        except ValueError as error:
+        except (ValueError, ComparisonError) as error:
             return JSONResponse(
                 status_code=422,
                 content={"error": {"code": "POLICY_INVALID", "message": str(error)}},
@@ -1764,14 +1907,42 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 status_code=422,
                 content={"error": {"code": "POLICY_INVALID", "message": "policy must be an object"}},
             )
+        scoring_pass_id = body.get("scoring_pass_id")
+        baseline_snapshot_id = body.get("baseline_snapshot_id")
+        for name, value in (
+            ("scoring_pass_id", scoring_pass_id),
+            ("baseline_snapshot_id", baseline_snapshot_id),
+            ("baseline_run_id", body.get("baseline_run_id")),
+        ):
+            if value is not None and not isinstance(value, str):
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {
+                        "code": "POLICY_INVALID",
+                        "message": name + " must be a string when provided",
+                    }},
+                )
         try:
             return comparisons_service.evaluate_gate(
-                run_id, policy=policy, baseline_run_id=body.get("baseline_run_id"),
+                run_id,
+                policy=policy,
+                baseline_run_id=body.get("baseline_run_id"),
+                scoring_pass_id=(
+                    scoring_pass_id if isinstance(scoring_pass_id, str) else None
+                ),
+                baseline_snapshot_id=(
+                    baseline_snapshot_id if isinstance(baseline_snapshot_id, str) else None
+                ),
             )
         except KeyError as error:
             return JSONResponse(
                 status_code=404,
                 content={"error": {"code": "RUN_NOT_FOUND", "message": str(error)}},
+            )
+        except ComparisonError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": error.code, "message": str(error)}},
             )
 
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）

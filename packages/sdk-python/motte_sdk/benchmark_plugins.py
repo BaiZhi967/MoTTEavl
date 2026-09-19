@@ -224,60 +224,115 @@ def _load_builtins() -> None:
 
     from motte_eval.ceval import diagnostic_metrics as ceval_diagnostic_metrics
 
-    def _ceval_external_manifest(
-        manifest: dict[str, Any], requested: dict[str, Any], resources: Any,
-    ) -> dict[str, Any]:
-        # job-based 套件的 manifest 在创建时已冻结（external_benchmark 钉版本）。
-        external = manifest.get("external_benchmark")
-        if not isinstance(external, dict) or not external.get("adapter_id"):
-            raise ValueError("ceval-external manifest requires external_benchmark")
-        return manifest
+    def _external_mcq_prepare(benchmark_id: str, adapter_id: str):
+        def prepare(
+            scenario: dict[str, Any], manifest: dict[str, Any], resources: Any,
+        ) -> dict[str, Any]:
+            # job-based 套件：manifest 在创建时已冻结（external_benchmark 钉版本
+            # + runner_config + case_expectations）；这里补齐评分身份。
+            external = manifest.get("external_benchmark")
+            if not isinstance(external, dict) or not external.get("adapter_id"):
+                raise ValueError(
+                    f"{benchmark_id}-external manifest requires external_benchmark"
+                )
+            if str(external.get("adapter_id")) != adapter_id:
+                raise ValueError(
+                    "external_benchmark.adapter_id mismatch: "
+                    f"{external.get('adapter_id')!r} != {adapter_id!r}"
+                )
+            expectations = manifest.get("case_expectations")
+            if not isinstance(expectations, dict) or not expectations:
+                raise ValueError(
+                    f"{benchmark_id}-external manifest requires frozen case_expectations"
+                )
+            from motte_sdk.benchmark_catalog import (
+                EXTERNAL_MCQ_SCORER,
+                EXTERNAL_MCQ_SCORER_VERSION,
+                benchmark_descriptor,
+            )
 
-    def _ceval_external_scores(
+            descriptor = benchmark_descriptor(benchmark_id)
+            provenance = {
+                "id": descriptor.benchmark_id,
+                "version": descriptor.benchmark_version,
+                "dataset_revision": str(external.get("dataset_revision") or ""),
+                "selected_count": len(expectations),
+                "scorer": EXTERNAL_MCQ_SCORER,
+                "scorer_version": EXTERNAL_MCQ_SCORER_VERSION,
+                "parser_version": descriptor.parser_version,
+            }
+            manifest["benchmark_provenance"] = provenance
+            return manifest
+
+        return prepare
+
+    def _external_mcq_scores(
         run: dict[str, Any], results: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        # gold 以冻结的 case_expectations 为准（review R03）；Runner 报告的
+        # gold 只作对账证据，出现分歧记进 details 不改变判定。
         records = []
         for row in results:
             payload = row.get("result") if isinstance(row.get("result"), dict) else {}
             records.append({
                 "case_id": row.get("case_id"),
                 "prediction": payload.get("prediction"),
-                "gold": payload.get("gold"),
+                "runner_gold": payload.get("gold"),
             })
         by_case = {record["case_id"]: record for record in records}
+        expectations = (run.get("manifest") or {}).get("case_expectations") or {}
         scores = []
         for case_id in run.get("case_ids") or []:
             record = by_case.get(case_id)
+            gold = expectations.get(case_id)
             if record is None:
                 scores.append({"case_id": case_id, "passed": None,
                                "details": {"code": "NOT_ATTEMPTED"}})
                 continue
             prediction = str(record.get("prediction") or "").strip()
-            gold = record.get("gold")
             if gold is None or str(gold).strip() == "":
                 scores.append({"case_id": case_id, "passed": None,
                                "details": {"code": "NO_EXPECTATION"}})
                 continue
+            runner_gold = record.get("runner_gold")
+            details = {}
+            if runner_gold is not None and str(runner_gold).strip().upper() != str(gold).strip().upper():
+                details["gold_source_mismatch"] = {
+                    "frozen": gold, "runner_reported": runner_gold,
+                    "authority": "case_expectations",
+                }
             scores.append({
                 "case_id": case_id,
                 "passed": bool(prediction and prediction.upper() == str(gold).strip().upper()),
+                **({"details": details} if details else {}),
             })
         return scores
 
-    def _ceval_external_aggregate(
+    def _external_mcq_aggregate(
         run: dict[str, Any], scores: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        # gold 以冻结 case_expectations 为准（与样本级评分同一权威来源，
+        # review R03）；退出码优先取分派侧传入的外部结局上下文。
+        manifest = run.get("manifest") or {}
+        expectations = manifest.get("case_expectations") or {}
         records = []
         for row in run.get("cases") or []:
             payload = row.get("result") if isinstance(row.get("result"), dict) else {}
+            case_id = row.get("case_id")
             records.append({
-                "case_id": row.get("case_id"),
+                "case_id": case_id,
                 "prediction": payload.get("prediction"),
-                "gold": payload.get("gold"),
+                "gold": expectations.get(case_id, payload.get("gold")),
             })
-        exit_code = ((run.get("manifest") or {}).get("external_benchmark") or {}).get(
-            "runner_exit_code",
-        )
+        outcome = run.get("external_outcome") or {}
+        exit_code = outcome.get("runner_exit_code")
+        if exit_code is None:
+            error = manifest.get("error") or {}
+            exit_code = (error.get("details") or {}).get("exit_code") if isinstance(
+                error, dict,
+            ) else None
+        if exit_code is None:
+            exit_code = (manifest.get("external_benchmark") or {}).get("runner_exit_code")
         metrics = ceval_diagnostic_metrics(
             selected_case_ids=run.get("case_ids") or [],
             records=records,
@@ -292,17 +347,22 @@ def _load_builtins() -> None:
             "accuracy": metrics["diagnostic.selected_case_accuracy"],
             "coverage": metrics["diagnostic.observed_call_coverage"],
             "unscored": metrics["unscored"],
+            "runner_exit_code": exit_code,
             "denominator": "selected_cases",
         }
 
-    register_benchmark_plugin(
-        BenchmarkPlugin(
-            suite_id="ceval-external",
-            contract_version="1",
-            prepare_manifest=_ceval_external_manifest,
-            score=_ceval_external_scores,
-            aggregate=_ceval_external_aggregate,
-            adapter_id="ceval-opencompass",
-            adapter_version="1",
+    for benchmark_id, suite_id, adapter_id in (
+        ("ceval", "ceval-external", "ceval-opencompass"),
+        ("cmmlu", "cmmlu-external", "cmmlu-opencompass"),
+    ):
+        register_benchmark_plugin(
+            BenchmarkPlugin(
+                suite_id=suite_id,
+                contract_version="1",
+                prepare_manifest=_external_mcq_prepare(benchmark_id, adapter_id),
+                score=_external_mcq_scores,
+                aggregate=_external_mcq_aggregate,
+                adapter_id=adapter_id,
+                adapter_version="1",
+            )
         )
-    )
