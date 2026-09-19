@@ -5,23 +5,32 @@ import hashlib
 import json
 from typing import Any
 
-def _reject_non_finite(value: Any, path: str = "$") -> None:
-    """NaN/Infinity 在进入规范 JSON / hash 前拒绝：它们不可跨语言稳定序列化。"""
+from pydantic import BaseModel
+
+
+def _to_canonical(value: Any, path: str = "$") -> Any:
+    """递归转规范 JSON 值；Contract 模型实例按 model_dump(mode="json") 展开。
+
+    NaN/Infinity 在此拒绝：它们不可跨语言稳定序列化。
+    """
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
     if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
         raise ValueError(f"non-finite float at {path} is not canonical JSON")
     if isinstance(value, dict):
-        for key, child in value.items():
-            _reject_non_finite(child, f"{path}.{key}")
-    elif isinstance(value, (list, tuple)):
-        for index, child in enumerate(value):
-            _reject_non_finite(child, f"{path}[{index}]")
+        return {
+            str(key): _to_canonical(child, f"{path}.{key}") for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_to_canonical(child, f"{path}[{index}]") for index, child in enumerate(value)]
+    return value
 
 
 def canonical_json_bytes(value: Any) -> bytes:
     """Deterministic UTF-8 JSON bytes; rejects NaN/Infinity inputs."""
-    _reject_non_finite(value)
     return json.dumps(
-        value, allow_nan=False, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        _to_canonical(value), allow_nan=False, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
     ).encode("utf-8")
 
 

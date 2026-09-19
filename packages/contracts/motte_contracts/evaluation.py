@@ -31,8 +31,11 @@ __all__ = [
     "MetricResult",
     "MetricStatus",
     "ObservedUsage",
+    "ProcessRecord",
     "TerminationReason",
     "TerminationRecord",
+    "ToolCallRecord",
+    "WorkspaceSnapshot",
     "observation_evidence_hash",
 ]
 
@@ -124,6 +127,36 @@ class ObservedUsage(Contract):
     cost_total: float | None = Field(default=None, allow_inf_nan=False)
 
 
+class ToolCallRecord(Contract):
+    """A redacted tool call in the frozen trajectory (arguments already sanitized)."""
+
+    call_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["succeeded", "failed", "denied"]
+    step: int = Field(ge=1, strict=True)
+
+
+class WorkspaceSnapshot(Contract):
+    """Before/after file listing of the case workspace (safe relative paths).
+
+    ``complete=False`` means the listing itself failed; evaluators must not
+    conclude "no forbidden write" from an incomplete snapshot.
+    """
+
+    before: list[str] = Field(default_factory=list)
+    after: list[str] = Field(default_factory=list)
+    complete: bool = True
+
+
+class ProcessRecord(Contract):
+    """An observed subject process outcome; ``exit_code=None`` stays unknown."""
+
+    label: str = Field(min_length=1)
+    exit_code: int | None = None
+    status: Literal["exited", "signalled", "unknown"] = "unknown"
+
+
 class FrozenObservation(Contract):
     """Frozen per-case scoring input produced after termination.
 
@@ -143,6 +176,9 @@ class FrozenObservation(Contract):
     artifact_refs: list[ArtifactEntry] = Field(default_factory=list)
     coverage: EvidenceCoverage
     usage: ObservedUsage | None = None
+    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    workspace: WorkspaceSnapshot | None = None
+    processes: list[ProcessRecord] = Field(default_factory=list)
     evidence_hash: str
     recorded_at: datetime | None = None
 
@@ -150,6 +186,9 @@ class FrozenObservation(Contract):
     def hash_shape(self) -> FrozenObservation:
         if not self.evidence_hash.startswith("sha256:") or len(self.evidence_hash) != 71:
             raise ValueError("evidence_hash must be a sha256:<64 hex> value")
+        if self.workspace is not None:
+            for path in [*self.workspace.before, *self.workspace.after]:
+                validate_safe_relative_path(path)
         return self
 
 
