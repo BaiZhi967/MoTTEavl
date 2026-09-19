@@ -179,8 +179,9 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
                 raise ValueError("benchmark requires a provider or model resource")
             preset = manifest["benchmark_provenance"]
             provider["max_retries"] = preset["max_retries"]
-            provider["parameters"] = {**(provider.get("parameters") or {}),
-                                      "max_output_tokens": preset["max_output_tokens"]}
+            if preset.get("max_output_tokens") is not None:
+                provider["parameters"] = {**(provider.get("parameters") or {}),
+                                          "max_output_tokens": preset["max_output_tokens"]}
         _apply_context_preflight(resolved)
         resolved = resolve_execution(scenario_version, resolved, scenario=scenario)
         from motte_sdk.execution_backends import resolve_replay_case_ids

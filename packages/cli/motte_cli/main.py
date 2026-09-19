@@ -222,6 +222,26 @@ def _build_parser() -> argparse.ArgumentParser:
     direct_run.add_argument("--reasoning-level", help="该模型的思考强度等级（需模型档案声明支持）")
     direct_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
+    agent = sub.add_parser("agent-tasks", help="Agent 文件任务（导入任务数据集，创建 Agent Run）")
+    agent_sub = agent.add_subparsers(dest="agent_command", required=True)
+    agent_list = agent_sub.add_parser("list", help="列出已导入的 Agent 任务数据集")
+    agent_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    agent_import = agent_sub.add_parser("import", help="导入一份 Agent 任务数据集（JSON 数组文件）")
+    agent_import.add_argument("--file", required=True, help="JSON 数组文件路径（每项一个任务 case）")
+    agent_import.add_argument("--name", required=True, help="数据集名（场景名与之一致）")
+    agent_import.add_argument("--version", help="数据集版本（省略=自动：同内容复用，否则下一个空号）")
+    agent_import.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    agent_run = agent_sub.add_parser("run", help="创建 Agent queued Run（由 Worker 执行）")
+    agent_run.add_argument("--scenario", required=True, help="任务场景引用，如 file-report@1")
+    agent_run.add_argument("--model", required=True, help="已发布模型档案 id")
+    agent_run.add_argument("--mode", choices=("native-tool", "legacy-json"), default="native-tool",
+                           help="工具模式（native-tool 需模型 supports_tools=true）")
+    agent_run.add_argument("--max-steps", type=int, help="步数预算（默认 8）")
+    agent_run.add_argument("--max-tool-calls", type=int, help="工具次数预算（默认 16）")
+    agent_run.add_argument("--wall-time-sec", type=float, help="时长预算秒（默认 120）")
+    agent_run.add_argument("--case-ids", help="只跑指定任务：逗号分隔 case id")
+    agent_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
     restore = sub.add_parser("restore", help="从最新备份恢复（先停 API 与 Worker）")
     restore.add_argument("--source", required=True, help="备份目录")
     restore.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
@@ -552,6 +572,91 @@ def _direct_llm_sources_command(args) -> int:
         return _error("CONTRACT_INVALID", str(error))
 
 
+def _agent_tasks_command(args) -> int:
+    """`motte agent-tasks`：任务数据集导入、清单与 Agent Run 创建（stdout 始终是 JSON）。"""
+    from motte_contracts import suites as contract_suites
+    from motte_contracts.agent_tasks import SUITE
+    from motte_sdk.agent_tasks import persist_agent_tasks_dataset
+    from motte_storage.resource_store import ResourceConflictError
+
+    if args.agent_command == "list":
+        resources = _resources(args)
+        items = []
+        for scenario in sorted(resources.scenarios.list(), key=lambda s: str(s.get("name"))):
+            if scenario.get("suite") != SUITE:
+                continue
+            name, _, version = str(scenario.get("dataset", "")).rpartition("@")
+            dataset = resources.datasets.get(name, version)
+            if dataset is None:
+                continue
+            items.append({
+                "scenario": f"{scenario['name']}@{scenario['version']}",
+                "dataset": scenario["dataset"],
+                "suite": SUITE,
+                "cases": len(dataset.get("cases") or ()),
+                "dataset_fingerprint": dataset.get("dataset_fingerprint"),
+            })
+        print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+        return 0
+
+    if args.agent_command == "import":
+        import json as _json
+
+        try:
+            with open(args.file, encoding="utf-8") as handle:
+                cases = _json.load(handle)
+            receipt = persist_agent_tasks_dataset(
+                {"name": args.name, "version": args.version or "1", "cases": cases},
+                _resources(args), version=args.version,
+            )
+        except OSError as error:
+            return _error("SOURCE_UNAVAILABLE", f"cannot read source file: {error}")
+        except ValueError as error:
+            code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+            return _error(code, str(error))
+        print(json.dumps(receipt, ensure_ascii=False))
+        return 0
+
+    from motte_sdk.resolve import ManifestResolutionError, prepare_run
+
+    name, _, version = args.scenario.rpartition("@")
+    scenario = _resources(args).scenarios.get(name, version)
+    if scenario is None:
+        return _error("SCENARIO_NOT_FOUND", f"scenario not found: {args.scenario}")
+    if scenario.get("suite") != SUITE:
+        actual = contract_suites.suite_of(scenario)
+        return _error(
+            "SUITE_MISMATCH",
+            f"resource {args.scenario} belongs to suite {actual!r}, expected {SUITE!r}",
+        )
+    requested: dict = {"model": args.model, "agent": {"mode": args.mode}}
+    budget = {}
+    if args.max_steps is not None:
+        budget["max_steps"] = args.max_steps
+    if args.max_tool_calls is not None:
+        budget["max_tool_calls"] = args.max_tool_calls
+    if args.wall_time_sec is not None:
+        budget["wall_time_sec"] = args.wall_time_sec
+    if budget:
+        requested["agent"]["budget"] = budget
+    if args.case_ids is not None:
+        ids = [item.strip() for item in args.case_ids.replace("，", ",").split(",") if item.strip()]
+        if not ids:
+            return _error("CONTRACT_INVALID", "--case-ids 不能为空")
+        requested["case_selection"] = {"mode": "ids", "case_ids": ids}
+    try:
+        manifest, case_ids = prepare_run(args.scenario, requested, [], _resources(args))
+    except ManifestResolutionError as error:
+        return _error(error.code, str(error))
+    except ValueError as error:
+        return _error("CONTRACT_INVALID", str(error))
+    run = _service(args).create_run(
+        args.scenario, manifest, case_ids, requested_manifest=requested
+    )
+    print(json.dumps(run, ensure_ascii=False))
+    return 0
+
+
 def _direct_llm_command(args) -> int:
     """`motte direct-llm`：内置样例 / 本地 JSONL 的导入、清单与运行创建（stdout 始终是 JSON）。"""
     if args.direct_command == "sources":
@@ -875,6 +980,8 @@ def main(argv=None):
         print(json.dumps(run, ensure_ascii=False))
         return 0
 
+    if args.command == "agent-tasks":
+        return _agent_tasks_command(args)
     if args.command == "direct-llm":
         return _direct_llm_command(args)
 

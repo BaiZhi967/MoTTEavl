@@ -26,6 +26,9 @@ from motte_storage.factory import create_resource_store
 from motte_storage.resource_store import InMemoryResourceStore, ResourceConflictError
 
 from apps.api.app.schemas import (
+    AgentTasksDryRunResponse,
+    AgentTasksImportRequest,
+    AgentTasksRunRequest,
     CancelRunRequest,
     CreateRunRequest,
     DatasetSourceListResponse,
@@ -1862,7 +1865,285 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             "estimated": True,
         }
 
+
+    # ------------------------------------------------------------ agent-tasks
+
+    @application.get("/api/v1/agent-tasks")
+    def agent_tasks_overview():
+        """Agent 文件任务数据集清单 + 最近 Run（含多指标通过概况）。"""
+        from motte_contracts.agent_tasks import SUITE
+
+        items = []
+        for scenario in resources.scenarios.list():
+            if scenario.get("suite") != SUITE:
+                continue
+            name, _, version = str(scenario.get("dataset", "")).rpartition("@")
+            dataset = resources.datasets.get(name, version)
+            if dataset is None:
+                continue
+            runs = sorted(
+                (run for run in service.store.runs.list()
+                 if run.get("scenario_version")
+                 == f"{scenario['name']}@{scenario['version']}"),
+                key=lambda run: run.get("created_at") or "", reverse=True,
+            )
+            items.append({
+                "scenario": f"{scenario['name']}@{scenario['version']}",
+                "dataset": scenario["dataset"],
+                "suite": SUITE,
+                "cases": len(dataset.get("cases", ())),
+                "dataset_fingerprint": dataset.get("dataset_fingerprint"),
+                "runs": [
+                    {
+                        "id": run["id"],
+                        "status": run["status"],
+                        "created_at": run.get("created_at"),
+                        "mode": (run.get("manifest") or {}).get("agent_config", {}).get("mode"),
+                    }
+                    for run in runs[:10]
+                ],
+            })
+        items.sort(key=lambda item: item["scenario"])
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/agent-tasks/import", status_code=201)
+    def agent_tasks_import(body: AgentTasksImportRequest):
+        """导入 Agent 文件任务数据集（JSON 数组），落成不可变数据集 + 场景。"""
+        import json as _json
+
+        from motte_sdk.agent_tasks import persist_agent_tasks_dataset
+
+        try:
+            cases = _json.loads(body.content)
+            record = {"name": body.name, "version": body.version or "1", "cases": cases}
+            return persist_agent_tasks_dataset(record, resources, version=body.version)
+        except ValueError as error:
+            code = (
+                "RESOURCE_CONFLICT"
+                if isinstance(error, ResourceConflictError)
+                else "CONTRACT_INVALID"
+            )
+            status = 409 if isinstance(error, ResourceConflictError) else 422
+            return JSONResponse(
+                status_code=status, content={"error": {"code": code, "message": str(error)}}
+            )
+
+    @application.get("/api/v1/agent-tasks/cases")
+    def agent_tasks_cases(dataset: str, offset: int = 0, limit: int = 50, query: str = ""):
+        """分页浏览任务题面（操作员可见 expected/forbidden；模型侧从不投影）。"""
+        from motte_contracts.agent_tasks import SUITE
+
+        name, _, version = str(dataset).rpartition("@")
+        record = resources.datasets.get(name, version)
+        if record is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "DATASET_NOT_FOUND", "message": f"dataset not found: {dataset}",
+                }},
+            )
+        mismatch = _suite_mismatch(record, SUITE, dataset)
+        if mismatch is not None:
+            return mismatch
+        cases = record.get("cases") or []
+        needle = (query or "").strip().lower()
+        matched = [
+            case for case in cases
+            if not needle
+            or needle in str(case.get("input", "")).lower()
+            or needle in str(case.get("case_id", "")).lower()
+        ]
+        start, size = max(0, offset), min(max(1, limit), 200)
+        items = [
+            {
+                "case_id": case["case_id"],
+                "input": case["input"],
+                "fixture": sorted((case.get("fixture") or {}).keys()),
+                "expected": case.get("expected"),
+                "forbidden_paths": case.get("forbidden_paths") or [],
+                "limits": case.get("limits") or {},
+            }
+            for case in matched[start : start + size]
+        ]
+        return {
+            "dataset": dataset, "total": len(matched), "dataset_total": len(cases),
+            "offset": start, "limit": size, "query": query or "", "items": items,
+        }
+
+    def _prepare_agent_tasks_request(body):
+        from motte_contracts.agent_tasks import SUITE
+        from motte_contracts.selection import CASE_SELECTION_KEY
+
+        request = body.model_dump(mode="json", exclude_none=True)
+        rejected = _reject_secret_fields(request)
+        if rejected is not None:
+            return rejected
+        scenario_name, _, scenario_version = body.scenario.rpartition("@")
+        scenario_record = resources.scenarios.get(scenario_name, scenario_version or "1")
+        if scenario_record is None:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "SCENARIO_NOT_FOUND",
+                    "message": f"agent-tasks scenario not found: {body.scenario}",
+                }},
+            )
+        mismatch = _suite_mismatch(scenario_record, SUITE, body.scenario)
+        if mismatch is not None:
+            return mismatch
+        manifest: dict[str, Any] = {
+            "model": body.model,
+            "agent": {"mode": body.mode},
+        }
+        if body.budget is not None:
+            manifest["agent"]["budget"] = body.budget.model_dump(exclude_none=True)
+        if body.case_selection is not None:
+            manifest[CASE_SELECTION_KEY] = body.case_selection.model_dump(
+                mode="json", exclude_none=True
+            )
+        try:
+            prepared, case_ids = prepare_run(body.scenario, manifest, [], resources)
+        except ManifestResolutionError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": error.code, "message": str(error)}},
+            )
+        return body.scenario, manifest, prepared, case_ids
+
+    @application.post("/api/v1/agent-tasks/runs", status_code=202)
+    def agent_tasks_run(body: AgentTasksRunRequest):
+        """创建 Agent Run：native-tool 不支持 tools 的模型在创建期 422（零调用）。"""
+        result = _prepare_agent_tasks_request(body)
+        if isinstance(result, JSONResponse):
+            return result
+        scenario, manifest, prepared, case_ids = result
+        return service.create_run(
+            scenario, prepared, case_ids, requested_manifest=manifest
+        )
+
+    @application.post("/api/v1/agent-tasks/runs/dry-run", response_model=AgentTasksDryRunResponse)
+    def agent_tasks_dry_run(body: AgentTasksRunRequest):
+        """预检：模式、模型能力、预算与选择，全部通过才返回摘要。"""
+        from motte_contracts.identity import canonical_sha256
+
+        result = _prepare_agent_tasks_request(body)
+        if isinstance(result, JSONResponse):
+            return result
+        scenario, _manifest, prepared, case_ids = result
+        config = prepared.get("agent_config") or {}
+        return AgentTasksDryRunResponse(
+            scenario=scenario,
+            dataset=(prepared.get("benchmark_snapshot") or {}).get("dataset", {}).get("ref", ""),
+            mode=config.get("mode", ""),
+            prompt_version=config.get("prompt_version", ""),
+            selected_cases=len(case_ids),
+            backend=prepared["execution"]["backend_id"],
+            budget=config.get("budget") or {},
+        )
+
+    def _agent_case_row(run_id: str, case_id: str) -> JSONResponse | dict[str, Any]:
+        run = service.get_run(run_id)
+        if case_id not in (run.get("case_ids") or []):
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "CASE_NOT_IN_RUN", "message": f"{case_id} not in run {run_id}",
+                }},
+            )
+        row = service.store.case_runs.get(run_id, case_id)
+        if row is None:
+            return {"run_id": run_id, "case_id": case_id, "result": None, "outcome": None}
+        result = row.get("result") or {}
+        observation = result.get("observation") or {}
+        return {
+            "run_id": run_id, "case_id": case_id,
+            "outcome": row.get("outcome"),
+            "agent": result.get("agent"),
+            "events": result.get("events") or [],
+            "capture_errors": result.get("capture_errors") or [],
+            "cleanup": result.get("cleanup"),
+            "observation": observation,
+            "artifacts": observation.get("artifact_refs") or [],
+        }
+
+    @application.get("/api/v1/runs/{run_id}/cases/{case_id}/agent")
+    def agent_case_detail(run_id: str, case_id: str):
+        """样本下钻：终止原因、逐步事件、Observation 概要与产物清单。"""
+        result = _agent_case_row(run_id, case_id)
+        if isinstance(result, JSONResponse):
+            return result
+        return result
+
+    @application.get("/api/v1/runs/{run_id}/cases/{case_id}/artifacts/content")
+    def agent_artifact_content(run_id: str, case_id: str, path: str):
+        """读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。"""
+        from motte_trace.redaction import redact_secrets
+
+        result = _agent_case_row(run_id, case_id)
+        if isinstance(result, JSONResponse):
+            return result
+        observation = result.get("observation") or {}
+        entry = next(
+            (item for item in observation.get("artifact_refs") or [] if item.get("path") == path),
+            None,
+        )
+        if entry is None or not entry.get("available"):
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "ARTIFACT_NOT_AVAILABLE",
+                    "message": f"artifact not captured for case {case_id}: {path}",
+                }},
+            )
+        import os as _os
+        from pathlib import Path as _Path
+
+        root = _Path(_os.environ.get("ARTIFACT_ROOT", "var/artifacts"))
+        target = (root / entry["artifact_id"]).resolve()
+        if root.resolve() not in target.parents:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "ARTIFACT_NOT_AVAILABLE", "message": "artifact path invalid",
+            }})
+        if not target.is_file():
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "ARTIFACT_NOT_AVAILABLE", "message": "artifact bytes missing",
+            }})
+        import hashlib as _hashlib
+
+        data = target.read_bytes()
+        return {
+            "run_id": run_id, "case_id": case_id, "path": path,
+            "media_type": entry.get("media_type"),
+            "size_bytes": entry.get("size_bytes"),
+            "sha256": entry.get("sha256"),
+            "sha256_matches": _hashlib.sha256(data).hexdigest() == entry.get("sha256"),
+            # 展示视图做值形状脱敏；评分读取的冻结原文不受影响
+            "content": redact_secrets(data.decode("utf-8", errors="replace")),
+        }
+
+    @application.get("/api/v1/runs/{run_id}/invocations")
+    def run_invocations(run_id: str, case_id: str | None = None):
+        """持久调用日志（prepared/dispatching/settled）下钻。"""
+        invocations_repo = getattr(service.store, "invocations", None)
+        if invocations_repo is None:
+            return {"items": [], "total": 0}
+        if case_id is not None:
+            run = service.get_run(run_id)
+            if case_id not in (run.get("case_ids") or []):
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": {
+                        "code": "CASE_NOT_IN_RUN",
+                        "message": f"{case_id} not in run {run_id}",
+                    }},
+                )
+            items = invocations_repo.list_for_case(run_id, case_id)
+        else:
+            items = invocations_repo.list_for_run(run_id)
+        return {"items": items, "total": len(items)}
+
     return application
+
 
 
 def _gsm8k_accuracy(

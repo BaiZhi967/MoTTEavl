@@ -14,6 +14,7 @@ import { DirectLlmCompare } from "./evalTypes/directllm/DirectLlmCompare";
 import { DirectLlmMonitor } from "./evalTypes/directllm/DirectLlmMonitor";
 import { DirectLlmOperate } from "./evalTypes/directllm/DirectLlmOperate";
 import { DirectLlmResult } from "./evalTypes/directllm/DirectLlmResult";
+import { AgentCompare, AgentMonitor, AgentOperate, AgentResult } from "./evalTypes/agent/AgentPages";
 import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
 
 const GENERAL_NAV = [
@@ -56,6 +57,10 @@ export default function App() {
           <Route path="/runs" element={<RunsOverviewPage />} />
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
+          <Route path="/agent-tasks" element={<AgentOperate />} />
+          <Route path="/agent-tasks/monitor" element={<AgentMonitor />} />
+          <Route path="/agent-tasks/runs/:runId/result" element={<AgentResult />} />
+          <Route path="/agent-tasks/compare" element={<AgentCompare />} />
           <Route path="/gsm8k" element={<Gsm8kOperate />} />
           <Route path="/gsm8k/cases" element={<Gsm8kCases />} />
           <Route path="/gsm8k/monitor" element={<Gsm8kMonitor />} />

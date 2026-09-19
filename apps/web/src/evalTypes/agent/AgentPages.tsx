@@ -1,0 +1,589 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  ArrowClockwiseIcon,
+  CheckCircleIcon,
+  FileTextIcon,
+  ProhibitIcon,
+  RobotIcon,
+  WarningCircleIcon,
+  XCircleIcon,
+} from "@phosphor-icons/react";
+import {
+  cancelRun,
+  createAgentTasksRun,
+  dryRunAgentTasks,
+  getAgentArtifactContent,
+  getAgentCaseDetail,
+  getAgentTasksOverview,
+  getModels,
+  getRun,
+  getScoringPasses,
+  retryRun,
+  type AgentDryRunSummary,
+  type AgentTasksOverview,
+  type AgentCaseDetail,
+  type ModelRecord,
+  type RunRecord,
+} from "../../api/client";
+import { BatchMonitor } from "../../components/BatchMonitor";
+import { MetricCards } from "../../components/MetricCards";
+import { StatusBadge } from "../../components/StatusBadge";
+import { statusLabel } from "../../components/statusMeta";
+import { suiteRoutes } from "../registry";
+
+export const ROUTES = suiteRoutes("agent-tasks");
+
+const MODE_LABELS: Record<string, string> = {
+  "native-tool": "native-tool（规范工具调用）",
+  "legacy-json": "legacy-json（JSON 动作协议）",
+};
+
+const TERMINATION_LABELS: Record<string, string> = {
+  final_answer: "模型给出最终回答",
+  max_steps: "步数预算耗尽",
+  max_tool_calls: "工具次数预算耗尽",
+  wall_time: "时长预算耗尽",
+  token_limit: "token 预算超限",
+  cost_limit: "费用预算超限",
+  cancelled: "被取消",
+  error: "执行错误",
+  invalid_state: "异常状态",
+};
+
+const METRIC_STATUS_LABELS: Record<string, { label: string; tone: "success" | "error" | "warning" | "neutral" }> = {
+  scored: { label: "已评分", tone: "success" },
+  insufficient_evidence: { label: "证据不足", tone: "warning" },
+  evaluator_error: { label: "评分器异常", tone: "error" },
+  not_applicable: { label: "不适用", tone: "neutral" },
+};
+
+function Panel({ title, children, actions }: { title: string; children: React.ReactNode; actions?: React.ReactNode }) {
+  return (
+    <section className="panel detail" aria-label={title}>
+      <div className="panel-head">
+        <h2>{title}</h2>
+        {actions}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return <p className="empty-state">{text}</p>;
+}
+
+/* ------------------------------------------------------------------ 操作页 */
+
+export function AgentOperate() {
+  const [overview, setOverview] = useState<AgentTasksOverview | null>(null);
+  const [models, setModels] = useState<ModelRecord[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [scenario, setScenario] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [mode, setMode] = useState<"native-tool" | "legacy-json">("native-tool");
+  const [maxSteps, setMaxSteps] = useState("8");
+  const [maxToolCalls, setMaxToolCalls] = useState("16");
+  const [wallTimeSec, setWallTimeSec] = useState("120");
+  const [dryRun, setDryRun] = useState<AgentDryRunSummary | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [o, m] = await Promise.all([getAgentTasksOverview(), getModels()]);
+        if (cancelled) return;
+        setOverview(o);
+        setModels(m.items);
+        if (o.items.length > 0 && !scenario) setScenario(o.items[0].scenario);
+        const published = m.items.find((item) => item.lifecycle === "published");
+        if (published) setModelId((current) => current || published.id);
+      } catch (error) {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const selectedModel = useMemo(
+    () => models?.find((item) => item.id === modelId) ?? null,
+    [models, modelId],
+  );
+  // native-tool 需要模型声明 supports_tools；不满足时禁用并给出原因（不静默降级）
+  const nativeUnsupported =
+    mode === "native-tool" && selectedModel != null && selectedModel.supports_tools === false;
+  const budgetInvalid = useMemo(() => {
+    const steps = Number(maxSteps);
+    const calls = Number(maxToolCalls);
+    const wall = Number(wallTimeSec);
+    if (!Number.isInteger(steps) || steps <= 0 || steps > 64) return "步数预算须为 1–64 的整数";
+    if (!Number.isInteger(calls) || calls <= 0 || calls > 256) return "工具次数预算须为 1–256 的整数";
+    if (!Number.isFinite(wall) || wall <= 0 || wall > 3600) return "时长预算须为 0–3600 秒";
+    return null;
+  }, [maxSteps, maxToolCalls, wallTimeSec]);
+  const submitDisabled = loading || !scenario || !modelId || nativeUnsupported || budgetInvalid != null || submitting;
+
+  const requestBody = useCallback(() => ({
+    scenario,
+    model: modelId,
+    mode,
+    budget: {
+      max_steps: Number(maxSteps),
+      max_tool_calls: Number(maxToolCalls),
+      wall_time_sec: Number(wallTimeSec),
+    },
+  }), [scenario, modelId, mode, maxSteps, maxToolCalls, wallTimeSec]);
+
+  const runPreflight = async () => {
+    setFormError(null);
+    setDryRun(null);
+    try {
+      setDryRun(await dryRunAgentTasks(requestBody()));
+    } catch (error) {
+      // 预检失败保留全部表单输入，就地显示结构化原因
+      setFormError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const run = await createAgentTasksRun(requestBody());
+      window.location.assign(ROUTES.monitor([run.id]));
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) return <div className="page"><p className="empty-state">加载中…</p></div>;
+  return (
+    <div className="page">
+      <h1 className="page-title">Agent 文件任务</h1>
+      {loadError && (
+        <div role="alert" className="banner error">
+          <WarningCircleIcon size={16} weight="bold" aria-hidden />
+          加载失败：{loadError}
+        </div>
+      )}
+      <Panel title="任务与模型">
+        {overview?.items.length === 0 && <EmptyState text="还没有 Agent 任务数据集：先用 CLI 或 API 导入（agent-tasks import）。" />}
+        <label className="field">
+          <span>任务数据集</span>
+          <select value={scenario} onChange={(event) => setScenario(event.target.value)}>
+            {(overview?.items ?? []).map((item) => (
+              <option key={item.scenario} value={item.scenario}>
+                {item.scenario}（{item.cases} 题）
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>已发布模型</span>
+          <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
+            <option value="">选择模型…</option>
+            {(models ?? []).map((item) => (
+              <option key={item.id} value={item.id} disabled={item.lifecycle !== "published"}>
+                {item.id}
+                {item.lifecycle !== "published" ? "（未发布）" : ""}
+                {item.supports_tools === false ? "（不支持工具）" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>执行模式</span>
+          <select
+            value={mode}
+            onChange={(event) => setMode(event.target.value as "native-tool" | "legacy-json")}
+          >
+            <option value="native-tool">{MODE_LABELS["native-tool"]}</option>
+            <option value="legacy-json">{MODE_LABELS["legacy-json"]}</option>
+          </select>
+        </label>
+        {nativeUnsupported && (
+          <p className="hint warning" role="note">
+            <ProhibitIcon size={14} weight="bold" aria-hidden />
+            模型 {modelId} 声明不支持工具（supports_tools=false），native-tool 模式不可用；不会自动切换到 legacy-json。
+          </p>
+        )}
+        <fieldset className="field-row">
+          <legend>预算</legend>
+          <label className="field"><span>最大步数</span>
+            <input value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} inputMode="numeric" /></label>
+          <label className="field"><span>最大工具次数</span>
+            <input value={maxToolCalls} onChange={(e) => setMaxToolCalls(e.target.value)} inputMode="numeric" /></label>
+          <label className="field"><span>时长（秒）</span>
+            <input value={wallTimeSec} onChange={(e) => setWallTimeSec(e.target.value)} inputMode="decimal" /></label>
+        </fieldset>
+        {budgetInvalid && <p className="hint warning" role="alert">{budgetInvalid}</p>}
+        {formError && (
+          <div role="alert" className="banner error">
+            <XCircleIcon size={16} weight="bold" aria-hidden />
+            {formError}
+          </div>
+        )}
+        <div className="actions">
+          <button type="button" onClick={runPreflight} disabled={submitDisabled}>预检</button>
+          <button type="button" onClick={submit} disabled={submitDisabled}>
+            {submitting ? "提交中…" : "创建运行"}
+          </button>
+        </div>
+      </Panel>
+      {dryRun && (
+        <Panel title="预检摘要">
+          <dl className="kv">
+            <div><dt>后端</dt><dd>{dryRun.backend}</dd></div>
+            <div><dt>模式</dt><dd>{dryRun.mode}（{dryRun.prompt_version}）</dd></div>
+            <div><dt>选中任务数</dt><dd>{dryRun.selected_cases}</dd></div>
+            <div><dt>数据集</dt><dd>{dryRun.dataset}</dd></div>
+          </dl>
+        </Panel>
+      )}
+      {(overview?.items.length ?? 0) > 0 && (
+        <Panel title="最近运行">
+          <table className="table">
+            <thead><tr><th>Run</th><th>状态</th><th>模式</th><th>创建时间</th><th /></tr></thead>
+            <tbody>
+              {overview!.items.flatMap((item) => item.runs.slice(0, 5).map((run) => (
+                <tr key={run.id}>
+                  <td className="mono">{run.id.slice(0, 18)}…</td>
+                  <td><StatusBadge status={run.status} /></td>
+                  <td>{run.mode ?? "—"}</td>
+                  <td>{run.created_at ?? "—"}</td>
+                  <td><Link to={ROUTES.result(run.id)}>查看结果</Link></td>
+                </tr>
+              )))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ 监控页 */
+
+export function AgentMonitor() {
+  const [params] = useSearchParams();
+  const runIds = (params.get("runs") ?? "").split(",").filter(Boolean);
+  return (
+    <div className="page">
+      <h1 className="page-title">Agent 运行监控</h1>
+      {runIds.length === 0
+        ? <EmptyState text="没有待监控的运行。" />
+        : <BatchMonitor runIds={runIds} resultPath={ROUTES.result} />}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ 结果页 */
+
+const MAX_EVENT_ROWS = 200;
+const MAX_ARTIFACT_CHARS = 4000;
+
+interface ScoreRow {
+  case_id: string;
+  metric_id: string;
+  metric_status: string;
+  passed: boolean | null;
+  reason: string | null;
+  value: number | null;
+}
+
+function MetricStatusBadge({ status }: { status: string }) {
+  const meta = METRIC_STATUS_LABELS[status] ?? { label: status, tone: "neutral" as const };
+  return <span className={`badge tone-${meta.tone}`}>{meta.label}</span>;
+}
+
+function ArtifactViewer({ runId, caseId, path }: { runId: string; caseId: string; path: string }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open || content != null) return;
+    let cancelled = false;
+    getAgentArtifactContent(runId, caseId, path)
+      .then((payload) => { if (!cancelled) setContent(payload.content); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
+    return () => { cancelled = true; };
+  }, [open, content, runId, caseId, path]);
+  const truncated = (content?.length ?? 0) > MAX_ARTIFACT_CHARS;
+  return (
+    <div className="artifact-view">
+      <button type="button" className="link" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <FileTextIcon size={14} weight="bold" aria-hidden /> {path}
+      </button>
+      {open && error && <p className="hint warning" role="alert">读取失败：{error}</p>}
+      {open && content != null && (
+        <pre className="code-block">
+          {content.slice(0, MAX_ARTIFACT_CHARS)}
+          {truncated && `\n… [已截断，完整内容共 ${content.length} 字符]`}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+export function AgentResult() {
+  const { runId = "" } = useParams();
+  const navigate = useNavigate();
+  const [run, setRun] = useState<RunRecord | null>(null);
+  const [passes, setPasses] = useState<Array<{ id: string; summary: Record<string, any> }>>([]);
+  const [selectedPass, setSelectedPass] = useState<string>("");
+  const [caseDetail, setCaseDetail] = useState<AgentCaseDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const [nextRun, passList] = await Promise.all([
+        getRun(runId),
+        getScoringPasses(runId),
+      ]);
+      setRun(nextRun);
+      setPasses(passList.items);
+      setSelectedPass((current) => current || nextRun.current_scoring_pass_id || passList.items.at(-1)?.id || "");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [runId]);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const scores: ScoreRow[] = useMemo(() => {
+    const current = run?.scores ?? [];
+    return current
+      .filter((score: any) => typeof score.metric_id === "string")
+      .map((score: any) => ({
+        case_id: score.case_id, metric_id: score.metric_id,
+        metric_status: score.metric_status ?? "scored",
+        passed: score.passed ?? null, reason: score.reason ?? null, value: score.value ?? null,
+      }));
+  }, [run]);
+
+  const active = run != null && !["completed", "failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(run.status);
+  const retryable = run != null && ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(run.status);
+
+  if (error) {
+    return (
+      <div className="page">
+        <div role="alert" className="banner error">读取失败：{error}</div>
+        <button type="button" className="link" onClick={() => void reload()}>重试读取</button>
+      </div>
+    );
+  }
+  if (!run) return <div className="page"><EmptyState text="加载中…" /></div>;
+
+  const caseIds: string[] = run.case_ids ?? [];
+  const onCaseSelect = async (caseId: string) => {
+    if (!caseId) { setCaseDetail(null); return; }
+    try { setCaseDetail(await getAgentCaseDetail(runId, caseId)); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  };
+
+  return (
+    <div className="page">
+      <h1 className="page-title">Agent 运行结果</h1>
+      <Panel
+        title="运行概览"
+        actions={
+          <div className="actions">
+            {active && (
+              <button type="button" disabled={busy} onClick={async () => {
+                setBusy(true);
+                try { await cancelRun(runId, "操作员在结果页取消"); await reload(); }
+                finally { setBusy(false); }
+              }}>取消运行</button>
+            )}
+            {retryable && (
+              <button type="button" disabled={busy} onClick={async () => {
+                setBusy(true);
+                try {
+                  const child = await retryRun(runId);
+                  navigate(ROUTES.result(child.id));
+                } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+                finally { setBusy(false); }
+              }}>
+                <ArrowClockwiseIcon size={14} weight="bold" aria-hidden /> 重试（子 Run）
+              </button>
+            )}
+          </div>
+        }
+      >
+        <dl className="kv">
+          <div><dt>Run</dt><dd className="mono">{run.id}</dd></div>
+          <div><dt>状态</dt><dd><StatusBadge status={run.status} /></dd></div>
+          <div><dt>场景</dt><dd>{run.scenario_version}</dd></div>
+          <div><dt>模式</dt><dd>{(run.manifest?.agent_config?.mode as string) ?? "—"}</dd></div>
+          <div><dt>终止</dt><dd>{TERMINATION_LABELS[run.status] ?? statusLabel(run.status)}</dd></div>
+        </dl>
+        {run.error?.message && (
+          <div role="alert" className="banner error">运行错误：{run.error.message}</div>
+        )}
+      </Panel>
+
+      {passes.length > 0 && (
+        <Panel title="评分批次（历史不可变）">
+          <label className="field">
+            <span>查看批次</span>
+            <select value={selectedPass} onChange={(event) => setSelectedPass(event.target.value)}>
+              {passes.map((passItem, index) => (
+                <option key={passItem.id} value={passItem.id}>
+                  #{index + 1} {passItem.id.slice(0, 12)}…
+                  {passItem.id === run.current_scoring_pass_id ? "（当前）" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="hint">切换只读历史批次；读取与切换不会重新评分或调用模型。</p>
+        </Panel>
+      )}
+
+      <Panel title="多指标结果">
+        {scores.length === 0
+          ? <EmptyState text={active ? "运行进行中，还没有评分。" : "本运行没有多指标分数（可能是未评分的终态）。"} />
+          : (
+            <table className="table">
+              <thead><tr><th>任务</th><th>指标</th><th>状态</th><th>判定</th><th>原因</th></tr></thead>
+              <tbody>
+                {scores.map((score) => (
+                  <tr key={`${score.case_id}:${score.metric_id}`}>
+                    <td className="mono">{score.case_id}</td>
+                    <td className="mono">{score.metric_id}</td>
+                    <td><MetricStatusBadge status={score.metric_status} /></td>
+                    <td>
+                      {score.passed === true && <span className="badge tone-success"><CheckCircleIcon size={12} weight="bold" aria-hidden /> 通过</span>}
+                      {score.passed === false && <span className="badge tone-error"><XCircleIcon size={12} weight="bold" aria-hidden /> 未通过</span>}
+                      {score.passed == null && <span className="badge tone-neutral">未判定</span>}
+                    </td>
+                    <td>{score.reason ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </Panel>
+
+      <Panel title="样本下钻">
+        <label className="field">
+          <span>任务</span>
+          <select defaultValue="" onChange={(event) => void onCaseSelect(event.target.value)}>
+            <option value="">选择任务…</option>
+            {caseIds.map((caseId) => <option key={caseId} value={caseId}>{caseId}</option>)}
+          </select>
+        </label>
+        {!caseDetail && <EmptyState text="选择任务查看终止原因、事件轨迹与文件产物。" />}
+        {caseDetail && (
+          <>
+            <dl className="kv">
+              <div><dt>终止原因</dt>
+                <dd>{TERMINATION_LABELS[caseDetail.agent?.termination_reason ?? ""] ?? caseDetail.agent?.termination_reason ?? "—"}</dd></div>
+              {caseDetail.agent?.termination_detail && (
+                <div><dt>细节</dt><dd>{caseDetail.agent.termination_detail}</dd></div>
+              )}
+              <div><dt>步数 / 工具调用</dt>
+                <dd>{caseDetail.agent?.steps ?? 0} / {caseDetail.agent?.tool_calls ?? 0}</dd></div>
+              <div><dt>耗时</dt>
+                <dd>{caseDetail.agent?.duration_ms != null ? `${Math.round(caseDetail.agent.duration_ms)} ms` : "—"}</dd></div>
+              <div><dt>工作区清理</dt>
+                <dd>
+                  {caseDetail.cleanup?.status === "success"
+                    ? "已回收"
+                    : `清理失败（残留：${(caseDetail.cleanup?.residual ?? []).join("、") || "未知"}）`}
+                </dd></div>
+            </dl>
+            {caseDetail.capture_errors.length > 0 && (
+              <div role="alert" className="banner error">
+                证据采集失败：{caseDetail.capture_errors.join("；")}
+              </div>
+            )}
+            <h3>文件产物</h3>
+            {caseDetail.artifacts.length === 0
+              ? <EmptyState text="没有捕获到文件产物。" />
+              : caseDetail.artifacts.map((artifact) =>
+                artifact.available
+                  ? <ArtifactViewer key={artifact.path} runId={runId} caseId={caseDetail.case_id} path={artifact.path} />
+                  : <p key={artifact.path} className="hint warning">产物 {artifact.path} 不可用（采集失败或损坏）</p>,
+              )}
+            <h3>事件轨迹{caseDetail.events.length >= MAX_EVENT_ROWS ? `（前 ${MAX_EVENT_ROWS} 条）` : ""}</h3>
+            <ol className="timeline">
+              {caseDetail.events.slice(0, MAX_EVENT_ROWS).map((event, index) => (
+                <li key={index} className="timeline-item">
+                  <span className="mono">{event.type}</span>
+                  {event.tool != null && <span> · {String(event.tool)}</span>}
+                  {event.reason != null && <span> · {String(event.reason)}</span>}
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ 并列阅读 */
+
+export function AgentCompare() {
+  const [params] = useSearchParams();
+  const runIds = (params.get("runs") ?? "").split(",").filter(Boolean).slice(0, 2);
+  const [runs, setRuns] = useState<Array<RunRecord | null>>([null, null]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(runIds.map((id) => getRun(id).catch(() => null)))
+      .then((loaded) => { if (!cancelled) setRuns(loaded); });
+    return () => { cancelled = true; };
+  }, [runIds.join(",")]);
+
+  return (
+    <div className="page">
+      <h1 className="page-title">同任务结果并列阅读</h1>
+      <p className="hint">
+        <RobotIcon size={14} weight="bold" aria-hidden />
+        两个运行按任务逐指标并列展示，供人工对照；这不是正式的可比性结论（正式比较由后续阶段的比较策略提供）。
+      </p>
+      {runIds.length < 2 && <EmptyState text="请从运行列表选择两个同场景的运行进行并列阅读。" />}
+      <div className="compare-grid">
+        {runs.map((run, index) => (
+          <Panel key={runIds[index] ?? index} title={run ? `运行 ${runIds[index].slice(0, 12)}…` : "运行"}>
+            {!run
+              ? <EmptyState text="运行不存在或不可读。" />
+              : (
+                <>
+                  <dl className="kv">
+                    <div><dt>状态</dt><dd><StatusBadge status={run.status} /></dd></div>
+                    <div><dt>模型</dt><dd>{(run.manifest?.resource_snapshots?.model_profile as any)?.id ?? "—"}</dd></div>
+                  </dl>
+                  <table className="table">
+                    <thead><tr><th>任务</th><th>指标</th><th>判定</th></tr></thead>
+                    <tbody>
+                      {(run.scores ?? [])
+                        .filter((score: any) => typeof score.metric_id === "string")
+                        .map((score: any, i: number) => (
+                          <tr key={i}>
+                            <td className="mono">{score.case_id}</td>
+                            <td className="mono">{score.metric_id}</td>
+                            <td>{score.passed === true ? "通过" : score.passed === false ? "未通过" : "未判定"}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+          </Panel>
+        ))}
+      </div>
+    </div>
+  );
+}

@@ -4,6 +4,106 @@
  */
 
 export interface paths {
+    "/api/v1/agent-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Tasks Overview
+         * @description Agent 文件任务数据集清单 + 最近 Run（含多指标通过概况）。
+         */
+        get: operations["agent_tasks_overview_api_v1_agent_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-tasks/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Tasks Cases
+         * @description 分页浏览任务题面（操作员可见 expected/forbidden；模型侧从不投影）。
+         */
+        get: operations["agent_tasks_cases_api_v1_agent_tasks_cases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-tasks/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Agent Tasks Import
+         * @description 导入 Agent 文件任务数据集（JSON 数组），落成不可变数据集 + 场景。
+         */
+        post: operations["agent_tasks_import_api_v1_agent_tasks_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-tasks/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Agent Tasks Run
+         * @description 创建 Agent Run：native-tool 不支持 tools 的模型在创建期 422（零调用）。
+         */
+        post: operations["agent_tasks_run_api_v1_agent_tasks_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-tasks/runs/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Agent Tasks Dry Run
+         * @description 预检：模式、模型能力、预算与选择，全部通过才返回摘要。
+         */
+        post: operations["agent_tasks_dry_run_api_v1_agent_tasks_runs_dry_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents": {
         parameters: {
             query?: never;
@@ -615,6 +715,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/cases/{case_id}/agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Case Detail
+         * @description 样本下钻：终止原因、逐步事件、Observation 概要与产物清单。
+         */
+        get: operations["agent_case_detail_api_v1_runs__run_id__cases__case_id__agent_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/cases/{case_id}/artifacts/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Artifact Content
+         * @description 读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。
+         */
+        get: operations["agent_artifact_content_api_v1_runs__run_id__cases__case_id__artifacts_content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/commands": {
         parameters: {
             query?: never;
@@ -641,6 +781,26 @@ export interface paths {
         };
         /** Events */
         get: operations["events_api_v1_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/invocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Invocations
+         * @description 持久调用日志（prepared/dispatching/settled）下钻。
+         */
+        get: operations["run_invocations_api_v1_runs__run_id__invocations_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -826,6 +986,68 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentBudgetRequest */
+        AgentBudgetRequest: {
+            /** Max Steps */
+            max_steps?: number | null;
+            /** Max Tool Calls */
+            max_tool_calls?: number | null;
+            /** Observed Cost Limit */
+            observed_cost_limit?: number | null;
+            /** Per Call Timeout Sec */
+            per_call_timeout_sec?: number | null;
+            /** Total Token Limit */
+            total_token_limit?: number | null;
+            /** Wall Time Sec */
+            wall_time_sec?: number | null;
+        };
+        /** AgentTasksDryRunResponse */
+        AgentTasksDryRunResponse: {
+            /** Backend */
+            backend: string;
+            /** Budget */
+            budget: {
+                [key: string]: unknown;
+            };
+            /** Dataset */
+            dataset: string;
+            /** Mode */
+            mode: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Scenario */
+            scenario: string;
+            /** Selected Cases */
+            selected_cases: number;
+        };
+        /**
+         * AgentTasksImportRequest
+         * @description Agent 文件任务数据集导入：cases 为 JSON 数组。
+         */
+        AgentTasksImportRequest: {
+            /** Content */
+            content: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version?: string | null;
+        };
+        /** AgentTasksRunRequest */
+        AgentTasksRunRequest: {
+            budget?: components["schemas"]["AgentBudgetRequest"] | null;
+            /** Case Selection */
+            case_selection?: (components["schemas"]["DirectLlmAllSelection"] | components["schemas"]["DirectLlmIdsSelection"] | components["schemas"]["DirectLlmRandomSelection"] | components["schemas"]["DirectLlmProfileSelection"]) | null;
+            /**
+             * Mode
+             * @default native-tool
+             * @enum {string}
+             */
+            mode: "native-tool" | "legacy-json";
+            /** Model */
+            model: string;
+            /** Scenario */
+            scenario: string;
+        };
         /** CancelRunRequest */
         CancelRunRequest: {
             /** Reason */
@@ -1445,6 +1667,8 @@ export interface components {
             attempted?: boolean | null;
             /** Case Id */
             case_id?: string | null;
+            /** Denominator */
+            denominator?: boolean | null;
             /** Details */
             details?: {
                 [key: string]: unknown;
@@ -1453,14 +1677,24 @@ export interface components {
             error_class?: string | null;
             /** Evaluator */
             evaluator?: string | null;
+            /** Evaluator Id */
+            evaluator_id?: string | null;
+            /** Evaluator Version */
+            evaluator_version?: string | null;
             /** Judged */
             judged?: boolean | null;
+            /** Metric Id */
+            metric_id?: string | null;
+            /** Metric Status */
+            metric_status?: string | null;
             /** Outcome */
             outcome?: string | null;
             /** Parsed */
             parsed?: string | null;
             /** Passed */
             passed?: boolean | null;
+            /** Reason */
+            reason?: string | null;
             /** Responded */
             responded?: boolean | null;
             /** Scorer */
@@ -1469,6 +1703,10 @@ export interface components {
             scorer_version?: string | null;
             /** Scoring Pass Id */
             scoring_pass_id?: string | null;
+            /** Trial Id */
+            trial_id?: string | null;
+            /** Unit */
+            unit?: string | null;
             /** Value */
             value?: number | null;
         };
@@ -1713,6 +1951,159 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    agent_tasks_overview_api_v1_agent_tasks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_tasks_cases_api_v1_agent_tasks_cases_get: {
+        parameters: {
+            query: {
+                dataset: string;
+                offset?: number;
+                limit?: number;
+                query?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_tasks_import_api_v1_agent_tasks_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTasksImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_tasks_run_api_v1_agent_tasks_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTasksRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_tasks_dry_run_api_v1_agent_tasks_runs_dry_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTasksRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentTasksDryRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agents_api_v1_agents_get: {
         parameters: {
             query?: never;
@@ -2942,6 +3333,72 @@ export interface operations {
             };
         };
     };
+    agent_case_detail_api_v1_runs__run_id__cases__case_id__agent_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_artifact_content_api_v1_runs__run_id__cases__case_id__artifacts_content_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_run_commands_api_v1_runs__run_id__commands_get: {
         parameters: {
             query?: never;
@@ -2977,6 +3434,39 @@ export interface operations {
         parameters: {
             query?: {
                 after?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_invocations_api_v1_runs__run_id__invocations_get: {
+        parameters: {
+            query?: {
+                case_id?: string | null;
             };
             header?: never;
             path: {

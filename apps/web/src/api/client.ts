@@ -135,6 +135,9 @@ export const replayRun = (id: string, cases: Record<string, any>) =>
 
 export const getReport = (id: string) => request<RunReport>(`/api/v1/runs/${id}/report`);
 
+export const getScoringPasses = (id: string) =>
+  request<{ items: Array<Record<string, any>>; total: number }>(`/api/v1/runs/${id}/scoring-passes`);
+
 // ---------------------------------------------------------------- resources
 
 export const getProviders = () => request<{ items: ProviderRecord[] }>(`/api/v1/providers`);
@@ -371,6 +374,115 @@ export interface ProviderKindMeta {
   default_base_url: string | null;
   default_key_env: string | null;
 }
+
+// ---------------------------------------------------------------- agent-tasks
+
+export interface AgentTasksOverview {
+  items: Array<{
+    scenario: string;
+    dataset: string;
+    suite: string;
+    cases: number;
+    dataset_fingerprint?: string | null;
+    runs: Array<{ id: string; status: string; created_at?: string | null; mode?: string | null }>;
+  }>;
+  total: number;
+}
+
+export interface AgentCaseRecord {
+  case_id: string;
+  input: string;
+  fixture: string[];
+  expected: Record<string, any> | null;
+  forbidden_paths: string[];
+  limits: Record<string, any>;
+}
+
+export interface AgentTasksRunRequest {
+  scenario: string;
+  model: string;
+  mode: "native-tool" | "legacy-json";
+  budget?: Record<string, number>;
+  case_selection?: { mode: string; case_ids?: string[] };
+}
+
+export interface AgentDryRunSummary {
+  scenario: string;
+  dataset: string;
+  mode: string;
+  prompt_version: string;
+  selected_cases: number;
+  backend: string;
+  budget: Record<string, unknown>;
+}
+
+export interface AgentCaseDetail {
+  run_id: string;
+  case_id: string;
+  outcome: string | null;
+  agent: {
+    final_output?: unknown;
+    termination_reason: string;
+    termination_detail?: string | null;
+    steps: number;
+    tool_calls: number;
+    prompt_version?: string | null;
+    mode?: string | null;
+    duration_ms?: number;
+    budget?: Record<string, any>;
+  } | null;
+  events: Array<Record<string, any>>;
+  capture_errors: string[];
+  cleanup?: { status?: string; residual?: string[]; error?: string } | null;
+  observation: Record<string, any> | null;
+  artifacts: Array<{
+    artifact_id: string;
+    path: string;
+    media_type?: string | null;
+    size_bytes?: number | null;
+    sha256?: string | null;
+    available: boolean;
+  }>;
+}
+
+export const getAgentTasksOverview = () =>
+  request<AgentTasksOverview>("/api/v1/agent-tasks");
+
+export const importAgentTasks = (body: { content: string; name: string; version?: string }) =>
+  request<Record<string, unknown>>("/api/v1/agent-tasks/import", jsonBody(body));
+
+export const getAgentTasksCases = (params: { dataset: string; query?: string }) =>
+  request<{ items: AgentCaseRecord[]; total: number }>(
+    `/api/v1/agent-tasks/cases?dataset=${encodeURIComponent(params.dataset)}`
+    + (params.query ? `&query=${encodeURIComponent(params.query)}` : ""),
+  );
+
+export const dryRunAgentTasks = (body: AgentTasksRunRequest) =>
+  request<AgentDryRunSummary>("/api/v1/agent-tasks/runs/dry-run", jsonBody(body));
+
+export const createAgentTasksRun = (body: AgentTasksRunRequest) =>
+  request<RunRecord>("/api/v1/agent-tasks/runs", jsonBody(body));
+
+export const getAgentCaseDetail = (runId: string, caseId: string) =>
+  request<AgentCaseDetail>(`/api/v1/runs/${runId}/cases/${encodeURIComponent(caseId)}/agent`);
+
+export const getAgentArtifactContent = (runId: string, caseId: string, path: string) =>
+  request<{
+    path: string;
+    media_type?: string | null;
+    size_bytes?: number | null;
+    sha256?: string | null;
+    sha256_matches: boolean;
+    content: string;
+  }>(
+    `/api/v1/runs/${runId}/cases/${encodeURIComponent(caseId)}`
+    + `/artifacts/content?path=${encodeURIComponent(path)}`,
+  );
+
+export const getRunInvocations = (runId: string, caseId?: string) =>
+  request<{ items: Array<Record<string, any>>; total: number }>(
+    `/api/v1/runs/${runId}/invocations${caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""}`,
+  );
 
 export const getProviderKinds = () =>
   request<{ items: ProviderKindMeta[] }>(`/api/v1/provider_kinds`);
