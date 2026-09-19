@@ -24,12 +24,17 @@ INVOCATION_TRANSITIONS = {
 
 
 def validate_invocation(record: dict[str, Any]) -> dict[str, Any]:
+    """契约校验；存储层字段（revision）在验证前剥离、验证后回填。"""
     from motte_contracts.evaluation import InvocationRecord
 
+    contract_view = {key: value for key, value in record.items() if key != "revision"}
     try:
-        return InvocationRecord.model_validate(record).model_dump(mode="json")
+        validated = InvocationRecord.model_validate(contract_view).model_dump(mode="json")
     except Exception as error:  # noqa: BLE001 - 统一转存储层 ValueError
         raise ValueError(f"invocation does not match the contract: {error}") from error
+    if "revision" in record:
+        validated["revision"] = record["revision"]
+    return validated
 
 
 class SQLiteInvocations:
@@ -38,6 +43,7 @@ class SQLiteInvocations:
 
     def create(self, record: dict[str, Any]) -> dict[str, Any]:
         stored = validate_invocation({**record, "status": record.get("status", "prepared")})
+        stored.setdefault("revision", 1)
         try:
             with closing(_connect(self._path)) as connection, connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -112,6 +118,7 @@ class MemoryInvocations:
 
     def create(self, record: dict[str, Any]) -> dict[str, Any]:
         stored = validate_invocation({**record, "status": record.get("status", "prepared")})
+        stored.setdefault("revision", 1)
         with self._lock:
             if stored["id"] in self._rows:
                 raise RunConflictError(f"invocation already exists: {stored['id']}")
