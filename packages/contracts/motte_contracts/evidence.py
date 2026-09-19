@@ -39,6 +39,27 @@ class Score(Contract):
     parsed: str | None = None
     scoring_pass_id: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+    # Multi-metric identity (M1). trial_id is reserved for M3 trials and stays
+    # None in M1 writes. Legacy rows simply omit these fields and keep the
+    # one-score-per-case contract.
+    trial_id: str | None = None
+    metric_id: str | None = None
+    evaluator_id: str | None = None
+    evaluator_version: str | None = None
+    metric_status: str | None = None
+    reason: str | None = None
+    unit: str | None = None
+    denominator: bool | None = Field(default=None, strict=True)
+
+
+def _metric_key(score: Score) -> tuple[str, str, str, str, str]:
+    return (
+        score.case_id or "",
+        score.trial_id or "",
+        score.metric_id or "",
+        score.evaluator_id or "",
+        score.evaluator_version or "",
+    )
 
 
 class ScoreSet(Contract):
@@ -49,7 +70,28 @@ class ScoreSet(Contract):
     @model_validator(mode="after")
     def unique_case_scores(self) -> ScoreSet:
         case_ids = [score.case_id for score in self.scores]
-        if any(not case_id for case_id in case_ids) or len(case_ids) != len(set(case_ids)):
+        if any(not case_id for case_id in case_ids):
+            raise ValueError("score set requires one score per distinct case_id")
+        has_metric_identity = [
+            any((score.trial_id, score.metric_id, score.evaluator_id, score.evaluator_version))
+            for score in self.scores
+        ]
+        if any(has_metric_identity) and not all(has_metric_identity):
+            raise ValueError("score set cannot mix legacy and multi-metric scores")
+        if any(has_metric_identity):
+            # Multi-metric: unique per (case, trial, metric, evaluator, version).
+            for score in self.scores:
+                if not (score.metric_id and score.evaluator_id and score.evaluator_version):
+                    raise ValueError(
+                        "multi-metric scores require metric_id, evaluator_id and evaluator_version"
+                    )
+            keys = [_metric_key(score) for score in self.scores]
+            if len(keys) != len(set(keys)):
+                raise ValueError(
+                    "score set requires a unique (case_id, trial_id, metric_id, "
+                    "evaluator_id, evaluator_version) key per score"
+                )
+        elif len(case_ids) != len(set(case_ids)):
             raise ValueError("score set requires one score per distinct case_id")
         if any(score.scoring_pass_id not in (None, self.scoring_pass_id) for score in self.scores):
             raise ValueError("score belongs to a different scoring pass")

@@ -9,6 +9,18 @@ from pydantic import TypeAdapter
 from .dataset import DatasetVersion
 from .errors import ContractError, ErrorEnvelope, ExecutionError
 from .events import TraceEvent
+from .evaluation import (
+    AgentResult,
+    ArtifactEntry,
+    EvidenceCoverage,
+    EvidenceRef,
+    EvaluatorSpec,
+    FrozenObservation,
+    InvocationRecord,
+    MetricResult,
+    ObservedUsage,
+    TerminationRecord,
+)
 from .evidence import Artifact, Observation, Score, ScoreSet, ScoringPass
 from .messages import Contract, ModelRequest, ModelResponse, StreamEvent
 from .model import (IdentityEvidence, IdentityPolicy, IdentityResult, IdentityVerdict,
@@ -26,6 +38,8 @@ _PUBLIC: tuple[type[Contract], ...] = (
     RunCommand, TraceEvent, Artifact, Observation, Score, ScoringPass, ScoreSet,
     ReportCase, ReportCost, ReportSummary, RunReport, ContractError,
     ExecutionError, ErrorEnvelope, DatasetVersion,
+    FrozenObservation, EvidenceRef, EvidenceCoverage, ArtifactEntry, EvaluatorSpec,
+    MetricResult, AgentResult, InvocationRecord, ObservedUsage, TerminationRecord,
 )
 _ENUMS: tuple[type[Enum], ...] = (
     RunStatus, AttemptStatus, RunCommandStatus, IdentityPolicy, IdentityVerdict,
