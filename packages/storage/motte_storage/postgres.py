@@ -328,6 +328,7 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
     from .pg_audit_store import (
         PgAttempts,
         PgCommands,
+        PgExternalJobs,
         PgInvocations,
         PgScoreSets,
         PgScoringPasses,
@@ -347,4 +348,5 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         score_sets=PgScoreSets(normalized),
         commands=PgCommands(normalized),
         invocations=PgInvocations(normalized),
+        external_jobs=PgExternalJobs(normalized),
     )

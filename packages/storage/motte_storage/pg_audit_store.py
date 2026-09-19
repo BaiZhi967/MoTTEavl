@@ -1,6 +1,7 @@
 """PostgreSQL audit repositories; write operations are single transactions."""
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
@@ -22,6 +23,10 @@ from .integrity import (
     validate_scores,
 )
 from .postgres import _append_event, _connect
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 class PgAttempts:
@@ -654,3 +659,183 @@ class PgCommands:
                 if cursor.rowcount != 1:
                     raise RunConflictError(f"command revision or status changed: {command_id}")
         return deepcopy(stored)
+
+
+def _as_payload(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else json.loads(value)
+
+
+class PgExternalJobs:
+    """PostgreSQL 外部 Job 仓库；与 SQLite/Memory 实现语义一致（M2-T03）。
+
+    表结构来自 alembic ``0006_external_jobs``；写操作单事务，记录与
+    checkpoint 同事务提交。
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def begin_job(self, record: dict[str, Any]) -> dict[str, Any]:
+        stored = deepcopy(record)
+        job_id = str(stored.get("job_id"))
+        run_id = str(stored.get("run_id"))
+        status = str(stored.get("status"))
+        launch_token = str(stored.get("launch_token"))
+        message = "job already exists: " + job_id
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM external_jobs WHERE job_id = %s", (job_id,))
+                if cursor.fetchone() is not None:
+                    raise RunConflictError(message)
+                cursor.execute(
+                    "INSERT INTO external_jobs(job_id, run_id, status, launch_token, payload) VALUES (%s, %s, %s, %s, %s)",
+                    (job_id, run_id, status, launch_token, Json(stored)),
+                )
+        return deepcopy(stored)
+
+    def update_job(self, job_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT payload FROM external_jobs WHERE job_id = %s", (job_id,))
+                row = cursor.fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                job = _as_payload(row[0])
+                updated = {**job, **deepcopy(changes), "updated_at": _utc_now()}
+                new_status = str(updated.get("status") or job.get("status"))
+                cursor.execute(
+                    "UPDATE external_jobs SET status = %s, payload = %s WHERE job_id = %s",
+                    (new_status, Json(updated), job_id),
+                )
+        return deepcopy(updated)
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT payload FROM external_jobs WHERE job_id = %s", (job_id,))
+                row = cursor.fetchone()
+        return _as_payload(row[0]) if row is not None else None
+
+    def jobs_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM external_jobs WHERE run_id = %s ORDER BY created_at, job_id",
+                    (run_id,),
+                )
+                rows = cursor.fetchall()
+        return [_as_payload(row[0]) for row in rows]
+
+    def recoverable_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        recoverable = ("launching", "active", "collecting")
+        return [
+            job for job in self.jobs_for_run(run_id)
+            if job.get("status") in recoverable
+        ]
+
+    def import_record(
+        self,
+        job_id: str,
+        source_record_key: str,
+        parser_version: str,
+        content_hash: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT payload FROM external_jobs WHERE job_id = %s", (job_id,))
+                job_row = cursor.fetchone()
+                if job_row is None:
+                    raise KeyError(job_id)
+                cursor.execute(
+                    "SELECT content_hash, payload FROM external_job_records WHERE job_id = %s AND source_record_key = %s AND parser_version = %s",
+                    (job_id, source_record_key, parser_version),
+                )
+                existing = cursor.fetchone()
+                if existing is not None:
+                    existing_hash = existing[0]
+                    existing_payload = _as_payload(existing[1])
+                    if existing_hash == content_hash:
+                        return {"status": "noop", "record": {
+                            "job_id": job_id,
+                            "source_record_key": source_record_key,
+                            "parser_version": parser_version,
+                            "content_hash": existing_hash,
+                            "payload": existing_payload,
+                        }}
+                    cursor.execute(
+                        "INSERT INTO external_job_conflicts(job_id, source_record_key, parser_version, existing_hash, incoming_hash, incoming_payload, detected_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (job_id, source_record_key, parser_version, existing_hash,
+                         content_hash, Json(payload), _utc_now()),
+                    )
+                    return {"status": "conflict", "existing": {
+                        "job_id": job_id,
+                        "source_record_key": source_record_key,
+                        "parser_version": parser_version,
+                        "content_hash": existing_hash,
+                        "payload": existing_payload,
+                    }, "incoming": {"content_hash": content_hash, "payload": deepcopy(payload)}}
+                imported_at = _utc_now()
+                cursor.execute(
+                    "INSERT INTO external_job_records(job_id, source_record_key, parser_version, content_hash, payload, imported_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (job_id, source_record_key, parser_version, content_hash,
+                     Json(payload), imported_at),
+                )
+                job = _as_payload(job_row[0])
+                checkpoint = dict(job.get("checkpoint") or {})
+                checkpoint["records_consumed"] = int(checkpoint.get("records_consumed", 0)) + 1
+                job["checkpoint"] = checkpoint
+                job["updated_at"] = _utc_now()
+                new_status = str(job.get("status") or "")
+                cursor.execute(
+                    "UPDATE external_jobs SET status = %s, payload = %s WHERE job_id = %s",
+                    (new_status, Json(job), job_id),
+                )
+        return {"status": "imported", "record": {
+            "job_id": job_id,
+            "source_record_key": source_record_key,
+            "parser_version": parser_version,
+            "content_hash": content_hash,
+            "payload": deepcopy(payload),
+            "imported_at": imported_at,
+        }}
+
+    def list_records(self, job_id: str) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT job_id, source_record_key, parser_version, content_hash, payload FROM external_job_records WHERE job_id = %s ORDER BY imported_at, position",
+                    (job_id,),
+                )
+                rows = cursor.fetchall()
+        records = []
+        for row in rows:
+            records.append({
+                "job_id": row[0], "source_record_key": row[1],
+                "parser_version": row[2], "content_hash": row[3],
+                "payload": _as_payload(row[4]),
+            })
+        return records
+
+    def list_conflicts(self, job_id: str | None = None) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                if job_id is None:
+                    cursor.execute(
+                        "SELECT job_id, source_record_key, parser_version, existing_hash, incoming_hash, incoming_payload, detected_at FROM external_job_conflicts ORDER BY position",
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT job_id, source_record_key, parser_version, existing_hash, incoming_hash, incoming_payload, detected_at FROM external_job_conflicts WHERE job_id = %s ORDER BY position",
+                        (job_id,),
+                    )
+                rows = cursor.fetchall()
+        conflicts = []
+        for row in rows:
+            conflicts.append({
+                "job_id": row[0], "source_record_key": row[1],
+                "parser_version": row[2], "existing_hash": row[3],
+                "incoming_hash": row[4], "incoming_payload": _as_payload(row[5]),
+                "detected_at": str(row[6]),
+            })
+        return conflicts

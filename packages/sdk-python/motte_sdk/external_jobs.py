@@ -1,14 +1,19 @@
 """外部 Job 应用层监督（启动边界、观察、采集与结局映射）。
 
 应用层持有调度主权：先持久化启动意图（含 launch_token）再调用
-adapter.start；恢复路径只观察/采集，绝不重启。结果导入的幂等检查点与
-同键冲突由 external job 存储（M2-T03）接管；本模块交付 T02 的单次启动
-边界与结局语义。
+adapter.start；恢复路径只观察/采集，绝不重启。``DurableExternalJobRunner``
+把 supervisor 装配到 Job 存储与 Artifact 冻结上：outcome 先冻结为受控
+不可变工件，再按 job_id + record key + parser_version 幂等导入；同键不同
+内容是 conflict，停止最终化并保留两份摘要。取消后的迟到结果只作审计
+证据，终态不复活。
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from motte_contracts.external_job import (
@@ -18,11 +23,21 @@ from motte_contracts.external_job import (
     new_launch_token,
 )
 
+# 通用进程 Job 的导入 parser 版本；C-Eval/CMMLU 迁入后由各自 parser 提供。
+GENERIC_PARSER_VERSION = "process-generic@1"
+
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def _canonical_hash(payload: Any) -> str:
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 class ExternalJobSupervisor:
@@ -42,14 +57,15 @@ class ExternalJobSupervisor:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.adapter = adapter
-        self._journal = intent_journal
+        # 公开可替换：DurableExternalJobRunner 装配时写入 Job 存储。
+        self.intent_journal = intent_journal
         self.poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
         self._monotonic = monotonic
 
     def _record(self, entry: dict[str, Any]) -> None:
-        if self._journal is not None:
-            self._journal(entry)
+        if self.intent_journal is not None:
+            self.intent_journal(entry)
 
     def launch(self, spec: ExternalJobSpec) -> ExternalJobHandle:
         """prepare → 持久化启动意图（新 token）→ start → 持久化句柄。"""
@@ -174,3 +190,216 @@ class ExternalJobSupervisor:
             })
         payload = [item.model_dump(mode="json") for item in results]
         return (payload, None)
+
+
+class DurableExternalJobRunner:
+    """job 模式入口装配：supervisor + Job 存储 + Artifact 冻结 + 幂等导入。
+
+    作为 ``ExecutionHandle.run_job`` 使用：同一 Run 再次进入（崩溃后重派）
+    时，已有可恢复 Job 只观察/采集，绝不重新启动；outcome 先冻结为受控
+    Artifact，再逐条幂等导入（同键同内容 no-op，同键不同内容 conflict 并
+    把结局改为 failed）。取消后 ``import_late_results`` 只写审计事件。
+    """
+
+    def __init__(
+        self,
+        supervisor: ExternalJobSupervisor,
+        job_store: Any,
+        *,
+        artifacts: Any = None,
+        work_root: str | Path = "var/external-jobs",
+        parser_version: str = GENERIC_PARSER_VERSION,
+    ) -> None:
+        self.supervisor = supervisor
+        self.job_store = job_store
+        self.artifacts = artifacts
+        self.work_root = str(work_root)
+        self.parser_version = parser_version
+        self._service: Any = None
+
+    def bind_service(self, service: Any) -> None:
+        self._service = service
+
+    # -------------------------------------------------------------- 启动日志
+
+    def _journal(self, record: dict[str, Any]) -> None:
+        event = record.get("event")
+        if event == "launch_intent":
+            handle = record.get("handle") or {}
+            self.job_store.begin_job({
+                "job_id": handle.get("job_id"),
+                "run_id": handle.get("run_id"),
+                "status": ExternalJobStatus.launching.value,
+                "launch_token": handle.get("launch_token"),
+                "spec": record.get("spec") or {},
+                "handle": handle,
+                "checkpoint": {},
+            })
+        elif event == "launch_started":
+            handle = record.get("handle") or {}
+            self.job_store.update_job(str(handle.get("job_id") or ""), {
+                "status": ExternalJobStatus.active.value,
+                "handle": handle,
+            })
+
+    # ---------------------------------------------------------------- 执行
+
+    def __call__(self, run: dict[str, Any]) -> dict[str, Any]:
+        from .execution_backends import external_job_spec_from_run
+
+        spec = external_job_spec_from_run(run, work_root=self.work_root)
+        existing = self.job_store.jobs_for_run(spec.run_id)
+        if existing:
+            # 一个 Run 只启动一个 Job：已有记录就绝不再次 start。
+            persisted = existing[-1]
+            status = str(persisted.get("status") or "")
+            if status in {"launching", "active", "collecting"}:
+                handle = ExternalJobHandle.model_validate(persisted.get("handle") or {})
+                outcome = self.supervisor.recover(spec, handle)
+            else:
+                # 终态 Job（采集后、最终化前崩溃）：从已导入记录重建 outcome，
+                # 再次导入同键同内容为 no-op，不产生重复评分/工件关联。
+                records = self.job_store.list_records(str(persisted.get("job_id") or ""))
+                outcome = {
+                    "job_status": status,
+                    "results": [dict(record.get("payload") or {}) for record in records],
+                    "error": None,
+                    "handle": persisted.get("handle") or {},
+                    "recovered_from": "job-store",
+                }
+        else:
+            # 启动意图（含新 launch_token）先落 Job 存储再 start。
+            self.supervisor.intent_journal = self._journal
+            outcome = self.supervisor.run(spec)
+        outcome = self._settle(spec, outcome)
+        return outcome
+
+    def _settle(self, spec: ExternalJobSpec, outcome: dict[str, Any]) -> dict[str, Any]:
+        handle = outcome.get("handle") or {}
+        job_id = str(handle.get("job_id") or "")
+        status = str(outcome.get("job_status") or "indeterminate")
+        if not job_id:
+            return outcome
+        if status in {"settled", "failed", "cancelled", "indeterminate"}:
+            current = self.job_store.get_job(job_id)
+            # cancelled 是操作员终局：中断后迟到的 failed/indeterminate 观察
+            # 不覆盖取消状态（终态不复活也不降级）。
+            if current is None or current.get("status") != "cancelled":
+                self.job_store.update_job(job_id, {"status": status, "handle": handle})
+            elif current.get("status") == "cancelled":
+                self.job_store.update_job(job_id, {"handle": handle})
+        # 原始 outcome 先冻结为受控不可变 Artifact，再进入导入。
+        artifact_id: str | None = None
+        if self.artifacts is not None:
+            frozen = {
+                "job_status": status,
+                "results": outcome.get("results") or [],
+                "error": outcome.get("error"),
+                "spec": spec.model_dump(mode="json"),
+                "handle": handle,
+            }
+            artifact = self.artifacts.put_bytes(
+                f"external-jobs/{spec.run_id}/{job_id}/outcome.json",
+                json.dumps(frozen, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            )
+            artifact_id = artifact.id
+        imported = 0
+        conflicts: list[dict[str, Any]] = []
+        for item in outcome.get("results") or []:
+            key = str(item.get("stable_case_key") or item.get("source_case_id") or "")
+            if not key:
+                continue
+            result = self.job_store.import_record(
+                job_id, key, self.parser_version,
+                _canonical_hash(item), item,
+            )
+            if result.get("status") == "imported":
+                imported += 1
+            elif result.get("status") == "conflict":
+                conflicts.append({
+                    "source_record_key": key,
+                    "existing": result.get("existing"),
+                    "incoming": result.get("incoming"),
+                })
+        outcome["import"] = {
+            "job_id": job_id,
+            "imported": imported,
+            "conflicts": conflicts,
+            "artifact": artifact_id,
+            "parser_version": self.parser_version,
+        }
+        if conflicts:
+            # 停止最终化：结局改 failed 并保留两份来源摘要。
+            outcome["job_status"] = "failed"
+            outcome["error"] = {
+                "code": "EXTERNAL_IMPORT_CONFLICT",
+                "message": "same import key arrived with different content; "
+                           "both summaries are preserved in the conflict ledger",
+                "details": {"conflicts": conflicts[:10]},
+            }
+        return outcome
+
+    # -------------------------------------------------------------- 取消
+
+    def interrupt_run(self, run_id: str) -> dict[str, Any] | None:
+        """操作员取消钩子：中断本 Run 活跃 Job 拥有的进程并落取消状态。"""
+        recoverable = self.job_store.recoverable_for_run(run_id)
+        if not recoverable:
+            return None
+        persisted = recoverable[0]
+        handle = ExternalJobHandle.model_validate(persisted.get("handle") or {})
+        cancelled = self.supervisor.interrupt(
+            ExternalJobSpec.model_validate(persisted.get("spec") or {}), handle,
+        )
+        cancelled_handle = cancelled.get("handle") or {}
+        self.job_store.update_job(
+            str(cancelled_handle.get("job_id") or ""),
+            {"status": ExternalJobStatus.cancelled.value, "handle": cancelled_handle},
+        )
+        return cancelled
+
+    # -------------------------------------------------------------- 迟到结果
+
+    def import_late_results(
+        self, run_id: str, records: list[dict[str, Any]], *, job_id: str | None = None,
+    ) -> dict[str, Any]:
+        """迟到数据只作审计证据：不改 Run 状态、不新增评分（M2-A09）。"""
+        jobs = self.job_store.jobs_for_run(run_id)
+        if not jobs:
+            raise KeyError("no external job for run: " + run_id)
+        target = next(
+            (job for job in jobs if job_id is None or job.get("job_id") == job_id),
+            jobs[-1],
+        )
+        resolved_job_id = str(target.get("job_id"))
+        imported = 0
+        conflicts: list[dict[str, Any]] = []
+        for record in records:
+            key = str(record.get("case_id") or record.get("source_case_id") or "")
+            if not key:
+                continue
+            result = self.job_store.import_record(
+                resolved_job_id, key, self.parser_version,
+                _canonical_hash(record), record,
+            )
+            if result.get("status") == "imported":
+                imported += 1
+            elif result.get("status") == "conflict":
+                conflicts.append({
+                    "source_record_key": key,
+                    "existing": result.get("existing"),
+                    "incoming": result.get("incoming"),
+                })
+        if self._service is not None:
+            self._service.emit_run_event(run_id, "external_job_late_results", {
+                "job_id": resolved_job_id,
+                "imported": imported,
+                "conflicts": conflicts,
+                "audit_only": True,
+            })
+        return {
+            "job_id": resolved_job_id,
+            "imported": imported,
+            "conflicts": conflicts,
+            "audit_only": True,
+        }

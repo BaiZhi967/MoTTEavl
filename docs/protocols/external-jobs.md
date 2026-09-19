@@ -1,8 +1,9 @@
 # External Jobs 协议（job-based Benchmark 执行）
 
-> 状态：**契约 + 进程适配器已接通（M2-T01/T02）**。Job 持久化与幂等导入在
-> M2-T03 接入；在此之前 `external-benchmark@1` 后端保持 `available=false`，
-> 创建 Run 时即拒绝，不会产生模型调用。
+> 状态：**契约 + 进程适配器 + Job 持久化已接通（M2-T01/T02/T03）**。
+> C-Eval 数据/配置/Parser 与公共入口在 T04–T07 接入；在此之前
+> `external-benchmark@1` 后端保持 `available=false`，创建 Run 时即拒绝，
+> 不会产生模型调用。
 
 ## 1. 执行模式
 
@@ -132,3 +133,36 @@ cleanup(handle)                # 清理本 Job 资源并列出残留
   禁止仅凭“没有 results.json”重新付费执行。
 - `interrupt(spec, handle)`：操作员取消——先中断自有进程，再尽力采集部分
   工件；终态不因迟到输出复活。
+
+## 8. Job 持久化与幂等导入（M2-T03）
+
+存储（`motte_storage.external_jobs`，Memory/SQLite/PostgreSQL 三实现，
+PG 表来自 alembic `0006_external_jobs`）：
+
+- `external_jobs`：job_id/run_id/status/launch_token + 完整 spec/handle/
+  checkpoint payload。`begin_job` 幂等（同 job_id+同 token 重放返回现有；
+  不同 token 是启动身份冲突，Job 永不二次 start）。
+- `external_job_records`：幂等键 `(job_id, source_record_key, parser_version)`
+  + content_hash + payload。`import_record`：同键同内容 no-op；同键不同
+  内容 conflict——已落库记录不变，incoming 摘要进冲突账本，两份都保留。
+  记录与 job checkpoint 在**同一事务**提交（崩溃恢复无半状态）。
+- `external_job_conflicts`：冲突账本（existing/incoming hash 与 payload）。
+
+`DurableExternalJobRunner`（`motte_sdk.external_jobs`）装配 supervisor 与
+上述存储，作为 job 模式 `run_job` 入口：
+
+1. **一个 Run 只启动一个 Job**：已存在 Job 记录时绝不 start。活跃
+   （launching/active/collecting）→ 只恢复观察；终态（采集后、最终化前
+   崩溃）→ 从已导入记录重建 outcome，再次导入为 no-op。
+2. 原始 outcome 先冻结为受控不可变 Artifact
+   （`external-jobs/<run>/<job>/outcome.json`），再逐条导入。
+3. 导入冲突 → 结局改 failed（`EXTERNAL_IMPORT_CONFLICT`），停止最终化并
+   保留两份摘要（M2-A06）。
+4. 操作员取消：`RunService.cancel` 先持久化取消请求，再经注册的
+   `interrupt_run` 中断本 Run 拥有的进程；中断后迟到的 failed/indeterminate
+   观察不覆盖 Job 的 cancelled 状态，Run 终态不复活（M2-A09）。
+5. 迟到结果只走 `import_late_results`：写审计事件
+   `external_job_late_results`（audit_only），不改 Run 状态、不新增评分。
+
+`launching` 状态但进程不可核验（崩溃于 start 前后）→ recover 观察 →
+indeterminate → Run needs_review；禁止仅凭“没有 results”重新执行（M2-A07）。

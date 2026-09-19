@@ -68,6 +68,8 @@ class RunService:
         self.provider = provider
         self._event_observers = [event_observer] if event_observer is not None else []
         self._progress_observers = [progress_observer] if progress_observer is not None else []
+        # job 模式入口可注册的取消钩子（运行中的外部 Job 中断）。
+        self._external_interrupters: dict[str, Any] = {}
 
     def add_event_observer(self, observer: Callable[[dict[str, Any]], None]) -> None:
         self._event_observers.append(observer)
@@ -294,10 +296,16 @@ class RunService:
             self._transition(run_id, "preparing")
         if self._load(run_id)["status"] != "running":
             self._transition(run_id, "running")
+        # 运行中的外部 Job 可被操作员取消中断（尽力而为，失败不阻断取消）。
+        interrupt_run = getattr(job_entry, "interrupt_run", None)
+        if callable(interrupt_run):
+            self._external_interrupters[run_id] = interrupt_run
         try:
             outcome = job_entry(run)
         except Exception as error:
             return self._fail_or_quarantine(run_id, error)
+        finally:
+            self._external_interrupters.pop(run_id, None)
         cancelled = self._honor_cancellation(run_id)
         if cancelled is not None:
             return cancelled
@@ -318,6 +326,8 @@ class RunService:
             self.store.case_runs.upsert(rows_by_case[case_id])
         rows = self.store.case_runs.list_for_run(run_id)
         job_status = str(outcome.get("job_status") or "indeterminate")
+        if outcome.get("import", {}).get("conflicts"):
+            job_status = "failed"
         errors = [
             row["result"]["error"] for row in rows
             if isinstance(row.get("result"), dict) and row["result"].get("error")
@@ -360,7 +370,7 @@ class RunService:
         for item in outcome.get("results") or []:
             if not isinstance(item, dict):
                 continue
-            case_id = item.get("case_id")
+            case_id = item.get("case_id") or item.get("source_case_id")
             if not isinstance(case_id, str) or not case_id:
                 continue
             status = item.get("status")
@@ -411,9 +421,11 @@ class RunService:
             return self._view(run_id)
         cancellation = {"reason": reason} if reason is not None else {}
         open_attempts = self.store.attempts.list_open(run_id)
-        if open_attempts or (
+        interrupter = self._external_interrupters.get(run_id)
+        deferrable = open_attempts or (
             not _settle and run["status"] in {"running", "collecting", "scoring"}
-        ):
+        )
+        if deferrable and interrupter is None:
             now = datetime.now(UTC).isoformat()
             cancellation["requested_at"] = now
             self.store.runs.update(
@@ -429,6 +441,34 @@ class RunService:
             )
             self._notify_latest_event(run_id)
             return self._view(run_id)
+        if interrupter is not None:
+            # job 模式：先持久化取消请求，再中断本 Run 拥有的外部 Job 进程，
+            # 迟到输出只作审计证据，终态不复活。
+            now = datetime.now(UTC).isoformat()
+            cancellation["requested_at"] = now
+            self.store.runs.update(
+                {**run, "cancellation": cancellation, "updated_at": now},
+                expected_revision=run["revision"],
+                expected_status=run["status"],
+                event={
+                    "run_id": run_id,
+                    "type": "cancellation_requested",
+                    "status": run["status"],
+                    **({"reason": reason} if reason is not None else {}),
+                },
+            )
+            self._notify_latest_event(run_id)
+            try:
+                interrupter(run_id)
+            except Exception as error:  # noqa: BLE001 - 中断失败不阻断取消落账
+                self.emit_run_event(run_id, "external_job_interrupt_failed", {
+                    "error_class": type(error).__name__,
+                    "message": str(error),
+                })
+            refreshed = self._load(run_id)
+            if refreshed["status"] in self.TERMINAL:
+                return self._view(run_id)
+            run = refreshed
         changes = {"cancellation": cancellation} if cancellation else {}
         if run.get("manifest", {}).get("benchmark_provenance"):
             try:

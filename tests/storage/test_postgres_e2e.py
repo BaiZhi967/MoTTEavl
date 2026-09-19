@@ -360,3 +360,47 @@ def test_postgres_pair_publish_rolls_back_on_scenario_trigger(migrated_dsn):
                     "DROP TRIGGER IF EXISTS reject_resource_scenario_insert ON scenario_versions"
                 )
                 cursor.execute("DROP FUNCTION IF EXISTS reject_resource_scenario()")
+
+
+def test_postgres_external_jobs_idempotent_import_and_conflict(migrated_dsn):
+    """M2-T03 PG 对齐：同键同内容 no-op、同键不同内容 conflict 且两份都保留。"""
+    store = create_postgres_run_store(migrated_dsn)
+    jobs = store.external_jobs
+    job = jobs.begin_job({
+        "job_id": "job-pg-t03",
+        "run_id": "run-pg-t03",
+        "status": "launching",
+        "launch_token": "launch-pg-1",
+        "spec": {},
+        "handle": {"job_id": "job-pg-t03"},
+        "checkpoint": {},
+    })
+    assert job["status"] == "launching"
+
+    record = {"case_id": "s-a:1", "status": "succeeded", "output": {"prediction": "A"}}
+    first = jobs.import_record(
+        "job-pg-t03", "s-a:1", "parser-v1", "hash-a", record,
+    )
+    assert first["status"] == "imported"
+    again = jobs.import_record(
+        "job-pg-t03", "s-a:1", "parser-v1", "hash-a", record,
+    )
+    assert again["status"] == "noop"
+
+    conflict = jobs.import_record(
+        "job-pg-t03", "s-a:1", "parser-v1", "hash-alt",
+        {"case_id": "s-a:1", "status": "succeeded", "output": {"prediction": "X"}},
+    )
+    assert conflict["status"] == "conflict"
+    stored = {row["source_record_key"]: row for row in jobs.list_records("job-pg-t03")}
+    assert stored["s-a:1"]["content_hash"] == "hash-a"
+    conflicts = jobs.list_conflicts("job-pg-t03")
+    assert len(conflicts) == 1
+    assert conflicts[0]["existing_hash"] == "hash-a"
+    assert conflicts[0]["incoming_hash"] == "hash-alt"
+
+    jobs.update_job("job-pg-t03", {"status": "active"})
+    assert [item["job_id"] for item in jobs.recoverable_for_run("run-pg-t03")] == ["job-pg-t03"]
+    jobs.update_job("job-pg-t03", {"status": "settled"})
+    assert jobs.recoverable_for_run("run-pg-t03") == []
+    assert jobs.get_job("job-pg-t03")["checkpoint"]["records_consumed"] == 1
