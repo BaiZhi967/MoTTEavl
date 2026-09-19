@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -107,9 +108,14 @@ def _safe_path_component(value: str, label: str) -> str:
     return value
 
 
+def _workspace_anchor() -> Path:
+    """受信 workspace 前缀（平台配置根）；anchor 之下的组件链必须真实。"""
+    return Path(os.environ.get("MOTTE_AGENT_WORKSPACE_ROOT", "var/agent-workspaces"))
+
+
 def _workspace_root(run_id: str, case_id: str) -> Path:
-    base = Path(os.environ.get("MOTTE_AGENT_WORKSPACE_ROOT", "var/agent-workspaces"))
-    return base / _safe_path_component(run_id, "run_id") / _safe_path_component(case_id, "case_id")
+    return _workspace_anchor() / _safe_path_component(run_id, "run_id") \
+        / _safe_path_component(case_id, "case_id")
 
 
 def _artifact_store():
@@ -225,7 +231,11 @@ class AgentCaseExecutor:
 
         budget_config = _merged_budget(self.config.get("budget") or {}, case.get("limits") or {})
         budget = ExecutionBudget.from_config(budget_config)
-        workspace = CaseWorkspace(_workspace_root(self.run["id"], case_id), quotas=WorkspaceQuotas())
+        # 目录链归属校验：anchor 之下任何组件是 symlink 即拒绝（R3 #3）
+        workspace = CaseWorkspace(
+            _workspace_root(self.run["id"], case_id),
+            quotas=WorkspaceQuotas(), anchor=_workspace_anchor(),
+        )
         workspace.materialize_fixture(case.get("fixture") or {})
         # fixture 属预置文件：before 快照在物化后取，forbidden 判定不含平台写入
         before = workspace.snapshot()
@@ -240,17 +250,67 @@ class AgentCaseExecutor:
                 "tools": len(request.tools),
                 "system": bool(request.system),
             })
-            try:
-                envelope = self.provider_complete(request)
-            except Exception as error:  # noqa: BLE001 - settled failed + re-raise
-                self._settle_invocation(invocation, "failed", {"error": str(error)})
-                raise
-            self._settle_invocation(invocation, "succeeded", {
-                "finish_reason": envelope.get("finish_reason"),
-                "usage": envelope.get("usage"),
-                "tool_calls": len(envelope.get("tool_calls") or []),
-            })
-            return envelope
+            from motte_agent.errors import ProviderCallTimeout
+
+            deadline = budget.per_call_deadline()
+            if deadline is None:
+                try:
+                    envelope = self.provider_complete(request)
+                except BaseException as error:  # noqa: BLE001 - settled failed + re-raise
+                    self._settle_invocation(invocation, "failed", {"error": str(error)})
+                    raise
+                self._settle_invocation(invocation, "succeeded", {
+                    "finish_reason": envelope.get("finish_reason"),
+                    "usage": envelope.get("usage"),
+                    "tool_calls": len(envelope.get("tool_calls") or []),
+                })
+                return envelope
+
+            # R3 #1：期限、线程与调用日志结算都在主流程内完成。到期时主流程先
+            # 同步把 invocation 结算为 indeterminate（可靠结算），再抛
+            # ProviderCallTimeout；被放弃的底层线程迟到返回后不得再写持久状态。
+            box: dict[str, Any] = {}
+            settled = threading.Event()
+            settle_lock = threading.Lock()
+
+            def settle_once(outcome: str, summary: dict[str, Any]) -> None:
+                with settle_lock:
+                    if settled.is_set():
+                        return  # 已由主流程按超时终结；僵尸线程的结果只丢弃
+                    settled.set()
+                    self._settle_invocation(invocation, outcome, summary)
+
+            def runner() -> None:
+                try:
+                    box["envelope"] = self.provider_complete(request)
+                except BaseException as error:  # noqa: BLE001 - 线程边界内原样传递
+                    box["error"] = error
+                if "error" in box:
+                    settle_once("failed", {"error": str(box["error"])})
+                else:
+                    envelope = box.get("envelope") or {}
+                    settle_once("succeeded", {
+                        "finish_reason": envelope.get("finish_reason"),
+                        "usage": envelope.get("usage"),
+                        "tool_calls": len(envelope.get("tool_calls") or []),
+                    })
+
+            worker = threading.Thread(
+                target=runner, daemon=True, name="agent-model-call",
+            )
+            worker.start()
+            worker.join(timeout=max(0.0, deadline - monotonic()))
+            if worker.is_alive():
+                settle_once("indeterminate", {
+                    "abandoned": "per_call_timeout",
+                    "timeout_sec": budget.per_call_timeout_sec,
+                })
+                raise ProviderCallTimeout(
+                    f"model call exceeded per_call_timeout_sec={budget.per_call_timeout_sec}"
+                )
+            if "error" in box:
+                raise box["error"]
+            return box.get("envelope")
 
         tools = _workspace_tools(workspace)
 
@@ -282,40 +342,59 @@ class AgentCaseExecutor:
             budget=budget,
             event_sink=self._event_sink(case_id, evidence),
             should_cancel=self._cancel_check(),
+            # 期限由 complete_with_logging 在主流程内强制并可靠结算（R3 #1）
+            per_call_self_enforced=True,
         )
 
         started = monotonic()
         pending_error: BaseException | None = None
+        capture_failure: BaseException | None = None
+        observation: dict[str, Any] = {}
+        capture_errors: list[str] = []
+        cleanup: dict[str, Any] | None = None
         try:
-            outcome = runtime.run_agent(case["input"])
-        except WorkspacePolicyError as error:
-            outcome = {
-                "final_output": None,
-                "termination_reason": "error",
-                "termination_detail": f"workspace policy: {error.code}: {error}",
-                "steps": 0, "tool_calls": budget.tool_calls_made(),
-                "events": list(runtime.events), "messages": [],
-                "usage": budget.observed_usage(),
-                "budget": budget.enforcement_report(),
-            }
-        except Exception as error:  # noqa: BLE001 - #9：异常路径也要采集证据并清理
-            pending_error = error
-            outcome = {
-                "final_output": None,
-                "termination_reason": "error",
-                "termination_detail": f"{type(error).__name__}: {error}",
-                "steps": state["step"], "tool_calls": budget.tool_calls_made(),
-                "events": list(runtime.events), "messages": [],
-                "usage": budget.observed_usage(),
-                "budget": budget.enforcement_report(),
-            }
-        duration_ms = round((monotonic() - started) * 1000, 3)
+            try:
+                outcome = runtime.run_agent(case["input"])
+            except WorkspacePolicyError as error:
+                outcome = {
+                    "final_output": None,
+                    "termination_reason": "error",
+                    "termination_detail": f"workspace policy: {error.code}: {error}",
+                    "steps": 0, "tool_calls": budget.tool_calls_made(),
+                    "events": list(runtime.events), "messages": [],
+                    "usage": budget.observed_usage(),
+                    "budget": budget.enforcement_report(),
+                }
+            except BaseException as error:  # noqa: BLE001 - #9：异常路径也要采集证据并清理
+                pending_error = error
+                outcome = {
+                    "final_output": None,
+                    "termination_reason": "error",
+                    "termination_detail": f"{type(error).__name__}: {error}",
+                    "steps": state["step"], "tool_calls": budget.tool_calls_made(),
+                    "events": list(runtime.events), "messages": [],
+                    "usage": budget.observed_usage(),
+                    "budget": budget.enforcement_report(),
+                }
+            duration_ms = round((monotonic() - started) * 1000, 3)
 
-        # 终止（含异常）后一律采集 + 清理；清理失败如实上报残留
-        observation, capture_errors = self._capture(
-            workspace, case, outcome, before, evidence,
-        )
-        cleanup = workspace.cleanup()
+            # 采集失败只记录，绝不允许覆盖原始异常（R3 #2）
+            try:
+                observation, capture_errors = self._capture(
+                    workspace, case, outcome, before, evidence,
+                )
+            except BaseException as error:  # noqa: BLE001 - 采集崩溃降级为记录
+                capture_failure = error
+                capture_errors = [f"capture failed: {type(error).__name__}: {error}"]
+        finally:
+            # 清理无条件执行；失败如实上报残留（R3 #2）
+            try:
+                cleanup = workspace.cleanup()
+            except BaseException as error:  # noqa: BLE001 - cleanup 自身崩溃也报告
+                cleanup = {
+                    "status": "failed", "residual": [],
+                    "error": f"{type(error).__name__}: {error}",
+                }
         envelope = {
             "agent": {
                 "final_output": outcome.get("final_output"),
@@ -335,9 +414,9 @@ class AgentCaseExecutor:
             "cleanup": cleanup,
         }
         if pending_error is not None:
+            # 原始异常优先（含隔离语义）：采集/清理失败只随 evidence 附带说明，
+            # 绝不覆盖或升级原始异常类型（R3 #2）。
             if not getattr(pending_error, "quarantine", False):
-                # #9：异常路径的采集证据随异常带回，服务层把 evidence 落成 case 结果；
-                # 附带 error 标记使该 case 记为失败而不是成功响应。
                 pending_error.evidence = {
                     **envelope,
                     "error": {
@@ -346,6 +425,23 @@ class AgentCaseExecutor:
                     },
                 }
             raise pending_error
+        if capture_failure is not None:
+            # 无原始异常但采集崩溃：副作用已发生而 Observation 不可冻结——
+            # 证据边界失败，隔离待审而不是当作普通失败。
+            from motte_agent.errors import AgentFatalError
+
+            fatal = AgentFatalError(
+                f"observation capture failed: {capture_failure}",
+                code="OBSERVATION_CAPTURE_FAILED",
+            )
+            fatal.evidence = {
+                **envelope,
+                "error": {
+                    "class": type(capture_failure).__name__,
+                    "message": str(capture_failure),
+                },
+            }
+            raise fatal
         return envelope
 
     # ------------------------------------------------------------ 证据通道

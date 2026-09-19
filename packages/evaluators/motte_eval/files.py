@@ -127,8 +127,6 @@ def evaluate_file_content(observation: FrozenObservation, metric: MetricRequest,
             reason="config_error", details={"error": "schema mode requires a schema object"},
             refs=refs,
         )
-    from jsonschema.exceptions import SchemaError
-
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -144,26 +142,29 @@ def evaluate_file_content(observation: FrozenObservation, metric: MetricRequest,
             observation, metric, MetricStatus.scored, passed=False,
             reason="invalid_json", details={"error": str(error)}, refs=refs,
         )
-    from .observation import local_schema_validator
+    from .observation import bounded_schema_validation, schema_timeout
 
-    try:
-        validator = local_schema_validator(schema)
-        errors = sorted(validator.iter_errors(payload), key=lambda item: list(item.absolute_path))
-    except SchemaError as error:
+    kind, value = bounded_schema_validation(
+        schema, payload, timeout_sec=schema_timeout(context),
+    )
+    if kind == "timeout":
         return _base_metric(
             observation, metric, MetricStatus.evaluator_error,
-            reason="config_error", details={"error": str(error)}, refs=refs,
+            reason="schema_timeout", details={"timeout_sec": schema_timeout(context)},
+            refs=refs,
         )
-    except Exception as error:  # noqa: BLE001 - 含被禁止的远程 $ref 等解析失败
+    if kind in ("config_error", "unresolvable", "error"):
         return _base_metric(
             observation, metric, MetricStatus.evaluator_error,
-            reason="schema_unresolvable", details={"error": str(error)}, refs=refs,
+            reason={"config_error": "config_error",
+                    "unresolvable": "schema_unresolvable"}.get(kind, "schema_execution_error"),
+            details={"error": str(value)}, refs=refs,
         )
-    if errors:
+    if value:
         return _base_metric(
             observation, metric, MetricStatus.scored, passed=False,
             reason="schema_violation",
-            details={"violations": [error.message for error in errors[:5]]},
+            details={"violations": list(value[:5])},
             refs=refs,
         )
     return _base_metric(observation, metric, MetricStatus.scored, passed=True, refs=refs)

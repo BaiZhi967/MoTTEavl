@@ -243,6 +243,10 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 - [x] M1-T10 集成：本地假 HTTP + 真实 API/Worker/SQLite 三组代表任务闭环；
   真实 Docker（一次性 PG 容器 + alembic 0001→0005）19 passed；
   Direct LLM v1 / Replay 回归不变。
+- [x] review 三轮修复：fcf4508 18 项 + a8629d5 10 项全部关闭（含单次调用期限
+  可靠结算、workspace 目录链归属校验、公共响应全面脱敏、schema 可终止校验、
+  禁写"写入后恢复"轨迹判定）；反例测试见
+  `tests/runtime/test_review_round{2,3}_fixes.py`。
 - [ ] live（真实 subject 模型）：待操作者授权与预算；M1-Supported 未满足。
 
 验证详情与逐包命令见 [docs/verification/M1.md](verification/M1.md)。

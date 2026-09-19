@@ -17,15 +17,17 @@ _SECRET_KEYS = {
 }
 
 # 值形状的秘密（哨兵/泄漏检测）：命中即整段替换，保留命中标记不保留正文。
+# ``\b`` 边界避免把普通词内嵌的形状误当秘密（如文件名 "task-response.txt"
+# 内嵌 "sk-response"）；独立 token 形态的真实密钥不受影响。
 import re as _re
 
 _SECRET_VALUE_PATTERNS = tuple(_re.compile(pattern) for pattern in (
-    r"sk-[A-Za-z0-9_-]{8,}",
-    r"ghp_[A-Za-z0-9]{20,}",
-    r"gho_[A-Za-z0-9]{20,}",
-    r"AKIA[0-9A-Z]{16}",
+    r"\bsk-[A-Za-z0-9_-]{8,}",
+    r"\bghp_[A-Za-z0-9]{20,}",
+    r"\bgho_[A-Za-z0-9]{20,}",
+    r"\bAKIA[0-9A-Z]{16}",
     r"Bearer\s+[A-Za-z0-9._-]{16,}",
-    r"xoxb-[A-Za-z0-9-]{10,}",
+    r"\bxoxb-[A-Za-z0-9-]{10,}",
 ))
 
 

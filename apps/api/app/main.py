@@ -386,7 +386,10 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     )
     def cancel_run(run_id: str, body: CancelRunRequest | None = None):
         try:
-            return service.cancel(run_id, reason=body.reason if body is not None else None)
+            # R3 #4：所有返回 Run 视图的公共端点统一脱敏（与 GET /runs/{id} 一致）
+            return adapt_legacy_run(_redact_agent_run_view(
+                service.cancel(run_id, reason=body.reason if body is not None else None)
+            ))
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         except ValueError as error:
@@ -399,7 +402,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     )
     def rescore_run(run_id: str):
         try:
-            return service.rescore(run_id)
+            return adapt_legacy_run(_redact_agent_run_view(service.rescore(run_id)))
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         except ValueError as error:
@@ -455,12 +458,13 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     from motte_sdk.direct_llm_v2 import require_runnable_direct_llm_v2_snapshot
 
                     require_runnable_direct_llm_v2_snapshot(parent, resources)
-            return service.retry(run_id, refreshed_manifest=refreshed, case_ids=refreshed_case_ids)
+            return adapt_legacy_run(_redact_agent_run_view(service.retry(
+                run_id, refreshed_manifest=refreshed, case_ids=refreshed_case_ids
+            )))
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         except (ManifestResolutionError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-
     @application.post(
         "/api/v1/runs/{run_id}/messages",
         status_code=409,
@@ -583,7 +587,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 expected_revision=run["revision"],
                 expected_status="queued",
             )
-            return service.get_run(run_id)
+            return adapt_legacy_run(_redact_agent_run_view(service.get_run(run_id)))
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         except (RunConflictError, ValueError) as error:
@@ -600,11 +604,14 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
         async def stream():
             nonlocal cursor
+            from motte_trace.redaction import redact_secrets
+
             while True:
                 for event in service.events_after(run_id, cursor):
                     cursor = event["seq"]
+                    # R3 #4：SSE 公共流按值形状脱敏；持久 trace 原文不动
                     envelope = TraceEvent.model_validate(
-                        adapt_legacy_trace_event(event)
+                        adapt_legacy_trace_event(redact_secrets(event))
                     ).model_dump(mode="json", exclude_none=True)
                     yield f"id: {event['seq']}\ndata: {json.dumps(envelope, ensure_ascii=False)}\n\n"
                 if service.get_run(run_id)["status"] in RunService.TERMINAL:
@@ -2088,13 +2095,24 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
     @application.get("/api/v1/runs/{run_id}/cases/{case_id}/artifacts/content")
     def agent_artifact_content(run_id: str, case_id: str, path: str):
-        """读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。"""
+        """读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。
+
+        R3 #7：身份校验（path -> artifact_id -> sha256）使用原始冻结 Observation
+        引用，只对返回的展示内容做值形状脱敏——文件名被脱敏规则改写不影响读取。
+        """
         from motte_trace.redaction import redact_secrets
 
-        result = _agent_case_row(run_id, case_id)
-        if isinstance(result, JSONResponse):
-            return result
-        observation = result.get("observation") or {}
+        run = service.get_run(run_id)
+        if case_id not in (run.get("case_ids") or []):
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "CASE_NOT_IN_RUN",
+                    "message": f"{case_id} not in run {run_id}",
+                }},
+            )
+        row = service.store.case_runs.get(run_id, case_id)
+        observation = ((row or {}).get("result") or {}).get("observation") or {}
         entry = next(
             (item for item in observation.get("artifact_refs") or [] if item.get("path") == path),
             None,
@@ -2135,7 +2153,13 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
     @application.get("/api/v1/runs/{run_id}/invocations")
     def run_invocations(run_id: str, case_id: str | None = None):
-        """持久调用日志（prepared/dispatching/settled）下钻。"""
+        """持久调用日志（prepared/dispatching/settled）下钻。
+
+        R3 #4：调用摘要含工具参数/结果片段，公共响应统一按键名 + 值形状脱敏；
+        持久记录本身不动。
+        """
+        from motte_trace.redaction import redact_secrets
+
         invocations_repo = getattr(service.store, "invocations", None)
         if invocations_repo is None:
             return {"items": [], "total": 0}
@@ -2152,7 +2176,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             items = invocations_repo.list_for_case(run_id, case_id)
         else:
             items = invocations_repo.list_for_run(run_id)
-        return {"items": items, "total": len(items)}
+        return {"items": [redact_secrets(item) for item in items], "total": len(items)}
 
     return application
 

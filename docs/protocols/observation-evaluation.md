@@ -43,12 +43,12 @@ Agent Case 终止后，平台从持久证据构建 `FrozenObservation`（schema_
 | exact | expected、normalization（strip/lowercase，显式声明才生效） | 无 expected → not_applicable(no_expectation)；无 final_output → insufficient |
 | contains | expected、case_policy | 字段缺失 → insufficient(final_output_missing) |
 | regex | pattern、flags、max_input_bytes、timeout_sec | pattern 错误 → evaluator_error(config_error)；超时/超限 → evaluator_error(regex_timeout/input_too_large)。匹配在可终止的子进程内执行 |
-| json-schema | schema（Draft 2020-12） | 输出非法 JSON → scored=False(invalid_json)（被测失败，不是评分器故障） |
+| json-schema | schema（Draft 2020-12） | 输出非法 JSON → scored=False(invalid_json)（被测失败，不是评分器故障）。schema 在可终止的子进程内校验：病态 `pattern` 超时 → evaluator_error(schema_timeout)，远程 $ref 一律阻断 |
 | file-exists | path | 采集不完整 → insufficient(capture_incomplete)；条目不可用 → insufficient(artifact_unavailable) |
-| file-content | path + mode（exact/contains/hash/schema） | 工件缺失/损坏（hash 不符）/截断/超限 → insufficient |
+| file-content | path + mode（exact/contains/hash/schema） | 工件缺失/损坏（hash 不符）/截断/超限 → insufficient；schema 模式同样走可终止子进程 |
 | exit-code | allowed、label | 未观测 → insufficient(exit_code_unobserved / process_not_observed) |
-| tool-call | tool、min/max_calls、args_schema、forbidden | 轨迹不完整 → insufficient(tool_trajectory_incomplete)，不能证明"从未调用" |
-| no-forbidden-write | forbidden（fnmatch）、ignore_preexisting | 快照不完整 → insufficient(workspace_snapshot_incomplete)；结论只覆盖受控 workspace 范围（`details.scope`） |
+| tool-call | tool、min/max_calls、args_schema、forbidden | 轨迹不完整 → insufficient(tool_trajectory_incomplete)，不能证明"从未调用"；args_schema 在可终止子进程内校验 |
+| no-forbidden-write | forbidden（fnmatch）、ignore_preexisting | 快照不完整 → insufficient(workspace_snapshot_incomplete)；结论只覆盖受控 workspace 范围（`details.scope`）。轨迹完整时结合写入记录：成功的 `write_file` 命中禁写路径即违规（"写入后恢复原内容"不因终态一致而通过）；轨迹不完整退回快照口径 |
 
 执行边界：`max_input_bytes` / `max_artifact_bytes`（默认 1MB/10MB，上限 16MB/64MB）、`regex_timeout_sec`（默认 2s，上限 10s）、`eval_deadline_sec`（默认 30s，上限 120s）。超期剩余指标记 `evaluator_error(eval_deadline_exceeded)`，不静默跳过。
 

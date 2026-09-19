@@ -222,34 +222,30 @@ def test_legacy_cancel_blocks_tool_after_model_response(tmp_path, monkeypatch):
     import motte_sdk.agent_backend as agent_backend
 
     monkeypatch.setattr(agent_backend, "_workspace_tools", workspace_tools)
-    run_id = None
-    try:
-        run = service.create_run("r2-tasks@1", manifest, ["case-1"])
-        run_id = run["id"]
-        from motte_sdk.dispatcher import RunDispatcher
+    # R3 #10：monkeypatch 自动恢复，不残留假 provider 影响后续测试
+    monkeypatch.setattr(agent_backend, "build_agent_provider", lambda m: scripted)
+    run = service.create_run("r2-tasks@1", manifest, ["case-1"])
+    from motte_sdk.dispatcher import RunDispatcher
 
-        dispatcher = RunDispatcher(service)
+    dispatcher = RunDispatcher(service)
 
-        # 首个模型响应返回后立即取消（模拟"模型调用期间取消"）
-        real_complete = scripted._complete
+    # 首个模型响应返回后立即取消（模拟"模型调用期间取消"）
+    real_complete = scripted._complete
 
-        def complete_then_cancel(request):  # noqa: ANN001
-            envelope = real_complete(request)
-            service.cancel(run_id, reason="operator")
-            return envelope
+    def complete_then_cancel(request):  # noqa: ANN001
+        envelope = real_complete(request)
+        service.cancel(run["id"], reason="operator")
+        return envelope
 
-        scripted.provider = SimpleNamespace(complete=complete_then_cancel)
-        agent_backend.build_agent_provider = lambda m: scripted
-        claimed = dispatcher.claim()
-        handle = build_execution_handle(claimed)
-        if handle.attach:
-            handle.attach(service, run_id)
-        result = service.execute(run_id, provider=handle.invoke)
-        assert result["status"] == "cancelled"
-        assert writes == []  # 取消后无任何工具写入
-        assert len(scripted.requests) == 1  # 也无第二次模型调用
-    finally:
-        agent_backend.build_agent_provider = lambda m: scripted
+    scripted.provider = SimpleNamespace(complete=complete_then_cancel)
+    claimed = dispatcher.claim()
+    handle = build_execution_handle(claimed)
+    if handle.attach:
+        handle.attach(service, run["id"])
+    result = service.execute(run["id"], provider=handle.invoke)
+    assert result["status"] == "cancelled"
+    assert writes == []  # 取消后无任何工具写入
+    assert len(scripted.requests) == 1  # 也无第二次模型调用
 
 
 # ---------------------------------------------------------------- #4 预算接线

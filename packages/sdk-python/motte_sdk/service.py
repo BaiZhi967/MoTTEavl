@@ -1074,7 +1074,8 @@ class RunService:
                     "message": "the provider returned but durable case completion failed",
                     "details": {
                         "attempt_ids": attempt_ids,
-                        "persistence_error": type(error).__name__,
+                        # 保留原始异常类型与消息（R3 #2）：采集/清理等次生失败不得覆盖
+                        "persistence_error": f"{type(error).__name__}: {error}",
                     },
                 },
             },

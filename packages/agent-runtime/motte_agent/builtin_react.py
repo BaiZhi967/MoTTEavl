@@ -71,6 +71,7 @@ class BuiltinReActRuntime(AgentRuntime):
         event_sink: Callable[[dict[str, Any]], None] | None = None,
         should_cancel: Callable[[], bool] | None = None,
         declared_tools: tuple[str, ...] | None = None,
+        per_call_self_enforced: bool = False,
     ) -> None:
         if mode not in PROMPT_VERSIONS:
             raise ValueError(f"unsupported agent mode: {mode!r}")
@@ -89,6 +90,9 @@ class BuiltinReActRuntime(AgentRuntime):
         self._event_sink = event_sink
         self._should_cancel = should_cancel
         self.declared_tools = declared_tools or tuple(sorted(self.tools))
+        # complete 已自带单次调用期限强制（executor 包装层，R3 #1）：期限、线程与
+        # 调用日志结算都在主流程内完成，运行时不再二次套线程。
+        self._per_call_self_enforced = per_call_self_enforced
         self.events: list[dict[str, Any]] = []
         self._legacy_call_seq = 0
 
@@ -240,9 +244,20 @@ class BuiltinReActRuntime(AgentRuntime):
     def _dispatch_model_call(self, request: ModelRequest, step: int) -> dict[str, Any] | None:
         """执行一次模型调用；配置了单次调用期限时用线程期限强制（#4）。
 
-        到期后循环立即停止（终止原因 per_call_timeout）；被放弃的底层调用由
-        Provider 传输超时兜底回收，其结果被丢弃。
+        到期后循环立即停止（终止原因 per_call_timeout）。期限的两条执行路径：
+        - ``per_call_self_enforced``：complete 包装层在主流程内强制期限并可靠
+          结算调用日志，超时以 ``ProviderCallTimeout`` 上抛（R3 #1）；
+        - 默认路径：运行时线程期限兜底，被放弃的底层调用由 Provider 传输超时回收。
         """
+        from .errors import ProviderCallTimeout
+
+        if self._per_call_self_enforced:
+            try:
+                return self._complete(request)
+            except ProviderCallTimeout:
+                self._record_timeout(step)
+                return None
+
         deadline = self.budget.per_call_deadline()
         if deadline is None:
             return self._complete(request)
@@ -261,15 +276,22 @@ class BuiltinReActRuntime(AgentRuntime):
         remaining = deadline - _time.monotonic()
         thread.join(timeout=max(0.0, remaining))
         if thread.is_alive():
-            self._record("model_call_timeout", step=step,
-                         timeout_sec=self.budget.per_call_timeout_sec)
-            self._last_call_stop = "per_call_timeout"
-            self.budget.per_call_timeout_enforced = True
+            self._record_timeout(step)
+            return None
+        if isinstance(box.get("error"), ProviderCallTimeout):
+            # 包装层先于运行时线程期限触发：同样按 per_call_timeout 停止
+            self._record_timeout(step)
             return None
         if "error" in box:
             raise box["error"]
         self.budget.per_call_timeout_enforced = True
         return box.get("envelope")
+
+    def _record_timeout(self, step: int) -> None:
+        self._record("model_call_timeout", step=step,
+                     timeout_sec=self.budget.per_call_timeout_sec)
+        self._last_call_stop = "per_call_timeout"
+        self.budget.per_call_timeout_enforced = True
 
     def _run_native_tool_call(
         self, context: list[Message], call: dict[str, Any], step: int,

@@ -745,6 +745,9 @@ export interface paths {
         /**
          * Agent Artifact Content
          * @description 读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。
+         *
+         *     R3 #7：身份校验（path -> artifact_id -> sha256）使用原始冻结 Observation
+         *     引用，只对返回的展示内容做值形状脱敏——文件名被脱敏规则改写不影响读取。
          */
         get: operations["agent_artifact_content_api_v1_runs__run_id__cases__case_id__artifacts_content_get"];
         put?: never;
@@ -799,6 +802,9 @@ export interface paths {
         /**
          * Run Invocations
          * @description 持久调用日志（prepared/dispatching/settled）下钻。
+         *
+         *     R3 #4：调用摘要含工具参数/结果片段，公共响应统一按键名 + 值形状脱敏；
+         *     持久记录本身不动。
          */
         get: operations["run_invocations_api_v1_runs__run_id__invocations_get"];
         put?: never;

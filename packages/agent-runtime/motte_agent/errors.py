@@ -13,3 +13,13 @@ class AgentFatalError(Exception):
         super().__init__(message)
         self.quarantine = quarantine
         self.code = code
+
+
+class ProviderCallTimeout(Exception):
+    """单次模型调用期限到期，由调用包装方在主流程内同步终结后抛出。
+
+    与运行时自带的线程期限不同：抛出方保证该次调用的调用日志已可靠结算，
+    被放弃的底层线程不会再写任何持久状态（R3 #1）。
+    """
+
+    code = "PROVIDER_CALL_TIMEOUT"

@@ -5142,7 +5142,7 @@
     },
     "/api/v1/runs/{run_id}/cases/{case_id}/artifacts/content": {
       "get": {
-        "description": "读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。",
+        "description": "读取冻结产物内容；归属校验（run 内 case、Observation 引用清单）。\n\nR3 #7：身份校验（path -> artifact_id -> sha256）使用原始冻结 Observation\n引用，只对返回的展示内容做值形状脱敏——文件名被脱敏规则改写不影响读取。",
         "operationId": "agent_artifact_content_api_v1_runs__run_id__cases__case_id__artifacts_content_get",
         "parameters": [
           {
@@ -5284,7 +5284,7 @@
     },
     "/api/v1/runs/{run_id}/invocations": {
       "get": {
-        "description": "持久调用日志（prepared/dispatching/settled）下钻。",
+        "description": "持久调用日志（prepared/dispatching/settled）下钻。\n\nR3 #4：调用摘要含工具参数/结果片段，公共响应统一按键名 + 值形状脱敏；\n持久记录本身不动。",
         "operationId": "run_invocations_api_v1_runs__run_id__invocations_get",
         "parameters": [
           {

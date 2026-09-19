@@ -62,6 +62,10 @@ run 级（`agent.budget`，CLI `--max-steps/--max-tool-calls/--wall-time-sec`）
   不虚构硬限制；`observed_cost_limit` 为 observed（事后计量）。
 - 停止原因具体化：max_steps / max_tool_calls / wall_time / token_limit / cost_limit /
   cancelled / error，进入 Observation.termination 与结果页。
+- `per_call_timeout_sec`：executor 层在主流程内强制——到期先把该次 invocation
+  同步结算为 `settled/indeterminate`（可靠结算，不悬置 dispatching），再以
+  `per_call_timeout` 停止循环；被放弃的底层调用线程迟到返回只丢弃，不再改写
+  已完成 Run 的调用日志。
 
 ## 4. 取消、恢复与重试
 
@@ -77,8 +81,9 @@ run 级（`agent.budget`，CLI `--max-steps/--max-tool-calls/--wall-time-sec`）
 
 - 每 Case 独立目录：`$MOTTE_AGENT_WORKSPACE_ROOT/<run_id>/<case_id>/`（默认
   `var/agent-workspaces/`）。仅接受受控相对路径；拒绝绝对路径、`..`、反斜杠、
-  symlink（组件级检查 + `O_NOFOLLOW`，防 TOCTOU）、设备/管道文件；配额
-  （单文件 1MB / 总量 10MB / 200 文件）写入前强制。
+  symlink（目录链逐组件校验 + `O_NOFOLLOW`，防 TOCTOU 与链接逃逸——预置
+  `run/case` 目录为 symlink 指向外部时拒绝创建，清理前重校验归属）、设备/管道
+  文件；配额（单文件 1MB / 总量 10MB / 200 文件）写入前强制。
 - Case 结束即清理 workspace；清理失败在 case 结果 `cleanup` 里报残留，不误报回收。
 - 产物冻结进 ArtifactStore（`$ARTIFACT_ROOT/agent/<run>/<case>/<path>`，SHA-256 绑定），
   读取走 `GET /api/v1/runs/{run}/cases/{case}/artifacts/content?path=`（归属校验 + 展示层脱敏）。

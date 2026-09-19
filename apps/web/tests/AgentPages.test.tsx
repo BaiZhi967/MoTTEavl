@@ -350,4 +350,76 @@ describe("AgentResult review-round2 fixes", () => {
     expect(screen.queryByText("stale-metric")).toBeNull(); // 不覆盖当前批次
     expect(screen.getByText(/当前显示：当前批次/)).toBeTruthy();
   });
+
+  it("#9 迟到的历史批次失败响应不得把结果页替换成错误页", async () => {
+    setup();
+    renderAt("/agent-tasks/runs/run-r2/result", <AgentResult />);
+    const passSelect = await screen.findByLabelText(/查看批次/);
+    let rejectOld: (reason: unknown) => void = () => {};
+    const oldRequest = new Promise((_resolve, reject) => { rejectOld = reject; });
+    clientMocks.getReport.mockImplementation(async (_id, passId) => {
+      if (passId === "pass-1") {
+        await oldRequest; // pass-1 的请求被挂起，随后以失败结束
+      }
+      return { summary: {}, scores: [] };
+    });
+    fireEvent.change(passSelect, { target: { value: "pass-1" } });
+    fireEvent.change(passSelect, { target: { value: "pass-2" } });
+    await waitFor(() => expect(clientMocks.getReport).toHaveBeenCalledTimes(1));
+    rejectOld(new Error("stale network failure"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // 迟到的 rejection 不得触发错误页（成功响应之外的路径也要做序号防护）
+    expect(screen.queryByText(/读取失败/)).toBeNull();
+    expect(screen.getByText(/当前显示：当前批次/)).toBeTruthy();
+  });
+
+  it("#8 重试进入子 Run 后样本下钻与产物缓存按 Run 重置", async () => {
+    const parentRun = {
+      id: "run-parent", status: "failed", scenario_version: "r2@1",
+      case_ids: ["case-1"], current_scoring_pass_id: "",
+      manifest: { agent_config: { mode: "native-tool" }, agent: "builtin-agent@1" },
+      scores: [], error: { message: "boom" },
+    };
+    const childRun = { ...parentRun, id: "run-child", status: "completed", error: null };
+    clientMocks.getRun.mockImplementation(async (id: string) =>
+      id === "run-child" ? childRun : parentRun);
+    clientMocks.getScoringPasses.mockResolvedValue({ items: [], total: 0 });
+    clientMocks.retryRun.mockResolvedValue({ id: "run-child", parent_run_id: "run-parent" });
+    clientMocks.getAgentCaseDetail.mockImplementation(async (runId: string, caseId: string) => ({
+      run_id: runId, case_id: caseId, outcome: null, pending: false,
+      agent: { termination_reason: "final_answer",
+               steps: runId === "run-parent" ? 1 : 2, tool_calls: 1 },
+      events: [], capture_errors: [], cleanup: { status: "success" },
+      observation: {},
+      artifacts: [{ artifact_id: `a/${runId}/${caseId}/report.txt`,
+                    path: "report.txt", available: true }],
+    }));
+    clientMocks.getAgentArtifactContent.mockImplementation(async (runId: string) => ({
+      path: "report.txt", sha256_matches: true, content: `content-of-${runId}`,
+    }));
+    renderAt("/agent-tasks/runs/run-parent/result", <AgentResult />);
+
+    // 父 Run：选 case 并展开产物（缓存进 ArtifactViewer 状态）
+    const caseSelect = await screen.findByLabelText(/任务/);
+    fireEvent.change(caseSelect, { target: { value: "case-1" } });
+    const toggleParent = await screen.findByText("report.txt", { selector: "button *, button" });
+    fireEvent.click(toggleParent);
+    await waitFor(() => expect(screen.getByText(/content-of-run-parent/)).toBeTruthy());
+
+    // 重试 → 子 Run 路由（同路由参数变化，组件不重挂载）
+    fireEvent.click(screen.getByText(/重试（子 Run）/));
+    await waitFor(() => expect(clientMocks.getRun).toHaveBeenCalledWith("run-child"));
+
+    // 旧 caseDetail 被重置：回到"选择任务"空态，父 Run 的产物内容不再显示
+    await waitFor(() => expect(screen.getByText(/选择任务查看终止原因/)).toBeTruthy());
+    expect(screen.queryByText(/content-of-run-parent/)).toBeNull();
+
+    // 子 Run 重新下钻同 case 同路径产物：必须取回子 Run 的内容
+    const caseSelectAgain = screen.getByLabelText(/任务/);
+    fireEvent.change(caseSelectAgain, { target: { value: "case-1" } });
+    const toggleChild = await screen.findByText("report.txt", { selector: "button *, button" });
+    fireEvent.click(toggleChild);
+    await waitFor(() => expect(screen.getByText(/content-of-run-child/)).toBeTruthy());
+    expect(clientMocks.getAgentArtifactContent).toHaveBeenCalledWith("run-child", "case-1", "report.txt");
+  });
 });
