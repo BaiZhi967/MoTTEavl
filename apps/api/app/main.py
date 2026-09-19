@@ -1563,6 +1563,19 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         _external_catalog_sync()
         return {"benchmarks": [external_catalog.status("ceval")]}
 
+    @application.get("/api/v1/benchmarks/external/ceval/cases")
+    def external_ceval_cases(offset: int = 0, limit: int = 50, query: str = ""):
+        dataset = external_catalog._entry("ceval").dataset  # noqa: SLF001 - 同进程目录
+        if dataset is None:
+            return {"cases": [], "total": 0}
+        entries = [
+            {"case_id": entry.case_id, "subject": entry.subject, "has_gold": entry.has_gold}
+            for entry in dataset.manifest
+            if not query or query in entry.case_id or query in entry.subject
+        ]
+        window = entries[offset:offset + max(1, min(limit, 200))]
+        return {"cases": window, "total": len(entries)}
+
     @application.get("/api/v1/benchmarks/external/ceval/preflight")
     def external_ceval_preflight(model: str):
         from motte_sdk.context_preflight import external_benchmark_preflight

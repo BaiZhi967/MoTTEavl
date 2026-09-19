@@ -4,6 +4,11 @@ import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 import { EVAL_SUITES } from "./evalTypes/registry";
 import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
+import { CevalCases } from "./evalTypes/ceval/CevalPages";
+import { CevalCompare } from "./evalTypes/ceval/CevalPages";
+import { CevalMonitor } from "./evalTypes/ceval/CevalPages";
+import { CevalOperate } from "./evalTypes/ceval/CevalPages";
+import { CevalResult } from "./evalTypes/ceval/CevalPages";
 import { Gsm8kCases } from "./evalTypes/gsm8k/Gsm8kCases";
 import { Gsm8kCompare } from "./evalTypes/gsm8k/Gsm8kCompare";
 import { Gsm8kOperate } from "./evalTypes/gsm8k/Gsm8kOperate";
@@ -61,6 +66,11 @@ export default function App() {
           <Route path="/agent-tasks/monitor" element={<AgentMonitor />} />
           <Route path="/agent-tasks/runs/:runId/result" element={<AgentResult />} />
           <Route path="/agent-tasks/compare" element={<AgentCompare />} />
+          <Route path="/ceval" element={<CevalOperate />} />
+          <Route path="/ceval/cases" element={<CevalCases />} />
+          <Route path="/ceval/monitor" element={<CevalMonitor />} />
+          <Route path="/ceval/runs/:runId/result" element={<CevalResult />} />
+          <Route path="/ceval/compare" element={<CevalCompare />} />
           <Route path="/gsm8k" element={<Gsm8kOperate />} />
           <Route path="/gsm8k/cases" element={<Gsm8kCases />} />
           <Route path="/gsm8k/monitor" element={<Gsm8kMonitor />} />

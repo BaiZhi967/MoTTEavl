@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { EVAL_SUITES, suiteForRun, suiteRoutes } from "../src/evalTypes/registry";
 
 describe("evalTypes 注册表", () => {
-  it("注册四个套件且 id 唯一", () => {
+  it("注册五个套件且 id 唯一", () => {
     expect(EVAL_SUITES.map((suite) => suite.id)).toEqual([
-      "agent-tasks", "gsm8k", "direct-llm", "replay",
+      "agent-tasks", "ceval", "gsm8k", "direct-llm", "replay",
     ]);
   });
 

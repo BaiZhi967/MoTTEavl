@@ -3929,6 +3929,64 @@
         "summary": "External Catalog List"
       }
     },
+    "/api/v1/benchmarks/external/ceval/cases": {
+      "get": {
+        "operationId": "external_ceval_cases_api_v1_benchmarks_external_ceval_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Ceval Cases"
+      }
+    },
     "/api/v1/benchmarks/external/ceval/preflight": {
       "get": {
         "operationId": "external_ceval_preflight_api_v1_benchmarks_external_ceval_preflight_get",

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { CalculatorIcon, ChatTextIcon, ClockCounterClockwiseIcon, RobotIcon, type IconProps } from "@phosphor-icons/react";
+import { CalculatorIcon, ChatTextIcon, ClockCounterClockwiseIcon, GraduationCapIcon, RobotIcon, type IconProps } from "@phosphor-icons/react";
 
 export interface RunLike {
   scenario_version: string;
@@ -70,8 +70,18 @@ const AGENT_TASKS_SUITE: EvalTypeSuite = {
       && run.manifest?.agent === "builtin-agent@1",
 };
 
+const CEVAL_SUITE: EvalTypeSuite = {
+  id: "ceval",
+  label: "C-Eval 外部基准",
+  icon: GraduationCapIcon,
+  matchRun: (run) =>
+    run.scenario_version.startsWith("ceval-external@")
+      || run.manifest?.execution?.backend_id === "external-benchmark",
+};
+
 export const EVAL_SUITES: EvalTypeSuite[] = [
   AGENT_TASKS_SUITE,
+  CEVAL_SUITE,
   GSM8K_SUITE,
   DIRECT_LLM_SUITE,
   REPLAY_SUITE,

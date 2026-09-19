@@ -540,3 +540,81 @@ export function subscribeRunEvents(
   source.onerror = () => handlers.onError?.();
   return () => source.close();
 }
+
+// ---------------------------------------------------------------------------
+// 外部 Benchmark（job-based C-Eval，M2-T07/T08）
+// ---------------------------------------------------------------------------
+
+export interface ExternalCatalogBenchmark {
+  benchmark_id: string;
+  benchmark_version: string;
+  status: "registered" | "prepared" | "runnable" | "verified";
+  blockers: string[];
+  dataset: {
+    state: string;
+    provenance: string;
+    revision: string;
+    rows: number;
+    gold_rows: number;
+    unscored: boolean;
+  } | null;
+}
+
+export interface ExternalPreflightReport {
+  ok: boolean;
+  reasons: string[];
+  checks: Record<string, boolean | null>;
+}
+
+export interface ExternalJobRecord {
+  job_id: string;
+  run_id: string;
+  status: string;
+  launch_token: string;
+}
+
+export interface ComparisonReportView {
+  eligible: boolean;
+  reasons: string[];
+  metric_eligibility: Record<string, boolean>;
+  case_diff: { added: string[]; removed: string[]; changed: string[] };
+}
+
+export interface GateResultView {
+  schema: string;
+  passed: boolean;
+  rules: { id: string; passed: boolean; reason: string }[];
+}
+
+export const getExternalCatalog = () =>
+  request<{ benchmarks: ExternalCatalogBenchmark[] }>("/api/v1/benchmarks/external/catalog");
+
+export const prepareCevalDataset = (body: Record<string, unknown>) =>
+  request<{ state: string; provenance: string; revision: string; rows: number; unscored: boolean }>(
+    "/api/v1/benchmarks/external/ceval/prepare",
+    jsonBody(body),
+  );
+
+export const getCevalPreflight = (model: string) =>
+  request<ExternalPreflightReport>(
+    `/api/v1/benchmarks/external/ceval/preflight?model=${encodeURIComponent(model)}`,
+  );
+
+export const getCevalCases = (query = "", offset = 0, limit = 50) =>
+  request<{ cases: { case_id: string; subject: string; has_gold: boolean }[]; total: number }>(
+    `/api/v1/benchmarks/external/ceval/cases?offset=${offset}&limit=${limit}&query=${encodeURIComponent(query)}`,
+  );
+
+export const createCevalRun = (body: Record<string, unknown>) =>
+  request<RunRecord>("/api/v1/benchmarks/external/ceval/runs", jsonBody(body));
+
+export const getExternalJobs = (runId: string) =>
+  request<{ jobs: ExternalJobRecord[] }>(`/api/v1/runs/${runId}/external-jobs`);
+
+export const compareRuns = (baseline: string, candidate: string, factors = "model") =>
+  request<ComparisonReportView>(
+    `/api/v1/comparisons?baseline=${encodeURIComponent(baseline)}&candidate=${encodeURIComponent(candidate)}&factors=${factors}`,
+  );
+
+export const evaluateRunGate = (body: Record<string, unknown>) =>
+  request<GateResultView>("/api/v1/gates", jsonBody(body));
