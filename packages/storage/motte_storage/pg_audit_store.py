@@ -514,6 +514,7 @@ class PgInvocations:
         from .invocations import validate_invocation
 
         stored = validate_invocation({**record, "status": record.get("status", "prepared")})
+        stored.setdefault("revision", 1)
         try:
             with _connect(self._dsn) as connection:
                 with connection.cursor() as cursor:

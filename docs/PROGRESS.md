@@ -220,3 +220,30 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 - Pi v1 bridge 支持旧 peer 可选字段、LF/CRLF framing、有界 stdout/stderr、进程树清理和超时回收；不宣称未实现的实时能力。
 
 验证：`uv run pytest -q -m "not live"`（620 passed，10 skipped）；`pnpm --dir apps/web test`（101 passed）；`pnpm --dir apps/web build`；`pnpm --dir apps/web exec tsc --noEmit`；`uv run pytest -q tests/protocol/test_pi_bridge_hardening.py`（14 passed）；OpenAPI live schema 与 `api/openapi.json` 一致。真实 Provider、Celery broker、PostgreSQL 服务和付费 live smoke 仍需由操作者在目标环境显式执行。
+
+
+## M1：原生 Agent 与通用评分（2026-09-19，分支 codex/m1-native-agent-evaluation）
+
+- [x] M1-T01 契约：FrozenObservation / MetricResult / EvaluatorSpec / InvocationRecord；
+  Score 多指标复合键（trial_id 预留 M3）；canonical JSON 拒绝 NaN/Infinity；旧 Observation 读取兼容。
+- [x] M1-T02 确定性评分器 agent-deterministic@1：exact/contains/regex（子进程可终止）/
+  json-schema/file-exists/file-content/exit-code/tool-call/no-forbidden-write；
+  缺证据与异常不映射成通过；逐指标隔离。
+- [x] M1-T03 多指标 ScoringPass：三 store 复合键 + migration 0004（SQLite 原地升级）；
+  rescore 新 pass、旧 pass 不变、GET 零副作用。
+- [x] M1-T04 builtin-agent@1 后端：发布 ModelProfile 快照构造请求、双显式模式、
+  native 创建期拒绝、Case 级 workspace/历史隔离。
+- [x] M1-T05 消息/工具循环：完整 assistant/tool 历史、call_id 去重、参数 schema、
+  预算（enforced/observed/unknown）与具体停止原因。
+- [x] M1-T06 受控 workspace：相对路径/symlink/TOCTOU/设备文件/配额；快照与残留报告。
+- [x] M1-T07 调用日志（migration 0005）、取消、崩溃恢复 needs_review、second-chance 排除。
+- [x] M1-T08 冻结采集：evidence_hash、coverage 降级、值形状脱敏（事件/SSE/摘要）。
+- [x] M1-T09 用户链路：/api/v1/agent-tasks + CLI agent-tasks + Web Agent 套件
+  （操作/监控/结果/并列阅读，历史 pass 切换、取消、retry 子 Run）。
+- [x] M1-T10 集成：本地假 HTTP + 真实 API/Worker/SQLite 三组代表任务闭环；
+  真实 Docker（一次性 PG 容器 + alembic 0001→0005）19 passed；
+  Direct LLM v1 / Replay 回归不变。
+- [ ] live（真实 subject 模型）：待操作者授权与预算；M1-Supported 未满足。
+
+验证详情与逐包命令见 [docs/verification/M1.md](verification/M1.md)。
+已知边界：workspace 为宿主本地目录 + 策略护栏（非容器隔离）；token 流式不在 M1。

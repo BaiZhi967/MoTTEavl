@@ -53,7 +53,7 @@ class AgentTasksDataset(Contract):
     schema_version: Literal[1] = 1
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
-    suite: Literal["agent-tasks"] = SUITE
+    suite: Literal["agent-tasks"] = "agent-tasks"
     cases: list[AgentTaskCase] = Field(min_length=1)
     cases_sha256: str | None = None
     dataset_fingerprint: str | None = None
