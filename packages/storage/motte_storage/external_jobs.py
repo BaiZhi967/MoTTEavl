@@ -111,11 +111,16 @@ class MemoryExternalJobs:
             self._jobs[job_id] = stored
             return deepcopy(stored)
 
-    def update_job(self, job_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    def update_job(
+        self, job_id: str, changes: dict[str, Any],
+        *, guard_status_not: str | None = None,
+    ) -> dict[str, Any] | None:
         with self._lock:
             current = self._jobs.get(job_id)
             if current is None:
                 raise KeyError(job_id)
+            if guard_status_not is not None and current.get("status") == guard_status_not:
+                return None
             updated = {**deepcopy(current), **deepcopy(changes), "updated_at": _now_iso()}
             self._jobs[job_id] = updated
             return deepcopy(updated)
@@ -239,7 +244,10 @@ class SQLiteExternalJobs:
             )
         return deepcopy(stored)
 
-    def update_job(self, job_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    def update_job(
+        self, job_id: str, changes: dict[str, Any],
+        *, guard_status_not: str | None = None,
+    ) -> dict[str, Any] | None:
         with closing(_connect(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -252,10 +260,15 @@ class SQLiteExternalJobs:
             updated = {**job, **deepcopy(changes), "updated_at": _now_iso()}
             new_status = str(updated.get("status") or job.get("status"))
             new_payload = json.dumps(updated, sort_keys=True)
-            connection.execute(
+            guarded = connection.execute(
+                "UPDATE external_jobs SET status = ?, payload = ? WHERE job_id = ? AND status != ?",
+                (new_status, new_payload, job_id, str(guard_status_not)),
+            ).rowcount if guard_status_not is not None else connection.execute(
                 "UPDATE external_jobs SET status = ?, payload = ? WHERE job_id = ?",
                 (new_status, new_payload, job_id),
-            )
+            ).rowcount
+            if not guarded:
+                return None
             return deepcopy(updated)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:

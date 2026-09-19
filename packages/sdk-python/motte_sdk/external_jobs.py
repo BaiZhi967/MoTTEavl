@@ -237,7 +237,19 @@ class DurableExternalJobRunner:
             })
         elif event == "launch_started":
             handle = record.get("handle") or {}
-            self.job_store.update_job(str(handle.get("job_id") or ""), {
+            job_id = str(handle.get("job_id") or "")
+            current = self.job_store.get_job(job_id)
+            if current is not None and current.get("status") == "cancelled":
+                # 取消落在启动窗口内：立即中断刚启动的进程，不复活取消状态。
+                try:
+                    self.supervisor.adapter.interrupt(
+                        ExternalJobHandle.model_validate(handle),
+                    )
+                except Exception:  # noqa: BLE001 - 中断失败保留句柄供审计
+                    pass
+                self.job_store.update_job(job_id, {"handle": handle})
+                return
+            self.job_store.update_job(job_id, {
                 "status": ExternalJobStatus.active.value,
                 "handle": handle,
             })
@@ -281,12 +293,13 @@ class DurableExternalJobRunner:
         if not job_id:
             return outcome
         if status in {"settled", "failed", "cancelled", "indeterminate"}:
-            current = self.job_store.get_job(job_id)
             # cancelled 是操作员终局：中断后迟到的 failed/indeterminate 观察
-            # 不覆盖取消状态（终态不复活也不降级）。
-            if current is None or current.get("status") != "cancelled":
-                self.job_store.update_job(job_id, {"status": status, "handle": handle})
-            elif current.get("status") == "cancelled":
+            # 不覆盖取消状态（原子条件更新，终态不复活也不降级）。
+            applied = self.job_store.update_job(
+                job_id, {"status": status, "handle": handle},
+                guard_status_not="cancelled",
+            )
+            if applied is None:
                 self.job_store.update_job(job_id, {"handle": handle})
         # 原始 outcome 先冻结为受控不可变 Artifact，再进入导入。
         artifact_id: str | None = None

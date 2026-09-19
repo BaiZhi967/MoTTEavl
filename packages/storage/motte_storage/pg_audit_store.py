@@ -693,20 +693,31 @@ class PgExternalJobs:
                 )
         return deepcopy(stored)
 
-    def update_job(self, job_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    def update_job(
+        self, job_id: str, changes: dict[str, Any],
+        *, guard_status_not: str | None = None,
+    ) -> dict[str, Any] | None:
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT payload FROM external_jobs WHERE job_id = %s", (job_id,))
+                cursor.execute("SELECT payload FROM external_jobs WHERE job_id = %s FOR UPDATE", (job_id,))
                 row = cursor.fetchone()
                 if row is None:
                     raise KeyError(job_id)
                 job = _as_payload(row[0])
                 updated = {**job, **deepcopy(changes), "updated_at": _utc_now()}
                 new_status = str(updated.get("status") or job.get("status"))
-                cursor.execute(
-                    "UPDATE external_jobs SET status = %s, payload = %s WHERE job_id = %s",
-                    (new_status, Json(updated), job_id),
-                )
+                if guard_status_not is not None:
+                    cursor.execute(
+                        "UPDATE external_jobs SET status = %s, payload = %s WHERE job_id = %s AND status != %s",
+                        (new_status, Json(updated), job_id, str(guard_status_not)),
+                    )
+                    if cursor.rowcount != 1:
+                        return None
+                else:
+                    cursor.execute(
+                        "UPDATE external_jobs SET status = %s, payload = %s WHERE job_id = %s",
+                        (new_status, Json(updated), job_id),
+                    )
         return deepcopy(updated)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:

@@ -259,10 +259,14 @@ def test_cancel_interrupts_job_and_late_results_stay_audit_only(tmp_path):
         )
         worker.start()
         deadline = time.monotonic() + 10
-        while not jobs.recoverable_for_run(run["id"]) and time.monotonic() < deadline:
+        active = None
+        while time.monotonic() < deadline:
+            recoverable = jobs.recoverable_for_run(run["id"])
+            if recoverable and recoverable[0].get("status") == "active":
+                active = recoverable[0]
+                break
             time.sleep(0.05)
-        assert jobs.recoverable_for_run(run["id"]), "job should become active"
-        active = jobs.recoverable_for_run(run["id"])[0]
+        assert active is not None, "job should become active with a live pid"
         pid = active["handle"]["owned_resources"]["pids"][0]
 
         cancelled = service.cancel(run["id"], reason="operator")
