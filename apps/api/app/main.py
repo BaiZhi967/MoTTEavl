@@ -1480,6 +1480,232 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         return service.create_run(scenario, prepared, case_ids, requested_manifest=manifest)
 
+    # ------------------------------------------- 外部 Benchmark（job-based C-Eval，M2-T07）
+
+    from motte_benchmark.registry import registered_adapter_ids
+    from motte_sdk.benchmark_catalog import BenchmarkCatalog, prepare_ceval_external_dataset
+
+    CEVAL_ADAPTER_ID = "ceval-opencompass"
+
+    application.state.external_catalog = external_catalog = BenchmarkCatalog()
+    external_catalog.register("ceval", benchmark_version="1")
+
+    def _external_catalog_sync() -> None:
+        external_catalog.mark_runner_connected(
+            "ceval", CEVAL_ADAPTER_ID in registered_adapter_ids(),
+        )
+
+    @application.post("/api/v1/benchmarks/external/ceval/prepare")
+    def external_ceval_prepare(body: dict):
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        raw_files = body.get("files")
+        if not isinstance(raw_files, dict) or not raw_files:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "CONTRACT_INVALID",
+                    "message": "files must be a non-empty object of logical name to JSONL text",
+                }},
+            )
+        files: dict[str, bytes] = {}
+        for name, content in raw_files.items():
+            if not isinstance(name, str) or not isinstance(content, str):
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {
+                        "code": "CONTRACT_INVALID",
+                        "message": "files keys/values must be strings",
+                    }},
+                )
+            files[name] = content.encode("utf-8")
+        revision = body.get("dataset_revision")
+        if not isinstance(revision, str) or not revision.strip():
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID",
+                                   "message": "dataset_revision is required"}},
+            )
+        declared = body.get("declared_sha256")
+        prepared = prepare_ceval_external_dataset(
+            files=files,
+            dataset_revision=revision,
+            declared_sha256=declared if isinstance(declared, dict) else None,
+            provenance_target=body.get("provenance_target") or "user-supplied",
+            approval_evidence=body.get("approval_evidence"),
+            approval_verifier=None,
+            license_evidence=body.get("license_evidence"),
+        )
+        if prepared.state != "ready":
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "DATASET_PREPARE_FAILED",
+                    "message": "dataset preparation failed; see reasons",
+                    "details": {"reasons": list(prepared.reasons)},
+                }},
+            )
+        external_catalog.update_dataset("ceval", prepared)
+        external_catalog.mark_profile_validated("ceval", True)
+        _external_catalog_sync()
+        return {
+            "state": prepared.state,
+            "provenance": prepared.provenance,
+            "revision": prepared.dataset_revision,
+            "rows": prepared.row_count,
+            "gold_rows": prepared.gold_count,
+            "unscored": prepared.unscored,
+        }
+
+    @application.get("/api/v1/benchmarks/external/catalog")
+    def external_catalog_list():
+        _external_catalog_sync()
+        return {"benchmarks": [external_catalog.status("ceval")]}
+
+    @application.get("/api/v1/benchmarks/external/ceval/preflight")
+    def external_ceval_preflight(model: str):
+        from motte_sdk.context_preflight import external_benchmark_preflight
+
+        _external_catalog_sync()
+        entry = external_catalog.status("ceval")
+        dataset_entry = entry.get("dataset") or {}
+        model_record = resources.models.get(model) if model else None
+        profile = {
+            "selected_subjects": _ceval_subjects(),
+            "split": "val",
+            "runner_version": _ceval_runner_version(),
+            "environment_digest": _ceval_environment_digest(),
+        }
+        report = external_benchmark_preflight(
+            profile,
+            model_record or {},
+            dataset={
+                "state": dataset_entry.get("state") or "unprepared",
+                "subjects": _ceval_subjects(),
+                "split": "val",
+            },
+            runner_connected=CEVAL_ADAPTER_ID in registered_adapter_ids(),
+        )
+        return report
+
+    def _ceval_subjects() -> list[str]:
+        dataset = external_catalog._entry("ceval").dataset  # noqa: SLF001 - 同进程目录
+        if dataset is None:
+            return []
+        return sorted({entry_subject.subject for entry_subject in dataset.manifest})
+
+    def _ceval_runner_version() -> str:
+        from motte_benchmark.opencompass.parser import RUNNER_VERSION_PIN
+
+        return f"opencompass-{RUNNER_VERSION_PIN}"
+
+    def _ceval_environment_digest() -> str:
+        import hashlib
+
+        return "sha256:" + hashlib.sha256(
+            _ceval_runner_version().encode("utf-8"),
+        ).hexdigest()
+
+    @application.post("/api/v1/benchmarks/external/ceval/runs", status_code=202)
+    def external_ceval_run(body: dict):
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        _external_catalog_sync()
+        model_id = body.get("model")
+        if not isinstance(model_id, str) or not model_id:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "MODEL_REQUIRED",
+                                   "message": "model profile id is required"}},
+            )
+        entry = external_catalog.status("ceval")
+        dataset = external_catalog._entry("ceval").dataset  # noqa: SLF001
+        if dataset is None or dataset.state != "ready":
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "DATASET_UNPREPARED",
+                    "message": "ceval dataset is not prepared",
+                    "details": {"blockers": entry["blockers"]},
+                }},
+            )
+        if CEVAL_ADAPTER_ID not in registered_adapter_ids():
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "RUNNER_NOT_CONNECTED",
+                    "message": "external benchmark adapter is not registered",
+                }},
+            )
+        model_record = resources.models.get(model_id)
+        if model_record is None:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "MODEL_IDENTITY_MISSING",
+                    "message": "published model profile not found",
+                }},
+            )
+        from motte_benchmark.opencompass.profiles import ceval_external_profile
+
+        try:
+            profile = ceval_external_profile(
+                dataset_revision=dataset.dataset_revision,
+                subjects=_ceval_subjects(),
+                split=str(body.get("split") or "val"),
+                few_shot=int(body.get("few_shot") or 0),
+                few_shot_split=str(body.get("few_shot_split") or "dev"),
+                seed=int(body.get("seed") or 0),
+                runner_version=_ceval_runner_version(),
+                environment_digest=_ceval_environment_digest(),
+            )
+        except ValueError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "PROFILE_INVALID", "message": str(error)}},
+            )
+        scope = str(body.get("scope") or "custom-subset")
+        manifest: dict[str, Any] = {
+            "model": model_id,
+            "scope": scope,
+            "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
+            "external_benchmark": {
+                "adapter_id": CEVAL_ADAPTER_ID,
+                "adapter_version": "1",
+                "runner_version": profile["runner_version"],
+                "dataset_revision": dataset.dataset_revision,
+                "environment_digest": profile["environment_digest"],
+                "profile": profile,
+                "limits": {"poll_interval_seconds": 0.1},
+                "parser_version": "ceval-opencompass-parser@1",
+            },
+        }
+        from motte_sdk.execution_backends import (
+            ExecutionBackendError,
+            resolve_execution,
+        )
+
+        try:
+            resolved = resolve_execution("ceval-external@1", manifest)
+        except ExecutionBackendError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": error.code, "message": str(error)}},
+            )
+        case_ids = [sample.case_id for sample in dataset.manifest]
+        return service.create_run(
+            "ceval-external@1", resolved, case_ids, requested_manifest=body,
+        )
+
+    @application.get("/api/v1/runs/{run_id}/external-jobs")
+    def run_external_jobs(run_id: str):
+        external_jobs = getattr(service.store, "external_jobs", None)
+        if external_jobs is None:
+            return {"jobs": []}
+        return {"jobs": external_jobs.jobs_for_run(run_id)}
+
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 
     from motte_contracts.dataset_sources import SourceSpec

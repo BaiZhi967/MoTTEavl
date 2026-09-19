@@ -45,6 +45,109 @@ def _harness_installations() -> dict:
     return reports
 
 
+def _handle_ceval(args: argparse.Namespace) -> int:
+    """C-Eval 外部基准：与 API 共用 benchmark_catalog/预检服务（M2-T07）。"""
+    import json as _json
+
+    from motte_benchmark.registry import registered_adapter_ids
+    from motte_sdk.benchmark_catalog import BenchmarkCatalog, prepare_ceval_external_dataset
+
+    catalog = BenchmarkCatalog()
+    catalog.register("ceval", benchmark_version="1")
+    adapter_connected = "ceval-opencompass" in registered_adapter_ids()
+
+    if args.ceval_command == "prepare":
+        files: dict[str, bytes] = {}
+        for item in args.files:
+            name, sep, path = item.partition("=")
+            if not sep or not name or not path:
+                print(f"--files 需要 logical_name=path 形式：{item}", file=sys.stderr)
+                return 2
+            files[name] = open(path, "rb").read()  # noqa: SIM115 - CLI 短命令
+        prepared = prepare_ceval_external_dataset(
+            files=files, dataset_revision=args.revision,
+            provenance_target=args.provenance,
+        )
+        catalog.update_dataset("ceval", prepared)
+        catalog.mark_profile_validated("ceval", prepared.state == "ready")
+        catalog.mark_runner_connected("ceval", adapter_connected)
+        print(_json.dumps({
+            "state": prepared.state,
+            "provenance": prepared.provenance,
+            "revision": prepared.dataset_revision,
+            "rows": prepared.row_count,
+            "gold_rows": prepared.gold_count,
+            "unscored": prepared.unscored,
+            "reasons": list(prepared.reasons),
+            "注意": "合成/本地数据为 user-supplied；official 需受信核验与许可证据（API 侧）",
+        }, ensure_ascii=False))
+        return 0 if prepared.state == "ready" else 1
+
+    if args.ceval_command == "preflight":
+        from motte_sdk.context_preflight import external_benchmark_preflight
+        from motte_benchmark.opencompass.parser import RUNNER_VERSION_PIN
+        import hashlib as _hashlib
+
+        runner_version = f"opencompass-{RUNNER_VERSION_PIN}"
+        report = external_benchmark_preflight(
+            {"selected_subjects": [], "split": "val",
+             "runner_version": runner_version,
+             "environment_digest": "sha256:" + _hashlib.sha256(runner_version.encode()).hexdigest()},
+            {"model": args.model} if args.model else {},
+            dataset={"state": "unprepared", "subjects": [], "split": "val"},
+            runner_connected=adapter_connected,
+        )
+        print(_json.dumps(report, ensure_ascii=False))
+        return 0
+
+    if args.ceval_command == "run":
+        from motte_sdk.benchmark_catalog import prepare_ceval_run_inputs
+
+        files: dict[str, bytes] = {}
+        for item in args.files:
+            name, sep, path = item.partition("=")
+            if not sep or not name or not path:
+                print(f"--files 需要 logical_name=path 形式：{item}", file=sys.stderr)
+                return 2
+            files[name] = open(path, "rb").read()  # noqa: SIM115 - CLI 短命令
+        prepared = prepare_ceval_external_dataset(
+            files=files, dataset_revision=args.revision,
+        )
+        if prepared.state != "ready":
+            print(_json.dumps({"error": "DATASET_PREPARE_FAILED",
+                               "reasons": list(prepared.reasons)}, ensure_ascii=False),
+                  file=sys.stderr)
+            return 1
+        if not adapter_connected:
+            print("RUNNER_NOT_CONNECTED: ceval-opencompass adapter 未注册", file=sys.stderr)
+            return 1
+        try:
+            inputs = prepare_ceval_run_inputs(
+                prepared, model_id=args.model, few_shot=args.few_shot,
+                seed=args.seed, scope=args.scope,
+            )
+        except ValueError as error:
+            print(f"PROFILE_INVALID: {error}", file=sys.stderr)
+            return 1
+        from motte_sdk.execution_backends import resolve_execution
+        from motte_sdk.service import RunService
+        from motte_storage.factory import create_run_store
+
+        db_path = args.db or os.environ.get("MOTTE_DB_PATH") or "var/runs.db"
+        service = RunService(create_run_store(db_path))
+        resolved = resolve_execution(inputs["scenario_version"], inputs["manifest"])
+        run = service.create_run(
+            inputs["scenario_version"], resolved, inputs["case_ids"],
+            requested_manifest={"model": args.model, "scope": args.scope},
+        )
+        print(_json.dumps({"id": run["id"], "status": run["status"],
+                           "scope": args.scope,
+                           "提示": "Worker 执行：uv run python -m apps.worker.motte_worker --once"},
+                          ensure_ascii=False))
+        return 0
+    return 2
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="motte")
     sub = parser.add_subparsers(dest="command")
@@ -128,6 +231,26 @@ def _build_parser() -> argparse.ArgumentParser:
     bench_run.add_argument("--reasoning-level", help="该模型的思考强度等级（需模型档案声明支持）")
     bench_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     bench_run.add_argument("--json", action="store_true")
+
+    ceval = sub.add_parser("ceval", help="C-Eval 外部基准（job-based；数据准备/预检/创建运行）")
+    ceval_sub = ceval.add_subparsers(dest="ceval_command", required=True)
+    ceval_prepare = ceval_sub.add_parser("prepare", help="校验并准备本地 JSONL 数据（来源治理门禁）")
+    ceval_prepare.add_argument("--files", required=True, nargs="+",
+                               help="logical_name=path 形式的 JSONL 文件（如 logic_val=./logic.jsonl）")
+    ceval_prepare.add_argument("--revision", required=True, help="数据集 revision（非占位）")
+    ceval_prepare.add_argument("--provenance", choices=("user-supplied", "verified-official"),
+                               default="user-supplied")
+    ceval_preflight = ceval_sub.add_parser("preflight", help="静态预检（不触发模型调用）")
+    ceval_preflight.add_argument("--model", help="模型档案 id")
+    ceval_run = ceval_sub.add_parser("run", help="创建 job-based queued Run（由 Worker 执行，一次一个外部 Job）")
+    ceval_run.add_argument("--model", required=True, help="已发布模型档案 id")
+    ceval_run.add_argument("--files", required=True, nargs="+",
+                           help="logical_name=path 形式的 JSONL 文件（与 prepare 同一校验服务）")
+    ceval_run.add_argument("--revision", required=True, help="数据集 revision")
+    ceval_run.add_argument("--few-shot", type=int, default=0)
+    ceval_run.add_argument("--seed", type=int, default=0)
+    ceval_run.add_argument("--scope", choices=("smoke", "custom-subset", "full"), default="custom-subset")
+    ceval_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
     direct = sub.add_parser("direct-llm", help="Direct LLM 通用直连评测（导入 JSONL 数据集，创建运行）")
     direct_sub = direct.add_subparsers(dest="direct_command", required=True)
@@ -895,6 +1018,9 @@ def main(argv=None):
             record_live_smoke(report, args.record)
         print(json.dumps(report, ensure_ascii=False))
         return exit_code
+
+    if args.command == "ceval":
+        return _handle_ceval(args)
 
     if args.command == "benchmark":
         from motte_sdk.benchmark import import_benchmark_split

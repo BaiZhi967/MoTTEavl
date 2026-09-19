@@ -84,6 +84,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if mode == "opencompass_ok":
+        # 写 OpenCompass 形态输出树（迁移 parser 的真实解析路径）。
+        results_dir = work / "outputs" / "results" / "mock-model"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "ceval-logic.json").write_text(
+            json.dumps({
+                "accuracy": 50.0,
+                "details": {
+                    "0": {"prompt": "L0", "origin_prediction": "答案为 B",
+                          "predictions": "B", "references": "B"},
+                    "1": {"prompt": "L1", "origin_prediction": "答案为 C",
+                          "predictions": "A", "references": "C"},
+                },
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return 0
+
     time.sleep(600)
     return 0
 

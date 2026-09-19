@@ -197,16 +197,22 @@ def test_explicit_direct_backend_cannot_ignore_agent_fields():
     assert raised.value.code == "EXECUTION_BACKEND_UNSUPPORTED"
 
 
-def test_registered_but_unavailable_backend_fails_at_resolution():
+def test_external_backend_resolves_but_fails_closed_without_adapter():
+    """M2-T07：后端可用性翻转；adapter 未注册时在 build（分派）层拒绝。"""
+    resolved = resolve_execution(
+        "external@1",
+        {
+            "external_benchmark": {"adapter_id": "future", "adapter_version": "1",
+                                   "runner_version": "r", "dataset_revision": "rev",
+                                   "environment_digest": "d",
+                                   "profile": {"benchmark_id": "b", "benchmark_version": "1"}},
+            "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
+        },
+    )
+    assert resolved["execution"]["execution_mode"] == "job"
     with pytest.raises(ExecutionBackendError) as raised:
-        resolve_execution(
-            "external@1",
-            {
-                "external_benchmark": {"adapter_id": "future"},
-                "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
-            },
-        )
-    assert raised.value.code == "EXECUTION_BACKEND_UNAVAILABLE"
+        build_execution_handle({"manifest": resolved, "case_ids": ["c1"]})
+    assert raised.value.code == "ADAPTER_UNKNOWN"
 
 
 def test_unknown_explicit_backend_fails_closed():

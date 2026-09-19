@@ -3913,6 +3913,135 @@
         "summary": "Direct Llm Source Detail"
       }
     },
+    "/api/v1/benchmarks/external/catalog": {
+      "get": {
+        "operationId": "external_catalog_list_api_v1_benchmarks_external_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "External Catalog List"
+      }
+    },
+    "/api/v1/benchmarks/external/ceval/preflight": {
+      "get": {
+        "operationId": "external_ceval_preflight_api_v1_benchmarks_external_ceval_preflight_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "title": "Model",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Ceval Preflight"
+      }
+    },
+    "/api/v1/benchmarks/external/ceval/prepare": {
+      "post": {
+        "operationId": "external_ceval_prepare_api_v1_benchmarks_external_ceval_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Ceval Prepare"
+      }
+    },
+    "/api/v1/benchmarks/external/ceval/runs": {
+      "post": {
+        "operationId": "external_ceval_run_api_v1_benchmarks_external_ceval_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "External Ceval Run"
+      }
+    },
     "/api/v1/benchmarks/gsm8k": {
       "get": {
         "operationId": "gsm8k_overview_api_v1_benchmarks_gsm8k_get",
@@ -5280,6 +5409,43 @@
           }
         },
         "summary": "Events"
+      }
+    },
+    "/api/v1/runs/{run_id}/external-jobs": {
+      "get": {
+        "operationId": "run_external_jobs_api_v1_runs__run_id__external_jobs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run External Jobs"
       }
     },
     "/api/v1/runs/{run_id}/invocations": {

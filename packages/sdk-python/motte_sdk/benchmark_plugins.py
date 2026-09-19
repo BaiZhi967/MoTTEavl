@@ -221,3 +221,88 @@ def _load_builtins() -> None:
             adapter_version="2",
         )
     )
+
+    from motte_eval.ceval import diagnostic_metrics as ceval_diagnostic_metrics
+
+    def _ceval_external_manifest(
+        manifest: dict[str, Any], requested: dict[str, Any], resources: Any,
+    ) -> dict[str, Any]:
+        # job-based 套件的 manifest 在创建时已冻结（external_benchmark 钉版本）。
+        external = manifest.get("external_benchmark")
+        if not isinstance(external, dict) or not external.get("adapter_id"):
+            raise ValueError("ceval-external manifest requires external_benchmark")
+        return manifest
+
+    def _ceval_external_scores(
+        run: dict[str, Any], results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        records = []
+        for row in results:
+            payload = row.get("result") if isinstance(row.get("result"), dict) else {}
+            records.append({
+                "case_id": row.get("case_id"),
+                "prediction": payload.get("prediction"),
+                "gold": payload.get("gold"),
+            })
+        by_case = {record["case_id"]: record for record in records}
+        scores = []
+        for case_id in run.get("case_ids") or []:
+            record = by_case.get(case_id)
+            if record is None:
+                scores.append({"case_id": case_id, "passed": None,
+                               "details": {"code": "NOT_ATTEMPTED"}})
+                continue
+            prediction = str(record.get("prediction") or "").strip()
+            gold = record.get("gold")
+            if gold is None or str(gold).strip() == "":
+                scores.append({"case_id": case_id, "passed": None,
+                               "details": {"code": "NO_EXPECTATION"}})
+                continue
+            scores.append({
+                "case_id": case_id,
+                "passed": bool(prediction and prediction.upper() == str(gold).strip().upper()),
+            })
+        return scores
+
+    def _ceval_external_aggregate(
+        run: dict[str, Any], scores: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        records = []
+        for row in run.get("cases") or []:
+            payload = row.get("result") if isinstance(row.get("result"), dict) else {}
+            records.append({
+                "case_id": row.get("case_id"),
+                "prediction": payload.get("prediction"),
+                "gold": payload.get("gold"),
+            })
+        exit_code = ((run.get("manifest") or {}).get("external_benchmark") or {}).get(
+            "runner_exit_code",
+        )
+        metrics = ceval_diagnostic_metrics(
+            selected_case_ids=run.get("case_ids") or [],
+            records=records,
+            runner_exit_code=exit_code,
+        )
+        return {
+            "selected": metrics["selected"],
+            "attempted": metrics["attempted"],
+            "correct": metrics["correct"],
+            "wrong": metrics["wrong"],
+            "not_attempted": metrics["not_attempted"],
+            "accuracy": metrics["diagnostic.selected_case_accuracy"],
+            "coverage": metrics["diagnostic.observed_call_coverage"],
+            "unscored": metrics["unscored"],
+            "denominator": "selected_cases",
+        }
+
+    register_benchmark_plugin(
+        BenchmarkPlugin(
+            suite_id="ceval-external",
+            contract_version="1",
+            prepare_manifest=_ceval_external_manifest,
+            score=_ceval_external_scores,
+            aggregate=_ceval_external_aggregate,
+            adapter_id="ceval-opencompass",
+            adapter_version="1",
+        )
+    )

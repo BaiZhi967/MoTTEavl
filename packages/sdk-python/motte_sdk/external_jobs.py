@@ -62,6 +62,8 @@ class ExternalJobSupervisor:
         self.poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
         self._monotonic = monotonic
+        # 最近一次采集的 cursor（parser 版本与指标汇总随采集返回）。
+        self.last_cursor: dict[str, Any] = {}
 
     def _record(self, entry: dict[str, Any]) -> None:
         if self.intent_journal is not None:
@@ -111,6 +113,7 @@ class ExternalJobSupervisor:
             "results": results,
             "error": error,
             "handle": cancelled.model_dump(mode="json"),
+            "cursor": dict(self.last_cursor or {}),
         }
 
     # ------------------------------------------------------------------ 观察
@@ -142,6 +145,7 @@ class ExternalJobSupervisor:
                         "details": {"max_wall_seconds": max_wall},
                     },
                     "handle": interrupted.model_dump(mode="json"),
+                    "cursor": dict(self.last_cursor or {}),
                 }
             self._sleep(max(poll_interval, 0.01))
 
@@ -173,6 +177,7 @@ class ExternalJobSupervisor:
             "results": results,
             "error": error,
             "handle": handle.model_dump(mode="json"),
+            "cursor": dict(self.last_cursor or {}),
         }
 
     def _collect_quiet(
@@ -180,7 +185,7 @@ class ExternalJobSupervisor:
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         """采集并转成 outcome 载荷；采集失败记录错误而不是抛出。"""
         try:
-            results, _cursor = self.adapter.collect(
+            results, cursor = self.adapter.collect(
                 handle, dict(handle.collection_cursor or {}),
             )
         except Exception as error:  # noqa: BLE001 - 采集失败进入证据
@@ -189,6 +194,7 @@ class ExternalJobSupervisor:
                 "message": str(error),
             })
         payload = [item.model_dump(mode="json") for item in results]
+        self.last_cursor = dict(cursor or {})
         return (payload, None)
 
 
@@ -219,6 +225,18 @@ class DurableExternalJobRunner:
 
     def bind_service(self, service: Any) -> None:
         self._service = service
+
+    def bind_store(self, store: Any) -> None:
+        """分派时绑定 Job 存储与工件根（external-benchmark 后端经 attach 注入）。"""
+        external_jobs = getattr(store, "external_jobs", None)
+        if external_jobs is not None:
+            self.job_store = external_jobs
+        if self.artifacts is None:
+            import os
+
+            from motte_storage.artifacts import ArtifactStore
+
+            self.artifacts = ArtifactStore(os.environ.get("ARTIFACT_ROOT", "var/artifacts"))
 
     # -------------------------------------------------------------- 启动日志
 
@@ -334,12 +352,21 @@ class DurableExternalJobRunner:
                     "existing": result.get("existing"),
                     "incoming": result.get("incoming"),
                 })
+        cursor = outcome.get("cursor") or {}
+        metrics: dict[str, Any] = {}
+        if isinstance(cursor.get("ceval_native"), dict):
+            metrics["native"] = cursor["ceval_native"]
+        if isinstance(cursor.get("ceval_diagnostic"), dict):
+            metrics["diagnostic"] = cursor["ceval_diagnostic"]
+        if isinstance(cursor.get("parser_version"), str):
+            metrics["parser_version"] = cursor["parser_version"]
         outcome["import"] = {
             "job_id": job_id,
             "imported": imported,
             "conflicts": conflicts,
             "artifact": artifact_id,
             "parser_version": self.parser_version,
+            "metrics": metrics,
         }
         if conflicts:
             # 停止最终化：结局改 failed 并保留两份来源摘要。

@@ -308,3 +308,64 @@ class BenchmarkCatalog:
                 if entry.dataset is not None else None
             ),
         }
+
+
+def prepare_ceval_run_inputs(
+    dataset: PreparedBenchmarkDataset,
+    *,
+    model_id: str,
+    few_shot: int = 0,
+    seed: int = 0,
+    scope: str = "custom-subset",
+    split: str = "val",
+    few_shot_split: str = "dev",
+) -> dict[str, Any]:
+    """构造 ceval-external Run 的 scenario_version/manifest/case_ids。
+
+    API 与 CLI 共用本入口（M2-T07）：profile 版本钉住、scope 三档、
+    external_benchmark 按契约要求钉齐版本字段。
+    """
+    if dataset.state != "ready":
+        raise ValueError("DATASET_UNPREPARED: dataset must be ready")
+    from motte_benchmark.opencompass.parser import RUNNER_VERSION_PIN
+
+    runner_version = f"opencompass-{RUNNER_VERSION_PIN}"
+    environment_digest = "sha256:" + hashlib.sha256(
+        runner_version.encode("utf-8"),
+    ).hexdigest()
+    from motte_benchmark.opencompass.profiles import ceval_external_profile
+
+    profile = ceval_external_profile(
+        dataset_revision=dataset.dataset_revision,
+        subjects=sorted({entry.subject for entry in dataset.manifest}),
+        split=split,
+        few_shot=few_shot,
+        few_shot_split=few_shot_split,
+        seed=seed,
+        runner_version=runner_version,
+        environment_digest=environment_digest,
+    )
+    if scope not in ("smoke", "custom-subset", "full"):
+        raise ValueError(f"CONFIG_INVALID:scope must be smoke/custom-subset/full, got {scope!r}")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError("MODEL_REQUIRED: model profile id is required")
+    manifest = {
+        "model": model_id,
+        "scope": scope,
+        "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
+        "external_benchmark": {
+            "adapter_id": "ceval-opencompass",
+            "adapter_version": "1",
+            "runner_version": profile["runner_version"],
+            "dataset_revision": dataset.dataset_revision,
+            "environment_digest": profile["environment_digest"],
+            "profile": profile,
+            "limits": {"poll_interval_seconds": 0.1},
+            "parser_version": "ceval-opencompass-parser@1",
+        },
+    }
+    return {
+        "scenario_version": "ceval-external@1",
+        "manifest": manifest,
+        "case_ids": [entry.case_id for entry in dataset.manifest],
+    }

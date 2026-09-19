@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -454,9 +455,41 @@ _validate_external = validate_external_job_manifest
 
 
 def _build_external(run: dict[str, Any]) -> ExecutionHandle:
-    raise ExecutionBackendError(
-        "EXECUTION_BACKEND_UNAVAILABLE",
-        "external-benchmark adapter execution is not connected in this release",
+    """装配 job 模式入口：adapter 来自显式注册表，存储/工件经 attach 绑定。
+
+    API 只创建 Run 不启动 Job；分派时 Worker 经 dispatcher 进入
+    DurableExternalJobRunner（一个 Run 一个 Job、崩溃恢复只观察）。
+    """
+    from motte_benchmark.protocol import BenchmarkRuntimeError
+    from motte_benchmark.registry import adapter_for
+
+    from .external_jobs import DurableExternalJobRunner, ExternalJobSupervisor
+
+    manifest = run.get("manifest") or {}
+    external = manifest.get("external_benchmark") or {}
+    adapter_id = str(external.get("adapter_id") or "")
+    try:
+        adapter = adapter_for(adapter_id)
+    except BenchmarkRuntimeError as error:
+        raise ExecutionBackendError(error.code, str(error)) from error
+    supervisor = ExternalJobSupervisor(adapter, poll_interval_seconds=0.1)
+    runner = DurableExternalJobRunner(
+        supervisor,
+        job_store=None,
+        work_root=os.environ.get("MOTTE_JOB_WORK_ROOT", "var/external-jobs"),
+        parser_version=str(external.get("parser_version") or "opencompass@1"),
+    )
+
+    def attach(service: Any, run_id: str) -> None:
+        runner.bind_store(service.store)
+        runner.bind_service(service)
+
+    return ExecutionHandle(
+        backend_id="external-benchmark",
+        backend_version="1",
+        execution_mode="job",
+        run_job=runner,
+        attach=attach,
     )
 
 
@@ -515,6 +548,7 @@ register_backend(ExecutionBackendSpec(
     validate=_validate_external,
     build=_build_external,
     capabilities={"interactive": False, "safe_to_repeat": False},
-    available=False,
+    # M2-T07 起可用：adapter 未注册时在 build（分派）层 ADAPTER_UNKNOWN 拒绝。
+    available=True,
     execution_mode="job",
 ))
