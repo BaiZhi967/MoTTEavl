@@ -107,17 +107,50 @@ def validate_case_rows(rows: list[dict[str, Any]] | None, run_id: str) -> list[d
     return bound
 
 
+def score_identity(score: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """持久化复合键：NULL 语义以 '' 规范化，避免 SQL NULL 唯一性差异。"""
+    def part(value: Any) -> str:
+        return value if isinstance(value, str) else ""
+    return (
+        part(score.get("case_id")),
+        part(score.get("trial_id")),
+        part(score.get("metric_id")),
+        part(score.get("evaluator_id")),
+        part(score.get("evaluator_version")),
+    )
+
+
 def validate_scores(scores: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from pydantic import ValidationError
     from motte_contracts.evidence import Score
 
     result = deepcopy(scores)
     ids = [score.get("case_id") for score in result]
-    if any(not isinstance(case_id, str) or not case_id for case_id in ids) or len(ids) != len(set(ids)):
+    if any(not isinstance(case_id, str) or not case_id for case_id in ids):
         raise ValueError("scores need distinct nonempty case_id values")
     try:
         for score in result:
             Score.model_validate(score)
     except ValidationError as error:
         raise ValueError(f"score does not match the public contract: {error}") from error
+    has_metric_identity = [
+        any(score.get(key) for key in ("trial_id", "metric_id", "evaluator_id", "evaluator_version"))
+        for score in result
+    ]
+    if any(has_metric_identity) and not all(has_metric_identity):
+        raise ValueError("scores cannot mix legacy and multi-metric rows")
+    if any(has_metric_identity):
+        for score in result:
+            if not all(score.get(key) for key in ("metric_id", "evaluator_id", "evaluator_version")):
+                raise ValueError(
+                    "multi-metric scores require metric_id, evaluator_id and evaluator_version"
+                )
+        keys = [score_identity(score) for score in result]
+        if len(keys) != len(set(keys)):
+            raise ValueError(
+                "scores require a unique (case_id, trial_id, metric_id, evaluator_id, "
+                "evaluator_version) key per score"
+            )
+    elif len(ids) != len(set(ids)):
+        raise ValueError("scores need distinct nonempty case_id values")
     return result

@@ -40,11 +40,11 @@ def migrated_dsn(dsn):
     import importlib.util
     from pathlib import Path
 
+    from motte_storage.migrations import revision_ids
+
     versions = Path(__file__).resolve().parents[2] / "migrations" / "versions"
     modules = []
-    for version in (
-        "0003_resource_publications", "0002_platform_integrity", "0001_initial",
-    ):
+    for version in reversed(revision_ids()):  # 新版本先回退
         version_file = versions / f"{version}.py"
         spec = importlib.util.spec_from_file_location(version, version_file)
         module = importlib.util.module_from_spec(spec)
@@ -65,14 +65,18 @@ def migrated_dsn(dsn):
             cursor.execute("DROP TABLE IF EXISTS alembic_version")
         connection.commit()
 
+    head = revision_ids()[-1]
     assert current(dsn) is None
-    assert upgrade(dsn) == "0003_resource_publications"
-    assert upgrade(dsn) == "0003_resource_publications"  # 幂等
+    assert upgrade(dsn) == head
+    assert upgrade(dsn) == head  # 幂等
     return dsn
 
 
 def test_migration_rollback_and_reapply(migrated_dsn):
-    assert downgrade(migrated_dsn, steps=2) == "0001_initial"
+    from motte_storage.migrations import revision_ids
+
+    head = revision_ids()[-1]
+    assert downgrade(migrated_dsn, steps=len(revision_ids()) - 1) == "0001_initial"
     assert current(migrated_dsn) == "0001_initial"
     with psycopg.connect(migrated_dsn) as connection:
         with connection.cursor() as cursor:
@@ -84,7 +88,7 @@ def test_migration_rollback_and_reapply(migrated_dsn):
                 "INSERT INTO scores(run_id, case_id, ordinal, payload) VALUES "
                 "('run-legacy-pg', 'case-legacy', 1, '{\"case_id\":\"case-legacy\",\"passed\":true}'::jsonb)"
             )
-    assert upgrade(migrated_dsn) == "0003_resource_publications"
+    assert upgrade(migrated_dsn) == head
     store = create_postgres_run_store(migrated_dsn)
     legacy = store.runs.get("run-legacy-pg")
     assert legacy["revision"] == 0 and legacy["schema_version"] == 1

@@ -371,9 +371,15 @@ class SQLiteScoringPasses:
                     (stored["id"], stored["run_id"], json.dumps(stored, sort_keys=True)),
                 )
                 connection.executemany(
-                    "INSERT INTO score_sets(scoring_pass_id, case_id, ordinal, payload) VALUES (?, ?, ?, ?)",
-                    [(stored["id"], row["case_id"], index, json.dumps(row, sort_keys=True))
-                     for index, row in enumerate(rows)],
+                    "INSERT INTO score_sets(scoring_pass_id, case_id, trial_id, metric_id, "
+                    "evaluator_id, evaluator_version, ordinal, payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(
+                        stored["id"], row["case_id"],
+                        row.get("trial_id") or "", row.get("metric_id") or "",
+                        row.get("evaluator_id") or "", row.get("evaluator_version") or "",
+                        index, json.dumps(row, sort_keys=True),
+                    ) for index, row in enumerate(rows)],
                 )
                 if updated_run is not None:
                     if connection.execute(
@@ -438,11 +444,34 @@ class SQLiteScoreSets:
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def list_for_case(self, pass_id: str, case_id: str) -> list[dict[str, Any]]:
+        with closing(_connect(self._path)) as connection:
+            rows = connection.execute(
+                "SELECT payload FROM score_sets WHERE scoring_pass_id = ? AND case_id = ? "
+                "ORDER BY ordinal", (pass_id, case_id),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def get(self, pass_id: str, case_id: str) -> dict[str, Any] | None:
+        """Legacy 单指标读取；多指标行在此显式报歧义，绝不静默取第一行。"""
+        rows = self.list_for_case(pass_id, case_id)
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ValueError(
+                f"ambiguous multi-metric scores for case {case_id}; query by metric instead"
+            )
+        return rows[0]
+
+    def get_metric(
+        self, pass_id: str, case_id: str, metric_id: str,
+        evaluator_id: str, evaluator_version: str, *, trial_id: str | None = None,
+    ) -> dict[str, Any] | None:
         with closing(_connect(self._path)) as connection:
             row = connection.execute(
-                "SELECT payload FROM score_sets WHERE scoring_pass_id = ? AND case_id = ?",
-                (pass_id, case_id),
+                "SELECT payload FROM score_sets WHERE scoring_pass_id = ? AND case_id = ? "
+                "AND trial_id = ? AND metric_id = ? AND evaluator_id = ? AND evaluator_version = ?",
+                (pass_id, case_id, trial_id or "", metric_id, evaluator_id, evaluator_version),
             ).fetchone()
         return json.loads(row[0]) if row else None
 
@@ -800,8 +829,33 @@ class MemoryScoreSets:
         with self._lock:
             return deepcopy(self._sets.get(pass_id, []))
 
+    def list_for_case(self, pass_id: str, case_id: str) -> list[dict[str, Any]]:
+        return [row for row in self.list_for_pass(pass_id) if row["case_id"] == case_id]
+
     def get(self, pass_id: str, case_id: str) -> dict[str, Any] | None:
-        return next((row for row in self.list_for_pass(pass_id) if row["case_id"] == case_id), None)
+        """Legacy 单指标读取；多指标行显式报歧义。"""
+        rows = self.list_for_case(pass_id, case_id)
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ValueError(
+                f"ambiguous multi-metric scores for case {case_id}; query by metric instead"
+            )
+        return rows[0]
+
+    def get_metric(
+        self, pass_id: str, case_id: str, metric_id: str,
+        evaluator_id: str, evaluator_version: str, *, trial_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        for row in self.list_for_case(pass_id, case_id):
+            if (
+                (row.get("trial_id") or "") == (trial_id or "")
+                and row.get("metric_id") == metric_id
+                and row.get("evaluator_id") == evaluator_id
+                and row.get("evaluator_version") == evaluator_version
+            ):
+                return row
+        return None
 
 
 class MemoryCommands:

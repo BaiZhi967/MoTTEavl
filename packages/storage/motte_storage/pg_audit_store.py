@@ -383,10 +383,15 @@ class PgScoringPasses:
                         (stored["id"], stored["run_id"], Json(stored)),
                     )
                     cursor.executemany(
-                        "INSERT INTO score_sets(scoring_pass_id, case_id, ordinal, payload) "
-                        "VALUES (%s, %s, %s, %s)",
-                        [(stored["id"], row["case_id"], index, Json(row))
-                         for index, row in enumerate(rows)],
+                        "INSERT INTO score_sets(scoring_pass_id, case_id, trial_id, metric_id, "
+                        "evaluator_id, evaluator_version, ordinal, payload) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        [(
+                            stored["id"], row["case_id"],
+                            row.get("trial_id") or "", row.get("metric_id") or "",
+                            row.get("evaluator_id") or "", row.get("evaluator_version") or "",
+                            index, Json(row),
+                        ) for index, row in enumerate(rows)],
                     )
                     if updated_run is not None:
                         cursor.execute(
@@ -462,12 +467,38 @@ class PgScoreSets:
                 rows = cursor.fetchall()
         return [deepcopy(row[0]) for row in rows]
 
-    def get(self, pass_id: str, case_id: str) -> dict[str, Any] | None:
+    def list_for_case(self, pass_id: str, case_id: str) -> list[dict[str, Any]]:
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT payload FROM score_sets WHERE scoring_pass_id = %s AND case_id = %s",
-                    (pass_id, case_id),
+                    "SELECT payload FROM score_sets WHERE scoring_pass_id = %s AND case_id = %s "
+                    "ORDER BY ordinal", (pass_id, case_id),
+                )
+                rows = cursor.fetchall()
+        return [deepcopy(row[0]) for row in rows]
+
+    def get(self, pass_id: str, case_id: str) -> dict[str, Any] | None:
+        """Legacy 单指标读取；多指标行显式报歧义，绝不静默取第一行。"""
+        rows = self.list_for_case(pass_id, case_id)
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ValueError(
+                f"ambiguous multi-metric scores for case {case_id}; query by metric instead"
+            )
+        return rows[0]
+
+    def get_metric(
+        self, pass_id: str, case_id: str, metric_id: str,
+        evaluator_id: str, evaluator_version: str, *, trial_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM score_sets WHERE scoring_pass_id = %s AND case_id = %s "
+                    "AND trial_id = %s AND metric_id = %s AND evaluator_id = %s "
+                    "AND evaluator_version = %s",
+                    (pass_id, case_id, trial_id or "", metric_id, evaluator_id, evaluator_version),
                 )
                 row = cursor.fetchone()
         return deepcopy(row[0]) if row else None

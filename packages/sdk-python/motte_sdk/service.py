@@ -10,7 +10,7 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from motte_storage.integrity import RunConflictError
+from motte_storage.integrity import RunConflictError, validate_scores
 
 RUN_STATES = (
     "queued",
@@ -444,6 +444,7 @@ class RunService:
         case_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         run = self._load(run_id)
+        scores = validate_scores(deepcopy(scores))
         evaluation = (run.get("manifest") or {}).get("evaluation") or {}
         provenance = (run.get("manifest") or {}).get("benchmark_provenance") or {}
         scorer_version = str(
@@ -477,6 +478,25 @@ class RunService:
             run.get("manifest") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         passed = sum(score.get("passed") is True for score in scores)
+        multi_metric = any(score.get("metric_id") for score in scores)
+        metric_summary: dict[str, dict[str, int]] | None = None
+        if multi_metric:
+            metric_summary = {}
+            for score in scores:
+                bucket = metric_summary.setdefault(str(score["metric_id"]), {
+                    "scored": 0, "passed": 0, "failed": 0,
+                    "insufficient_evidence": 0, "evaluator_error": 0, "not_applicable": 0,
+                })
+                status = str(score.get("metric_status") or (
+                    "scored" if score.get("passed") is not None else "not_applicable"
+                ))
+                if status in bucket:
+                    bucket[status] += 1
+                if status == "scored":
+                    if score.get("passed") is True:
+                        bucket["passed"] += 1
+                    elif score.get("passed") is False:
+                        bucket["failed"] += 1
         aggregate = None
         if provenance and not skip_aggregate:
             from .benchmark_plugins import aggregate_with_plugin
@@ -561,6 +581,7 @@ class RunService:
             "summary": {
                 "scores": len(scores),
                 "passed": passed,
+                **({"multi_metric": True, "metrics": metric_summary} if metric_summary else {}),
                 **({"aggregate": deepcopy(aggregate)} if aggregate is not None else {}),
             },
             "scores": deepcopy(scores),
@@ -586,6 +607,7 @@ class RunService:
                 "type": "score",
                 "scoring_pass_id": pass_id,
                 "case_id": score["case_id"],
+                **({"metric_id": score["metric_id"]} if score.get("metric_id") else {}),
                 **({"passed": score["passed"]} if "passed" in score else {}),
             } for score in scores] if source != "terminal-unattempted" else []),
             final_status=final_status,

@@ -63,9 +63,13 @@ CREATE INDEX IF NOT EXISTS scoring_passes_run_idx ON scoring_passes(run_id);
 CREATE TABLE IF NOT EXISTS score_sets (
   scoring_pass_id TEXT NOT NULL,
   case_id TEXT NOT NULL,
+  trial_id TEXT NOT NULL DEFAULT '',
+  metric_id TEXT NOT NULL DEFAULT '',
+  evaluator_id TEXT NOT NULL DEFAULT '',
+  evaluator_version TEXT NOT NULL DEFAULT '',
   ordinal INTEGER NOT NULL,
   payload TEXT NOT NULL,
-  PRIMARY KEY (scoring_pass_id, case_id),
+  PRIMARY KEY (scoring_pass_id, case_id, trial_id, metric_id, evaluator_id, evaluator_version),
   FOREIGN KEY (scoring_pass_id) REFERENCES scoring_passes(id)
 );
 CREATE TABLE IF NOT EXISTS run_commands (
@@ -562,6 +566,32 @@ class RunStore:
     commands: Any = None
 
 
+def _upgrade_score_sets(connection: sqlite3.Connection) -> None:
+    """把 case-only 主键的旧 score_sets 原地升级为多指标复合键（保留旧行）。"""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(score_sets)")}
+    if "metric_id" in columns:
+        return
+    connection.executescript("""
+        CREATE TABLE score_sets_new (
+          scoring_pass_id TEXT NOT NULL,
+          case_id TEXT NOT NULL,
+          trial_id TEXT NOT NULL DEFAULT '',
+          metric_id TEXT NOT NULL DEFAULT '',
+          evaluator_id TEXT NOT NULL DEFAULT '',
+          evaluator_version TEXT NOT NULL DEFAULT '',
+          ordinal INTEGER NOT NULL,
+          payload TEXT NOT NULL,
+          PRIMARY KEY (scoring_pass_id, case_id, trial_id, metric_id, evaluator_id, evaluator_version),
+          FOREIGN KEY (scoring_pass_id) REFERENCES scoring_passes(id)
+        );
+        INSERT INTO score_sets_new
+          (scoring_pass_id, case_id, trial_id, metric_id, evaluator_id, evaluator_version, ordinal, payload)
+          SELECT scoring_pass_id, case_id, '', '', '', '', ordinal, payload FROM score_sets;
+        DROP TABLE score_sets;
+        ALTER TABLE score_sets_new RENAME TO score_sets;
+    """)
+
+
 def SQLiteRunStore(path: str | Path) -> RunStore:
     from .audit_store import SQLiteAttempts, SQLiteCommands, SQLiteScoreSets, SQLiteScoringPasses
 
@@ -575,6 +605,7 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
             if "revision" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            _upgrade_score_sets(connection)
     return RunStore(
         runs=_SQLiteRuns(path),
         case_runs=_SQLiteCaseRuns(path),
