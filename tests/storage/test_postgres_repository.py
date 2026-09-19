@@ -10,6 +10,7 @@ from motte_storage.run_store import RunStore
 
 VERSION_FILE = MIGRATIONS_DIR / "versions" / "0001_initial.py"
 INTEGRITY_VERSION_FILE = MIGRATIONS_DIR / "versions" / "0002_platform_integrity.py"
+PUBLICATION_VERSION_FILE = MIGRATIONS_DIR / "versions" / "0003_resource_publications.py"
 
 
 def _load_version_module(version_file=VERSION_FILE):
@@ -29,7 +30,9 @@ def test_dsn_is_validated_and_normalized():
 
 
 def test_alembic_revision_chain_is_linear_and_complete():
-    assert revision_ids() == ["0001_initial", "0002_platform_integrity"]
+    assert revision_ids() == [
+        "0001_initial", "0002_platform_integrity", "0003_resource_publications",
+    ]
     config = alembic_config("postgresql://user@localhost/db")
     assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)
     assert "postgresql+psycopg://" in config.get_main_option("sqlalchemy.url")
@@ -71,6 +74,17 @@ def test_integrity_migration_preserves_legacy_tables_and_adds_audit_entities():
     assert "UNIQUE (run_id, case_id, attempt_no)" in sql
     assert "PRIMARY KEY (scoring_pass_id, case_id)" in sql
     assert "DROP TABLE IF EXISTS scores" not in drops
+
+
+def test_publication_migration_adds_append_only_resource_audit():
+    module = _load_version_module(PUBLICATION_VERSION_FILE)
+    assert module.down_revision == "0002_platform_integrity"
+    sql = "\n".join(module.UP_STATEMENTS)
+    drops = "\n".join(module.DOWN_STATEMENTS)
+    assert "CREATE TABLE resource_publications" in sql
+    assert "payload JSONB NOT NULL" in sql
+    assert "created_at TIMESTAMPTZ NOT NULL" in sql
+    assert "DROP TABLE IF EXISTS resource_publications" in drops
 
 
 def test_factory_selects_backend(monkeypatch, tmp_path):

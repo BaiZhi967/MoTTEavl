@@ -3,6 +3,7 @@
 仅在设置 MOTTE_PG_DSN 时运行（CI 的 postgres service 会设置；本地默认跳过）。
 """
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -41,7 +42,9 @@ def migrated_dsn(dsn):
 
     versions = Path(__file__).resolve().parents[2] / "migrations" / "versions"
     modules = []
-    for version in ("0002_platform_integrity", "0001_initial"):
+    for version in (
+        "0003_resource_publications", "0002_platform_integrity", "0001_initial",
+    ):
         version_file = versions / f"{version}.py"
         spec = importlib.util.spec_from_file_location(version, version_file)
         module = importlib.util.module_from_spec(spec)
@@ -63,13 +66,13 @@ def migrated_dsn(dsn):
         connection.commit()
 
     assert current(dsn) is None
-    assert upgrade(dsn) == "0002_platform_integrity"
-    assert upgrade(dsn) == "0002_platform_integrity"  # 幂等
+    assert upgrade(dsn) == "0003_resource_publications"
+    assert upgrade(dsn) == "0003_resource_publications"  # 幂等
     return dsn
 
 
 def test_migration_rollback_and_reapply(migrated_dsn):
-    assert downgrade(migrated_dsn) == "0001_initial"
+    assert downgrade(migrated_dsn, steps=2) == "0001_initial"
     assert current(migrated_dsn) == "0001_initial"
     with psycopg.connect(migrated_dsn) as connection:
         with connection.cursor() as cursor:
@@ -81,7 +84,7 @@ def test_migration_rollback_and_reapply(migrated_dsn):
                 "INSERT INTO scores(run_id, case_id, ordinal, payload) VALUES "
                 "('run-legacy-pg', 'case-legacy', 1, '{\"case_id\":\"case-legacy\",\"passed\":true}'::jsonb)"
             )
-    assert upgrade(migrated_dsn) == "0002_platform_integrity"
+    assert upgrade(migrated_dsn) == "0003_resource_publications"
     store = create_postgres_run_store(migrated_dsn)
     legacy = store.runs.get("run-legacy-pg")
     assert legacy["revision"] == 0 and legacy["schema_version"] == 1
@@ -234,3 +237,122 @@ def test_postgres_unmanaged_versions_are_immutable(migrated_dsn):
         assert repository.get(*key) == record
     assert store.models.put({"id": "model-pg", "provider": "p1"})["provider"] == "p1"
     assert store.models.put({"id": "model-pg", "provider": "p2"})["provider"] == "p2"
+
+
+def test_postgres_dataset_scenario_publish_is_atomic(migrated_dsn):
+    from motte_storage.resource_store import PostgresResourceStore, ResourceConflictError
+
+    store = PostgresResourceStore(migrated_dsn)
+    existing_scenario = {"name": "atomic-pg", "version": "1", "cases": ["old"]}
+    store.scenarios.put(existing_scenario)
+    dataset = {"name": "atomic-pg", "version": "1", "cases": ["new"]}
+    scenario = {"name": "atomic-pg", "version": "1", "cases": ["new"]}
+
+    with pytest.raises(ResourceConflictError, match="different content"):
+        store.publish_dataset_scenario(dataset, scenario)
+    assert store.datasets.get("atomic-pg", "1") is None
+    assert store.scenarios.get("atomic-pg", "1") == existing_scenario
+
+    pair = (
+        {"name": "atomic-pg-ok", "version": "1", "cases": ["new"]},
+        {"name": "atomic-pg-ok", "version": "1", "cases": ["new"]},
+    )
+    assert store.publish_dataset_scenario(*pair) == pair
+    assert store.publish_dataset_scenario(*pair) == pair
+
+
+def test_postgres_publication_audit_is_in_the_same_bundle(migrated_dsn):
+    from motte_sdk.publication import publication_audit
+    from motte_storage.resource_store import PostgresResourceStore
+
+    store = PostgresResourceStore(migrated_dsn)
+    fingerprint = "sha256:" + "1" * 64
+    dataset = {
+        "name": "audited-pg", "version": "1",
+        "dataset_fingerprint": fingerprint,
+    }
+    scenario = {"name": "audited-pg", "version": "1", "dataset": "audited-pg@1"}
+    publication = publication_audit(
+        dataset, scenario, {"fixture": "postgres"},
+        actor="test-operator", entrypoint="cli", published_at="2026-09-19T00:00:00Z",
+    )
+    assert store.publish_dataset_scenario(
+        dataset, scenario, publication=publication
+    ) == (dataset, scenario)
+    assert store.publications.get(publication["id"]) == publication
+
+
+def test_postgres_pair_publish_handles_concurrent_writers(migrated_dsn):
+    from motte_storage.resource_store import PostgresResourceStore, ResourceConflictError
+
+    store = PostgresResourceStore(migrated_dsn)
+    same_pair = (
+        {"name": "same-pg-pair", "version": "1", "value": 1},
+        {"name": "same-pg-pair", "version": "1", "value": 1},
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(store.publish_dataset_scenario, *same_pair) for _ in range(2)]
+        assert [future.result(timeout=10) for future in futures] == [same_pair, same_pair]
+
+    pairs = [
+        (
+            {"name": "racing-pg-pair", "version": "1", "value": value},
+            {"name": "racing-pg-pair", "version": "1", "value": value},
+        )
+        for value in (1, 2)
+    ]
+
+    def publish(pair):
+        try:
+            return store.publish_dataset_scenario(*pair)
+        except ResourceConflictError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(publish, pair) for pair in pairs]
+        outcomes = [future.result(timeout=10) for future in futures]
+    assert sum(outcome is None for outcome in outcomes) == 1
+    winner = next(outcome for outcome in outcomes if outcome is not None)
+    assert store.datasets.get("racing-pg-pair", "1") == winner[0]
+    assert store.scenarios.get("racing-pg-pair", "1") == winner[1]
+
+
+def test_postgres_pair_publish_rolls_back_on_scenario_trigger(migrated_dsn):
+    from motte_storage.resource_store import PostgresResourceStore
+
+    with psycopg.connect(migrated_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE OR REPLACE FUNCTION reject_resource_scenario() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW.name = 'rollback-pg-pair' THEN
+                        RAISE EXCEPTION 'forced scenario failure';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TRIGGER reject_resource_scenario_insert
+                BEFORE INSERT ON scenario_versions
+                FOR EACH ROW EXECUTE FUNCTION reject_resource_scenario()
+                """
+            )
+    try:
+        store = PostgresResourceStore(migrated_dsn)
+        dataset = {"name": "rollback-pg-pair", "version": "1", "value": 1}
+        scenario = {"name": "rollback-pg-pair", "version": "1", "value": 1}
+        with pytest.raises(psycopg.Error, match="forced scenario failure"):
+            store.publish_dataset_scenario(dataset, scenario)
+        assert store.datasets.get("rollback-pg-pair", "1") is None
+        assert store.scenarios.get("rollback-pg-pair", "1") is None
+    finally:
+        with psycopg.connect(migrated_dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DROP TRIGGER IF EXISTS reject_resource_scenario_insert ON scenario_versions"
+                )
+                cursor.execute("DROP FUNCTION IF EXISTS reject_resource_scenario()")

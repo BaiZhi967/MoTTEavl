@@ -75,6 +75,31 @@ class RunService:
     def add_progress_observer(self, observer: Callable[[dict[str, Any]], None]) -> None:
         self._progress_observers.append(observer)
 
+    @staticmethod
+    def _validate_frozen_benchmark_snapshot(run: dict[str, Any]) -> None:
+        manifest = run.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        provenance = manifest.get("benchmark_provenance")
+        provenance = provenance if isinstance(provenance, dict) else {}
+        snapshot = manifest.get("benchmark_snapshot")
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        scenario_identity = snapshot.get("scenario")
+        dataset_identity = snapshot.get("dataset")
+        scenario_identity = scenario_identity if isinstance(scenario_identity, dict) else {}
+        dataset_identity = dataset_identity if isinstance(dataset_identity, dict) else {}
+        is_direct_v2 = (
+            provenance.get("suite") == "direct-llm"
+            and str(provenance.get("plugin_version") or "") == "2"
+        ) or (
+            snapshot.get("schema_version") == 2
+            and str(scenario_identity.get("plugin_version") or "") == "2"
+            and dataset_identity.get("contract_version") == 2
+        )
+        if is_direct_v2:
+            from .direct_llm_v2 import selected_cases_from_snapshot
+
+            selected_cases_from_snapshot(run)
+
     def create_run(
         self,
         scenario_version: str,
@@ -112,6 +137,7 @@ class RunService:
         }
         if parent_run_id is not None:
             run["parent_run_id"] = parent_run_id
+        self._validate_frozen_benchmark_snapshot(run)
         event = {"run_id": run_id, "type": "queued", "status": "queued"}
         self.store.runs.create(run, event=event)
         self._notify_latest_event(run_id)
@@ -140,6 +166,7 @@ class RunService:
         invoke = provider if provider is not None else self.provider
         requested_case_ids = list(case_ids) if case_ids is not None else None
         if run.get("manifest", {}).get("benchmark_provenance"):
+            self._validate_frozen_benchmark_snapshot(run)
             if requested_case_ids is not None and requested_case_ids != run["case_ids"]:
                 raise ValueError("benchmark selected case ids are immutable")
             return self._execute_benchmark(run, invoke)
@@ -311,6 +338,7 @@ class RunService:
 
     def rescore(self, run_id: str) -> dict[str, Any]:
         run = self._load(run_id)
+        self._validate_frozen_benchmark_snapshot(run)
         benchmark_terminal = run.get("manifest", {}).get("benchmark_provenance") and run["status"] in self.TERMINAL
         if run["status"] != "completed" and not benchmark_terminal:
             raise ValueError("only completed runs or terminal benchmarks can be rescored")
@@ -355,6 +383,7 @@ class RunService:
         case_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         parent = self._load(run_id)
+        self._validate_frozen_benchmark_snapshot(parent)
         if parent["status"] not in RETRYABLE:
             raise ValueError(
                 "only failed, cancelled, unsupported, profile_stale, or needs_review runs can be retried"

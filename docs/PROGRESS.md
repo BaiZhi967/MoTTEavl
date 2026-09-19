@@ -21,6 +21,27 @@
 
 状态说明：⏳ 未开始，🚧 开发中，✅ 已通过仓库验证，⚠️ 受外部依赖或未运行 live smoke 影响。
 
+## Direct LLM 题库扩充 Phase 0-11（2026-09-19 至 2026-09-20）
+
+- [x] Phase 0：冻结 GSM8K 不转换、Direct LLM v1/v2 并存、selected-only snapshot、来源 fail-closed 与 CLI 联网边界；新增来源治理文档和 7 份静态 SourceSpec 草案。
+- [x] 修复 v1 `judged` 分母事实来源；overview、report 和 scoring pass 共用 aggregate accuracy，同时保留 v1 completion/attempt_rate 历史语义。
+- [x] 数据集身份改为完整 `dataset_fingerprint`，兼容已发布且没有 fingerprint 字段的 v1 资源；伪造 fingerprint fail closed；GSM8K 继续使用其原有 cases hash 幂等语义。
+- [x] dataset + scenario 在 InMemory、SQLite 和 PostgreSQL 使用单事务原子发布；增加并发同/异内容、12 路自动版本竞争和 scenario 写入故障回滚测试。
+- [x] Direct CLI 拒绝 GSM8K/未知 suite scenario；Direct import API 使用 strict Pydantic request/response 并重新生成 OpenAPI/TypeScript schema。
+- [x] Web 修复空可选导入字段、跨数据集 selection、返回 ids 模式与 Compare dataset/version/case-set 可比性门禁。
+- [x] 仓库门禁：Ruff、contracts mypy、compileall、`629 passed / 11 skipped`、Web build、Web `108 passed`、Pi selftest 均通过。
+- [ ] Compose config：当前机器没有 `docker` 可执行文件，`make check` 仅在最后一步因此失败；需在具备 Docker 的 CI/发布环境补证据。PostgreSQL 专项测试也因未设置 `MOTTE_PG_DSN` 本地跳过。
+- [x] Phase 2-3：新增 strict Direct LLM v2 contract、`choice/numeric/json_equal/exact@1` scorer registry、selected-only snapshot、固定 profile、dataset fingerprint 和 selected/judged/attempted/coverage outcome 语义；未知显式版本 fail closed，v1 历史语义不变。
+- [x] Phase 4：新增 strict SourceSpec、HTTPS/DNS/IP/redirect/大小/hash/cache/JSON/JSONL/CSV/Parquet 资源限制和 CLI-only `list/inspect/fetch/verify/convert/import/prepare`；restricted 只能通过受信 `ApprovalVerifier`，当前 CLI 无此 capability。
+- [x] Phase 4 原子发布：dataset、scenario 和 append-only publication audit 在 InMemory/SQLite/PostgreSQL 使用单事务；`0003_resource_publications` 已纳入升级/回滚文档。
+- [x] Phase 5-7：TruthfulQA Binary、MMLU-Pro 5-shot/zero-shot 和 1,000 题 MoTTE Core ZH 的确定性 adapter/generator、固定 profiles、provenance 与 quality checks 已实现；三者来源仍为 `pending`，不能用自动测试替代许可、ownership/privacy 双人复核或三模型校准。
+- [x] Phase 8：typed DatasetSummary/Source/run/dry-run/publication API、OpenAPI 类型、Web profile、保守 token/费用上界、v2 outcome/coverage 展示和 restricted 默认隐藏已完成；服务端不提供隐式远程下载。
+- [x] Phase 9-10：C-Eval/CMMLU 保持 `restricted` 且仅允许隔离实验转换；IFEval 使用独立 preview rule evaluator 和四项指标；LongBench v2 固定 503 题/6 域/full-verbatim context/50-200-503 profiles。全部保持非官方、不可默认发布，不并入普通 Direct accuracy。
+- [x] Phase 11：fake-provider E2E 真实经过 prepare/run/score/aggregate，覆盖三个首批数据集转换器、四个 scorer、失败 outcome、provider gold 隔离、retry/rescore snapshot 复用；新增 v2 主操作指南和高级基准限制文档。
+- [x] 最终 P1 加固：numeric 极端指数有界失败；selected snapshot 全内容 hash；provider 只接收 execution allowlist；显式版本不降级；data/code license 独立验证；publication 保存 portable receipt 并重算 hash/identity；generic v2 POST、bundle 关系、当前 SourceSpec/provenance、普通 retry 与 cache symlink/junction 全部 fail closed；Web v2 下钻读取 `selected_cases`，报告区分 judged failure 与 unjudged。
+- [x] 最终离线门禁：Ruff、contracts mypy、compileall、`982 passed / 15 skipped`、Web production build、Web `130 passed` 和 Pi selftest 通过；OpenAPI/TypeScript 二次生成 SHA-256 不变，TypeScript `tsc --noEmit` 通过。`make check` 可执行部分全绿，仍只在本机缺少 Docker 的 Compose config 步骤失败。
+- [ ] 外部发布门禁：当前 7 个来源为 5 个 `pending`、2 个 `restricted`，没有 stable approved 来源；有限付费 live smoke 未执行。Docker Compose 因本机缺少 `docker` 未验证，PostgreSQL E2E 因未设置 `MOTTE_PG_DSN` 为 `10 skipped`。以上均保持 fail closed，未伪造证据。
+
 ## 当前推进阶段：Direct LLM Run 纵向切片
 
 阶段目标是让 API、CLI、Worker 和 SDK 共用一个可持久化的 RunService，并先以 replay Provider 验证完整生命周期，再接入真实 Provider。

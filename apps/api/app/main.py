@@ -14,7 +14,12 @@ from motte_contracts.events import TraceEvent
 from motte_contracts.report import ReportSummary, RunReport
 from motte_contracts.run import Run, RunCommand
 from motte_sdk.execution_backends import legacy_execution
-from motte_sdk.resolve import ManifestResolutionError, find_secret_paths, prepare_run, resolve_manifest
+from motte_sdk.resolve import (
+    ManifestResolutionError,
+    find_secret_paths,
+    prepare_run,
+    resolve_manifest,
+)
 from motte_sdk.service import RunService, build_run_service
 from motte_storage import RunConflictError
 from motte_storage.factory import create_resource_store
@@ -23,7 +28,15 @@ from motte_storage.resource_store import InMemoryResourceStore, ResourceConflict
 from apps.api.app.schemas import (
     CancelRunRequest,
     CreateRunRequest,
+    DatasetSourceListResponse,
+    DatasetSummaryListResponse,
+    DirectLlmDryRunResponse,
+    DirectLlmImportRequest,
+    DirectLlmImportResponse,
+    DirectLlmOverviewResponse,
+    DirectLlmRunRequest,
     ReplayRunRequest,
+    ResourcePublicationListResponse,
     RunCommandListResponse,
     RunListResponse,
     RunMessageRequest,
@@ -34,13 +47,18 @@ SSE_POLL_INTERVAL_SECONDS = 1.0
 
 AGENT_CATALOG = [
     {
-        "id": "builtin-react", "kind": "react",
+        "id": "builtin-react",
+        "kind": "react",
         "description": "内置 ReAct agent（尚未接入 ExecutionBackend）",
-        "protocol_ready": True, "execution_ready": False,
+        "protocol_ready": True,
+        "execution_ready": False,
     },
     {
-        "id": "pi", "kind": "bridge", "description": "Pi Agent bridge protocol v1",
-        "protocol_ready": True, "execution_ready": False,
+        "id": "pi",
+        "kind": "bridge",
+        "description": "Pi Agent bridge protocol v1",
+        "protocol_ready": True,
+        "execution_ready": False,
     },
 ]
 
@@ -113,10 +131,12 @@ def _suite_mismatch(resource: dict[str, Any], expected: str, reference: str) -> 
         return None
     return JSONResponse(
         status_code=422,
-        content={"error": {
-            "code": "SUITE_MISMATCH",
-            "message": f"resource {reference} belongs to suite {actual!r}, expected {expected!r}",
-        }},
+        content={
+            "error": {
+                "code": "SUITE_MISMATCH",
+                "message": f"resource {reference} belongs to suite {actual!r}, expected {expected!r}",
+            }
+        },
     )
 
 
@@ -127,10 +147,66 @@ def _resource_hash(record: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _dataset_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """Project immutable identity and governance without returning large case payloads."""
+    evaluation = record.get("eval") if isinstance(record.get("eval"), dict) else {}
+    provenance = record.get("provenance") if isinstance(record.get("provenance"), dict) else {}
+    scorer = evaluation.get("scorer")
+    if isinstance(scorer, dict):
+        scorer_id = scorer.get("id")
+        scorer_version = scorer.get("version")
+        scorer = (
+            f"{scorer_id}@{scorer_version}"
+            if isinstance(scorer_id, str) and isinstance(scorer_version, str)
+            else None
+        )
+    license_info = provenance.get("license")
+    license_status = license_info.get("status") if isinstance(license_info, dict) else license_info
+    profiles = []
+    for profile in record.get("profiles") or []:
+        if not isinstance(profile, dict) or not isinstance(profile.get("name"), str):
+            continue
+        count = profile.get("count", len(profile.get("case_ids") or []))
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            continue
+        profiles.append(
+            {
+                "name": profile["name"],
+                "count": count,
+                "strategy": profile.get("strategy")
+                if isinstance(profile.get("strategy"), str)
+                else None,
+                "case_ids_sha256": (
+                    profile.get("case_ids_sha256")
+                    if isinstance(profile.get("case_ids_sha256"), str)
+                    else None
+                ),
+            }
+        )
+    source = provenance.get("source_id", provenance.get("source"))
+    revision = provenance.get("upstream_revision", provenance.get("revision"))
+    return {
+        "name": record.get("name"),
+        "version": str(record.get("version", "")),
+        "contract_version": record.get("contract_version", evaluation.get("version")),
+        "dataset_fingerprint": record.get("dataset_fingerprint"),
+        "cases": len(record.get("cases") or []),
+        "cases_sha256": record.get("cases_sha256"),
+        "suite": evaluation.get("suite"),
+        "scorer": scorer if isinstance(scorer, str) else None,
+        "source": source if isinstance(source, str) else None,
+        "revision": revision if isinstance(revision, str) else None,
+        "license_status": license_status if isinstance(license_status, str) else None,
+        "profiles": profiles,
+    }
+
+
 def create_app(store=None, resource_store=None) -> FastAPI:
     service = build_run_service() if store is None else RunService(store)
-    resources = resource_store if resource_store is not None else (
-        create_resource_store() if store is None else InMemoryResourceStore()
+    resources = (
+        resource_store
+        if resource_store is not None
+        else (create_resource_store() if store is None else InMemoryResourceStore())
     )
     application = FastAPI(title="MoTTEavl API", version="0.1.0")
     application.state.run_service = service
@@ -138,13 +214,21 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
     @application.exception_handler(ResourceConflictError)
     async def resource_conflict(request, error):
-        return JSONResponse(status_code=409, content={"error": {"code": "RESOURCE_CONFLICT", "message": str(error)}})
+        return JSONResponse(
+            status_code=409, content={"error": {"code": "RESOURCE_CONFLICT", "message": str(error)}}
+        )
 
     @application.exception_handler(RunConflictError)
     async def run_conflict(request, error):
-        return JSONResponse(status_code=409, content={"error": {
-            "code": "RUN_CONFLICT", "message": "run revision or status changed",
-        }})
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "code": "RUN_CONFLICT",
+                    "message": "run revision or status changed",
+                }
+            },
+        )
 
     # ------------------------------------------------------------------ runs
 
@@ -153,7 +237,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         return {"status": "ok"}
 
     @application.post(
-        "/api/v1/runs", status_code=202, response_model=Run,
+        "/api/v1/runs",
+        status_code=202,
+        response_model=Run,
         response_model_exclude_unset=True,
     )
     def create_run(request_body: CreateRunRequest):
@@ -165,16 +251,32 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if not isinstance(scenario, str) or not scenario:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "SCENARIO_REQUIRED", "message": "scenario_version is required"}},
+                content={
+                    "error": {
+                        "code": "SCENARIO_REQUIRED",
+                        "message": "scenario_version is required",
+                    }
+                },
             )
         if scenario.startswith("vision@"):
-            return JSONResponse(status_code=422, content={"error": {"code": "MODEL_CAPABILITY_UNSUPPORTED", "message": "vision capability is unsupported"}})
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "MODEL_CAPABILITY_UNSUPPORTED",
+                        "message": "vision capability is unsupported",
+                    }
+                },
+            )
         if scenario not in BUILTIN_SCENARIOS:
             try:
                 scenario_name, scenario_version = scenario.rsplit("@", 1)
             except ValueError:
                 scenario_name, scenario_version = scenario, ""
-            if not scenario_name or resources.scenarios.get(scenario_name, scenario_version) is None:
+            if (
+                not scenario_name
+                or resources.scenarios.get(scenario_name, scenario_version) is None
+            ):
                 return JSONResponse(
                     status_code=422,
                     content={
@@ -198,7 +300,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 },
             )
         try:
-            manifest, case_ids = prepare_run(scenario, manifest, body.get("case_ids", []), resources)
+            manifest, case_ids = prepare_run(
+                scenario, manifest, body.get("case_ids", []), resources
+            )
         except ManifestResolutionError as error:
             return JSONResponse(
                 status_code=422,
@@ -208,23 +312,39 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         provider = manifest.get("provider") or {}
         fixture = provider.get("fixture") if isinstance(provider, dict) else None
         if execution.get("backend_id") == "replay" and fixture is not None:
-            if not isinstance(fixture, dict) or not fixture or any(
-                not isinstance(case_id, str) or not case_id
-                or not isinstance(item, dict) or "output" not in item
-                for case_id, item in fixture.items()
+            if (
+                not isinstance(fixture, dict)
+                or not fixture
+                or any(
+                    not isinstance(case_id, str)
+                    or not case_id
+                    or not isinstance(item, dict)
+                    or "output" not in item
+                    for case_id, item in fixture.items()
+                )
             ):
-                return JSONResponse(status_code=422, content={"error": {
-                    "code": "REPLAY_FIXTURE_INVALID",
-                    "message": "replay fixture must contain object cases with output fields",
-                }})
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {
+                            "code": "REPLAY_FIXTURE_INVALID",
+                            "message": "replay fixture must contain object cases with output fields",
+                        }
+                    },
+                )
             if not case_ids:
                 case_ids = list(fixture)
             missing = [case_id for case_id in case_ids if case_id not in fixture]
             if missing:
-                return JSONResponse(status_code=422, content={"error": {
-                    "code": "REPLAY_CASE_NOT_FOUND",
-                    "message": f"replay fixture has no selected cases: {missing}",
-                }})
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {
+                            "code": "REPLAY_CASE_NOT_FOUND",
+                            "message": f"replay fixture has no selected cases: {missing}",
+                        }
+                    },
+                )
         if isinstance(manifest.get("provider"), dict):
             invalid = _validate_provider(manifest["provider"])
             if invalid is not None:
@@ -234,20 +354,20 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         )
 
     @application.get(
-        "/api/v1/runs", response_model=RunListResponse,
+        "/api/v1/runs",
+        response_model=RunListResponse,
         response_model_exclude_unset=True,
     )
     def list_runs(status: str | None = None):
         runs = service.store.runs.list()
         if status is not None:
             runs = [run for run in runs if run.get("status") == status]
-        items = [
-            adapt_legacy_run({**run, "model": _run_model_label(run)}) for run in runs
-        ]
+        items = [adapt_legacy_run({**run, "model": _run_model_label(run)}) for run in runs]
         return {"items": items, "total": len(items)}
 
     @application.get(
-        "/api/v1/runs/{run_id}", response_model=Run,
+        "/api/v1/runs/{run_id}",
+        response_model=Run,
         response_model_exclude_unset=True,
     )
     def get_run(run_id: str):
@@ -257,7 +377,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="run not found") from error
 
     @application.post(
-        "/api/v1/runs/{run_id}/cancel", response_model=Run,
+        "/api/v1/runs/{run_id}/cancel",
+        response_model=Run,
         response_model_exclude_unset=True,
     )
     def cancel_run(run_id: str, body: CancelRunRequest | None = None):
@@ -269,7 +390,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post(
-        "/api/v1/runs/{run_id}/rescore", response_model=Run,
+        "/api/v1/runs/{run_id}/rescore",
+        response_model=Run,
         response_model_exclude_unset=True,
     )
     def rescore_run(run_id: str):
@@ -281,7 +403,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post(
-        "/api/v1/runs/{run_id}/retry", response_model=Run,
+        "/api/v1/runs/{run_id}/retry",
+        response_model=Run,
         response_model_exclude_unset=True,
     )
     def retry_run(run_id: str):
@@ -307,16 +430,29 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                         and bool(requested_selection["case_ids"])
                     )
                     if isinstance(pinned_selection, dict) and not has_explicit_ids:
-                        requested["case_selection"] = deepcopy(pinned_selection)
+                        if pinned_selection.get("mode") == "profile":
+                            profile_name = pinned_selection.get("profile")
+                            if not isinstance(profile_name, str) or not profile_name.strip():
+                                raise ValueError("profile_stale retry has an invalid pinned profile")
+                            requested.pop("profile", None)
+                            requested["case_selection"] = {
+                                "mode": "profile", "profile": profile_name,
+                            }
+                        else:
+                            requested["case_selection"] = deepcopy(pinned_selection)
                     selected = []
                 else:
                     selected = parent.get("case_ids") or []
                 refreshed, refreshed_case_ids = prepare_run(
                     parent["scenario_version"], requested, selected, resources
                 )
-            return service.retry(
-                run_id, refreshed_manifest=refreshed, case_ids=refreshed_case_ids
-            )
+            elif parent["status"] in {"failed", "cancelled", "unsupported", "needs_review"}:
+                managed = (parent.get("manifest") or {}).get("benchmark_provenance") or {}
+                if managed.get("plugin_version") == "2":
+                    from motte_sdk.direct_llm_v2 import require_runnable_direct_llm_v2_snapshot
+
+                    require_runnable_direct_llm_v2_snapshot(parent, resources)
+            return service.retry(run_id, refreshed_manifest=refreshed, case_ids=refreshed_case_ids)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         except (ManifestResolutionError, ValueError) as error:
@@ -344,22 +480,24 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if capabilities.get("interactive") is not True:
             return JSONResponse(
                 status_code=409,
-                content={"error": {
-                    "code": "COMMAND_UNSUPPORTED",
-                    "message": "the run execution backend is not interactive",
-                }},
+                content={
+                    "error": {
+                        "code": "COMMAND_UNSUPPORTED",
+                        "message": "the run execution backend is not interactive",
+                    }
+                },
             )
         return JSONResponse(
             status_code=501,
-            content={"error": {
-                "code": "RUN_COMMANDS_NOT_IMPLEMENTED",
-                "message": "no registered execution backend has a durable command consumer",
-            }},
+            content={
+                "error": {
+                    "code": "RUN_COMMANDS_NOT_IMPLEMENTED",
+                    "message": "no registered execution backend has a durable command consumer",
+                }
+            },
         )
 
-    @application.get(
-        "/api/v1/runs/{run_id}/commands", response_model=RunCommandListResponse
-    )
+    @application.get("/api/v1/runs/{run_id}/commands", response_model=RunCommandListResponse)
     def list_run_commands(run_id: str):
         try:
             service.get_run(run_id)
@@ -369,7 +507,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         return {"items": items, "total": len(items)}
 
     @application.post(
-        "/api/v1/runs/{run_id}/replay", status_code=202, response_model=Run,
+        "/api/v1/runs/{run_id}/replay",
+        status_code=202,
+        response_model=Run,
         response_model_exclude_unset=True,
     )
     def replay_run(run_id: str, body: ReplayRunRequest):
@@ -398,10 +538,16 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 if isinstance(existing_provider, dict) and "fixture" in existing_provider
                 else None
             )
-            has_provider_fixture = isinstance(existing_provider, dict) and "fixture" in existing_provider
+            has_provider_fixture = (
+                isinstance(existing_provider, dict) and "fixture" in existing_provider
+            )
             has_manifest_fixture = "replay_fixture" in manifest
             manifest_fixture = manifest.get("replay_fixture") if has_manifest_fixture else None
-            if has_provider_fixture and has_manifest_fixture and provider_fixture != manifest_fixture:
+            if (
+                has_provider_fixture
+                and has_manifest_fixture
+                and provider_fixture != manifest_fixture
+            ):
                 raise ValueError("provider.fixture and replay_fixture are inconsistent")
             existing_fixture = provider_fixture if has_provider_fixture else manifest_fixture
             if has_provider_fixture or has_manifest_fixture:
@@ -421,12 +567,14 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             # Keep the user's provider/model reference resolvable for profile-stale retry;
             # the fixture is run data, not a replacement for that reference.
             requested["replay_fixture"] = fixture
-            run.update({
-                "manifest": manifest,
-                "requested_manifest": requested,
-                "case_ids": selected,
-                "updated_at": datetime.now(UTC).isoformat(),
-            })
+            run.update(
+                {
+                    "manifest": manifest,
+                    "requested_manifest": requested,
+                    "case_ids": selected,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            )
             service.store.runs.update(
                 run,
                 expected_revision=run["revision"],
@@ -464,7 +612,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     @application.get(
-        "/api/v1/runs/{run_id}/report", response_model=RunReport,
+        "/api/v1/runs/{run_id}/report",
+        response_model=RunReport,
         response_model_exclude_unset=True,
     )
     def run_report(run_id: str, scoring_pass_id: str | None = None):
@@ -475,18 +624,21 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if scoring_pass_id is not None:
             selected = service.store.scoring_passes.get(scoring_pass_id)
             if selected is None or selected.get("run_id") != run_id:
-                return JSONResponse(status_code=404, content={"error": {
-                    "code": "SCORING_PASS_NOT_FOUND",
-                    "message": f"scoring pass not found for run: {scoring_pass_id}",
-                }})
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": {
+                            "code": "SCORING_PASS_NOT_FOUND",
+                            "message": f"scoring pass not found for run: {scoring_pass_id}",
+                        }
+                    },
+                )
             run["scores"] = service.store.score_sets.list_for_pass(scoring_pass_id)
             run["current_scoring_pass_id"] = scoring_pass_id
             run["scoring_pass"] = selected
         return adapt_legacy_report(_build_report(adapt_legacy_run(run)))
 
-    @application.get(
-        "/api/v1/runs/{run_id}/scoring-passes", response_model=ScoringPassListResponse
-    )
+    @application.get("/api/v1/runs/{run_id}/scoring-passes", response_model=ScoringPassListResponse)
     def list_scoring_passes(run_id: str):
         try:
             service.get_run(run_id)
@@ -500,9 +652,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     def _resource_routes(name: str, validate, *, versioned: bool, key_is_path: bool = False):
         repository = getattr(resources, name)
 
-        @application.get(f"/api/v1/{name}")
+        @application.get(
+            f"/api/v1/{name}",
+            response_model=DatasetSummaryListResponse if name == "datasets" else None,
+        )
         def list_items():
-            items = repository.list()
+            records = repository.list()
+            items = (
+                [_dataset_summary(record) for record in records] if name == "datasets" else records
+            )
             return {"items": items, "total": len(items)}
 
         @application.post(f"/api/v1/{name}", status_code=201)
@@ -510,34 +668,68 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             server_managed = {"_deleted"} | {
                 "providers": {"generation"},
                 "models": {
-                    "generation", "lifecycle", "profile_hash", "published_at", "deprecated_at"
+                    "generation",
+                    "lifecycle",
+                    "profile_hash",
+                    "published_at",
+                    "deprecated_at",
                 },
             }.get(name, set())
             supplied_managed = sorted(set(body).intersection(server_managed))
             if supplied_managed:
-                return JSONResponse(status_code=422, content={"error": {
-                    "code": "SERVER_MANAGED_FIELD",
-                    "message": f"server-managed fields are not accepted: {supplied_managed}",
-                }})
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {
+                            "code": "SERVER_MANAGED_FIELD",
+                            "message": f"server-managed fields are not accepted: {supplied_managed}",
+                        }
+                    },
+                )
             rejected = _reject_secret_fields(body)
             if rejected is not None:
                 return rejected
+            evaluation = body.get("eval")
+            if (
+                name in {"datasets", "scenarios"}
+                and isinstance(evaluation, dict)
+                and evaluation.get("suite") == "direct-llm"
+                and evaluation.get("version") == 2
+            ):
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {
+                        "code": "ATOMIC_PUBLICATION_REQUIRED",
+                        "message": (
+                            "direct-llm v2 datasets and scenarios must be published atomically "
+                            "with a matching publication audit"
+                        ),
+                    }},
+                )
             invalid = validate(body)
             if invalid is not None:
                 return invalid
             if not versioned:
                 resource_key = body.get("name") if name == "providers" else body.get("id")
                 if resource_key and repository.get(resource_key) is not None:
-                    return JSONResponse(status_code=409, content={"error": {
-                        "code": "RESOURCE_CONFLICT",
-                        "message": f"{name[:-1]} already exists: {resource_key}",
-                    }})
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "error": {
+                                "code": "RESOURCE_CONFLICT",
+                                "message": f"{name[:-1]} already exists: {resource_key}",
+                            }
+                        },
+                    )
             try:
                 return repository.put(body, expected_generation=0 if not versioned else None)
             except ResourceConflictError:
                 raise
             except ValueError as error:
-                return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
+                )
 
         if versioned:
             path = f"/api/v1/{name}/{{resource_name}}/{{version}}"
@@ -553,10 +745,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             def delete_versioned(resource_name: str, version: str):
                 if repository.get(resource_name, version) is None:
                     raise HTTPException(status_code=404, detail=f"{name[:-1]} not found")
-                return JSONResponse(status_code=409, content={"error": {
-                    "code": "PUBLISHED_RESOURCE_IMMUTABLE",
-                    "message": f"published resource cannot be deleted: {resource_name}@{version}",
-                }})
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error": {
+                            "code": "PUBLISHED_RESOURCE_IMMUTABLE",
+                            "message": f"published resource cannot be deleted: {resource_name}@{version}",
+                        }
+                    },
+                )
 
         else:
             # 资源键可能自带路径分隔符（如模型 id `Qwen/Qwen2.5-7B`）：整键交给路由，不做路径切分
@@ -586,13 +783,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     invalid = validate(deprecated)
                     if invalid is not None:
                         return invalid
-                    repository.put(
-                        deprecated, expected_generation=int(record.get("generation", 1))
-                    )
+                    repository.put(deprecated, expected_generation=int(record.get("generation", 1)))
                     return {"deprecated": key}
-                if not repository.delete(
-                    key, expected_generation=int(record.get("generation", 1))
-                ):
+                if not repository.delete(key, expected_generation=int(record.get("generation", 1))):
                     raise HTTPException(status_code=404, detail=f"{name[:-1]} not found")
                 return {"deleted": key}
 
@@ -600,12 +793,20 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         from motte_provider.config import validate_connection_config
 
         if not body.get("name"):
-            return JSONResponse(status_code=422, content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": "name is required"}})
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {"code": "PROVIDER_CONFIG_INVALID", "message": "name is required"}
+                },
+            )
         body.setdefault("generation", 1)
         try:
             validate_connection_config(body)
         except ValueError as error:
-            return JSONResponse(status_code=422, content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": str(error)}})
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "PROVIDER_CONFIG_INVALID", "message": str(error)}},
+            )
         return None
 
     def _validate_model(body: dict):
@@ -624,20 +825,36 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             issue = error.errors()[-1]
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "CONTRACT_INVALID", "message": issue["msg"], "field": str(issue["loc"])}},
+                content={
+                    "error": {
+                        "code": "CONTRACT_INVALID",
+                        "message": issue["msg"],
+                        "field": str(issue["loc"]),
+                    }
+                },
             )
         provider_name = body.get("provider")
         if provider_name and resources.providers.get(provider_name) is None:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "RESOURCE_NOT_FOUND", "message": f"provider not found: {provider_name}"}},
+                content={
+                    "error": {
+                        "code": "RESOURCE_NOT_FOUND",
+                        "message": f"provider not found: {provider_name}",
+                    }
+                },
             )
         return None
 
     def _validate_named_version(body: dict):
         for field in ("name", "version"):
             if not body.get(field):
-                return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": f"{field} is required"}})
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {"code": "CONTRACT_INVALID", "message": f"{field} is required"}
+                    },
+                )
         return None
 
     def _validate_price_table(body: dict):
@@ -645,11 +862,19 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
         for field in ("model_id", "version"):
             if not body.get(field):
-                return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": f"{field} is required"}})
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {"code": "CONTRACT_INVALID", "message": f"{field} is required"}
+                    },
+                )
         try:
             parse_price_table(body)
         except ValueError as error:
-            return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}})
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "CONTRACT_INVALID", "message": str(error)}},
+            )
         return None
 
     _resource_routes("providers", _validate_provider_resource, versioned=False, key_is_path=True)
@@ -658,16 +883,42 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     _resource_routes("scenarios", _validate_named_version, versioned=True)
     _resource_routes("price_tables", _validate_price_table, versioned=True)
 
+    @application.get(
+        "/api/v1/resource-publications", response_model=ResourcePublicationListResponse
+    )
+    def list_resource_publications():
+        items = resources.publications.list()
+        return {"items": items, "total": len(items)}
+
     # 读-改-写更新：只接受白名单字段，其余载荷原样保留（put 是整记录覆盖，先合再校验）
     PROVIDER_UPDATABLE_FIELDS = (
-        "kind", "base_url", "credentials", "api_key_env", "enabled", "request_path",
-        "timeout", "max_retries", "backoff_initial_ms", "backoff_max_ms",
+        "kind",
+        "base_url",
+        "credentials",
+        "api_key_env",
+        "enabled",
+        "request_path",
+        "timeout",
+        "max_retries",
+        "backoff_initial_ms",
+        "backoff_max_ms",
     )
     MODEL_UPDATABLE_FIELDS = (
-        "model", "enabled", "capabilities", "input_modalities", "output_modalities",
-        "supports_tools", "tool_features", "context_window", "max_output_tokens",
-        "reasoning", "parameters", "provenance", "identity_policy",
-        "identity_aliases", "identity_alias_version",
+        "model",
+        "enabled",
+        "capabilities",
+        "input_modalities",
+        "output_modalities",
+        "supports_tools",
+        "tool_features",
+        "context_window",
+        "max_output_tokens",
+        "reasoning",
+        "parameters",
+        "provenance",
+        "identity_policy",
+        "identity_aliases",
+        "identity_alias_version",
     )
 
     @application.put("/api/v1/providers/{name:path}")
@@ -681,13 +932,17 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if "name" in body and body["name"] != name:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "CONTRACT_INVALID", "message": "provider name is immutable"}},
+                content={
+                    "error": {"code": "CONTRACT_INVALID", "message": "provider name is immutable"}
+                },
             )
         unknown = sorted(set(body) - set(PROVIDER_UPDATABLE_FIELDS) - {"name"})
         if unknown:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "CONTRACT_INVALID", "message": f"unknown fields: {unknown}"}},
+                content={
+                    "error": {"code": "CONTRACT_INVALID", "message": f"unknown fields: {unknown}"}
+                },
             )
         merged = {
             **record,
@@ -699,9 +954,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         invalid = _validate_provider_resource(merged)
         if invalid is not None:
             return invalid
-        return resources.providers.put(
-            merged, expected_generation=int(record.get("generation", 1))
-        )
+        return resources.providers.put(merged, expected_generation=int(record.get("generation", 1)))
 
     @application.put("/api/v1/models/{model_id:path}")
     def update_model(model_id: str, body: dict):
@@ -709,10 +962,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="model not found")
         if record.get("lifecycle", "draft") != "draft":
-            return JSONResponse(status_code=409, content={"error": {
-                "code": "PUBLISHED_RESOURCE_IMMUTABLE",
-                "message": "published or deprecated model profiles cannot be updated",
-            }})
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "PUBLISHED_RESOURCE_IMMUTABLE",
+                        "message": "published or deprecated model profiles cannot be updated",
+                    }
+                },
+            )
         rejected = _reject_secret_fields(body)
         if rejected is not None:
             return rejected
@@ -724,13 +982,17 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if "provider" in body and body["provider"] != record.get("provider"):
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "CONTRACT_INVALID", "message": "model provider is immutable"}},
+                content={
+                    "error": {"code": "CONTRACT_INVALID", "message": "model provider is immutable"}
+                },
             )
         unknown = sorted(set(body) - set(MODEL_UPDATABLE_FIELDS) - {"id", "provider"})
         if unknown:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "CONTRACT_INVALID", "message": f"unknown fields: {unknown}"}},
+                content={
+                    "error": {"code": "CONTRACT_INVALID", "message": f"unknown fields: {unknown}"}
+                },
             )
         merged = {
             **record,
@@ -740,9 +1002,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         invalid = _validate_model(merged)
         if invalid is not None:
             return invalid
-        return resources.models.put(
-            merged, expected_generation=int(record.get("generation", 1))
-        )
+        return resources.models.put(merged, expected_generation=int(record.get("generation", 1)))
 
     @application.post("/api/v1/models/{model_id:path}/publish")
     def publish_model(model_id: str):
@@ -753,10 +1013,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if lifecycle == "published":
             return record
         if lifecycle != "draft":
-            return JSONResponse(status_code=409, content={"error": {
-                "code": "RESOURCE_LIFECYCLE_INVALID",
-                "message": f"model cannot be published from lifecycle {lifecycle!r}",
-            }})
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "RESOURCE_LIFECYCLE_INVALID",
+                        "message": f"model cannot be published from lifecycle {lifecycle!r}",
+                    }
+                },
+            )
         published = {
             **record,
             "lifecycle": "published",
@@ -766,9 +1031,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         invalid = _validate_model(published)
         if invalid is not None:
             return invalid
-        return resources.models.put(
-            published, expected_generation=int(record.get("generation", 1))
-        )
+        return resources.models.put(published, expected_generation=int(record.get("generation", 1)))
 
     @application.get("/api/v1/provider_kinds")
     def list_provider_kinds():
@@ -813,7 +1076,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if connection is None:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "RESOURCE_NOT_FOUND", "message": f"provider not found: {profile.get('provider')}"}},
+                content={
+                    "error": {
+                        "code": "RESOURCE_NOT_FOUND",
+                        "message": f"provider not found: {profile.get('provider')}",
+                    }
+                },
             )
         try:
             spec = adapter_for(connection.get("kind"))
@@ -825,7 +1093,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if spec.provider_cls is None or not spec.smoke_supported:
             return JSONResponse(
                 status_code=422,
-                content={"error": {"code": "PROVIDER_TEST_UNSUPPORTED", "message": f"kind 不支持测试调用: {connection.get('kind')}"}},
+                content={
+                    "error": {
+                        "code": "PROVIDER_TEST_UNSUPPORTED",
+                        "message": f"kind 不支持测试调用: {connection.get('kind')}",
+                    }
+                },
             )
         from motte_provider.config import build_case_provider
 
@@ -833,9 +1106,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             manifest = {"model": model_id}
             if "reasoning_level" in (body or {}):
                 manifest["reasoning_level"] = body["reasoning_level"]
-            config = resolve_manifest(
-                manifest, resources, allow_draft_model=True
-            )["provider"]
+            config = resolve_manifest(manifest, resources, allow_draft_model=True)["provider"]
             # Use the same snapshot/factory as real runs, but never exceed 16 output tokens.
             bound = min(16, config.get("max_output_tokens") or 16)
             config["parameters"] = {**(config.get("parameters") or {}), "max_output_tokens": bound}
@@ -844,7 +1115,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             model = provider.model
             request = ModelRequest(
                 model=model,
-                messages=[Message(role="user", content=(body or {}).get("prompt") or "Reply with exactly: pong")],
+                messages=[
+                    Message(
+                        role="user",
+                        content=(body or {}).get("prompt") or "Reply with exactly: pong",
+                    )
+                ],
                 max_output_tokens=bound,
             )
             envelope = provider.complete(request)
@@ -922,10 +1198,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
         harnesses = [ClaudeHarness(), CodexHarness()]
         reports = await asyncio.gather(*(harness.inspect() for harness in harnesses))
-        items = [
-            {**report, "protocol_ready": True, "execution_ready": False}
-            for report in reports
-        ]
+        items = [{**report, "protocol_ready": True, "execution_ready": False} for report in reports]
         return {"items": items, "total": len(items)}
 
     @application.get("/api/v1/skills")
@@ -941,7 +1214,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return rejected
         missing = [field for field in ("name", "version", "entrypoint") if not body.get(field)]
         if missing:
-            return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": f"missing fields: {missing}"}})
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {"code": "CONTRACT_INVALID", "message": f"missing fields: {missing}"}
+                },
+            )
         registry = getattr(application.state, "skill_registry", None)
         if registry is None:
             registry = {}
@@ -969,26 +1247,42 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             dataset = resources.datasets.get(dataset_name, dataset_version)
             if dataset is None:
                 continue
-            runs = [run for run in service.store.runs.list()
-                    if run.get("scenario_version") == f"{scenario['name']}@{scenario['version']}"]
+            runs = [
+                run
+                for run in service.store.runs.list()
+                if run.get("scenario_version") == f"{scenario['name']}@{scenario['version']}"
+            ]
             runs.sort(key=lambda run: run.get("created_at") or "", reverse=True)
-            presets.append({
-                "scenario": f"{scenario['name']}@{scenario['version']}",
-                "dataset": scenario["dataset"],
-                "scope": scope_of(dataset),
-                "benchmark": dataset.get("benchmark"),
-                "provenance": {k: v for k, v in dataset.get("provenance", {}).items() if k != "synthetic"}
-                              | {"synthetic": dataset.get("provenance", {}).get("synthetic", False)},
-                "cases": len(dataset.get("cases", ())),
-                "runs": [{"id": run["id"], "status": run["status"], "created_at": run.get("created_at"),
-                          "accuracy": _gsm8k_accuracy(run, service.get_run(run["id"]).get("scores", []))}
-                         for run in runs[:10]],
-            })
+            presets.append(
+                {
+                    "scenario": f"{scenario['name']}@{scenario['version']}",
+                    "dataset": scenario["dataset"],
+                    "scope": scope_of(dataset),
+                    "benchmark": dataset.get("benchmark"),
+                    "provenance": {
+                        k: v for k, v in dataset.get("provenance", {}).items() if k != "synthetic"
+                    }
+                    | {"synthetic": dataset.get("provenance", {}).get("synthetic", False)},
+                    "cases": len(dataset.get("cases", ())),
+                    "runs": [
+                        {
+                            "id": run["id"],
+                            "status": run["status"],
+                            "created_at": run.get("created_at"),
+                            "accuracy": _gsm8k_accuracy(
+                                run, service.get_run(run["id"]).get("scores", [])
+                            ),
+                        }
+                        for run in runs[:10]
+                    ],
+                }
+            )
         return {"items": presets, "total": len(presets)}
 
     def _invalid(message: str) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID",
-                                                                "message": message}})
+        return JSONResponse(
+            status_code=422, content={"error": {"code": "CONTRACT_INVALID", "message": message}}
+        )
 
     @application.post("/api/v1/benchmarks/gsm8k/import", status_code=201)
     def gsm8k_import(body: dict):
@@ -1004,8 +1298,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return rejected
         from motte_contracts.gsm8k import preset_for
         from motte_sdk.benchmark import import_benchmark_split
-        from motte_sdk.gsm8k_source import (SourceUnavailable, fetch_official_jsonl,
-                                            latest_revision, store_source_file)
+        from motte_sdk.gsm8k_source import (
+            SourceUnavailable,
+            fetch_official_jsonl,
+            latest_revision,
+            store_source_file,
+        )
         from motte_storage.resource_store import ResourceConflictError
 
         revision, license_id = body.get("revision"), body.get("license")
@@ -1026,16 +1324,31 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         except ValueError as error:
             return _invalid(str(error))
         except SourceUnavailable as error:
-            return JSONResponse(status_code=502, content={"error": {"code": "SOURCE_UNAVAILABLE",
-                                                                    "message": str(error)}})
+            return JSONResponse(
+                status_code=502,
+                content={"error": {"code": "SOURCE_UNAVAILABLE", "message": str(error)}},
+            )
         store_source_file(raw, revision=revision)
         try:
-            return import_benchmark_split(raw, name=name, version=version, revision=revision,
-                                          license_id=license_id, scope=scope, resources=resources)
+            return import_benchmark_split(
+                raw,
+                name=name,
+                version=version,
+                revision=revision,
+                license_id=license_id,
+                scope=scope,
+                resources=resources,
+            )
         except ValueError as error:
-            code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+            code = (
+                "RESOURCE_CONFLICT"
+                if isinstance(error, ResourceConflictError)
+                else "CONTRACT_INVALID"
+            )
             status = 409 if isinstance(error, ResourceConflictError) else 422
-            return JSONResponse(status_code=status, content={"error": {"code": code, "message": str(error)}})
+            return JSONResponse(
+                status_code=status, content={"error": {"code": code, "message": str(error)}}
+            )
 
     @application.get("/api/v1/benchmarks/gsm8k/cases")
     def gsm8k_cases(dataset: str, offset: int = 0, limit: int = 50, query: str = ""):
@@ -1046,8 +1359,15 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         name, _, version = str(dataset).rpartition("@")
         record = resources.datasets.get(name, version)
         if record is None:
-            return JSONResponse(status_code=404, content={"error": {
-                "code": "DATASET_NOT_FOUND", "message": f"dataset not found: {dataset}"}})
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "code": "DATASET_NOT_FOUND",
+                        "message": f"dataset not found: {dataset}",
+                    }
+                },
+            )
         from motte_contracts.gsm8k import SUITE
 
         mismatch = _suite_mismatch(record, SUITE, dataset)
@@ -1055,16 +1375,33 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return mismatch
         cases = record.get("cases") or []
         needle = (query or "").strip().lower()
-        matched = [case for case in cases
-                   if not needle or needle in str(case.get("input", "")).lower()
-                   or needle in str(case.get("case_id", "")).lower()]
+        matched = [
+            case
+            for case in cases
+            if not needle
+            or needle in str(case.get("input", "")).lower()
+            or needle in str(case.get("case_id", "")).lower()
+        ]
         start = max(0, offset)
         size = min(max(1, limit), 200)
-        items = [{"case_id": case["case_id"], "input": case["input"], "expected": case["expected"],
-                  "source_line": (case.get("metadata") or {}).get("source_line")}
-                 for case in matched[start:start + size]]
-        return {"dataset": dataset, "total": len(matched), "dataset_total": len(cases),
-                "offset": start, "limit": size, "query": query or "", "items": items}
+        items = [
+            {
+                "case_id": case["case_id"],
+                "input": case["input"],
+                "expected": case["expected"],
+                "source_line": (case.get("metadata") or {}).get("source_line"),
+            }
+            for case in matched[start : start + size]
+        ]
+        return {
+            "dataset": dataset,
+            "total": len(matched),
+            "dataset_total": len(cases),
+            "offset": start,
+            "limit": size,
+            "query": query or "",
+            "items": items,
+        }
 
     @application.post("/api/v1/benchmarks/gsm8k/runs", status_code=202)
     def gsm8k_run(body: dict):
@@ -1072,16 +1409,25 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         if rejected is not None:
             return rejected
         from motte_contracts.gsm8k import CASE_SELECTION_KEY
+
         # 省略 scenario 时默认全量数据集（与导入的默认 scope 一致）；控制台始终显式传场景。
         scenario = body.get("scenario") or (
             f"{(body.get('dataset_name') or 'gsm8k-test')}-{body.get('scope') or 'full'}"
-            f"@{body.get('dataset_version') or '1'}")
+            f"@{body.get('dataset_version') or '1'}"
+        )
         scenario_name, _, scenario_version = scenario.rpartition("@")
         scenario_record = resources.scenarios.get(scenario_name, scenario_version)
         if scenario_record is None:
             # 缺失场景必须显式失败：否则 prepare_run 会退化成一条无题的通用 run。
-            return JSONResponse(status_code=422, content={"error": {"code": "SCENARIO_NOT_FOUND",
-                                                                    "message": f"benchmark scenario not found: {scenario}"}})
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "SCENARIO_NOT_FOUND",
+                        "message": f"benchmark scenario not found: {scenario}",
+                    }
+                },
+            )
         from motte_contracts.gsm8k import SUITE
 
         mismatch = _suite_mismatch(scenario_record, SUITE, scenario)
@@ -1089,14 +1435,25 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             return mismatch
         model = body.get("model")
         if not isinstance(model, str) or not model:
-            return JSONResponse(status_code=422, content={"error": {"code": "MODEL_REQUIRED",
-                                                                    "message": "model profile id is required"}})
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {"code": "MODEL_REQUIRED", "message": "model profile id is required"}
+                },
+            )
         manifest: dict[str, Any] = {"model": model}
         parameters = body.get("parameters")
         if parameters is not None:
             if not isinstance(parameters, dict):
-                return JSONResponse(status_code=422, content={"error": {"code": "CONTRACT_INVALID",
-                                                                        "message": "parameters must be an object"}})
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": {
+                            "code": "CONTRACT_INVALID",
+                            "message": "parameters must be an object",
+                        }
+                    },
+                )
             manifest["parameters"] = parameters
         reasoning_level = body.get("reasoning_level")
         if reasoning_level is not None:
@@ -1108,38 +1465,122 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         try:
             prepared, case_ids = prepare_run(scenario, manifest, [], resources)
         except ManifestResolutionError as error:
-            return JSONResponse(status_code=422, content={"error": {"code": error.code, "message": str(error)}})
-        return service.create_run(
-            scenario, prepared, case_ids, requested_manifest=manifest
-        )
+            return JSONResponse(
+                status_code=422, content={"error": {"code": error.code, "message": str(error)}}
+            )
+        return service.create_run(scenario, prepared, case_ids, requested_manifest=manifest)
 
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 
-    @application.get("/api/v1/benchmarks/direct-llm")
+    from motte_contracts.dataset_sources import SourceSpec
+
+    @application.get(
+        "/api/v1/benchmarks/direct-llm/sources", response_model=DatasetSourceListResponse
+    )
+    def direct_llm_sources():
+        from motte_sdk.dataset_sources import list_sources
+
+        items = []
+        for source in list_sources():
+            items.append(
+                {
+                    "id": source.id,
+                    "label": source.label,
+                    "tier": source.tier,
+                    "status": source.governance.status,
+                    "distribution_scope": source.governance.distribution_scope,
+                    "stable_eligible": source.governance.stable_eligible,
+                    "revision": source.upstream.revision.value,
+                    "license_ids": source.license.data.declared_ids,
+                    "profiles": source.conversion.profiles,
+                    "official_comparability": source.official_comparability.status,
+                    "blocker_count": len(source.blockers),
+                }
+            )
+        return {"items": items, "total": len(items)}
+
+    @application.get("/api/v1/benchmarks/direct-llm/sources/{source_id}", response_model=SourceSpec)
+    def direct_llm_source_detail(source_id: str):
+        from motte_sdk.dataset_sources import SourcePipelineError, inspect_source
+
+        try:
+            return inspect_source(source_id)
+        except SourcePipelineError as error:
+            raise HTTPException(status_code=404, detail=error.message) from error
+
+    @application.get("/api/v1/benchmarks/direct-llm", response_model=DirectLlmOverviewResponse)
     def direct_llm_overview():
-        from motte_contracts.direct_llm import EVAL_KEY, SUITE, is_scenario
+        from motte_contracts.direct_llm import EVAL_KEY, SUITE
+        from motte_contracts.suites import (
+            validated_dataset_identity,
+            validated_scenario_identity,
+        )
 
         presets = []
-        scenarios = [s for s in resources.scenarios.list() if is_scenario(s)]
-        for scenario in sorted(scenarios, key=lambda s: str(s.get("name"))):
+        scenarios = []
+        for candidate in resources.scenarios.list():
+            try:
+                identity = validated_scenario_identity(candidate)
+            except ValueError:
+                continue
+            if identity is not None and identity[0] == SUITE:
+                scenarios.append((candidate, identity))
+        for scenario, scenario_identity in sorted(
+            scenarios, key=lambda item: str(item[0].get("name"))
+        ):
             dataset_name, _, dataset_version = str(scenario.get("dataset", "")).rpartition("@")
             dataset = resources.datasets.get(dataset_name, dataset_version)
             if dataset is None:
                 continue
-            runs = [run for run in service.store.runs.list()
-                    if run.get("scenario_version") == f"{scenario['name']}@{scenario['version']}"]
+            try:
+                dataset_identity = validated_dataset_identity(dataset)
+            except ValueError:
+                continue
+            if dataset_identity != scenario_identity:
+                continue
+            runs = [
+                run
+                for run in service.store.runs.list()
+                if run.get("scenario_version") == f"{scenario['name']}@{scenario['version']}"
+            ]
             runs.sort(key=lambda run: run.get("created_at") or "", reverse=True)
-            presets.append({
-                "scenario": f"{scenario['name']}@{scenario['version']}",
-                "dataset": scenario["dataset"],
-                "suite": SUITE,
-                "eval": dataset.get(EVAL_KEY),
-                "provenance": dict(dataset.get("provenance") or {}),
-                "cases": len(dataset.get("cases", ())),
-                "runs": [{"id": run["id"], "status": run["status"], "created_at": run.get("created_at"),
-                          "accuracy": _direct_llm_accuracy(run, service.get_run(run["id"]).get("scores", []))}
-                         for run in runs[:10]],
-            })
+            evaluation = dataset.get(EVAL_KEY) or {}
+            contract_version = int(dataset_identity[1])
+            profiles = []
+            if contract_version == 2:
+                profiles = [
+                    {
+                        "name": profile["name"],
+                        "count": profile["count"],
+                        "strategy": profile.get("strategy"),
+                        "case_ids_sha256": profile.get("case_ids_sha256"),
+                    }
+                    for profile in dataset.get("profiles") or []
+                ]
+            presets.append(
+                {
+                    "scenario": f"{scenario['name']}@{scenario['version']}",
+                    "dataset": scenario["dataset"],
+                    "suite": SUITE,
+                    "contract_version": contract_version,
+                    "dataset_fingerprint": dataset.get("dataset_fingerprint"),
+                    "profiles": profiles,
+                    "eval": evaluation,
+                    "provenance": dict(dataset.get("provenance") or {}),
+                    "cases": len(dataset.get("cases", ())),
+                    "runs": [
+                        {
+                            "id": run["id"],
+                            "status": run["status"],
+                            "created_at": run.get("created_at"),
+                            "accuracy": _direct_llm_accuracy(
+                                run, service.get_run(run["id"]).get("scores", [])
+                            ),
+                        }
+                        for run in runs[:10]
+                    ],
+                }
+            )
         return {"items": presets, "total": len(presets)}
 
     @application.get("/api/v1/benchmarks/direct-llm/builtins")
@@ -1150,66 +1591,75 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         items = builtin_catalog()
         return {"items": items, "total": len(items)}
 
-    @application.post("/api/v1/benchmarks/direct-llm/import", status_code=201)
-    def direct_llm_import(body: dict):
+    @application.post(
+        "/api/v1/benchmarks/direct-llm/import",
+        status_code=201,
+        response_model=DirectLlmImportResponse,
+    )
+    def direct_llm_import(body: DirectLlmImportRequest):
         """导入一份 Direct LLM JSONL（内置样例或本地内容），落成不可变数据集 + 场景。
 
         ``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file
         时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。
-        省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。
-        同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。
+        省略 version 时自动选版本：完整数据集身份相同则复用，否则取下一个空号。
+        同 name@version 内容不同返回 409。除 version 外，显式传入的空串不会被当成默认值。
         """
-        rejected = _reject_secret_fields(body)
-        if rejected is not None:
-            return rejected
-        from motte_sdk.direct_llm import (BUILTIN_LICENSE, BuiltinUnavailable,
-                                          import_builtin_dataset, import_direct_llm_split)
+        from motte_sdk.direct_llm import (
+            BUILTIN_LICENSE,
+            BuiltinUnavailable,
+            import_builtin_dataset,
+            import_direct_llm_split,
+        )
 
-        content, builtin = body.get("content"), body.get("builtin")
+        content, builtin = body.content, body.builtin
         if (content is None) == (builtin is None):
-            return _invalid("exactly one of content (JSONL text) or builtin (dataset id) is required")
-        if content is not None and not isinstance(content, str):
-            return _invalid("content must be a JSONL string")
-
-        def _text(key: str, default: str | None = None) -> str | None:
-            """缺席才用默认值；显式传入的空串/非字符串一律拒绝（静默兜底会掩盖客户端 bug）。"""
-            value = body.get(key)
-            if value is None:
-                return default
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{key} must be a non-empty string")
-            return value.strip()
-
-        # version 是唯一「留空=自动」有明确语义的字段（与 GSM8K 导入一致），因此空串合法。
-        raw_version = body.get("version")
-        if raw_version is not None and not isinstance(raw_version, str):
-            return _invalid("version must be a string")
-        version = (raw_version or "").strip() or None
-        try:
-            # 三个字段的默认值都非空，因此 `or ""` 只用于收窄类型，不会真的兜底成空串。
-            name = _text("name", builtin or "direct-llm-custom") or ""
-            license_id = _text("license", BUILTIN_LICENSE) or ""
-            scorer = _text("scorer")
-            source = _text("source")
-        except ValueError as error:
-            return _invalid(str(error))
+            return _invalid(
+                "exactly one of content (JSONL text) or builtin (dataset id) is required"
+            )
+        version = (body.version or "").strip() or None
+        name = (
+            body.name.strip()
+            if body.name is not None
+            else (builtin.strip() if builtin is not None else "direct-llm-custom")
+        )
+        license_id = body.license.strip() if body.license is not None else BUILTIN_LICENSE
+        scorer = body.scorer.strip() if body.scorer is not None else None
+        source = body.source.strip() if body.source is not None else "local-jsonl"
         try:
             if builtin is not None:
-                if not isinstance(builtin, str) or not builtin.strip():
-                    return _invalid("builtin must be a builtin dataset id")
-                return import_builtin_dataset(builtin.strip(), resources=resources, name=name,
-                                              version=version, license_id=license_id,
-                                              scorer=scorer)
-            return import_direct_llm_split(content.encode("utf-8"), name=name, version=version,
-                                           license_id=license_id, scorer=scorer,
-                                           source=source or "local-jsonl", resources=resources)
+                return import_builtin_dataset(
+                    builtin.strip(),
+                    resources=resources,
+                    name=name,
+                    version=version,
+                    license_id=license_id,
+                    scorer=scorer,
+                )
+            assert content is not None
+            return import_direct_llm_split(
+                content.encode("utf-8"),
+                name=name,
+                version=version,
+                license_id=license_id,
+                scorer=scorer,
+                source=source,
+                resources=resources,
+            )
         except BuiltinUnavailable as error:
-            return JSONResponse(status_code=404, content={"error": {"code": "BUILTIN_UNAVAILABLE",
-                                                                     "message": str(error)}})
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "BUILTIN_UNAVAILABLE", "message": str(error)}},
+            )
         except ValueError as error:
-            code = "RESOURCE_CONFLICT" if isinstance(error, ResourceConflictError) else "CONTRACT_INVALID"
+            code = (
+                "RESOURCE_CONFLICT"
+                if isinstance(error, ResourceConflictError)
+                else "CONTRACT_INVALID"
+            )
             status = 409 if isinstance(error, ResourceConflictError) else 422
-            return JSONResponse(status_code=status, content={"error": {"code": code, "message": str(error)}})
+            return JSONResponse(
+                status_code=status, content={"error": {"code": code, "message": str(error)}}
+            )
 
     @application.get("/api/v1/benchmarks/direct-llm/cases")
     def direct_llm_cases(dataset: str, offset: int = 0, limit: int = 50, query: str = ""):
@@ -1219,78 +1669,205 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         name, _, version = str(dataset).rpartition("@")
         record = resources.datasets.get(name, version)
         if record is None:
-            return JSONResponse(status_code=404, content={"error": {
-                "code": "DATASET_NOT_FOUND", "message": f"dataset not found: {dataset}"}})
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "code": "DATASET_NOT_FOUND",
+                        "message": f"dataset not found: {dataset}",
+                    }
+                },
+            )
         from motte_contracts.direct_llm import SUITE
 
         mismatch = _suite_mismatch(record, SUITE, dataset)
         if mismatch is not None:
             return mismatch
         cases = record.get("cases") or []
-        scorers = effective_scorers(record)
+        evaluation = record.get("eval") if isinstance(record.get("eval"), dict) else {}
+        if evaluation.get("version") == 2:
+            default_scorer = evaluation.get("scorer")
+
+            def scorer_label(case: dict[str, Any]) -> str | None:
+                metadata = case.get("metadata") if isinstance(case.get("metadata"), dict) else {}
+                spec = metadata.get("scorer") or default_scorer
+                if not isinstance(spec, dict):
+                    return None
+                scorer_id, scorer_version = spec.get("id"), spec.get("version")
+                return (
+                    f"{scorer_id}@{scorer_version}"
+                    if isinstance(scorer_id, str) and isinstance(scorer_version, str)
+                    else None
+                )
+
+            scorers = {case["case_id"]: scorer_label(case) for case in cases}
+        else:
+            scorers = effective_scorers(record)
         needle = (query or "").strip().lower()
-        matched = [case for case in cases
-                   if not needle or needle in str(case.get("input", "")).lower()
-                   or needle in str(case.get("case_id", "")).lower()]
+        matched = [
+            case
+            for case in cases
+            if not needle
+            or needle in str(case.get("input", "")).lower()
+            or needle in str(case.get("case_id", "")).lower()
+        ]
         start = max(0, offset)
         size = min(max(1, limit), 200)
-        items = [{"case_id": case["case_id"], "input": case["input"],
-                  "expected": case.get("expected"), "scorer": scorers.get(case["case_id"]),
-                  "source_line": (case.get("metadata") or {}).get("source_line")}
-                 for case in matched[start:start + size]]
-        return {"dataset": dataset, "total": len(matched), "dataset_total": len(cases),
-                "offset": start, "limit": size, "query": query or "", "items": items}
+        items = [
+            {
+                "case_id": case["case_id"],
+                "input": case["input"],
+                "expected": case.get("expected"),
+                "scorer": scorers.get(case["case_id"]),
+                "source_line": (case.get("metadata") or {}).get("source_line"),
+            }
+            for case in matched[start : start + size]
+        ]
+        return {
+            "dataset": dataset,
+            "total": len(matched),
+            "dataset_total": len(cases),
+            "offset": start,
+            "limit": size,
+            "query": query or "",
+            "items": items,
+        }
 
-    @application.post("/api/v1/benchmarks/direct-llm/runs", status_code=202)
-    def direct_llm_run(body: dict):
-        rejected = _reject_secret_fields(body)
-        if rejected is not None:
-            return rejected
+    def _prepare_direct_llm_request(body: DirectLlmRunRequest):
+        from motte_contracts.direct_llm import SUITE
         from motte_contracts.selection import CASE_SELECTION_KEY
 
-        # 省略 scenario 时按数据集名@版本推导（场景名与数据集名一致，见 direct_llm.scenario_for）。
-        scenario = body.get("scenario") or (
-            f"{body.get('dataset_name') or 'direct-llm-custom'}@{body.get('dataset_version') or '1'}")
+        request = body.model_dump(mode="json", exclude_none=True)
+        rejected = _reject_secret_fields(request)
+        if rejected is not None:
+            return rejected
+        scenario = body.scenario or f"{body.dataset_name}@{body.dataset_version or '1'}"
         scenario_name, _, scenario_version = scenario.rpartition("@")
         scenario_record = resources.scenarios.get(scenario_name, scenario_version)
         if scenario_record is None:
-            # 缺失场景必须显式失败：否则 prepare_run 会退化成一条无题的通用 run。
-            return JSONResponse(status_code=422, content={"error": {"code": "SCENARIO_NOT_FOUND",
-                                                                    "message": f"direct-llm scenario not found: {scenario}"}})
-        from motte_contracts.direct_llm import SUITE
-
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "SCENARIO_NOT_FOUND",
+                        "message": f"direct-llm scenario not found: {scenario}",
+                    }
+                },
+            )
         mismatch = _suite_mismatch(scenario_record, SUITE, scenario)
         if mismatch is not None:
             return mismatch
-        model = body.get("model")
-        if not isinstance(model, str) or not model:
-            return JSONResponse(status_code=422, content={"error": {"code": "MODEL_REQUIRED",
-                                                                    "message": "model profile id is required"}})
-        manifest: dict[str, Any] = {"model": model}
-        parameters = body.get("parameters")
-        if parameters is not None:
-            if not isinstance(parameters, dict):
-                return _invalid("parameters must be an object")
-            manifest["parameters"] = parameters
-        reasoning_level = body.get("reasoning_level")
-        if reasoning_level is not None:
-            if not isinstance(reasoning_level, str) or not reasoning_level:
-                return _invalid("reasoning_level must be a non-empty string")
-            manifest["reasoning_level"] = reasoning_level
-        if body.get(CASE_SELECTION_KEY) is not None:
-            manifest[CASE_SELECTION_KEY] = body[CASE_SELECTION_KEY]
+
+        manifest: dict[str, Any] = {"model": body.model}
+        if body.parameters:
+            manifest["parameters"] = body.parameters
+        if body.reasoning_level is not None:
+            manifest["reasoning_level"] = body.reasoning_level
+        if body.case_selection is not None:
+            manifest[CASE_SELECTION_KEY] = body.case_selection.model_dump(
+                mode="json", exclude_none=True
+            )
         try:
             prepared, case_ids = prepare_run(scenario, manifest, [], resources)
         except ManifestResolutionError as error:
-            return JSONResponse(status_code=422, content={"error": {"code": error.code, "message": str(error)}})
-        return service.create_run(
-            scenario, prepared, case_ids, requested_manifest=manifest
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": error.code,
+                        "message": str(error),
+                    }
+                },
+            )
+        return scenario, scenario_record, manifest, prepared, case_ids
+
+    @application.post("/api/v1/benchmarks/direct-llm/runs", status_code=202)
+    def direct_llm_run(body: DirectLlmRunRequest):
+        result = _prepare_direct_llm_request(body)
+        if isinstance(result, JSONResponse):
+            return result
+        scenario, _scenario_record, manifest, prepared, case_ids = result
+        return service.create_run(scenario, prepared, case_ids, requested_manifest=manifest)
+
+    @application.post(
+        "/api/v1/benchmarks/direct-llm/dry-run", response_model=DirectLlmDryRunResponse
+    )
+    def direct_llm_dry_run(body: DirectLlmRunRequest):
+        from motte_contracts.identity import canonical_sha256
+
+        result = _prepare_direct_llm_request(body)
+        if isinstance(result, JSONResponse):
+            return result
+        scenario, scenario_record, _manifest, prepared, case_ids = result
+        provenance = prepared.get("benchmark_provenance") or {}
+        preflight = (prepared.get("budget") or {}).get("context_preflight")
+        provider = prepared.get("provider") or {}
+        provider_parameters = provider.get("parameters") or {}
+        max_output_tokens = provider_parameters.get("max_output_tokens", 0)
+        input_upper_bound = None
+        total_upper_bound = None
+        context_window = None
+        estimation_method = None
+        if isinstance(preflight, dict):
+            stats = preflight.get("stats") or {}
+            input_upper_bound = (stats.get("input_tokens_upper_bound") or {}).get("max")
+            total_upper_bound = (stats.get("total_tokens_upper_bound") or {}).get("max")
+            context_window = preflight.get("context_window")
+            estimation_method = preflight.get("method")
+            max_output_tokens = preflight.get("output_tokens_reserved", max_output_tokens)
+        estimated_cost = None
+        price_table_version = None
+        currency = None
+        price_table = provider.get("price_table")
+        if isinstance(price_table, dict):
+            version = price_table.get("version")
+            price_table_version = version if isinstance(version, str) and version else None
+            price_currency = price_table.get("currency")
+            currency = (
+                price_currency if isinstance(price_currency, str) and price_currency else None
+            )
+            input_rate = price_table.get("input_per_million")
+            output_rate = price_table.get("output_per_million")
+            numeric_rates = all(
+                type(rate) in (int, float) and rate >= 0 and rate != float("inf")
+                for rate in (input_rate, output_rate)
+            )
+            if numeric_rates and isinstance(input_upper_bound, int):
+                estimated_cost = (
+                    len(case_ids)
+                    * (input_upper_bound * input_rate + max_output_tokens * output_rate)
+                    / 1_000_000
+                )
+        selection = body.case_selection
+        profile = (
+            selection.profile if selection is not None and selection.mode == "profile" else None
         )
+        evaluation = scenario_record.get("eval") or {}
+        return {
+            "scenario": scenario,
+            "dataset": scenario_record["dataset"],
+            "contract_version": evaluation.get("version", 1),
+            "plugin_version": str(provenance.get("plugin_version") or "1"),
+            "selected_count": len(case_ids),
+            "case_ids_sha256": canonical_sha256(case_ids),
+            "profile": profile,
+            "max_input_tokens_upper_bound": input_upper_bound,
+            "max_output_tokens": max_output_tokens,
+            "max_total_tokens_upper_bound": total_upper_bound,
+            "context_window": context_window,
+            "estimation_method": estimation_method,
+            "estimated_cost_upper_bound": estimated_cost,
+            "price_table_version": price_table_version,
+            "currency": currency,
+            "estimated": True,
+        }
 
     return application
 
 
-def _gsm8k_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = None) -> float | None:
+def _gsm8k_accuracy(
+    run: dict[str, Any], scores: list[dict[str, Any]] | None = None
+) -> float | None:
     """分母取运行自己选中的题数（子集运行按子集算，旧运行回落到数据集级 selected_count）。"""
     from motte_contracts.gsm8k import run_selected_count
 
@@ -1302,19 +1879,25 @@ def _gsm8k_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = N
     return round(correct / selected, 4)
 
 
-def _direct_llm_accuracy(run: dict[str, Any], scores: list[dict[str, Any]] | None = None) -> float | None:
-    """分母取本次运行里「声明了期望」的题数（judged）：无期望的题不判对错也不进分母。"""
+def _direct_llm_accuracy(
+    run: dict[str, Any], scores: list[dict[str, Any]] | None = None
+) -> float | None:
+    """复用评分插件的 judged 口径；未跑完或全无判定时不给概览结论。"""
     from motte_contracts.selection import run_selected_count
+    from motte_eval.direct_llm import aggregate_answers
 
     rows = scores if scores is not None else (run.get("scores") or [])
     selected = run_selected_count((run.get("manifest") or {}).get("benchmark_provenance"))
     if selected is None or len(rows) != selected:
         return None
-    judged = sum(1 for score in rows if score.get("judged"))
-    if judged == 0:
-        return None
-    correct = sum(1 for score in rows if score.get("outcome") == "correct")
-    return round(correct / judged, 4)
+    provenance = (run.get("manifest") or {}).get("benchmark_provenance") or {}
+    if provenance.get("plugin_version") == "2":
+        from motte_sdk.direct_llm_v2 import aggregate_direct_llm_v2
+
+        accuracy = aggregate_direct_llm_v2(run, rows)["accuracy"]
+    else:
+        accuracy = aggregate_answers(rows, selected)["accuracy"]
+    return round(accuracy, 4) if accuracy is not None else None
 
 
 def _run_model_label(run: dict[str, Any]) -> str | None:
@@ -1339,7 +1922,9 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
     ]
     known_costs = [cost["total"] for cost in costs if cost.get("total") is not None]
     total_cost = sum(known_costs)
-    versions = sorted({cost["price_table_version"] for cost in costs if cost.get("price_table_version")})
+    versions = sorted(
+        {cost["price_table_version"] for cost in costs if cost.get("price_table_version")}
+    )
     scoring_pass_id = run.get("current_scoring_pass_id")
     passed = sum(1 for score in scores if score.get("passed") is True)
     failed = sum(1 for score in scores if score.get("passed") is False)
@@ -1375,13 +1960,17 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
             # Legacy passes have no aggregate snapshot; retain their persisted scalar summary
             # rather than invoking mutable plugin code while serving a report.
             aggregate = {
-                key: value for key, value in pass_summary.items()
+                key: value
+                for key, value in pass_summary.items()
                 if key not in {"scores", "passed", "aggregate"}
             }
-        report["summary"].update({
-            key: value for key, value in aggregate.items()
-            if key in ReportSummary.model_fields and key != "aggregate"
-        })
+        report["summary"].update(
+            {
+                key: value
+                for key, value in aggregate.items()
+                if key in ReportSummary.model_fields and key != "aggregate"
+            }
+        )
         report["summary"]["aggregate"] = aggregate
         selected = aggregate.get("selected")
         responded = aggregate.get("responded")
@@ -1394,7 +1983,12 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
             report["summary"]["scored"] = responded
         if isinstance(correct, int):
             report["summary"]["passed"] = correct
-            if isinstance(selected, int):
+            if benchmark.get("plugin_version") == "2":
+                aggregate_judged = aggregate.get("judged")
+                if isinstance(selected, int) and isinstance(aggregate_judged, int):
+                    report["summary"]["failed"] = aggregate_judged - correct
+                    report["summary"]["unjudged"] = selected - aggregate_judged
+            elif isinstance(selected, int):
                 report["summary"]["failed"] = selected - correct
         if isinstance(accuracy, (int, float)):
             report["summary"]["pass_rate"] = accuracy
@@ -1403,9 +1997,11 @@ def _build_report(run: dict[str, Any]) -> dict[str, Any]:
             unknown_cases=(attempted - len(known_costs)) if isinstance(attempted, int) else None,
         )
         usage = [c["result"].get("usage", {}) for c in cases if isinstance(c.get("result"), dict)]
-        report["usage"] = {key: sum(u[key] for u in usage if key in u)
-                           for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-                           if any(key in u for u in usage)}
+        report["usage"] = {
+            key: sum(u[key] for u in usage if key in u)
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            if any(key in u for u in usage)
+        }
     return report
 
 

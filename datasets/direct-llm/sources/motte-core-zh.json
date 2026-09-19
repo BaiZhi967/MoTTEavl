@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "id": "motte-core-zh",
+  "label": "MoTTE Core ZH",
+  "description": "Project-owned deterministic Chinese benchmark generated from versioned templates and independent answer oracles.",
+  "tier": "generated-internal",
+  "governance": {
+    "status": "pending",
+    "distribution_scope": "blocked",
+    "stable_eligible": false,
+    "reviewer": null,
+    "reviewed_at": null,
+    "decision_notes": "Ownership, privacy, and stratified human review are pending; generation and publication remain blocked until attributable approval evidence exists."
+  },
+  "links": {
+    "homepage": null,
+    "repository": null,
+    "dataset_card": null,
+    "citation": null
+  },
+  "upstream": {
+    "revision": {
+      "kind": "generator-version",
+      "resolver": "local-static-generator",
+      "value": "motte-core-zh-generator-v1"
+    },
+    "artifacts": [
+      {
+        "logical_name": "generation-recipe",
+        "url": null,
+        "format": "json",
+        "sha256": null,
+        "bytes": null,
+        "max_bytes": null,
+        "required": true
+      }
+    ]
+  },
+  "license": {
+    "data": {
+      "declared_ids": [
+        "project-owned-internal"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": []
+    },
+    "code": {
+      "declared_ids": [
+        "project-owned-internal"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": []
+    },
+    "commercial_use": "unknown",
+    "redistribution": "blocked-pending-review",
+    "attribution": "project-owned",
+    "share_alike": "not-applicable",
+    "review_notes": "No external license is inferred. Ownership, privacy, template provenance, and public-release evidence must be attached before any wider distribution."
+  },
+  "conversion": {
+    "converter": {
+      "id": "motte-core-zh-generator",
+      "version": "motte-core-zh-converter-v1"
+    },
+    "splits": [
+      "generated"
+    ],
+    "default_split": "generated",
+    "prompt_version": "motte-core-zh-prompt-v1",
+    "scorer": {
+      "id": "mixed-deterministic",
+      "version": "motte-core-zh-scorers-v1"
+    },
+    "profiles": [
+      "smoke",
+      "regression",
+      "full"
+    ],
+    "optional_dependency": null
+  },
+  "safety": {
+    "network_entrypoint": "none",
+    "allowed_protocols": [],
+    "trust_remote_code": false,
+    "online_rows_fallback": false,
+    "executable_upstream_code": false,
+    "archive_auto_extract": false
+  },
+  "official_comparability": {
+    "status": "not-applicable",
+    "notes": "This is a MoTTEavl-owned benchmark and has no upstream official leaderboard."
+  },
+  "blockers": [
+    "The stratified 200-case dual human review is pending.",
+    "The three-reference-model calibration is pending.",
+    "Ownership and privacy approval is pending; generation and publication remain blocked."
+  ]
+}

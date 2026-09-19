@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 from motte_sdk.execution_backends import (
@@ -31,6 +33,18 @@ def test_replay_provider_resource_uses_manifest_fixture_for_direct_backend():
     assert provider.invoke("case-a") == {"ok": True}
 
 
+def test_direct_backend_preserves_top_level_replay_fixture_only_for_replay_provider():
+    manifest = resolve_execution(
+        "direct-llm@1",
+        {
+            "provider": {"kind": "replay"},
+            "replay_fixture": {"case-a": {"output": "ok"}},
+        },
+    )
+    handle = build_execution_handle({"manifest": manifest})
+    assert handle.invoke("case-a") == "ok"
+
+
 def test_resolve_execution_pins_direct_provider_backend():
     manifest = resolve_execution(
         "direct-llm@1",
@@ -42,6 +56,88 @@ def test_resolve_execution_pins_direct_provider_backend():
         "backend_version": "1",
         "capabilities": {"interactive": False, "safe_to_repeat": False},
     }
+
+
+def test_direct_backend_projects_only_execution_inputs_to_provider_adapters():
+    from motte_provider.registry import (
+        AdapterSpec,
+        register as register_provider_adapter,
+        unregister as unregister_provider_adapter,
+    )
+
+    kind = "__capturing_execution_manifest__"
+    observed = {}
+
+    class CapturingProvider:
+        def __init__(self, config, manifest):
+            observed["config"] = deepcopy(config)
+            observed["build_manifest"] = deepcopy(manifest)
+            self.manifest = manifest
+
+        def invoke(self, case_id):
+            observed["invoke_manifest"] = deepcopy(self.manifest)
+            return {"content": self.manifest["cases"][case_id]["prompt"]}
+
+    register_provider_adapter(
+        AdapterSpec(
+            kind=kind,
+            implementation_version="1",
+            validate=lambda config: None,
+            build=lambda config, manifest: CapturingProvider(config, manifest),
+        )
+    )
+    try:
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "safe tool",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+        manifest = {
+            "provider": {
+                "kind": kind,
+                "parameters": {"temperature": 0.2, "max_output_tokens": 32},
+                "max_retries": 1,
+            },
+            "cases": {"c1": {"case_id": "c1", "prompt": "safe prompt"}},
+            "tools": tools,
+            "parameters": {"temperature": 0.9},
+            "execution": {"backend_id": "direct-llm", "backend_version": "1"},
+            "benchmark_snapshot": {
+                "selected_cases": [{
+                    "case_id": "c1",
+                    "input": "safe prompt",
+                    "expected": "GOLD-EXPECTED",
+                    "metadata": {"scorer": "GOLD-SCORER"},
+                }],
+                "dataset": {"provenance": {"source": "GOLD-PROVENANCE"}},
+            },
+            "benchmark_provenance": {"source": "GOLD-PROVENANCE"},
+            "evaluation": {"scorer_id": "GOLD-SCORER"},
+        }
+        handle = build_execution_handle({"manifest": manifest})
+        assert handle.invoke("c1") == {"content": "safe prompt"}
+        expected_projection = {
+            "cases": manifest["cases"],
+            "tools": tools,
+            "parameters": manifest["parameters"],
+        }
+        assert observed["build_manifest"] == expected_projection
+        assert observed["invoke_manifest"] == expected_projection
+        assert observed["config"] == manifest["provider"]
+        assert observed["build_manifest"] is not manifest
+        serialized = repr((observed["build_manifest"], observed["invoke_manifest"]))
+        assert "GOLD-EXPECTED" not in serialized
+        assert "GOLD-SCORER" not in serialized
+        assert "GOLD-PROVENANCE" not in serialized
+        assert "benchmark_snapshot" not in observed["build_manifest"]
+        assert "benchmark_provenance" not in observed["build_manifest"]
+        assert "evaluation" not in observed["build_manifest"]
+        assert observed["build_manifest"]["parameters"] == manifest["parameters"]
+    finally:
+        unregister_provider_adapter(kind)
 
 
 def test_direct_backend_rejects_fixture_on_non_replay_provider():

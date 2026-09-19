@@ -78,6 +78,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/benchmarks/direct-llm/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Direct Llm Dry Run */
+        post: operations["direct_llm_dry_run_api_v1_benchmarks_direct_llm_dry_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/benchmarks/direct-llm/import": {
         parameters: {
             query?: never;
@@ -93,8 +110,8 @@ export interface paths {
          *
          *     ``content`` 与 ``builtin`` 二选一：前者是 UTF-8 JSONL 正文（Web 上传/粘贴、CLI 走 --file
          *     时由调用方读文件后传入），后者是内置样例 id（数据集名与评分器默认取内置注册表）。
-         *     省略 version 时自动选版本：同内容复用（重复导入幂等），否则取下一个空号。
-         *     同 name@version 内容不同返回 409。可选字段「显式传入就必须合法」——空串不会被当成默认值。
+         *     省略 version 时自动选版本：完整数据集身份相同则复用，否则取下一个空号。
+         *     同 name@version 内容不同返回 409。除 version 外，显式传入的空串不会被当成默认值。
          */
         post: operations["direct_llm_import_api_v1_benchmarks_direct_llm_import_post"];
         delete?: never;
@@ -114,6 +131,40 @@ export interface paths {
         put?: never;
         /** Direct Llm Run */
         post: operations["direct_llm_run_api_v1_benchmarks_direct_llm_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/direct-llm/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Direct Llm Sources */
+        get: operations["direct_llm_sources_api_v1_benchmarks_direct_llm_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/direct-llm/sources/{source_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Direct Llm Source Detail */
+        get: operations["direct_llm_source_detail_api_v1_benchmarks_direct_llm_sources__source_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -495,6 +546,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resource-publications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Resource Publications */
+        get: operations["list_resource_publications_api_v1_resource_publications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs": {
         parameters: {
             query?: never;
@@ -799,6 +867,267 @@ export interface components {
             /** Scenario Version */
             scenario_version: string;
         };
+        /** DatasetProfileSummary */
+        DatasetProfileSummary: {
+            /** Case Ids Sha256 */
+            case_ids_sha256?: string | null;
+            /** Count */
+            count: number;
+            /** Name */
+            name: string;
+            /** Strategy */
+            strategy?: string | null;
+        };
+        /** DatasetSourceListResponse */
+        DatasetSourceListResponse: {
+            /** Items */
+            items: components["schemas"]["DatasetSourceSummary"][];
+            /** Total */
+            total: number;
+        };
+        /** DatasetSourceSummary */
+        DatasetSourceSummary: {
+            /** Blocker Count */
+            blocker_count: number;
+            /** Distribution Scope */
+            distribution_scope: string;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** License Ids */
+            license_ids?: string[];
+            /** Official Comparability */
+            official_comparability: string;
+            /** Profiles */
+            profiles?: string[];
+            /** Revision */
+            revision?: string | null;
+            /** Stable Eligible */
+            stable_eligible: boolean;
+            /** Status */
+            status: string;
+            /** Tier */
+            tier: string;
+        };
+        /** DatasetSummary */
+        DatasetSummary: {
+            /** Cases */
+            cases: number;
+            /** Cases Sha256 */
+            cases_sha256?: string | null;
+            /** Contract Version */
+            contract_version?: number | null;
+            /** Dataset Fingerprint */
+            dataset_fingerprint?: string | null;
+            /** License Status */
+            license_status?: string | null;
+            /** Name */
+            name: string;
+            /** Profiles */
+            profiles?: components["schemas"]["DatasetProfileSummary"][];
+            /** Revision */
+            revision?: string | null;
+            /** Scorer */
+            scorer?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Suite */
+            suite?: string | null;
+            /** Version */
+            version: string;
+        };
+        /** DatasetSummaryListResponse */
+        DatasetSummaryListResponse: {
+            /** Items */
+            items: components["schemas"]["DatasetSummary"][];
+            /** Total */
+            total: number;
+        };
+        /** DirectLlmAllSelection */
+        DirectLlmAllSelection: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "all";
+        };
+        /** DirectLlmDryRunResponse */
+        DirectLlmDryRunResponse: {
+            /** Case Ids Sha256 */
+            case_ids_sha256: string;
+            /** Context Window */
+            context_window?: number | null;
+            /** Contract Version */
+            contract_version: number;
+            /** Currency */
+            currency?: string | null;
+            /** Dataset */
+            dataset: string;
+            /**
+             * Estimated
+             * @default true
+             * @constant
+             */
+            estimated: true;
+            /**
+             * Estimated Cost Upper Bound
+             * @description Conservative estimated upper bound; never an exact billed cost.
+             */
+            estimated_cost_upper_bound?: number | null;
+            /** Estimation Method */
+            estimation_method?: string | null;
+            /** Max Input Tokens Upper Bound */
+            max_input_tokens_upper_bound?: number | null;
+            /** Max Output Tokens */
+            max_output_tokens: number;
+            /** Max Total Tokens Upper Bound */
+            max_total_tokens_upper_bound?: number | null;
+            /** Plugin Version */
+            plugin_version: string;
+            /** Price Table Version */
+            price_table_version?: string | null;
+            /** Profile */
+            profile?: string | null;
+            /** Scenario */
+            scenario: string;
+            /** Selected Count */
+            selected_count: number;
+        };
+        /** DirectLlmIdsSelection */
+        DirectLlmIdsSelection: {
+            /** Case Ids */
+            case_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "ids";
+        };
+        /** DirectLlmImportRequest */
+        DirectLlmImportRequest: {
+            /** Builtin */
+            builtin?: string | null;
+            /** Content */
+            content?: string | null;
+            /** License */
+            license?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Scorer */
+            scorer?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Version */
+            version?: string | null;
+        };
+        /** DirectLlmImportResponse */
+        DirectLlmImportResponse: {
+            /** Cases */
+            cases: number;
+            /** Cases Sha256 */
+            cases_sha256: string;
+            /** Dataset Fingerprint */
+            dataset_fingerprint: string;
+            /** Imported */
+            imported: string;
+            /** Scenario */
+            scenario: string;
+            /** Scorer */
+            scorer: string;
+            /** Source */
+            source: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Suite */
+            suite: string;
+        };
+        /** DirectLlmOverviewItem */
+        DirectLlmOverviewItem: {
+            /** Cases */
+            cases: number;
+            /** Contract Version */
+            contract_version: number;
+            /** Dataset */
+            dataset: string;
+            /** Dataset Fingerprint */
+            dataset_fingerprint?: string | null;
+            /** Eval */
+            eval: {
+                [key: string]: unknown;
+            };
+            /** Profiles */
+            profiles?: components["schemas"]["DatasetProfileSummary"][];
+            /** Provenance */
+            provenance: {
+                [key: string]: unknown;
+            };
+            /** Runs */
+            runs?: components["schemas"]["DirectLlmOverviewRun"][];
+            /** Scenario */
+            scenario: string;
+            /** Suite */
+            suite: string;
+        };
+        /** DirectLlmOverviewResponse */
+        DirectLlmOverviewResponse: {
+            /** Items */
+            items: components["schemas"]["DirectLlmOverviewItem"][];
+            /** Total */
+            total: number;
+        };
+        /** DirectLlmOverviewRun */
+        DirectLlmOverviewRun: {
+            /** Accuracy */
+            accuracy?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Id */
+            id: string;
+            /** Status */
+            status: string;
+        };
+        /** DirectLlmProfileSelection */
+        DirectLlmProfileSelection: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "profile";
+            /** Profile */
+            profile: string;
+        };
+        /** DirectLlmRandomSelection */
+        DirectLlmRandomSelection: {
+            /** Count */
+            count: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "random";
+            /** Seed */
+            seed?: string | null;
+        };
+        /** DirectLlmRunRequest */
+        DirectLlmRunRequest: {
+            /** Case Selection */
+            case_selection?: (components["schemas"]["DirectLlmAllSelection"] | components["schemas"]["DirectLlmIdsSelection"] | components["schemas"]["DirectLlmRandomSelection"] | components["schemas"]["DirectLlmProfileSelection"]) | null;
+            /** Dataset Name */
+            dataset_name?: string | null;
+            /** Dataset Version */
+            dataset_version?: string | null;
+            /** Model */
+            model: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /** Reasoning Level */
+            reasoning_level?: string | null;
+            /** Scenario */
+            scenario?: string | null;
+        };
         /** EvaluationDescriptor */
         EvaluationDescriptor: {
             /** Adapter Id */
@@ -924,6 +1253,36 @@ export interface components {
             unjudged?: number | null;
             /** Wrong Answer */
             wrong_answer?: number | null;
+        };
+        /** ResourcePublication */
+        ResourcePublication: {
+            /** Actor */
+            actor: string;
+            /** Dataset */
+            dataset: string;
+            /** Dataset Fingerprint */
+            dataset_fingerprint: string;
+            /** Entrypoint */
+            entrypoint: string;
+            /** Id */
+            id: string;
+            /** Published At */
+            published_at: string;
+            /** Receipt */
+            receipt: {
+                [key: string]: unknown;
+            };
+            /** Receipt Sha256 */
+            receipt_sha256: string;
+            /** Scenario */
+            scenario: string;
+        };
+        /** ResourcePublicationListResponse */
+        ResourcePublicationListResponse: {
+            /** Items */
+            items: components["schemas"]["ResourcePublication"][];
+            /** Total */
+            total: number;
         };
         /** Run */
         Run: {
@@ -1147,6 +1506,191 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** SourceArtifact */
+        SourceArtifact: {
+            /** Bytes */
+            bytes: number | null;
+            /** Format */
+            format: ("json" | "jsonl" | "csv" | "parquet") | null;
+            /** Logical Name */
+            logical_name: string;
+            /** Max Bytes */
+            max_bytes: number | null;
+            /** Required */
+            required: boolean;
+            /** Sha256 */
+            sha256: string | null;
+            /** Url */
+            url: string | null;
+        };
+        /** SourceComparability */
+        SourceComparability: {
+            /** Notes */
+            notes: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "established" | "not-established" | "not-applicable";
+        };
+        /** SourceConversion */
+        SourceConversion: {
+            converter: components["schemas"]["SourceConverter"];
+            /** Default Split */
+            default_split: string | null;
+            /** Optional Dependency */
+            optional_dependency: string | null;
+            /** Profiles */
+            profiles: string[];
+            /** Prompt Version */
+            prompt_version: string | null;
+            scorer: components["schemas"]["SourceScorer"];
+            /** Splits */
+            splits: string[];
+        };
+        /** SourceConverter */
+        SourceConverter: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: string | null;
+        };
+        /** SourceGovernance */
+        SourceGovernance: {
+            /** Decision Notes */
+            decision_notes: string;
+            /**
+             * Distribution Scope
+             * @enum {string}
+             */
+            distribution_scope: "public" | "internal-only" | "restricted" | "blocked";
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewer */
+            reviewer: string | null;
+            /** Stable Eligible */
+            stable_eligible: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "approved" | "approved-internal" | "restricted" | "pending";
+        };
+        /** SourceLicense */
+        SourceLicense: {
+            /** Attribution */
+            attribution: string;
+            code: components["schemas"]["SourceLicenseEvidence"];
+            /** Commercial Use */
+            commercial_use: string;
+            data: components["schemas"]["SourceLicenseEvidence"];
+            /** Redistribution */
+            redistribution: string;
+            /** Review Notes */
+            review_notes: string;
+            /** Share Alike */
+            share_alike: string;
+        };
+        /** SourceLicenseEvidence */
+        SourceLicenseEvidence: {
+            /** Declared Ids */
+            declared_ids: string[];
+            /** Evidence Urls */
+            evidence_urls: string[];
+            /** Verified Spdx */
+            verified_spdx: string | null;
+        };
+        /** SourceLinks */
+        SourceLinks: {
+            /** Citation */
+            citation: string | null;
+            /** Dataset Card */
+            dataset_card: string | null;
+            /** Homepage */
+            homepage: string | null;
+            /** Repository */
+            repository: string | null;
+        };
+        /** SourceRevision */
+        SourceRevision: {
+            /** Kind */
+            kind: string;
+            /** Resolver */
+            resolver: string;
+            /** Value */
+            value: string | null;
+        };
+        /** SourceSafety */
+        SourceSafety: {
+            /** Allowed Protocols */
+            allowed_protocols: "https"[];
+            /**
+             * Archive Auto Extract
+             * @constant
+             */
+            archive_auto_extract: false;
+            /**
+             * Executable Upstream Code
+             * @constant
+             */
+            executable_upstream_code: false;
+            /**
+             * Network Entrypoint
+             * @enum {string}
+             */
+            network_entrypoint: "cli-only" | "none";
+            /**
+             * Online Rows Fallback
+             * @constant
+             */
+            online_rows_fallback: false;
+            /**
+             * Trust Remote Code
+             * @constant
+             */
+            trust_remote_code: false;
+        };
+        /** SourceScorer */
+        SourceScorer: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: string | null;
+        };
+        /** SourceSpec */
+        SourceSpec: {
+            /** Blockers */
+            blockers: string[];
+            conversion: components["schemas"]["SourceConversion"];
+            /** Description */
+            description: string;
+            governance: components["schemas"]["SourceGovernance"];
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            license: components["schemas"]["SourceLicense"];
+            links: components["schemas"]["SourceLinks"];
+            official_comparability: components["schemas"]["SourceComparability"];
+            safety: components["schemas"]["SourceSafety"];
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /**
+             * Tier
+             * @enum {string}
+             */
+            tier: "builtin-smoke" | "managed-public" | "generated-internal" | "restricted-public" | "advanced";
+            upstream: components["schemas"]["SourceUpstream"];
+        };
+        /** SourceUpstream */
+        SourceUpstream: {
+            /** Artifacts */
+            artifacts: components["schemas"]["SourceArtifact"][];
+            revision: components["schemas"]["SourceRevision"];
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1204,7 +1748,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DirectLlmOverviewResponse"];
                 };
             };
         };
@@ -1263,6 +1807,39 @@ export interface operations {
             };
         };
     };
+    direct_llm_dry_run_api_v1_benchmarks_direct_llm_dry_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectLlmRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectLlmDryRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     direct_llm_import_api_v1_benchmarks_direct_llm_import_post: {
         parameters: {
             query?: never;
@@ -1272,9 +1849,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["DirectLlmImportRequest"];
             };
         };
         responses: {
@@ -1284,7 +1859,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DirectLlmImportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1307,9 +1882,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["DirectLlmRunRequest"];
             };
         };
         responses: {
@@ -1320,6 +1893,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    direct_llm_sources_api_v1_benchmarks_direct_llm_sources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetSourceListResponse"];
+                };
+            };
+        };
+    };
+    direct_llm_source_detail_api_v1_benchmarks_direct_llm_sources__source_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceSpec"];
                 };
             };
             /** @description Validation Error */
@@ -1529,7 +2153,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DatasetSummaryListResponse"];
                 };
             };
         };
@@ -2164,6 +2788,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_resource_publications_api_v1_resource_publications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourcePublicationListResponse"];
                 };
             };
         };

@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "id": "truthfulqa",
+  "label": "TruthfulQA Binary Direct",
+  "description": "Truthfulness benchmark adapted to deterministic binary multiple choice without generation-based judging.",
+  "tier": "managed-public",
+  "governance": {
+    "status": "pending",
+    "distribution_scope": "blocked",
+    "stable_eligible": false,
+    "reviewer": null,
+    "reviewed_at": null,
+    "decision_notes": "The repository license claim must be reviewed against the dataset files and a pinned revision before stable use."
+  },
+  "links": {
+    "homepage": "https://github.com/sylinrl/TruthfulQA",
+    "repository": "https://github.com/sylinrl/TruthfulQA",
+    "dataset_card": null,
+    "citation": null
+  },
+  "upstream": {
+    "revision": {
+      "kind": "git-commit",
+      "resolver": "git-commit",
+      "value": null
+    },
+    "artifacts": [
+      {
+        "logical_name": "TruthfulQA.csv",
+        "url": null,
+        "format": "csv",
+        "sha256": null,
+        "bytes": null,
+        "max_bytes": null,
+        "required": true
+      }
+    ]
+  },
+  "license": {
+    "data": {
+      "declared_ids": [],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/sylinrl/TruthfulQA"
+      ]
+    },
+    "code": {
+      "declared_ids": [
+        "Apache-2.0"
+      ],
+      "verified_spdx": null,
+      "evidence_urls": [
+        "https://github.com/sylinrl/TruthfulQA/blob/main/LICENSE"
+      ]
+    },
+    "commercial_use": "unknown",
+    "redistribution": "unknown",
+    "attribution": "unknown",
+    "share_alike": "unknown",
+    "review_notes": "The repository-level claim is recorded as evidence, not as a verified dataset-license conclusion."
+  },
+  "conversion": {
+    "converter": {
+      "id": "truthfulqa-binary-to-direct",
+      "version": null
+    },
+    "splits": [],
+    "default_split": null,
+    "prompt_version": "truthfulqa-binary-direct-v1",
+    "scorer": {
+      "id": "choice",
+      "version": "1"
+    },
+    "profiles": [
+      "smoke",
+      "regression",
+      "full"
+    ],
+    "optional_dependency": null
+  },
+  "safety": {
+    "network_entrypoint": "cli-only",
+    "allowed_protocols": [
+      "https"
+    ],
+    "trust_remote_code": false,
+    "online_rows_fallback": false,
+    "executable_upstream_code": false,
+    "archive_auto_extract": false
+  },
+  "official_comparability": {
+    "status": "not-established",
+    "notes": "The Binary Direct construction is a MoTTEavl variant and must not be equated with generation-based TruthfulQA metrics."
+  },
+  "blockers": [
+    "A human has not verified the dataset license at a pinned revision.",
+    "No immutable repository commit is pinned.",
+    "The TruthfulQA.csv revision URL, SHA-256, byte count, and size limit are not pinned.",
+    "Converter version is not fixed.",
+    "Binary Direct protocol documentation and comparability review are incomplete."
+  ]
+}

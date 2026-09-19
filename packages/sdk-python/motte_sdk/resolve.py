@@ -112,6 +112,8 @@ def resolve_manifest(
             "content_hash": _content_hash(profile),
             "profile_hash": profile.get("profile_hash"),
         }
+        if profile.get("context_window") is not None:
+            snapshots["model_profile"]["context_window"] = profile["context_window"]
     if connection is not None:
         snapshots["provider_connection"] = {
             "name": connection.get("name"),
@@ -139,6 +141,11 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
     manifest = deepcopy(manifest or {})
     if find_secret_paths(manifest):
         raise ManifestResolutionError("CREDENTIALS_REJECTED", "plaintext credentials are not accepted")
+    requested_budget = manifest.get("budget")
+    if isinstance(requested_budget, dict) and "context_preflight" in requested_budget:
+        raise ManifestResolutionError(
+            "SNAPSHOT_RESERVED", "budget.context_preflight is generated at creation"
+        )
     if contract_suites.RESERVED_KEYS.intersection(manifest):
         raise ManifestResolutionError("SNAPSHOT_RESERVED", "benchmark snapshots are generated at creation")
     name, sep, version = scenario_version.rpartition("@")
@@ -174,6 +181,7 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
             provider["max_retries"] = preset["max_retries"]
             provider["parameters"] = {**(provider.get("parameters") or {}),
                                       "max_output_tokens": preset["max_output_tokens"]}
+        _apply_context_preflight(resolved)
         resolved = resolve_execution(scenario_version, resolved, scenario=scenario)
         from motte_sdk.execution_backends import resolve_replay_case_ids
 
@@ -291,6 +299,59 @@ def _max_output_ceiling(profile: dict[str, Any]) -> int | None:
     if ceiling is not None and (type(ceiling) is not int or ceiling <= 0):
         raise ManifestResolutionError("MODEL_CONFIG_INVALID", "max_output_tokens must be a positive integer")
     return ceiling
+
+
+def _apply_context_preflight(resolved: dict[str, Any]) -> None:
+    """Attach auditable context estimates when a model profile pins its window."""
+    model_snapshot = (resolved.get("resource_snapshots") or {}).get("model_profile")
+    if not isinstance(model_snapshot, dict) or "context_window" not in model_snapshot:
+        return
+    context_window = model_snapshot.get("context_window")
+    if type(context_window) is not int or context_window <= 0:
+        raise ManifestResolutionError(
+            "MODEL_CONFIG_INVALID", "context_window must be a positive integer"
+        )
+
+    provider = resolved.get("provider") or {}
+    parameters = provider.get("parameters") if isinstance(provider, dict) else {}
+    reserve = parameters.get("max_output_tokens") if isinstance(parameters, dict) else None
+    if reserve is None:
+        reserve = 0
+    if type(reserve) is not int or reserve < 0:
+        raise ManifestResolutionError(
+            "MODEL_CONFIG_INVALID", "max_output_tokens reserve must be a non-negative integer"
+        )
+
+    from .context_preflight import estimate_context_preflight
+
+    report = estimate_context_preflight(
+        resolved.get("cases") or {},
+        context_window=context_window,
+        output_tokens_reserved=reserve,
+    )
+    over_limit = [
+        (case_id, estimate["total_tokens_upper_bound"])
+        for case_id, estimate in report["per_case"].items()
+        if estimate["total_tokens_upper_bound"] > context_window
+    ]
+    if over_limit:
+        case_id, estimate = max(over_limit, key=lambda item: item[1])
+        raise ManifestResolutionError(
+            "CONTEXT_WINDOW_EXCEEDED",
+            f"case {case_id} context upper bound {estimate} exceeds model context_window "
+            f"{context_window} (output reserve {reserve}, method {report['method']})",
+        )
+
+    budget = resolved.get("budget")
+    if budget is None:
+        budget = {}
+    if not isinstance(budget, dict):
+        raise ManifestResolutionError("RUN_CONFIG_INVALID", "budget must be an object")
+    persisted_summary = {
+        key: report[key]
+        for key in ("method", "context_window", "output_tokens_reserved", "stats")
+    }
+    resolved["budget"] = {**budget, "context_preflight": persisted_summary}
 
 
 def _resolve_price_table(

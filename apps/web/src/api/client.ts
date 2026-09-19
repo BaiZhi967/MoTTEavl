@@ -258,10 +258,18 @@ export const createBenchmarkRun = (body: {
 
 // ---------------------------------------------------------------- direct llm
 
+export type DirectLlmProfileSummary = components["schemas"]["DatasetProfileSummary"];
+export type DirectLlmCaseSelection = NonNullable<components["schemas"]["DirectLlmRunRequest"]["case_selection"]>;
+export type DirectLlmRunRequest = components["schemas"]["DirectLlmRunRequest"];
+export type DirectLlmDryRunResponse = components["schemas"]["DirectLlmDryRunResponse"];
+
 export interface DirectLlmPreset {
   scenario: string;
   dataset: string;
   suite: string;
+  contract_version?: number | null;
+  dataset_fingerprint?: string | null;
+  profiles?: DirectLlmProfileSummary[];
   /** 数据集级 eval 描述：scorer / scorer_version / prompt_version / selected_count 等。 */
   eval?: Record<string, any>;
   provenance?: Record<string, any>;
@@ -273,6 +281,10 @@ export interface DirectLlmOverview {
   items: DirectLlmPreset[];
   total: number;
 }
+
+export type DirectLlmSourceSummary = components["schemas"]["DatasetSourceSummary"];
+export type DirectLlmSourceDetail = components["schemas"]["SourceSpec"];
+export type DirectLlmSourceList = components["schemas"]["DatasetSourceListResponse"];
 
 export interface DirectLlmBuiltin {
   id: string;
@@ -313,6 +325,16 @@ export interface DirectLlmImportReceipt {
 export const getDirectLlmOverview = () =>
   request<DirectLlmOverview>(`/api/v1/benchmarks/direct-llm`);
 
+/** 只读受管来源目录；仅返回治理摘要，不触发上游网络访问。 */
+export const getDirectLlmSources = () =>
+  request<DirectLlmSourceList>(`/api/v1/benchmarks/direct-llm/sources`);
+
+/** 读取一个受管来源的本地治理登记详情，不执行 fetch / prepare。 */
+export const getSourceDetail = (sourceId: string) =>
+  request<DirectLlmSourceDetail>(
+    `/api/v1/benchmarks/direct-llm/sources/${encodeURIComponent(sourceId)}`,
+  );
+
 /** 仓库内置样例清单（含题数与可导入性），供操作页一键导入。 */
 export const getDirectLlmBuiltins = () =>
   request<{ items: DirectLlmBuiltin[]; total: number }>(`/api/v1/benchmarks/direct-llm/builtins`);
@@ -334,10 +356,11 @@ export const importDirectLlm = (body: {
   license?: string; scorer?: string; source?: string;
 }) => request<DirectLlmImportReceipt>("/api/v1/benchmarks/direct-llm/import", jsonBody(body));
 
-export const createDirectLlmRun = (body: {
-  model: string; scenario?: string; parameters?: Record<string, number>;
-  reasoning_level?: string; case_selection?: CaseSelectionRequest;
-}) => request<RunRecord>("/api/v1/benchmarks/direct-llm/runs", jsonBody(body));
+export const dryRunDirectLlm = (body: DirectLlmRunRequest) =>
+  request<DirectLlmDryRunResponse>("/api/v1/benchmarks/direct-llm/dry-run", jsonBody(body));
+
+export const createDirectLlmRun = (body: DirectLlmRunRequest) =>
+  request<RunRecord>("/api/v1/benchmarks/direct-llm/runs", jsonBody(body));
 
 // ---------------------------------------------------------------- provider kinds
 
