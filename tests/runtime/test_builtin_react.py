@@ -21,7 +21,9 @@ def test_final_answer_without_tools():
     runtime = BuiltinReActRuntime(complete)
     result = runtime.run("say hi")
     assert result == {"status": "completed", "answer": "hi", "steps": 1}
-    assert [event["type"] for event in runtime.events] == ["step_started", "final_answer"]
+    assert [event["type"] for event in runtime.events] == [
+        "step_started", "model_request", "model_response", "final_answer", "terminated",
+    ]
 
 
 def test_tool_call_flow_with_observation_feedback():
@@ -38,11 +40,9 @@ def test_tool_call_flow_with_observation_feedback():
     assert result["answer"] == 3
     assert calls == [{"a": 1, "b": 2}]
     assert [event["type"] for event in runtime.events] == [
-        "step_started",
-        "tool_call",
-        "tool_result",
-        "step_started",
-        "final_answer",
+        "step_started", "model_request", "model_response",
+        "tool_call", "tool_result",
+        "step_started", "model_request", "model_response", "final_answer", "terminated",
     ]
     # 第二轮请求包含 observation 回灌
     second_round = complete.requests[1].messages
@@ -86,7 +86,8 @@ def test_invalid_responses_consume_budget_and_end_in_budget_exceeded():
     assert result == {"status": "budget_exceeded", "answer": None, "steps": 2}
     types = [event["type"] for event in runtime.events]
     assert types.count("invalid_response") == 2
-    assert types[-1] == "budget_exceeded"
+    terminated = runtime.events[-1]
+    assert terminated["type"] == "terminated" and terminated["reason"] == "max_steps"
 
 
 def test_system_prompt_lists_tools():
