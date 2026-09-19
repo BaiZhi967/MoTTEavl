@@ -1,8 +1,8 @@
 # External Jobs 协议（job-based Benchmark 执行）
 
-> 状态：**契约已定义（M2-T01）**。外部适配器与进程管理在 M2-T02 接入，持久化与
-> 幂等导入在 M2-T03 接入；在此之前 `external-benchmark@1` 后端保持
-> `available=false`，创建 Run 时即拒绝，不会产生模型调用。
+> 状态：**契约 + 进程适配器已接通（M2-T01/T02）**。Job 持久化与幂等导入在
+> M2-T03 接入；在此之前 `external-benchmark@1` 后端保持 `available=false`，
+> 创建 Run 时即拒绝，不会产生模型调用。
 
 ## 1. 执行模式
 
@@ -83,3 +83,52 @@ cleanup(handle)                # 清理本 Job 资源并列出残留
 
 每个 selected case 都有处置行：结果缺失的记 `not_attempted`，不静默消失。
 采集检查点、同键冲突与迟到结果的审计政策由 M2-T03 的 Job 存储接管。
+
+## 6. 进程适配器（M2-T02，`packages/benchmark-runtime/`）
+
+独立于 API 进程的适配器包（workspace 成员 `motte-benchmark-runtime`，
+模块 `motte_benchmark`）：
+
+- `process.ProcessJobAdapter`：实现 `ExternalJobAdapter` 协议的受控子进程
+  适配器。进程执行走 asyncio 子进程 API（专用事件循环线程），不经 shell。
+  - **prepare**：用 M1 加固的 `CaseWorkspace`（逐组件拒 symlink、dir_fd
+    打开、归属校验）创建 `work_root/job-<id>`；无进程执行。
+  - **start**：唯一副作用操作。子进程独立会话启动（POSIX
+    `start_new_session` / Windows `CREATE_NEW_PROCESS_GROUP`）；
+    `launch_token` 经 `MOTTE_LAUNCH_TOKEN` 环境变量与 `{launch_token}`
+    argv 占位符传入受控 wrapper；`{work_dir}`/`{job_id}`/`{run_id}` 同理
+    可用。启动身份（pid、host、started_at、token）随句柄落库。
+  - **stdout/stderr 有界消费**：只保留尾部 `max_output_bytes` 字节并标记
+    truncated；限制优先级 spec.limits > adapter 默认。
+  - **poll**：会话内凭进程对象 + token；跨会话凭 argv 中嵌入的 token 核验
+    （Linux 读 `/proc/<pid>/cmdline`，macOS 经 `ps -p <pid> -o command=`；
+    Windows 不可核验）。进程不在但受控产物存在 → settled（exit 不可观测）；
+    均不可证明 → indeterminate。
+  - **interrupt/cleanup**：只信号**本 Job 拥有**的进程树（TERM → 宽限 →
+    KILL，按进程组）。token 不可核验时绝不信号（PID 被无关进程复用不会
+    误杀），残留资源列在 cleanup 报告里；不执行全系统 prune，不删除未知
+    状态的工作目录。
+  - **collect**：经 `CaseWorkspace` 读 `results.json`（`{"records": [...]}`，
+    每条 `case_id`/`status`/`output?`/`error?`/`usage?`）；拒绝 symlink
+    逃逸、超大文件与半写 JSON（`JOB_OUTPUT_INVALID`），不伪造记录。
+    cursor 记 `records_consumed`，重复采集只返回新增记录。
+- `registry`：显式内置 adapter 注册表；`adapter_for` 对未注册 id 抛
+  `ADAPTER_UNKNOWN` 并列出已知项，不经在线安装用户插件。
+- `fake_runner`：合成假 Runner（`-m motte_benchmark.fake_runner`），
+  测试与离线验收用，不是官方 C-Eval 内容。
+
+`NormalizedCaseResult` 契约在 T02 增加 `output`/`error` 透传字段；结果
+冻结为受控 Artifact 后（T03）改用 `output_ref` 引用。
+
+## 7. 应用层监督（`motte_sdk.external_jobs.ExternalJobSupervisor`）
+
+- `launch(spec)`：prepare → 生成**新** launch_token → 持久化启动意图
+  （`intent_journal`，T03 替换为 Job 存储事务）→ `adapter.start` → 持久化
+  句柄。写入顺序固定 launch_intent → start → launch_started。
+- `run(spec)`：launch 后轮询至终态（`max_wall_seconds` 超时 → 只中断本
+  Job 进程树，outcome 记 `JOB_TIMEOUT`）并采集。
+- `recover(spec, handle)`：崩溃恢复只观察/采集，绝不 start；token 不可
+  核验且无受控产物 → `JOB_OUTCOME_INDETERMINATE`（映射 needs_review），
+  禁止仅凭“没有 results.json”重新付费执行。
+- `interrupt(spec, handle)`：操作员取消——先中断自有进程，再尽力采集部分
+  工件；终态不因迟到输出复活。

@@ -135,13 +135,16 @@ class ExternalJobHandle(Contract):
 class NormalizedCaseResult(Contract):
     """Parser 归一化后的单 case 结果（需求 4.1 表）。
 
-    ``usage``/``evidence_coverage`` 中未观测到的量（费用、模型身份）如实标记
-    unknown，不补填为已核验。
+    ``output``/``error`` 是导入层消费的原始载荷；结果冻结为受控 Artifact 后
+    改用 ``output_ref`` 引用（M2-T03）。``usage``/``evidence_coverage`` 中
+    未观测到的量（费用、模型身份）如实标记 unknown，不补填为已核验。
     """
 
     stable_case_key: StrictStr = Field(min_length=1)
     source_case_id: StrictStr = Field(min_length=1)
     output_ref: StrictStr | None = None
+    output: Any = None
+    error: dict[str, Any] | None = None
     native_score_refs: list[StrictStr] = Field(default_factory=list)
     status: CaseResultStatus
     error_category: StrictStr | None = None
