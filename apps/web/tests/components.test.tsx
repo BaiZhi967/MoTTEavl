@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import React from "react";
 import { ModelPicker } from "../src/components/ModelPicker";
 import { RunAuditSummary } from "../src/components/RunAuditSummary";
+import { RunErrorBanner } from "../src/components/RunErrorBanner";
 import { RunTimeline } from "../src/components/RunTimeline";
 import { ScoreTable } from "../src/components/ScoreTable";
 import { StatusBadge, statusLabel } from "../src/components/StatusBadge";
@@ -107,6 +108,69 @@ describe("RunAuditSummary", () => {
     } as any} />);
     const cell = screen.getByTitle(hash);
     expect(cell.textContent).toContain(`${"b".repeat(12)}…`);
+  });
+});
+
+describe("RunErrorBanner", () => {
+  const PROVIDER_500 = "provider HTTP 500: 请求上游失败，请稍后重试 (request id: x) (type=AgnesAI_error)";
+
+  it("部分题目调用失败时点出失败范围与出路", () => {
+    render(<RunErrorBanner run={{
+      id: "run-1",
+      status: "failed",
+      case_ids: ["c1", "c2", "c3"],
+      cases: [
+        { case_id: "c1", result: { content: "ok" } },
+        { case_id: "c2", result: { error: { class: "server", message: PROVIDER_500 } } },
+        { case_id: "c3", result: { content: "ok" } },
+      ],
+      error: { class: "server", message: PROVIDER_500 },
+    } as any} />);
+    const banner = document.querySelector(".error") as HTMLElement;
+    expect(banner.textContent).toContain("3 题中 1 题调用失败（c2）：");
+    expect(banner.textContent).toContain(PROVIDER_500);
+    expect(banner.textContent).toContain("其余 2 题结果不受影响，可在下方查看；如需完整结果，请在「运行」总览重试本次运行。");
+    expect(banner.querySelector(".mono")?.textContent).toContain("server");
+  });
+
+  it("失败题超过 3 个时折叠 id 清单", () => {
+    const cases = ["c1", "c2", "c3", "c4", "c5"].map((case_id) => ({
+      case_id, result: { error: { class: "server", message: "x" } },
+    }));
+    render(<RunErrorBanner run={{
+      id: "run-1", status: "failed", case_ids: ["c1", "c2", "c3", "c4", "c5"],
+      cases, error: { class: "server", message: "x" },
+    } as any} />);
+    expect(document.querySelector(".error")?.textContent)
+      .toContain("5 题中 5 题调用失败（c1 · c2 · c3 等 5 题）：");
+    expect(document.querySelector(".error")?.textContent).toContain("可在「运行」总览重试本次运行。");
+  });
+
+  it("run 级错误（无逐题失败）保持 code + message 形式且不加指引", () => {
+    render(<RunErrorBanner run={{
+      id: "run-1", status: "unsupported", cases: [],
+      error: { code: "UNSUPPORTED_PARAMETER", message: "reasoning_effort 不受支持" },
+    } as any} />);
+    const banner = document.querySelector(".error") as HTMLElement;
+    expect(banner.textContent).toContain("UNSUPPORTED_PARAMETER reasoning_effort 不受支持");
+    expect(banner.textContent).not.toContain("调用失败");
+  });
+
+  it("monitor 场景只展示范围行", () => {
+    render(<RunErrorBanner monitor run={{
+      id: "run-1", status: "failed", case_ids: ["c1", "c2"],
+      cases: [{ case_id: "c1", result: { content: "ok" } },
+              { case_id: "c2", result: { error: { class: "server", message: "x" } } }],
+      error: { class: "server", message: "x" },
+    } as any} />);
+    const banner = document.querySelector(".error") as HTMLElement;
+    expect(banner.textContent).toContain("2 题中 1 题调用失败（c2）：");
+    expect(banner.textContent).not.toContain("总览");
+  });
+
+  it("无 run 错误时不渲染", () => {
+    render(<RunErrorBanner run={{ id: "run-1", status: "completed" } as any} />);
+    expect(document.querySelector(".error")).toBeNull();
   });
 });
 

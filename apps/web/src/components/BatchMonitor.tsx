@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { cancelRun, getRun, modelLabel, retryRun, type RunRecord } from "../api/client";
 import { StatusBadge } from "./StatusBadge";
 import { RunProgress } from "./RunProgress";
+import { RunErrorBanner } from "./RunErrorBanner";
 import { countDone, isTerminal, useRunEvents } from "../hooks/useRunEvents";
 
 const RETRYABLE = ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"];
@@ -60,11 +61,7 @@ function BatchRow({ runId, resultPath, renderDetail }: {
         )}
       </div>
       {current === "queued" && <p className="hint">等待 Worker 领取；若长期排队，请在服务端启动 Worker（make worker）。</p>}
-      {terminal && run?.error && (
-        <p className="error">
-          {run.error.code ?? run.error.type ?? ""} {run.error.message ?? ""}
-        </p>
-      )}
+      {terminal && run?.error && <RunErrorBanner run={run} monitor />}
       {expanded && renderDetail?.(activeRunId)}
     </li>
   );
