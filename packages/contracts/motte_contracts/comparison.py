@@ -26,6 +26,9 @@ ALLOWED_COMPARISON_FACTORS: frozenset[str] = frozenset({
     "retries",
     "environment",
     "credentials",
+    # M4：外部 runtime（backend/transport/原生配置）是实验条件——默认必须
+    # 一致，政策显式允许时才可作为变量（M4 review R16）。
+    "runtime",
 })
 
 

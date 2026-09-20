@@ -84,8 +84,9 @@ def _model_identity(manifest: dict[str, Any]) -> Any:
     """按**套件实际冻结的模型身份**取值（review R2-10）。
 
     旧套件（GSM8K 等）把模型放在 manifest 顶层；M3 的 Terminal-Bench 放在
-    ``external_benchmark.profile.model``。只看顶层会让"政策不允许换模型"的
-    TB 比较悄悄放行模型差异。
+    ``external_benchmark.profile.model``；M4 的 runtime 运行把原生模型放在
+    ``runtime_profile.native_settings.model``。只看顶层会让"政策不允许换
+    模型"的比较悄悄放行原生模型差异（M4 review R16）。
     """
     profile_model = _profile(manifest).get("model")
     if isinstance(profile_model, Mapping) and profile_model.get("model"):
@@ -93,7 +94,34 @@ def _model_identity(manifest: dict[str, Any]) -> Any:
             "provider": profile_model.get("provider"),
             "model": profile_model.get("model"),
         }
+    runtime_profile = manifest.get("runtime_profile")
+    if isinstance(runtime_profile, dict):
+        native_model = (runtime_profile.get("native_settings") or {}).get("model")
+        if native_model:
+            return str(native_model)
     return manifest.get("model")
+
+
+def _runtime_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """runtime 实验条件身份：backend 引用 + profile 的原生配置/预算/工作区。
+
+    ``native_settings`` 去掉 ``model``（模型差异由 model 分支处理），其余
+    配置差异都是实验条件差异，不允许时阻断比较（M4 review R16）。
+    """
+    runtime = manifest.get("runtime")
+    profile = manifest.get("runtime_profile")
+    if not isinstance(runtime, str) and not isinstance(profile, dict):
+        return None
+    native = dict(profile.get("native_settings") or {}) if isinstance(profile, dict) else {}
+    native.pop("model", None)
+    return {
+        "runtime": runtime if isinstance(runtime, str) else None,
+        "config_hash": profile.get("config_hash") if isinstance(profile, dict) else None,
+        "native_settings": native,
+        "budgets": profile.get("budgets") if isinstance(profile, dict) else None,
+        "workspace": profile.get("workspace") if isinstance(profile, dict) else None,
+        "credential_refs": profile.get("credential_refs") if isinstance(profile, dict) else None,
+    }
 
 
 def _compare_invariants(
@@ -118,6 +146,26 @@ def _compare_invariants(
             )
         else:
             allowed.append(f"ALLOWED_FACTOR:model: {base_model!r} -> {cand_model!r}")
+    # M4：runtime 实验条件（backend/transport/原生配置）进入可比性判定
+    # （M4 review R16）：一侧声明 runtime、一侧没有 → 身份缺失阻断；两侧
+    # runtime 条件不同且政策未允许 → 阻断并给出具体差异。
+    base_runtime = _runtime_identity(baseline_manifest)
+    cand_runtime = _runtime_identity(candidate_manifest)
+    if (base_runtime is None) != (cand_runtime is None):
+        reasons.append(
+            "IDENTITY_MISSING:runtime: "
+            f"{base_runtime!r} vs {cand_runtime!r}"
+        )
+    elif base_runtime is not None and base_runtime != cand_runtime:
+        if "runtime" in allowed_factors:
+            allowed.append(
+                f"ALLOWED_FACTOR:runtime: {base_runtime.get('runtime')!r} "
+                f"-> {cand_runtime.get('runtime')!r}"
+            )
+        else:
+            reasons.append(
+                f"RUNTIME_CHANGED:runtime: {base_runtime!r} -> {cand_runtime!r}"
+            )
     base_external = _external(baseline_manifest)
     cand_external = _external(candidate_manifest)
     base_profile = _profile(baseline_manifest)

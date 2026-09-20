@@ -11,6 +11,8 @@ import textwrap
 import time
 from pathlib import Path
 
+import pytest
+
 from motte_harness.process import kill_tree, minimal_env
 from motte_harness.session import (
     load_session,
@@ -126,3 +128,73 @@ def test_never_spawned_session_stays_prepared(tmp_path):
     )
     verdict = recover_session(record)
     assert verdict["action"] == "never_spawned"
+
+
+def test_persist_session_is_real_cas(tmp_path):
+    """R15：revision 过期即拒绝（不静默改写）。"""
+    from motte_harness.session import SessionCasError, next_revision
+
+    record = new_session_record(
+        run_id="run-cas", case_id="case-1", attempt_id="att-1",
+        backend="claude-cli", argv=["claude", "-p", "hi"],
+    )
+    session_file = tmp_path / "cas" / f"{record['session_id']}.json"
+    persisted = persist_session(session_file, record)
+    assert persisted["revision"] == 1
+
+    # 用旧 revision 重写（并发写冲突）→ 拒绝。
+    stale = {**record, "state": "spawned", "pid": 123, "revision": 1}
+    with pytest.raises(SessionCasError):
+        persist_session(session_file, stale)
+    # 文件未被覆盖。
+    assert load_session(session_file)["state"] == "prepared"
+
+    # 按递增 revision 写入成功（mark_spawned 的用法）。
+    updated = mark_spawned(persisted, 4242, path=session_file)
+    assert updated["revision"] == 2
+    assert load_session(session_file)["pid"] == 4242
+    assert next_revision(updated) == 3
+
+
+def test_recover_runtime_sessions_scans_anchor(tmp_path):
+    """R15：生产恢复入口——扫描未终结记录并只读判定（不重放）。"""
+    from motte_harness.session import (
+        mark_spawned,
+        new_session_record,
+        persist_session,
+        recover_runtime_sessions,
+        session_path,
+    )
+
+    # 终态记录：不出现在恢复清单。
+    done = new_session_record(
+        run_id="run-done", case_id="case-1", attempt_id="att-1",
+        backend="claude-cli", argv=["claude", "-p", "hi"],
+    )
+    done_file = session_path(tmp_path, "run-done", "case-1", done["session_id"])
+    done = persist_session(done_file, done)
+    done = mark_terminal(done, "completed", path=done_file)
+
+    # 已 spawn 但进程早已消失：needs_review。
+    gone = new_session_record(
+        run_id="run-gone", case_id="case-2", attempt_id="att-1",
+        backend="codex-cli", argv=["codex", "exec", "hi"],
+    )
+    gone_file = session_path(tmp_path, "run-gone", "case-2", gone["session_id"])
+    gone = persist_session(gone_file, gone)
+    gone = {
+        **gone,
+        "state": "spawned",
+        "pid": 4,
+        "identity": {"create_time": None, "cmdline": ["gone", "process"]},
+        "revision": 2,
+    }
+    persist_session(gone_file, gone)
+
+    findings = recover_runtime_sessions(anchor=tmp_path)
+    by_run = {item["run_id"]: item for item in findings}
+    assert "run-done" not in by_run
+    assert by_run["run-gone"]["action"] == "needs_review"
+    assert by_run["run-gone"]["replayed"] is False
+    assert by_run["run-gone"]["backend"] == "codex-cli"
+    del done
