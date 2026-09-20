@@ -15,6 +15,7 @@ import pytest
 
 from motte_benchmark.fake_runner import self_argv
 from motte_benchmark.opencompass.adapter import CevalJobAdapter
+from motte_benchmark.opencompass.parser import PARSER_VERSION
 from motte_benchmark.opencompass.entry import (
     export_subject_files,
     main as entry_main,
@@ -191,7 +192,7 @@ def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_
     # 身份参数（review R2-01）。
     assert argv[0:2] == ["-m", "opencompass.cli.main"]
     assert argv[2].endswith("opencompass-config.py")
-    assert argv[3:] == ["--work-dir", str(work / "outputs")]
+    assert argv[3:] == ["--work-dir", str(work / "outputs"), "--mode", "infer"]
     assert "--launch-token" not in argv and "--config" not in argv
     # 实验目录指针 + 完成标记（R2-02/R2-10 契约）。
     pointer = json.loads((work / "outputs" / "experiment.json").read_text())
@@ -612,7 +613,7 @@ def test_r2_07_recovery_after_work_dir_cleanup_keeps_evidence_refs(tmp_path, mon
     supervisor = ExternalJobSupervisor(recovery_adapter, poll_interval_seconds=0.05)
     runner = DurableExternalJobRunner(
         supervisor, jobs, artifacts=artifacts, work_root=tmp_path / "jobs",
-        parser_version="ceval-opencompass-parser@1",
+        parser_version=PARSER_VERSION,
     )
     runner.bind_service(service)
     replay = runner(service.store.runs.get(run["id"]))

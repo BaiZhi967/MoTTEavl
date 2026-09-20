@@ -1,7 +1,8 @@
 # C-Eval 外部基准操作指南（job-based）
 
-> 状态：**合成/假 Runner 链路已验证；真实固定 Runner、真实模型 smoke 与
-> full Profile 验收未执行（not_run）**。本文同时是后两层的验收清单。
+> 状态：**合成/假 Runner、真实固定 OpenCompass 0.4.2 + 本地确定性 HTTP
+> 端点已验证；真实模型 smoke 与 full Profile 仍未执行（not_run）**。
+> 本地验证仅证明生产推理与平台评分链路，不代表官方数据或原生准确率对照验收。
 
 ## 1. 链路概览
 
@@ -33,11 +34,49 @@ R2-05）。adapter 注册经同一受控配置加载：
 
 固定环境 wrapper 见 `scripts/runner/opencompass-entry`：以 pinned 解释器调用
 `motte_benchmark.opencompass.entry` 桥接——按学科导出本地数据、渲染
-OpenCompass **0.4.2** 形态配置（位置参数调用，凭据引用经 `os.environ`
-解析）、定位时间戳实验目录并写 `outputs/experiment.json` 指针（解析侧据此
+OpenCompass **0.4.2** 形态配置（位置参数调用，凭据引用只在模型构造时经
+`os.environ` 解析，不进入上游 Config dump）、定位时间戳实验目录并写
+`outputs/experiment.json` 指针（解析侧据此
 选择唯一实验，绝不混入其他运行）、结束原子写 `.motte-job-complete` 完成标记。
 同 revision 重写不同内容在 prepare 层拒绝（`DATASET_REVISION_REUSED`）。
+`preparation.default_split` 参与 revision 不可变身份。旧 payload 仍可读取；
+缺少 `preparation` 与空对象的无变化 roundtrip 保持幂等，但未知旧参数不能
+证明与新的明确参数相同，重准备需使用新 revision。
 无配置且 wrapper 不存在 → RUNNER_NOT_CONNECTED，创建在提交前 422。
+
+### 固定 Runner 安装与本地验收
+
+```bash
+scripts/runner/install-opencompass /absolute/path/to/motte-runner
+scripts/runner/verify-opencompass-local /absolute/path/to/motte-runner/bin/python
+```
+
+安装脚本使用独立 Python **3.10.20** 和
+`scripts/runner/opencompass-0.4.2-py310.lock`，并把独立桥接模块与 wrapper
+复制进该环境。API/SDK 仍使用 Python >=3.12，不向 API 环境安装 OpenCompass。
+0.4.2 的 pandas==1.5.3 在本机 Python3.12 安装失败，因此不把主项目的 Python
+版本约束绕过。固定依赖集合已在 macOS arm64 验证；Linux 部署须重复验收，
+不能把该平台结果当作 Linux/CUDA 依赖兼容证据。
+
+安装需要下载公开依赖和 gpt-4 tokenizer 资产；部署时应保留该 tokenizer 缓存。
+测试只把模型请求发送到临时 localhost HTTP 服务，使用合成凭据，并关闭 HF
+联网下载。已安装 wrapper 自动使用相邻 `bin/python`，且把解释器传给下游 CLI；
+可直接将 adapter argv 指向任意安装目录的 `bin/opencompass-entry`。
+显式 `MOTTE_RUNNER_PYTHON` / `MOTTE_RUNNER_ROOT` 仍可覆盖默认路径。
+
+推理配置导入 `LocalMCQDataset`（返回 HuggingFace Dataset）与完整 reader /
+PromptTemplate / ZeroRetriever / GenInferencer。生产冻结 prompt 已包含选定
+few-shot 示例；ZeroRetriever 不重新选样。temperature 走模型参数，top_p 走
+OpenAI.extra_body，max_output_tokens 走 max_out_len。base_url 引用可为 `/v1`
+或完整 `/chat/completions` URL；未给引用时保留上游默认端点。
+
+目标 gold 仅在平台 manifest 中，Runner 使用 `--mode infer` 产生真实
+`predictions/<model>/<benchmark>-<subject>.json`，不产生伪造的 results/native
+accuracy。Parser v2 接受该形态并拒绝多个模型混入同一 Job，平台从冻结 gold
+生成 ScoringPass 和 report；没有 native accuracy 时不宣称 native 对照通过。
+Parser 身份升级为 `<benchmark>-opencompass-parser@2`，历史报告保持固定证据读取。
+
+升级到 Parser @2 后，尚未完成导入的旧 @1 Job 不会被新规则重解析或重新启动；返回 `EXTERNAL_PARSER_VERSION_MISMATCH`，保留原 Job、checkpoint 和 Artifact，交由操作员使用匹配版本处理。已取消 Job 保持取消，已完成导入的历史报告仍可只读查询，并保留原 parser 版本。
 
 ## 2. 数据与来源治理
 
@@ -76,7 +115,7 @@ OpenCompass **0.4.2** 形态配置（位置参数调用，凭据引用经 `os.en
 |---|---|---|
 | 合成 golden（旧 Parser 对照） | ✅ 已验证 | `uv run pytest -q -m "not live" tests/benchmarks/test_ceval_parser_parity.py` |
 | 假 Runner 全链路（API→排队→分派→Job→查询；禁用 adapter 不影响旧套件） | ✅ 已验证 | `uv run pytest -q -m "not live" tests/integration/test_ceval_external_job.py` |
-| 真实固定 Runner + 本地确定性端点 | **not_run** | 需要：独立环境安装 `opencompass==0.4.2`（容器/venv，不进 API 进程）；`CevalJobAdapter` argv 指向 `opencompass-entry`（`/opt/motte-runner/bin/opencompass-entry` 默认，可配置）；本地假 HTTP 端点（不付费）承载 OpenAI 兼容协议；执行 `motte ceval prepare → run → worker`，用迁移 Parser 解析真实输出目录并与 native 对照。完成后在 `docs/verification/M2.md` 记录原始 hash 与差异。 |
+| 真实固定 Runner + 本地确定性端点 | **已验证：本地推理与平台评分** | `scripts/runner/verify-opencompass-local /absolute/runner/bin/python`：生产 prepare inputs → RunService/Dispatcher → 实际安装 wrapper/0.4.2 → localhost HTTP → 真实 predictions → Parser → SQLite ScoringPass → report API；zero/few-shot、选样、参数、默认 URL、整个临时目录凭据扫描。未验证官方完整 Profile/native accuracy 对照。 |
 | 真实模型 smoke（小样本，授权预算） | **not_run / blocked** | 需显式授权（预算、凭据、预算上限）；授权后：`ceval prepare`（官方数据需先完成受信核验器部署）→ `POST runs {model, scope:"smoke"}` → worker。 |
 | full Profile（选定完整集） | **not_run / blocked** | 同上，且需确认选择集合与目标 Profile 完全一致后才可记录为完整成绩。 |
 

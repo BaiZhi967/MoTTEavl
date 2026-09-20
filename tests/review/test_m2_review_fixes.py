@@ -16,6 +16,7 @@ import pytest
 
 from motte_benchmark.fake_runner import self_argv
 from motte_benchmark.opencompass.adapter import CevalJobAdapter
+from motte_benchmark.opencompass.parser import PARSER_VERSION
 from motte_benchmark.opencompass.parser import (
     CevalParserError,
     parse_opencompass_results,
@@ -486,7 +487,7 @@ def test_r04_import_crash_recovers_without_second_start(tmp_path, fail_on, monke
         supervisor = ExternalJobSupervisor(recovery_adapter, poll_interval_seconds=0.05)
         runner = DurableExternalJobRunner(
             supervisor, real_jobs, artifacts=ArtifactStore(tmp_path / "artifacts"),
-            work_root=tmp_path / "jobs", parser_version="ceval-opencompass-parser@1",
+            work_root=tmp_path / "jobs", parser_version=PARSER_VERSION,
         )
         runner.bind_service(service)
         recovered = runner(service.store.runs.get(run["id"]))

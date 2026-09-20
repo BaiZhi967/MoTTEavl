@@ -425,6 +425,45 @@ class DurableExternalJobRunner:
                 return True
         return False
 
+    def _parser_mismatch(
+        self, actual: Any, *, source: str, persisted: dict[str, Any] | None = None,
+        outcome: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """版本拒绝只返回诊断，不启动/导入或改写原 Job 的状态与证据。"""
+        persisted, outcome = persisted or {}, outcome or {}
+        checkpoint = persisted.get("checkpoint") or {}
+        return {
+            "job_status": "cancelled" if "cancelled" in (
+                persisted.get("status"), outcome.get("job_status"),
+            ) else "indeterminate",
+            "results": [],
+            "handle": persisted.get("handle") or outcome.get("handle") or {},
+            "cursor": outcome.get("cursor") or checkpoint.get("cursor") or {},
+            "error": {
+                "code": "EXTERNAL_PARSER_VERSION_MISMATCH",
+                "message": "frozen parser version differs from available evidence parser; "
+                           "no results imported or job restarted",
+                "details": {"expected": self.parser_version, "actual": actual, "source": source,
+                            "persisted_job_status": persisted.get("status"),
+                            "original_error": outcome.get("error") or checkpoint.get("outcome_error")},
+            },
+            "import": {
+                "imported": 0, "conflicts": [],
+                "evidence": checkpoint.get("evidence") or {},
+                "parser_version": self.parser_version,
+            },
+        }
+
+    def _check_parser_version(self, persisted: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        actual = getattr(self.supervisor.adapter, "parser_version", None)
+        if actual is not None and actual != self.parser_version:
+            return self._parser_mismatch(actual, source="adapter", persisted=persisted)
+        checkpoint = (persisted or {}).get("checkpoint") or {}
+        previous = (checkpoint.get("cursor") or {}).get("parser_version")
+        if previous is not None and previous != self.parser_version:
+            return self._parser_mismatch(previous, source="checkpoint", persisted=persisted)
+        return None
+
     def __call__(self, run: dict[str, Any]) -> dict[str, Any]:
         from .execution_backends import external_job_spec_from_run
 
@@ -449,6 +488,9 @@ class DurableExternalJobRunner:
             else:
                 # 非终态，或终态但导入未完成（R04）：优先从**已冻结工件**
                 # 幂等补齐（R3-07：不依赖可清理的工作目录），否则重新观察。
+                rejected = self._check_parser_version(persisted)
+                if rejected is not None:
+                    return rejected
                 handle = ExternalJobHandle.model_validate(persisted.get("handle") or {})
                 job_id = str(persisted.get("job_id") or handle.job_id)
                 artifact_outcome = self._recover_from_frozen_artifact(persisted, handle)
@@ -463,6 +505,9 @@ class DurableExternalJobRunner:
                     # 取消是操作员终局：观察到的其他结局只作审计，不复活。
                     outcome["job_status"] = "cancelled"
         else:
+            rejected = self._check_parser_version()
+            if rejected is not None:
+                return rejected
             # 启动意图（含新 launch_token）先落 Job 存储再 start；observe 的
             # should_cancel 绑定到实际 job_id，消费跨进程持久取消（R05）。
             self.supervisor.intent_journal = self._journal
@@ -581,22 +626,32 @@ class DurableExternalJobRunner:
                 "conflicts": [],
                 "artifact": evidence.get("outcome_artifact"),
                 "evidence": evidence,
-                "parser_version": self.parser_version,
+                "parser_version": (checkpoint.get("cursor") or {}).get("parser_version")
+                                  or self.parser_version,
                 "metrics": self._metrics_from_cursor(checkpoint.get("cursor") or {}),
             }
             return outcome
 
+        actual_parser = cursor.get("parser_version")
+        if (
+            actual_parser is not None and actual_parser != self.parser_version
+        ) or (
+            outcome.get("results") and actual_parser is None
+            and hasattr(self.supervisor.adapter, "parser_version")
+        ):
+            return self._parser_mismatch(
+                actual_parser, source="collection_cursor", persisted=current, outcome=outcome,
+            )
+
         # 冻结工件恢复且导入未完成（R3-07）：证据引用已持久化，直接补导入，
         # 不重新派生证据、不重读工作目录。
         recovery_reuse = outcome.get("recovered_from") == "frozen-artifact"
-        if recovery_reuse:
-            evidence = checkpoint.get("evidence") or {}
 
         # (1) 证据（R2-06）：优先使用解析前冻结的字节 bundle；旧协议
         # adapter（无字节级读取）退回"再读工作目录 + 与解析前快照 hash
         # 交叉核验"，不一致即拒绝最终化。
         frozen = cursor.get("frozen_evidence") if isinstance(cursor.get("frozen_evidence"), dict) else None
-        evidence: dict[str, Any] = {}
+        evidence: dict[str, Any] = dict(checkpoint.get("evidence") or {}) if recovery_reuse else {}
         evidence_inconsistent = False
         if recovery_reuse:
             pass
@@ -734,6 +789,7 @@ class DurableExternalJobRunner:
                 },
                 "evidence": evidence,
                 "outcome_status": status,
+                "outcome_error": outcome.get("error"),
                 "import_completed": False,
             }})
 
@@ -768,6 +824,7 @@ class DurableExternalJobRunner:
             },
             "evidence": evidence,
             "outcome_status": status,
+            "outcome_error": outcome.get("error"),
             "import_completed": True,
         })
         if conflicts:

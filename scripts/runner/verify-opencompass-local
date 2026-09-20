@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Actual fixed runner + deterministic localhost HTTP. No real provider calls.
+set -euo pipefail
+RUNNER_PYTHON="${1:?Usage: verify-opencompass-local /absolute/runner/bin/python}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+MOTTE_OC042_PYTHON="$RUNNER_PYTHON" uv run pytest -q \
+    tests/review/test_m2_round4_runner.py

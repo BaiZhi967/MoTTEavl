@@ -71,6 +71,11 @@ class OpenCompassJobAdapter:
         self.last_parsed: dict[str, Any] | None = None
 
     @property
+    def parser_version(self) -> str:
+        """Actual parser identity, including dataset namespace (recovery guard)."""
+        return PARSER_VERSION.replace("ceval-", f"{self.dataset}-", 1)
+
+    @property
     def default_limits(self) -> dict[str, Any]:
         """监督层读取有效 Job limits 的入口（review R2-09：默认超时生效）。"""
         return self._process.default_limits
@@ -167,17 +172,16 @@ class OpenCompassJobAdapter:
 
     def snapshot_outputs(self, handle: ExternalJobHandle) -> dict[str, Any]:
         """原始输出文件的受信清单（字节级 sha256），解析前冻结证据用（R09）。"""
-        from motte_sandbox.workspace import WorkspacePolicyError
+        import hashlib
 
         try:
-            snap = self._workspace(handle).snapshot()
             files = {
-                rel: digest for rel, digest in (snap.get("hashes") or {}).items()
-                if self._evidence_rels(rel)
+                rel: hashlib.sha256(content.encode("utf-8")).hexdigest()
+                for rel, content in self.read_output_files(handle).items()
             }
-        except (WorkspacePolicyError, OSError):
+        except (ValueError, OSError):
             return {"complete": False, "files": {}}
-        return {"complete": bool(snap.get("complete")) and bool(files), "files": files}
+        return {"complete": bool(files), "files": files}
 
     # ------------------------------------------------------------------ 采集
 
@@ -332,7 +336,7 @@ class OpenCompassJobAdapter:
                 },
             ))
         cursor["records_consumed"] = len(parsed["samples"])
-        cursor["parser_version"] = PARSER_VERSION
+        cursor["parser_version"] = parsed["parser_version"]
         cursor["ceval_native"] = parsed["native"]
         cursor["ceval_diagnostic"] = parsed["diagnostic"]
         return (results, cursor)

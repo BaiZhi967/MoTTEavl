@@ -117,7 +117,7 @@ BENCHMARK_DESCRIPTORS: dict[str, BenchmarkDescriptor] = {
         scenario_version="ceval-external@1",
         adapter_id="ceval-opencompass",
         adapter_version="1",
-        parser_version="ceval-opencompass-parser@1",
+        parser_version="ceval-opencompass-parser@2",
         splits=("val", "test", "dev"),
         default_split="val",
         default_few_shot_split="dev",
@@ -131,7 +131,7 @@ BENCHMARK_DESCRIPTORS: dict[str, BenchmarkDescriptor] = {
         scenario_version="cmmlu-external@1",
         adapter_id="cmmlu-opencompass",
         adapter_version="1",
-        parser_version="cmmlu-opencompass-parser@1",
+        parser_version="cmmlu-opencompass-parser@2",
         splits=("test", "dev"),
         default_split="test",
         default_few_shot_split="dev",
@@ -177,6 +177,7 @@ class PreparedBenchmarkDataset:
     # 平台侧评分的唯一数据来源（review R01/R03）。
     rows: tuple[dict[str, Any], ...] = ()
     dataset_splits: tuple[str, ...] = ()
+    preparation: dict[str, Any] = field(default_factory=dict)
 
 
 def _safe_logical_name(name: str) -> bool:
@@ -375,6 +376,7 @@ def prepare_external_dataset(
         gold_count=gold_count,
         rows=tuple(frozen_rows),
         dataset_splits=tuple(sorted(splits_seen)),
+        preparation={"default_split": default_split},
     )
 
 
@@ -439,6 +441,7 @@ def dataset_to_payload(dataset: PreparedBenchmarkDataset) -> dict[str, Any]:
         "row_count": dataset.row_count,
         "gold_count": dataset.gold_count,
         "dataset_splits": list(dataset.dataset_splits),
+        "preparation": dict(dataset.preparation),
         "files": [
             {
                 "logical_name": item.logical_name,
@@ -474,12 +477,14 @@ def dataset_from_payload(payload: Mapping[str, Any]) -> PreparedBenchmarkDataset
         "provenance", "unscored", "license_evidence", "row_count", "gold_count",
     }
     fields = {key: value for key, value in data.items() if key in known}
+    fields["reasons"] = tuple(fields.get("reasons") or ())
     return PreparedBenchmarkDataset(
         **fields,
         files=files,
         manifest=manifest,
         rows=rows,
         dataset_splits=tuple(data.get("dataset_splits") or ()),
+        preparation=dict(data.get("preparation") or {}),
     )
 
 
@@ -529,14 +534,15 @@ class BenchmarkCatalog:
             payload = dataset_to_payload(dataset)
             payload["created_at"] = datetime.now(UTC).isoformat()
             try:
-                self._store.put_immutable(payload)
+                receipt = self._store.put_immutable(payload)
             except ValueError as error:
                 raise ValueError(
                     "DATASET_REVISION_REUSED: benchmark "
                     f"{benchmark_id}@{dataset.dataset_revision} was already "
-                    "prepared with different file content; use a new dataset "
+                    "prepared with different content or preparation semantics; use a new dataset "
                     "revision instead of rewriting"
                 ) from error
+            dataset = dataset_from_payload(receipt["record"])
         self._entry(benchmark_id).dataset = dataset
 
     def dataset(self, benchmark_id: str) -> PreparedBenchmarkDataset | None:

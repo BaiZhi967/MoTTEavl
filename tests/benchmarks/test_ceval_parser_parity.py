@@ -64,7 +64,7 @@ def test_parser_native_diagnostic_parity():
     assert parsed["native"]["empty_prediction_ratio"] == pytest.approx(
         expected["empty_prediction_ratio"],
     )
-    assert parsed["parser_version"].startswith("ceval-opencompass-parser@1")
+    assert parsed["parser_version"] == "ceval-opencompass-parser@2"
     assert "b661bcdf" in parsed["migrated_from"]
 
 

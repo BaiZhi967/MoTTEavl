@@ -10,7 +10,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 
 from .audit_store import _pass_record
-from .benchmark_datasets import RevisionConflictError
+from .benchmark_datasets import RevisionConflictError, _content_identity, _record_id, _validate
 from .integrity import (
     ATTEMPT_TRANSITIONS,
     COMMAND_TRANSITIONS,
@@ -879,28 +879,29 @@ class PgBenchmarkDatasets:
         return deepcopy(stored)
 
     def put_immutable(self, record: dict[str, Any]) -> dict[str, Any]:
-        """同 revision 同内容幂等、异内容冲突（review R3-11，单事务）。"""
-        import hashlib as _hashlib
-
-        stored = deepcopy(record)
+        """原子首次插入；冲突等待提交后比较冻结语义，不覆盖既有 revision。"""
+        stored = _validate(record)
         benchmark_id = str(stored.get("benchmark_id"))
         dataset_revision = str(stored.get("dataset_revision"))
+        stored["id"] = _record_id(benchmark_id, dataset_revision)
         stored.setdefault("created_at", _utc_now())
         created_at = str(stored.get("created_at"))
-        identity = _hashlib.sha256(
-            json.dumps(
-                sorted(
-                    (str(item.get("logical_name")), str(item.get("sha256")))
-                    for item in (stored.get("files") or []) if isinstance(item, dict)
-                ), sort_keys=True,
-            ).encode("utf-8"),
-        ).hexdigest()
+        identity = _content_identity(stored)
         message = (
             "benchmark dataset revision already exists with different content: "
             + benchmark_id + "@" + dataset_revision
         )
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
+                # 行不存在时 SELECT FOR UPDATE 无锁可取。唯一索引仲裁首写；
+                # DO NOTHING 等待竞争事务结束，下一条 READ COMMITTED 查询可见它。
+                cursor.execute(
+                    "INSERT INTO benchmark_datasets(benchmark_id, dataset_revision, payload, created_at) VALUES (%s, %s, %s, %s) ON CONFLICT (benchmark_id, dataset_revision) DO NOTHING RETURNING payload",  # noqa: E501
+                    (benchmark_id, dataset_revision, Json(stored), created_at),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    return {"status": "created", "record": _as_payload(row[0])}
                 cursor.execute(
                     "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s AND dataset_revision = %s FOR UPDATE",  # noqa: E501
                     (benchmark_id, dataset_revision),
@@ -908,22 +909,9 @@ class PgBenchmarkDatasets:
                 row = cursor.fetchone()
                 if row is not None:
                     existing = _as_payload(row[0])
-                    existing_identity = _hashlib.sha256(
-                        json.dumps(
-                            sorted(
-                                (str(item.get("logical_name")), str(item.get("sha256")))
-                                for item in (existing.get("files") or []) if isinstance(item, dict)
-                            ), sort_keys=True,
-                        ).encode("utf-8"),
-                    ).hexdigest()
-                    if existing_identity == identity:
+                    if _content_identity(existing) == identity:
                         return {"status": "identical", "record": existing}
-                    raise RevisionConflictError(message)
-                cursor.execute(
-                    "INSERT INTO benchmark_datasets(benchmark_id, dataset_revision, payload, created_at) VALUES (%s, %s, %s, %s)",  # noqa: E501
-                    (benchmark_id, dataset_revision, Json(stored), created_at),
-                )
-        return {"status": "created", "record": deepcopy(stored)}
+                raise RevisionConflictError(message)
 
     def get(self, benchmark_id: str, dataset_revision: str) -> dict[str, Any] | None:
         with _connect(self._dsn) as connection:

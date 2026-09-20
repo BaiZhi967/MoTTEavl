@@ -15,13 +15,18 @@
 #     .motte-job-complete 完成标记（R2-10）。
 #
 # 固定环境（部署到 /opt/motte-runner，见 docs/operations/ceval.md）：
-#   - pinned 解释器同时安装 opencompass==0.4.2 与 motte-benchmark-runtime；
+#   - pinned 解释器同时安装 opencompass==0.4.2 与独立桥接模块；
 #   - 凭据由 Runner 环境按引用注入（os.environ），命令行/配置不落明文。
 set -euo pipefail
 
 WORK_DIR="${MOTTE_WORK_DIR:?MOTTE_WORK_DIR is required}"
 
-RUNNER_ROOT="${MOTTE_RUNNER_ROOT:-/opt/motte-runner}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_RUNNER_ROOT="/opt/motte-runner"
+if [ -x "$SCRIPT_DIR/python" ]; then
+    DEFAULT_RUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+RUNNER_ROOT="${MOTTE_RUNNER_ROOT:-$DEFAULT_RUNNER_ROOT}"
 PYTHON_BIN="${MOTTE_RUNNER_PYTHON:-$RUNNER_ROOT/bin/python}"
 if [ ! -x "$PYTHON_BIN" ]; then
     echo "pinned runner environment missing: $PYTHON_BIN" >&2
@@ -31,6 +36,7 @@ if [ ! -x "$PYTHON_BIN" ]; then
     exit 4
 fi
 
+export MOTTE_RUNNER_PYTHON="$PYTHON_BIN"
 exec "$PYTHON_BIN" -m motte_benchmark.opencompass.entry \
     --launch-token "${MOTTE_LAUNCH_TOKEN:-}" \
     --job-id "${MOTTE_JOB_ID:-}" \

@@ -3,8 +3,8 @@
 准备结果（样本清单、逐行内容、来源治理与许可证据）以
 ``(benchmark_id, dataset_revision)`` 为主键落库：API/CLI/Worker 共享同一
 存储，重启或第二个 API 实例不再把 ready 数据降回 unprepared。payload 由
-SDK 侧的序列化函数生成（``PreparedBenchmarkDataset`` 的完整 dump），本
-模块只做哑 JSON 存取。
+SDK 侧的序列化函数生成（``PreparedBenchmarkDataset`` 的完整 dump）；
+不可变写入比较完整准备语义，而不只比较原始文件 hash。
 
 SQL 约定：语句一律为调用点的单行字符串字面量并以占位符绑定；绑定值只
 使用普通局部量（``.get()``/``str()``/``json.dumps()``/``row[i]``）。
@@ -56,13 +56,19 @@ class RevisionConflictError(ValueError):
 
 
 def _content_identity(record: dict[str, Any]) -> str:
-    """(benchmark, revision) 的内容身份：排序后的 (logical_name, sha256)。"""
-    files = record.get("files") or []
-    pairs = sorted(
-        (str(item.get("logical_name")), str(item.get("sha256")))
-        for item in files if isinstance(item, dict)
+    """冻结准备结果的完整语义身份，排除存储生成的 ID 和时间戳。
+
+    原文件 hash 无法区分 default_split、解析版本与归一化行的变化。
+    仅文件清单顺序无语义；样本/行顺序参与选择，必须保留。
+    """
+    semantic = {key: value for key, value in record.items() if key not in {"id", "created_at"}}
+    # 旧记录无该字段；反序列化后的 {} 同样表示未知，不能因往返新增空值而冲突。
+    # 未知仍不等同于已冻结的 {"default_split": ...}，不猜测旧准备参数。
+    semantic.setdefault("preparation", {})
+    semantic["files"] = sorted(
+        record.get("files") or [], key=lambda item: json.dumps(item, sort_keys=True),
     )
-    return json.dumps(pairs, sort_keys=True)
+    return json.dumps(semantic, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class MemoryBenchmarkDatasets:

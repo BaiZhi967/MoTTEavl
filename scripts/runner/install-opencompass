@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Isolated 0.4.2 runner; does not install OpenCompass in the API environment.
+set -euo pipefail
+
+RUNNER_DIR="${1:?Usage: install-opencompass /absolute/runner/environment}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ ! -x "$RUNNER_DIR/bin/python" ]; then
+    uv venv --python 3.10.20 "$RUNNER_DIR"
+fi
+"$RUNNER_DIR/bin/python" -c 'import sys; assert sys.version_info[:2] == (3, 10)'
+uv pip sync --python "$RUNNER_DIR/bin/python" "$SCRIPT_DIR/opencompass-0.4.2-py310.lock"
+# The API distribution requires Python >=3.12. Only the three standalone bridge
+# modules run on 3.10; do not install the API/SDK or bypass its Python constraint.
+"$RUNNER_DIR/bin/python" - "$REPO_ROOT" <<'PY'
+import shutil
+import sys
+import sysconfig
+from pathlib import Path
+
+source = Path(sys.argv[1]) / 'packages/benchmark-runtime/motte_benchmark'
+target = Path(sysconfig.get_path('purelib')) / 'motte_benchmark'
+(target / 'opencompass').mkdir(parents=True, exist_ok=True)
+for name in ('__init__.py', 'opencompass/__init__.py', 'opencompass/entry.py',
+             'opencompass/upstream.py'):
+    shutil.copy2(source / name, target / name)
+PY
+cp "$SCRIPT_DIR/opencompass-entry" "$RUNNER_DIR/bin/opencompass-entry"
+chmod +x "$RUNNER_DIR/bin/opencompass-entry"
+# Warm the public tokenizer asset at install time. Runtime integration sets HF
+# offline and needs no model download or external provider request.
+"$RUNNER_DIR/bin/python" -c 'import tiktoken; tiktoken.encoding_for_model("gpt-4")'
+"$RUNNER_DIR/bin/python" -c 'from importlib.metadata import version; assert version("opencompass") == "0.4.2"; from motte_benchmark.opencompass.upstream import RuntimeOpenAI, LocalMCQDataset'

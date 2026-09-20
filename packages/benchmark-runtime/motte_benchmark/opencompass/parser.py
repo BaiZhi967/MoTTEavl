@@ -24,7 +24,9 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-PARSER_VERSION = "ceval-opencompass-parser@1"
+# v2 accepts upstream infer-only artifacts without inventing native accuracy,
+# and refuses multi-model bundles instead of silently selecting a model.
+PARSER_VERSION = "ceval-opencompass-parser@2"
 MIGRATED_FROM = (
     "llm_agent__evaluation_platform@b661bcdf83e1c3dfb8d6062ee78817d249e86a4c "
     "packages/benchmark-adapters/src/evalstudio_benchmark_adapters/opencompass.py"
@@ -507,12 +509,18 @@ def parse_opencompass_files(
     """
     rels = sorted(files)
     _, results_by_exp, predictions_by_exp = _split_layout(rels, base_parts, dataset)
-    resolved_experiment = _resolve_experiment(results_by_exp, experiment)
+    resolved_experiment = _resolve_experiment({**predictions_by_exp, **results_by_exp}, experiment)
     results_rels = sorted(results_by_exp.get(resolved_experiment) or [])
     prediction_rels = sorted(predictions_by_exp.get(resolved_experiment) or [])
-    if not results_rels:
+    if not results_rels and not prediction_rels:
         raise CevalParserError(
             f"missing-results: 未找到 OpenCompass 结果文件: results/*/{dataset}-*.json"
+        )
+    model_dirs = {PurePosixPath(rel).parent.name for rel in results_rels + prediction_rels}
+    if len(model_dirs) > 1:
+        raise CevalParserError(
+            "ambiguous-model: a single-model Job cannot merge output models: "
+            + ", ".join(sorted(model_dirs)),
         )
 
     def _subject_of(rel: str) -> str:
@@ -528,22 +536,29 @@ def parse_opencompass_files(
     prediction_files: dict[str, str] = {}
     for rel in prediction_rels:
         if isinstance(_read(rel), dict):
-            prediction_files.setdefault(_subject_of(rel), rel)
+            subject = _subject_of(rel)
+            if subject in prediction_files:
+                raise CevalParserError(f"ambiguous-model: duplicate predictions for {subject}")
+            prediction_files[subject] = rel
 
     samples: list[dict[str, Any]] = []
     per_subject: dict[str, float] = {}
     detail_source: dict[str, str] = {}
     native: dict[str, Any] = {}
     conclusion_overrides = 0
-    for rel in results_rels:
-        subject = _subject_of(rel)
-        doc = _read(rel)
+    result_files = {_subject_of(rel): rel for rel in results_rels}
+    if len(result_files) != len(results_rels):
+        raise CevalParserError("ambiguous-model: duplicate results for the same subject")
+    for subject in sorted(set(result_files) | set(prediction_files)):
+        rel = result_files.get(subject)
+        doc = _read(rel) if rel is not None else {}
         if not isinstance(doc, dict):
             raise CevalParserError(
                 f"json-parse: 结果文件必须是对象: {PurePosixPath(rel).name}"
             )
-        acc = float(doc.get("accuracy", 0.0)) / 100.0
-        native[f"{dataset}_{subject}/accuracy"] = acc
+        acc = float(doc["accuracy"]) / 100.0 if "accuracy" in doc else None
+        if acc is not None:
+            native[f"{dataset}_{subject}/accuracy"] = acc
         rows = _sample_rows_from_details(doc.get("details"))
         source_kind = "results_details" if rows else None
         if not rows:
@@ -574,13 +589,17 @@ def parse_opencompass_files(
                     })
                 source_kind = "predictions_fallback"
         if rows:
-            per_subject[subject] = round(
-                sum(1 for row in rows if row["correct"]) / len(rows), 6,
-            )
+            # Infer-only output intentionally has no target gold. Do not
+            # manufacture native or diagnostic accuracy before platform scoring.
+            if all(row.get("gold") is not None for row in rows):
+                per_subject[subject] = round(
+                    sum(1 for row in rows if row["correct"]) / len(rows), 6,
+                )
             detail_source[subject] = source_kind or "results_details"
         else:
             # 仅聚合：保留 native 聚合与缺失标记，不伪造样本（M2-A03）。
-            per_subject[subject] = acc
+            if acc is not None:
+                per_subject[subject] = acc
             detail_source[subject] = "aggregate_only_native_only"
         conclusion_overrides += sum(
             1 for row in rows if row.get("official_prediction") is not None
@@ -615,7 +634,7 @@ def parse_opencompass_files(
     native["sample_detail_source"] = sorted(set(detail_source.values()))
 
     return {
-        "parser_version": PARSER_VERSION,
+        "parser_version": PARSER_VERSION.replace("ceval-", f"{dataset}-", 1),
         "migrated_from": MIGRATED_FROM,
         "runner_version_pin": RUNNER_VERSION_PIN,
         "dataset": dataset,
@@ -689,10 +708,12 @@ def parse_opencompass_results(
             )
             if isinstance(pointer, dict) and isinstance(pointer.get("experiment"), str):
                 experiment = pointer["experiment"]
-        resolved_experiment = _resolve_experiment(results_by_exp, experiment)
+        resolved_experiment = _resolve_experiment(
+            {**predictions_by_exp, **results_by_exp}, experiment,
+        )
         wanted = sorted(set(results_by_exp.get(resolved_experiment) or []))
         wanted += sorted(set(predictions_by_exp.get(resolved_experiment) or []))
-        if not results_by_exp.get(resolved_experiment):
+        if not wanted:
             raise CevalParserError(
                 f"missing-results: 未找到 OpenCompass 结果文件: results/*/{dataset}-*.json"
             )

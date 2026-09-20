@@ -18,6 +18,7 @@ import pytest
 
 from motte_benchmark.fake_runner import self_argv
 from motte_benchmark.opencompass.adapter import CevalJobAdapter
+from motte_benchmark.opencompass.parser import PARSER_VERSION
 from motte_benchmark.opencompass.entry import (
     export_subject_files,
     main as entry_main,
@@ -136,14 +137,15 @@ def test_r3_01_generated_config_resolves_and_uses_pinned_shapes(tmp_path, monkey
     assert "CevalDataset" not in source and "CmmlUDataset" not in source
     # 0.4.2 契约：数据集/模型项 type=<导入的类对象>；端点参数 openai_api_base。
     assert "type=LocalMCQDataset," in source
-    assert "type=OpenAI," in source
-    assert "openai_api_base=" in source and "url=" not in source
+    assert "type=RuntimeOpenAI," in source
+    assert "base_url_env=None" in source  # retain upstream endpoint when no ref
     # 凭据引用经 os.environ 解析；明文不落盘。
     monkeypatch.setenv("MOTTE_R3_KEY", "synthetic-key")
     assert "os.environ" in source and "MOTTE_R3_KEY" in source
     assert "synthetic-key" not in source
     # 本地数据集的 load 样板与导出文件契约一致。
-    assert "def load(path, few_shot_file=None):" in source
+    assert "path=" in source and "infer_cfg=" in source
+    assert "data_file=" not in source and "few_shot_file=" not in source
     rows = [json.loads(line) for line in data_files["logic"].read_text().splitlines()]
     assert [row["id"] for row in rows] == ["logic-1", "logic-2"]
 
@@ -507,7 +509,7 @@ def test_r3_07_import_crash_recovers_from_frozen_artifact_after_cleanup(tmp_path
             argv=self_argv(), extra_env={"MOTTE_FAKE_MODE": "opencompass_ok"},
         ), poll_interval_seconds=0.05),
         jobs, artifacts=artifacts, work_root=tmp_path / "jobs",
-        parser_version="ceval-opencompass-parser@1",
+        parser_version=PARSER_VERSION,
     )
     recovery.bind_service(service)
     outcome = recovery(service.store.runs.get(run["id"]))
@@ -552,7 +554,7 @@ def test_r3_08_over_budget_evidence_refuses_finalization(tmp_path, monkeypatch):
     supervisor = ExternalJobSupervisor(adapter, poll_interval_seconds=0.05)
     runner = DurableExternalJobRunner(
         supervisor, jobs, artifacts=artifacts, work_root=tmp_path / "jobs",
-        parser_version="ceval-opencompass-parser@1",
+        parser_version=PARSER_VERSION,
     )
     runner.bind_service(service)
     handle = {
