@@ -334,6 +334,7 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         PgInvocations,
         PgScoreSets,
         PgScoringPasses,
+        PgTrials,
     )
 
     normalized = normalize_dsn(dsn)
@@ -353,4 +354,5 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         external_jobs=PgExternalJobs(normalized),
         benchmark_datasets=PgBenchmarkDatasets(normalized),
         baselines=PgBaselines(normalized),
+        trials=PgTrials(normalized),
     )

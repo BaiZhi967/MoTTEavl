@@ -18,11 +18,11 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from motte_benchmark.trusted import TrustedDir
 
 # v2 accepts upstream infer-only artifacts without inventing native accuracy,
 # and refuses multi-model bundles instead of silently selecting a model.
@@ -269,108 +269,15 @@ def _sample_rows_from_details(details: object) -> list[dict]:
     return rows
 
 
-class _TrustedDir:
-    """fd 锚定的受信目录读取（review R06）。
+class _TrustedDir(TrustedDir):
+    """受信目录读取（review R06）：异常类型保持 ``CevalParserError``。
 
-    信任边界固定在调用方给定的目录（原 Job 工作目录），沿目录描述符逐组件
-    ``O_NOFOLLOW`` 打开；symlink 不进入受信清单（根目录本身是 symlink 也
-    拒绝）。文件读取先 ``fstat`` 校验大小，再读全量。
+    实现已抽到 ``motte_benchmark.trusted.TrustedDir``，与 Harbor 任务准备
+    共用同一套 fd 锚定与 ``O_NOFOLLOW`` 语义。
     """
 
     def __init__(self, path: Path) -> None:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            self._fd = os.open(path, flags)
-        except OSError as error:
-            raise CevalParserError(
-                f"path-escape: trusted root rejected: {path}: {error}",
-            ) from error
-
-    def __enter__(self) -> _TrustedDir:
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        self.close()
-
-    def close(self) -> None:
-        if self._fd >= 0:
-            os.close(self._fd)
-            self._fd = -1
-
-    def list_files(self) -> tuple[list[str], list[str]]:
-        """受信目录下的常规文件与被排除的 symlink（posix 相对路径）。
-
-        symlink 不进入受控清单，但调用方对输出边界内的 symlink 显式拒绝
-        （防止静默丢结果/篡改聚合），见 ``_reject_symlinks_under``。
-        """
-        out: list[str] = []
-        symlinks: list[str] = []
-        self._walk(self._fd, "", out, symlinks)
-        return (sorted(out), sorted(symlinks))
-
-    def _walk(
-        self, dir_fd: int, prefix: str, out: list[str], symlinks: list[str],
-    ) -> None:
-        for name in os.listdir(dir_fd):
-            info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-            if stat.S_ISLNK(info.st_mode):
-                symlinks.append(prefix + name)
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-                child = os.open(name, flags, dir_fd=dir_fd)
-                try:
-                    self._walk(child, prefix + name + "/", out, symlinks)
-                finally:
-                    os.close(child)
-            elif stat.S_ISREG(info.st_mode):
-                out.append(prefix + name)
-
-    def read_bytes(self, rel: str, *, max_bytes: int) -> bytes:
-        parts = [part for part in PurePosixPath(rel).parts if part]
-        if not parts:
-            raise CevalParserError(f"path-escape: not a file: {rel}")
-        dir_fd = os.dup(self._fd)
-        try:
-            for part in parts[:-1]:
-                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-                try:
-                    child = os.open(part, flags, dir_fd=dir_fd)
-                except OSError as error:
-                    raise CevalParserError(
-                        f"path-escape: component rejected: {part}: {error}",
-                    ) from error
-                os.close(dir_fd)
-                dir_fd = child
-            file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            try:
-                file_fd = os.open(parts[-1], file_flags, dir_fd=dir_fd)
-            except OSError as error:
-                raise CevalParserError(
-                    f"path-escape: file rejected: {parts[-1]}: {error}",
-                ) from error
-        finally:
-            os.close(dir_fd)
-        try:
-            info = os.fstat(file_fd)
-            if not stat.S_ISREG(info.st_mode):
-                raise CevalParserError(f"path-escape: not a regular file: {rel}")
-            if info.st_size > max_bytes:
-                raise CevalParserError(
-                    f"file-size: {rel} is {info.st_size} bytes > limit {max_bytes}"
-                )
-            chunks: list[bytes] = []
-            while True:
-                chunk = os.read(file_fd, 1 << 16)
-                if not chunk:
-                    return b"".join(chunks)
-                chunks.append(chunk)
-                if sum(len(item) for item in chunks) > max_bytes:
-                    raise CevalParserError(
-                        f"file-size: {rel} exceeds limit {max_bytes} while reading"
-                    )
-        finally:
-            os.close(file_fd)
+        super().__init__(path, error_factory=CevalParserError)
 
 
 EXPERIMENT_POINTER = "experiment.json"

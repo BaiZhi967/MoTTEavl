@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { EVAL_SUITES, suiteForRun, suiteRoutes } from "../src/evalTypes/registry";
 
 describe("evalTypes 注册表", () => {
-  it("注册六个套件且 id 唯一", () => {
+  it("注册七个套件且 id 唯一", () => {
     expect(EVAL_SUITES.map((suite) => suite.id)).toEqual([
-      "agent-tasks", "cmmlu", "ceval", "gsm8k", "direct-llm", "replay",
+      "agent-tasks", "cmmlu", "terminal-bench", "ceval", "gsm8k", "direct-llm", "replay",
     ]);
+    expect(new Set(EVAL_SUITES.map((suite) => suite.id)).size).toBe(EVAL_SUITES.length);
   });
 
   it("按 run 归属匹配套件", () => {
@@ -21,6 +22,20 @@ describe("evalTypes 注册表", () => {
       manifest: { execution: { backend_id: "external-benchmark" } },
     })?.id).toBe("cmmlu");
     expect(suiteForRun({ scenario_version: "unknown@9" })).toBeNull();
+  });
+
+  it("Terminal-Bench（Harbor）优先于 ceval 的 external-benchmark 兜底", () => {
+    expect(suiteForRun({ scenario_version: "terminal-bench-harbor@1" })?.id).toBe("terminal-bench");
+    // Harbor 运行与 ceval 共用 external-benchmark 后端时仍归 Harbor（注册顺序保证）
+    expect(suiteForRun({
+      scenario_version: "terminal-bench-harbor@1",
+      manifest: { execution: { backend_id: "external-benchmark" } },
+    })?.id).toBe("terminal-bench");
+    expect(suiteForRun({
+      scenario_version: "harbor-job@1",
+      manifest: { execution: { backend_id: "harbor-external" } },
+    })?.id).toBe("terminal-bench");
+    expect(EVAL_SUITES.find((suite) => suite.id === "terminal-bench")?.label).toContain("Terminal-Bench");
   });
 
   it("两个套件的运行都带 benchmark_provenance，靠 provenance.suite 区分", () => {

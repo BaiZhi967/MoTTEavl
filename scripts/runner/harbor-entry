@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# MoTTEavl Harbor Runner 入口（固定环境 wrapper；M3-T06/T07）。
+#
+# 契约（与 motte_benchmark.process.ProcessJobAdapter 对齐）：
+#   - 环境变量 MOTTE_WORK_DIR      : 受控工作目录（prepare 阶段创建）；
+#   - 环境变量 MOTTE_LAUNCH_TOKEN / MOTTE_JOB_ID / MOTTE_RUN_ID : 启动身份。
+#     token 保留在最终进程 argv 里，跨实例身份核验（argv 匹配）在 Worker
+#     重启后仍可认领活进程；桥接层消费身份，绝不透传给 Harbor。
+#   - 环境变量 MOTTE_TASK_ROOT     : 受控任务数据根（Harbor 从这里解析任务）。
+#   - $MOTTE_WORK_DIR/harbor/config.json + harbor/plan.json : 平台冻结配置。
+#   - 桥接（motte_benchmark.harbor.entry）负责：用固定版本 Harbor 构造并校验
+#     原生 JobConfig、运行 Job、写 harbor/job-location.json 与原子完成标记。
+#
+# 固定环境（部署到 /opt/motte-runner，见 docs/operations/terminal-bench.md）：
+#   - pinned 解释器安装 harbor==0.23.0 与桥接模块；
+#   - 凭据由 Runner 环境按引用注入（os.environ），命令行/配置不落明文。
+set -euo pipefail
+
+WORK_DIR="${MOTTE_WORK_DIR:?MOTTE_WORK_DIR is required}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEFAULT_RUNNER_ROOT="/opt/motte-runner"
+if [ -x "$SCRIPT_DIR/python" ]; then
+    DEFAULT_RUNNER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
+RUNNER_ROOT="${MOTTE_RUNNER_ROOT:-$DEFAULT_RUNNER_ROOT}"
+PYTHON_BIN="${MOTTE_RUNNER_PYTHON:-$RUNNER_ROOT/bin/python}"
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "pinned runner environment missing: $PYTHON_BIN" >&2
+    MARKER="$WORK_DIR/.motte-job-complete"
+    printf '{"exit_code": 4, "completed": true, "detail": "pinned runner environment missing"}\n' \
+        > "$MARKER.partial"
+    mv "$MARKER.partial" "$MARKER"
+    exit 4
+fi
+
+export MOTTE_RUNNER_PYTHON="$PYTHON_BIN"
+exec "$PYTHON_BIN" -m motte_benchmark.harbor.entry \
+    --launch-token "${MOTTE_LAUNCH_TOKEN:-}" \
+    --job-id "${MOTTE_JOB_ID:-}" \
+    --run-id "${MOTTE_RUN_ID:-}"

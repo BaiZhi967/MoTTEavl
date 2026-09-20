@@ -4554,6 +4554,237 @@
         "summary": "Gsm8K Run"
       }
     },
+    "/api/v1/benchmarks/terminal-bench": {
+      "get": {
+        "operationId": "terminal_bench_overview_api_v1_benchmarks_terminal_bench_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Terminal Bench Overview"
+      }
+    },
+    "/api/v1/benchmarks/terminal-bench/preflight": {
+      "get": {
+        "operationId": "terminal_bench_preflight_api_v1_benchmarks_terminal_bench_preflight_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "model",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "n_trials",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "N Trials",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "task_keys",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Task Keys",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "default": "oracle",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_version",
+            "required": false,
+            "schema": {
+              "default": "1.0.0",
+              "title": "Agent Version",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dataset_revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dataset Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Terminal Bench Preflight"
+      }
+    },
+    "/api/v1/benchmarks/terminal-bench/prepare": {
+      "post": {
+        "description": "只读准备受控任务根目录（不执行任务包脚本、不启动任务/模型）。",
+        "operationId": "terminal_bench_prepare_api_v1_benchmarks_terminal_bench_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Terminal Bench Prepare"
+      }
+    },
+    "/api/v1/benchmarks/terminal-bench/runs": {
+      "post": {
+        "operationId": "terminal_bench_run_api_v1_benchmarks_terminal_bench_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Terminal Bench Run"
+      }
+    },
+    "/api/v1/benchmarks/terminal-bench/tasks": {
+      "get": {
+        "operationId": "terminal_bench_tasks_api_v1_benchmarks_terminal_bench_tasks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset_revision",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dataset Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Terminal Bench Tasks"
+      }
+    },
     "/api/v1/comparisons": {
       "get": {
         "operationId": "compare_runs_api_v1_comparisons_get",
@@ -6251,6 +6482,135 @@
           }
         },
         "summary": "List Scoring Passes"
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks": {
+      "get": {
+        "operationId": "run_terminal_bench_tasks_api_v1_runs__run_id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Terminal Bench Tasks"
+      }
+    },
+    "/api/v1/runs/{run_id}/tasks/{task_key}/trials": {
+      "get": {
+        "operationId": "run_terminal_bench_task_trials_api_v1_runs__run_id__tasks__task_key__trials_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_key",
+            "required": true,
+            "schema": {
+              "title": "Task Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Terminal Bench Task Trials"
+      }
+    },
+    "/api/v1/runs/{run_id}/trials/{trial_id}": {
+      "get": {
+        "operationId": "run_terminal_bench_trial_api_v1_runs__run_id__trials__trial_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "trial_id",
+            "required": true,
+            "schema": {
+              "title": "Trial Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Terminal Bench Trial"
       }
     },
     "/api/v1/scenarios": {

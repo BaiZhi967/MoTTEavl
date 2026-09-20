@@ -1,0 +1,9 @@
+{
+ "job_id": "fbf782d7-c174-4947-abb1-84524c9516f0",
+ "task": {
+  "path": "<HOST_PATH>",
+  "source": "tasks"
+ },
+ "trial_name": "hello-fail__hxJUsQg",
+ "trials_dir": "<HOST_PATH>"
+}

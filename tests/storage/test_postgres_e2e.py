@@ -43,13 +43,19 @@ def migrated_dsn(dsn):
     from motte_storage.migrations import revision_ids
 
     versions = Path(__file__).resolve().parents[2] / "migrations" / "versions"
-    modules = []
-    for version in reversed(revision_ids()):  # 新版本先回退
-        version_file = versions / f"{version}.py"
-        spec = importlib.util.spec_from_file_location(version, version_file)
+    # 文件名不一定等于 revision id（例如 0007_benchmark_datasets_and_baselines）；
+    # 按模块内声明的 revision 索引，升级/降级顺序以 revision_ids() 为准。
+    by_revision: dict[str, object] = {}
+    for version_file in sorted(versions.glob("*.py")):
+        spec = importlib.util.spec_from_file_location(version_file.stem, version_file)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        modules.append(module)
+        by_revision[str(module.revision)] = module
+    modules = []
+    for version in reversed(revision_ids()):  # 新版本先回退
+        if version not in by_revision:
+            raise AssertionError(f"migration module missing for revision {version}")
+        modules.append(by_revision[version])
 
     with psycopg.connect(dsn) as connection:
         with connection.cursor() as cursor:

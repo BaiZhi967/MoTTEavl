@@ -400,14 +400,15 @@ def validate_external_job_manifest(manifest: dict[str, Any]) -> None:
             if not str(profile.get(name) or "").strip()
         )
     runner_config = external.get("runner_config")
-    if (
-        not isinstance(runner_config, dict)
-        or not isinstance(runner_config.get("cases"), list)
-        or not runner_config.get("cases")
+    # Runner 必须拿到可消费的冻结输入（review R01）：没有逐题/逐 Trial
+    # 配置的外部 Run 在创建层拒绝，不留到分派时空跑。Harbor 形态用
+    # ``trials``（事前冻结的 TrialPlan）而不是逐题 ``cases``。
+    if not isinstance(runner_config, dict) or not (
+        isinstance(runner_config.get("cases"), list) and runner_config.get("cases")
+    ) and not (
+        isinstance(runner_config.get("trials"), list) and runner_config.get("trials")
     ):
-        # Runner 必须拿到可消费的冻结输入（review R01）：没有逐题配置的
-        # 外部 Run 在创建层拒绝，不留到分派时空跑。
-        missing.append("runner_config.cases")
+        missing.append("runner_config.cases|trials")
     if missing:
         raise ExecutionBackendError(
             "EXTERNAL_JOB_VERSION_REQUIRED",

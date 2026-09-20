@@ -1,0 +1,46 @@
+{
+ "finished_at": "2026-09-20T08:18:09.374398",
+ "id": "f7642816-01c9-40ce-ad3f-953bc04e4760",
+ "n_total_trials": 2,
+ "started_at": "2026-09-20T08:17:51.335191",
+ "stats": {
+  "cost_usd": null,
+  "evals": {
+   "oracle__tasks-errors": {
+    "exception_stats": {
+     "AgentTimeoutError": [
+      "agent-timeout__wo62aM7"
+     ],
+     "VerifierTimeoutError": [
+      "verifier-timeout__8wiDJKo"
+     ]
+    },
+    "metrics": [
+     {
+      "mean": 0.0
+     }
+    ],
+    "n_errors": 2,
+    "n_trials": 1,
+    "pass_at_k": {},
+    "reward_stats": {
+     "reward": {
+      "0.0": [
+       "agent-timeout__wo62aM7"
+      ]
+     }
+    }
+   }
+  },
+  "n_cache_tokens": null,
+  "n_cancelled_trials": 0,
+  "n_completed_trials": 2,
+  "n_errored_trials": 2,
+  "n_input_tokens": null,
+  "n_output_tokens": null,
+  "n_pending_trials": 0,
+  "n_retries": 0,
+  "n_running_trials": 0
+ },
+ "updated_at": "2026-09-20T08:18:09.374398"
+}

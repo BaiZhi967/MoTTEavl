@@ -1,0 +1,18 @@
+{
+ "dataset_revision": "fixtures-2026-09-20",
+ "harbor_version": "0.23.0",
+ "planned_trial_count": 4,
+ "schema": "motte-harbor-config@1",
+ "tasks": [
+  {
+   "normalized_relative_path": "tasks/agent-timeout",
+   "source_id": "motte-harbor-fixtures",
+   "task_key": "sha256:4f8e291f02e4819d0e7412ea9a9f5c16718f5b14b13eb554827a27112497f3af"
+  },
+  {
+   "normalized_relative_path": "tasks/verifier-timeout",
+   "source_id": "motte-harbor-fixtures",
+   "task_key": "sha256:e6fc68e4f89f2e93a35092c191fb2605ccc30ab5e01b2e45ff55b22e5a36164a"
+  }
+ ]
+}

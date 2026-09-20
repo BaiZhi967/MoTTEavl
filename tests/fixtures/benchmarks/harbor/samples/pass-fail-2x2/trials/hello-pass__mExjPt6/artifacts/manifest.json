@@ -1,0 +1,10 @@
+[
+ {
+  "destination": "artifacts/logs/artifacts",
+  "exclude": [],
+  "service": null,
+  "source": "/logs/artifacts",
+  "status": "empty",
+  "type": "directory"
+ }
+]

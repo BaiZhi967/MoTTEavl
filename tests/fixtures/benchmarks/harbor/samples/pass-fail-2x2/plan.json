@@ -1,0 +1,18 @@
+{
+ "dataset_revision": "fixtures-2026-09-20",
+ "harbor_version": "0.23.0",
+ "planned_trial_count": 4,
+ "schema": "motte-harbor-config@1",
+ "tasks": [
+  {
+   "normalized_relative_path": "tasks/hello-pass",
+   "source_id": "motte-harbor-fixtures",
+   "task_key": "sha256:ebd14438a38a351c5c069f2d72e3b582f0d195f54626d195971eeff6fb8d2e96"
+  },
+  {
+   "normalized_relative_path": "tasks/hello-fail",
+   "source_id": "motte-harbor-fixtures",
+   "task_key": "sha256:d76d0d50d94cf87cb1a71144ab3f9eb05bb716d9d944aced798830ba947908fa"
+  }
+ ]
+}

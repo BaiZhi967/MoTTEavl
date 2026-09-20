@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# 独立固定的 Harbor Runner 环境（不把 Harbor 装进 API workspace）。
+#
+# 用法：scripts/runner/install-harbor /absolute/runner/environment
+#
+# 固定版本：harbor==0.23.0（Apache-2.0，requires-python >=3.12）。
+# 与 API 环境共用 3.12，但依赖树完全隔离；桥接模块单独拷贝过去，
+# 避免 Runner 装上整棵平台依赖。
+set -euo pipefail
+
+RUNNER_DIR="${1:?Usage: install-harbor /absolute/runner/environment}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+if [ ! -x "$RUNNER_DIR/bin/python" ]; then
+    uv venv --python 3.12 "$RUNNER_DIR"
+fi
+"$RUNNER_DIR/bin/python" -c 'import sys; assert sys.version_info[:2] == (3, 12)'
+uv pip sync --python "$RUNNER_DIR/bin/python" "$SCRIPT_DIR/harbor-0.23.0-py312.lock"
+"$RUNNER_DIR/bin/python" - "$REPO_ROOT" <<'PY'
+import shutil
+import sys
+import sysconfig
+from pathlib import Path
+
+source = Path(sys.argv[1]) / 'packages/benchmark-runtime/motte_benchmark'
+target = Path(sysconfig.get_path('purelib')) / 'motte_benchmark'
+(target / 'harbor').mkdir(parents=True, exist_ok=True)
+for name in ('__init__.py', 'harbor/__init__.py', 'harbor/entry.py',
+             'harbor/tasks.py', 'harbor/config.py'):
+    shutil.copy2(source / name, target / name)
+PY
+cp "$SCRIPT_DIR/harbor-entry" "$RUNNER_DIR/bin/harbor-entry"
+chmod +x "$RUNNER_DIR/bin/harbor-entry"
+"$RUNNER_DIR/bin/python" - <<'PY'
+from importlib.metadata import version
+assert version("harbor") == "0.23.0", version("harbor")
+from harbor.models.job.config import JobConfig
+from harbor.models.trial.config import TrialConfig
+from harbor.models.trial.result import TrialResult
+from harbor.models.verifier.result import VerifierResult
+print("harbor", version("harbor"), "native models importable")
+PY

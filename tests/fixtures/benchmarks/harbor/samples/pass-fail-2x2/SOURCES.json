@@ -1,0 +1,85 @@
+{
+ "files": {
+  "hello-fail__ZHenQKz": [
+   "agent/oracle.txt",
+   "artifacts/manifest.json",
+   "config.json",
+   "lock.json",
+   "result.json",
+   "trial.log",
+   "verifier/reward.txt",
+   "verifier/test-stdout.txt"
+  ],
+  "hello-fail__hxJUsQg": [
+   "agent/oracle.txt",
+   "artifacts/manifest.json",
+   "config.json",
+   "lock.json",
+   "result.json",
+   "trial.log",
+   "verifier/reward.txt",
+   "verifier/test-stdout.txt"
+  ],
+  "hello-pass__5RmqnD2": [
+   "agent/oracle.txt",
+   "artifacts/manifest.json",
+   "config.json",
+   "lock.json",
+   "result.json",
+   "trial.log",
+   "verifier/reward.txt",
+   "verifier/test-stdout.txt"
+  ],
+  "hello-pass__mExjPt6": [
+   "agent/oracle.txt",
+   "artifacts/manifest.json",
+   "config.json",
+   "lock.json",
+   "result.json",
+   "trial.log",
+   "verifier/reward.txt",
+   "verifier/test-stdout.txt"
+  ]
+ },
+ "hashes": {
+  "job-result.json": "sha256:343f39da82a205808abd41efe359d4572d36e847feffc1cbabd4c867ec6208f7",
+  "trials/hello-fail__ZHenQKz/agent/oracle.txt": "sha256:28904b0b5ce41884a22462af898c2fe22468b08e62a2ef94be1f1d7a61572fc2",
+  "trials/hello-fail__ZHenQKz/artifacts/manifest.json": "sha256:ec6219deb7c3b3da2e4a81e1cd07ca541b87f0b747b1a7bbd951407b52e9434c",
+  "trials/hello-fail__ZHenQKz/config.json": "sha256:f998e318cff06851e1a06dab31ee3194b622abc3f730f1b12b8552f95664f304",
+  "trials/hello-fail__ZHenQKz/lock.json": "sha256:87099cbcd1b04a45e3723a1f2520809a5beb775ee2a8e032a1b95c96b9c5af29",
+  "trials/hello-fail__ZHenQKz/result.json": "sha256:815845159026c850823cb795fbd35b6b2d3d42e4abeb6c7aca072b5b17458f36",
+  "trials/hello-fail__ZHenQKz/trial.log": "sha256:39d85dd16ee46d4e5cc73061596c4db664d03b909978ad39a4f8e1882e841a7a",
+  "trials/hello-fail__ZHenQKz/verifier/reward.txt": "sha256:9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "trials/hello-fail__ZHenQKz/verifier/test-stdout.txt": "sha256:4f8e9e45f8a9e1843b81eaf3bdf52a6b778d415d23bf985774a9d34a43f69bd5",
+  "trials/hello-fail__hxJUsQg/agent/oracle.txt": "sha256:28904b0b5ce41884a22462af898c2fe22468b08e62a2ef94be1f1d7a61572fc2",
+  "trials/hello-fail__hxJUsQg/artifacts/manifest.json": "sha256:ec6219deb7c3b3da2e4a81e1cd07ca541b87f0b747b1a7bbd951407b52e9434c",
+  "trials/hello-fail__hxJUsQg/config.json": "sha256:ff2313d72cc8dd4d2c7137275e0591a3313689ee9530a9ccbf46365c1971a838",
+  "trials/hello-fail__hxJUsQg/lock.json": "sha256:87099cbcd1b04a45e3723a1f2520809a5beb775ee2a8e032a1b95c96b9c5af29",
+  "trials/hello-fail__hxJUsQg/result.json": "sha256:52b974e0062cef4426e5e188c3e4d892a5c033e308b0799dc90cc55ec5823eec",
+  "trials/hello-fail__hxJUsQg/trial.log": "sha256:39d85dd16ee46d4e5cc73061596c4db664d03b909978ad39a4f8e1882e841a7a",
+  "trials/hello-fail__hxJUsQg/verifier/reward.txt": "sha256:9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "trials/hello-fail__hxJUsQg/verifier/test-stdout.txt": "sha256:4f8e9e45f8a9e1843b81eaf3bdf52a6b778d415d23bf985774a9d34a43f69bd5",
+  "trials/hello-pass__5RmqnD2/agent/oracle.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "trials/hello-pass__5RmqnD2/artifacts/manifest.json": "sha256:ec6219deb7c3b3da2e4a81e1cd07ca541b87f0b747b1a7bbd951407b52e9434c",
+  "trials/hello-pass__5RmqnD2/config.json": "sha256:4ed572d9e29f9e2687c7357acaf0049495bfccc1815ff2e5889594c242314b6b",
+  "trials/hello-pass__5RmqnD2/lock.json": "sha256:0e192d8b356e324f3528a86f9c3649425f0fc68e797de2fbfc566b138abaefe4",
+  "trials/hello-pass__5RmqnD2/result.json": "sha256:73a731bedf61a30ed0fa21a037f072c3aa355f78fa1d62c3db4a3b28f5ebbfba",
+  "trials/hello-pass__5RmqnD2/trial.log": "sha256:39d85dd16ee46d4e5cc73061596c4db664d03b909978ad39a4f8e1882e841a7a",
+  "trials/hello-pass__5RmqnD2/verifier/reward.txt": "sha256:4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+  "trials/hello-pass__5RmqnD2/verifier/test-stdout.txt": "sha256:c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431",
+  "trials/hello-pass__mExjPt6/agent/oracle.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "trials/hello-pass__mExjPt6/artifacts/manifest.json": "sha256:ec6219deb7c3b3da2e4a81e1cd07ca541b87f0b747b1a7bbd951407b52e9434c",
+  "trials/hello-pass__mExjPt6/config.json": "sha256:09fa2f6f00e574535cd5d999d33d7b8906c261747924c50df77ff9af0023790b",
+  "trials/hello-pass__mExjPt6/lock.json": "sha256:0e192d8b356e324f3528a86f9c3649425f0fc68e797de2fbfc566b138abaefe4",
+  "trials/hello-pass__mExjPt6/result.json": "sha256:29f6223593ba28680a4f8f6f603594e36fdaaced41c9f9145e67942fa4b9e49a",
+  "trials/hello-pass__mExjPt6/trial.log": "sha256:39d85dd16ee46d4e5cc73061596c4db664d03b909978ad39a4f8e1882e841a7a",
+  "trials/hello-pass__mExjPt6/verifier/reward.txt": "sha256:4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+  "trials/hello-pass__mExjPt6/verifier/test-stdout.txt": "sha256:c26de83abdc9496cd1301470918ec39ecca1cf389ef0ae1c6504da1800d1c431"
+ },
+ "job": "m3-recon-01",
+ "sanitized": {
+  "absolute_paths": true,
+  "log_limit_bytes": 4096,
+  "tracebacks": true
+ }
+}

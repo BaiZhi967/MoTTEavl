@@ -204,6 +204,18 @@ def _dataset_summary(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_json_file(path: str | None) -> dict | None:
+    """读取可选的 Runner 预检报告；缺失/畸形按"未上报"处理（预检随后 fail closed）。"""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def create_app(store=None, resource_store=None) -> FastAPI:
     service = build_run_service() if store is None else RunService(store)
     resources = (
@@ -1860,6 +1872,304 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 job["metrics"] = checkpoint.get("cursor") or {}
                 job["evidence"] = checkpoint.get("evidence") or {}
         return {"jobs": jobs}
+
+
+    # --------------------------------------------- Terminal-Bench（Harbor，M3-T09）
+
+    from motte_sdk import terminalbench as tb
+
+    def _tb_dataset_or_404(dataset_revision):
+        record = tb.prepared_dataset(service.store, dataset_revision=dataset_revision)
+        if record is None:
+            return None, JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "DATASET_UNPREPARED",
+                    "message": "no Terminal-Bench task set is prepared yet",
+                }},
+            )
+        return record, None
+
+    def _tb_model_record(model_id):
+        if not isinstance(model_id, str) or not model_id:
+            return None, JSONResponse(
+                status_code=422,
+                content={"error": {"code": "MODEL_REQUIRED",
+                                   "message": "model profile id is required"}},
+            )
+        record = resources.models.get(model_id)
+        if record is None:
+            return None, JSONResponse(
+                status_code=422,
+                content={"error": {"code": "MODEL_NOT_FOUND",
+                                   "message": f"unknown model profile: {model_id}"}},
+            )
+        # 已发布模型：lifecycle 是资源生命周期的唯一判据（与 publish 路由一致）。
+        if str(record.get("lifecycle") or record.get("status") or "") != "published":
+            return None, JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "MODEL_NOT_PUBLISHED",
+                    "message": "Terminal-Bench runs require a published model profile",
+                }},
+            )
+        return record, None
+
+    def _tb_docker_probe():
+        """Runner 侧探测摘要：API 进程不执行 docker；没有上报就按不可用处理。"""
+        import os as _os
+
+        report = _load_json_file(_os.environ.get("MOTTE_HARBOR_PREFLIGHT_REPORT")) or {}
+        return {
+            "available": bool(report.get("available")),
+            "server_version": report.get("server_version"),
+            "platform": report.get("platform"),
+            "disk_free_bytes": report.get("disk_free_bytes"),
+            "disk_required_bytes": report.get("disk_required_bytes"),
+            "images": list(report.get("images") or []),
+        }
+
+    def _tb_profile_from_body(body):
+        return tb.terminal_bench_profile(
+            agent_id=str(body.get("agent_id") or "oracle"),
+            agent_version=str(body.get("agent_version") or "1.0.0"),
+            n_trials=int(body.get("n_trials") or 1),
+            aggregation=str(body.get("aggregation") or "first-trial"),
+            timeouts={
+                "agent_sec": body.get("agent_timeout_sec"),
+                "verifier_sec": body.get("verifier_timeout_sec"),
+                "job_sec": body.get("job_timeout_sec"),
+                "environment_build_sec": body.get("environment_build_timeout_sec"),
+            },
+        )
+
+    def _tb_run_or_404(run_id):
+        try:
+            return service.get_run(run_id)
+        except KeyError:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "RUN_NOT_FOUND", "message": run_id}},
+            )
+
+    def _tb_run_summary(run):
+        rows = tb.task_rows(service.store, str(run.get("id")), manifest=run.get("manifest") or {})
+        aggregate = rows[0]["aggregate"] if rows else {}
+        return {
+            "id": run.get("id"),
+            "status": run.get("status"),
+            "created_at": run.get("created_at"),
+            "valid_trial_pass_rate": aggregate.get("valid_trial_pass_rate"),
+            "valid_trial_coverage": aggregate.get("valid_trial_coverage"),
+        }
+
+    @application.get("/api/v1/benchmarks/terminal-bench")
+    def terminal_bench_overview():
+        from motte_benchmark.registry import registered_adapter_ids
+
+        record = tb.prepared_dataset(service.store)
+        runs = [
+            run for run in service.store.runs.list()
+            if str(run.get("scenario_version") or "").startswith("terminal-bench-harbor@")
+        ]
+        items = []
+        if record is not None:
+            items.append({
+                "scenario": tb.SCENARIO_VERSION,
+                "dataset_revision": record.get("dataset_revision"),
+                "source_id": (record.get("manifest") or {}).get("source_id"),
+                "task_root": record.get("task_root"),
+                "license_id": record.get("license_id"),
+                "manifest_hash": record.get("manifest_hash"),
+                "tasks": len(tb.task_view(record)),
+                "runner_connected": tb.ADAPTER_ID in registered_adapter_ids(),
+                "runs": [_tb_run_summary(run) for run in runs],
+            })
+        return {
+            "benchmark": tb.BENCHMARK_ID,
+            "items": items,
+            "total": len(items),
+            "runner": {
+                "adapter_id": tb.ADAPTER_ID,
+                "harbor_version": tb.HARBOR_VERSION,
+                "connected": tb.ADAPTER_ID in registered_adapter_ids(),
+            },
+        }
+
+    @application.post("/api/v1/benchmarks/terminal-bench/prepare", status_code=201)
+    def terminal_bench_prepare(body: dict):
+        """只读准备受控任务根目录（不执行任务包脚本、不启动任务/模型）。"""
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        try:
+            record = tb.prepare_terminal_bench_dataset(
+                service.store,
+                task_root=str(body.get("task_root") or ""),
+                source_id=str(body.get("source_id") or ""),
+                dataset_revision=str(body.get("revision") or ""),
+                license_id=body.get("license_id"),
+                license_evidence=body.get("license_evidence"),
+                source_kind="pinned-source" if body.get("pinned_source") else "local",
+            )
+        except Exception as error:  # noqa: BLE001 - 合同错误以 422 返回
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": getattr(error, "code", "TASK_PREPARE_FAILED"),
+                    "message": str(error),
+                }},
+            )
+        manifest = record.get("manifest") or {}
+        tasks = tb.task_view(record)
+        return {
+            "state": record.get("state"),
+            "dataset_revision": record.get("dataset_revision"),
+            "source_id": manifest.get("source_id"),
+            "manifest_hash": record.get("manifest_hash"),
+            "tasks": tasks,
+            "total": len(tasks),
+            "invalid_tasks": manifest.get("invalid_tasks") or [],
+            "license_id": record.get("license_id"),
+            "license_evidence": record.get("license_evidence"),
+        }
+
+    @application.get("/api/v1/benchmarks/terminal-bench/tasks")
+    def terminal_bench_tasks(dataset_revision: str | None = None):
+        record, error = _tb_dataset_or_404(dataset_revision)
+        if error is not None:
+            return error
+        items = tb.task_view(record)
+        return {
+            "items": items, "total": len(items),
+            "dataset_revision": record.get("dataset_revision"),
+        }
+
+    @application.get("/api/v1/benchmarks/terminal-bench/preflight")
+    def terminal_bench_preflight(
+        model: str = "", n_trials: int = 1, task_keys: str = "",
+        agent_id: str = "oracle", agent_version: str = "1.0.0",
+        dataset_revision: str | None = None,
+    ):
+        record, error = _tb_dataset_or_404(dataset_revision)
+        if error is not None:
+            return error
+        _model_record, model_error = _tb_model_record(model)
+        if model_error is not None:
+            return model_error
+        selected = [item for item in task_keys.split(",") if item]
+        profile = tb.terminal_bench_profile(
+            agent_id=agent_id, agent_version=agent_version, n_trials=max(int(n_trials), 1),
+        )
+        report = tb.preflight_terminal_bench(
+            record=record, profile=profile, task_keys=selected or None,
+            docker=_tb_docker_probe(),
+        )
+        return {
+            "ok": report["allowed"],
+            "reasons": report["reason_codes"],
+            "messages": report["messages"],
+            "checks": report["checks"],
+            "profile_fingerprint": report["profile_fingerprint"],
+            "platform_custom_profile": report["platform_custom_profile"],
+            "model": model,
+            "dataset_revision": report.get("dataset_revision"),
+            "tasks": report["tasks"],
+        }
+
+    @application.post("/api/v1/benchmarks/terminal-bench/runs", status_code=202)
+    def terminal_bench_run(body: dict):
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        record, error = _tb_dataset_or_404(body.get("dataset_revision"))
+        if error is not None:
+            return error
+        _model_record, model_error = _tb_model_record(body.get("model"))
+        if model_error is not None:
+            return model_error
+        from motte_benchmark.registry import registered_adapter_ids
+
+        if tb.ADAPTER_ID not in registered_adapter_ids():
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "RUNNER_NOT_CONNECTED",
+                    "message": "the Harbor adapter is not registered in this process",
+                }},
+            )
+        profile = _tb_profile_from_body(body)
+        selected = [str(item) for item in (body.get("task_keys") or [])]
+        report = tb.preflight_terminal_bench(
+            record=record, profile=profile, task_keys=selected or None,
+            docker=_tb_docker_probe(),
+        )
+        if not report["allowed"]:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "PREFLIGHT_FAILED",
+                    "message": "Terminal-Bench preflight did not pass",
+                    "details": {
+                        "reasons": report["reason_codes"],
+                        "messages": report["messages"],
+                        "checks": report["checks"],
+                    },
+                }},
+            )
+        from uuid import uuid4 as _uuid4
+
+        from motte_sdk.execution_backends import resolve_execution
+
+        planned_run_id = f"run-{_uuid4().hex}"
+        inputs = tb.build_run_inputs(
+            record=record, run_id=planned_run_id, job_id=f"job-{_uuid4().hex}",
+            profile=profile, task_keys=selected or None,
+        )
+        resolved = resolve_execution(tb.SCENARIO_VERSION, inputs["manifest"])
+        run = service.create_run(
+            tb.SCENARIO_VERSION, resolved, inputs["case_ids"],
+            requested_manifest={"benchmark": tb.BENCHMARK_ID},
+            run_id=planned_run_id,
+        )
+        return {
+            "id": run["id"], "status": run["status"], "scenario": tb.SCENARIO_VERSION,
+            "execution": resolved.get("execution") or {},
+            "trials": len(inputs["trials"]),
+        }
+
+    @application.get("/api/v1/runs/{run_id}/tasks")
+    def run_terminal_bench_tasks(run_id: str):
+        run = _tb_run_or_404(run_id)
+        if isinstance(run, JSONResponse):
+            return run
+        items = tb.task_rows(service.store, run_id, manifest=run.get("manifest") or {})
+        return {"run_id": run_id, "items": items, "total": len(items), "status": run.get("status")}
+
+    @application.get("/api/v1/runs/{run_id}/tasks/{task_key}/trials")
+    def run_terminal_bench_task_trials(run_id: str, task_key: str):
+        run = _tb_run_or_404(run_id)
+        if isinstance(run, JSONResponse):
+            return run
+        items = tb.trial_rows(service.store, run_id, task_key)
+        return {"run_id": run_id, "task_key": task_key, "items": items, "total": len(items)}
+
+    @application.get("/api/v1/runs/{run_id}/trials/{trial_id}")
+    def run_terminal_bench_trial(run_id: str, trial_id: str):
+        run = _tb_run_or_404(run_id)
+        if isinstance(run, JSONResponse):
+            return run
+        detail = tb.trial_detail(service.store, run_id, trial_id)
+        if detail is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "TRIAL_NOT_FOUND",
+                    "message": f"trial {trial_id} does not belong to run {run_id}",
+                }},
+            )
+        return detail
+
 
     # ------------------------------------------- 比较/门禁（M6-Lite 公共服务，只读）
 

@@ -1,0 +1,15 @@
+schema_version = "1.4"
+
+[metadata]
+name = "hello-fail"
+difficulty = "easy"
+category = "software-engineering"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 120.0
+
+[environment]
+build_timeout_sec = 300.0

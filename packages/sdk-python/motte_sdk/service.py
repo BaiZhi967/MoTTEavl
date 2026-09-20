@@ -114,7 +114,14 @@ class RunService:
         *,
         requested_manifest: dict[str, Any] | None = None,
         parent_run_id: str | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
+        """创建 Run。
+
+        ``run_id`` 允许调用方**先**冻结 Run 身份再创建：M3 的 Trial 计划由
+        ``run_id`` 派生 ``trial_id``，因此计划与最终 Run 身份必须一致；省略
+        时按既有行为生成新 id。
+        """
         selected = list(case_ids)
         if len(selected) != len(set(selected)):
             raise ValueError("case_ids must be unique")
@@ -125,7 +132,10 @@ class RunService:
             from .execution_backends import resolve_replay_case_ids
 
             selected = resolve_replay_case_ids(manifest, selected)
-        run_id = f"run-{uuid4().hex}"
+        if run_id is None:
+            run_id = f"run-{uuid4().hex}"
+        elif not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError("run_id must be a nonempty string when provided")
         now = datetime.now(UTC).isoformat()
         run: dict[str, Any] = {
             "id": run_id,
@@ -324,6 +334,20 @@ class RunService:
         rows_by_case, unmapped = self._external_job_case_rows(run_id, run, outcome)
         for case_id in list(run.get("case_ids") or []):
             self.store.case_runs.upsert(rows_by_case[case_id])
+        trial_import = self._import_trials(run, rows_by_case)
+        if trial_import.get("conflicts"):
+            # 同一 Trial 的原始证据变化（hash 冲突）必须阻断最终化，而不是覆盖。
+            for conflict in trial_import["conflicts"]:
+                outcome.setdefault("import", {})
+            outcome.setdefault("error", None)
+            outcome["error"] = outcome.get("error") or {
+                "code": "EXTERNAL_IMPORT_CONFLICT",
+                "message": "trial evidence conflicted with the stored trial; "
+                           "existing evidence is preserved",
+            }
+            errors_from_trials = True
+        else:
+            errors_from_trials = False
         rows = self.store.case_runs.list_for_run(run_id)
         job_status = str(outcome.get("job_status") or "indeterminate")
         if outcome.get("import", {}).get("conflicts"):
@@ -360,6 +384,11 @@ class RunService:
                     "external job returned no case results for a non-empty "
                     "selection; run cannot be finalized as completed"
                 ),
+            })
+        if errors_from_trials:
+            errors.append({
+                "code": "TRIAL_IMPORT_CONFLICT",
+                "message": "trial evidence conflicted with stored trial results",
             })
         if job_status == "cancelled":
             final_status = "cancelled"
@@ -432,6 +461,11 @@ class RunService:
             if not isinstance(item, dict):
                 continue
             case_id = item.get("case_id") or item.get("source_case_id")
+            payload = item.get("output") if isinstance(item.get("output"), dict) else {}
+            # Trial 形态的 Runner（M3）：一行是一个计划的 Trial，逻辑 Case 是
+            # payload 里的 task_key；没有该字段时退回既有 stable case 身份。
+            if isinstance(payload.get("task_key"), str) and payload.get("trial_id"):
+                case_id = str(payload["task_key"])
             if not isinstance(case_id, str) or not case_id:
                 continue
             if case_id not in selected:
@@ -889,6 +923,26 @@ class RunService:
             self._notify_event(event)
         return stored
 
+    def _import_trials(
+        self, run: dict[str, Any], rows_by_case: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Terminal-Bench 形态：把采集到的 Trial 结果落进 Trial 存储。
+
+        非 Trial 套件直接返回空结果；Trial 计划来自冻结 manifest，因此
+        缺失的 Trial 会在存储里保持 pending，而不会从覆盖分母里消失。
+        """
+        from motte_sdk.benchmark_plugins import import_terminal_bench_trials, suite_for_run
+
+        suite = suite_for_run(run)
+        if suite is None or suite[0] != "terminal-bench-harbor":
+            return {"skipped": True}
+        results = [
+            {"result": row.get("result")}
+            for row in rows_by_case.values()
+            if isinstance(row.get("result"), dict)
+        ]
+        return import_terminal_bench_trials(self.store, run, results)
+
     def _score_results(
         self,
         run_id: str,
@@ -913,7 +967,14 @@ class RunService:
                     self._emit(run_id, "score", {"case_id": entry["case_id"], "passed": passed})
         return scores
 
-    def _begin_case_attempt(self, run: dict[str, Any], case_id: str) -> dict[str, Any]:
+    def _begin_case_attempt(
+        self, run: dict[str, Any], case_id: str, *, trial_id: str | None = None,
+    ) -> dict[str, Any]:
+        """开始一次 Case attempt；``trial_id`` 存在时冲突域收窄到该 Trial。
+
+        ``attempt_no`` 仍是该 (run, case) 内全序编号（既有唯一键不变），
+        传输重试只会产生新的 attempt_no，不会产生新的 Trial（M3-G04）。
+        """
         previous = [
             item for item in self.store.attempts.list_for_run(run["id"])
             if item.get("case_id") == case_id
@@ -925,8 +986,9 @@ class RunService:
             "case_id": case_id,
             "attempt_no": len(previous) + 1,
             "execution_backend_id": backend,
-            "idempotency_key": f"{run['id']}:{case_id}:{len(previous) + 1}",
+            "idempotency_key": f"{run['id']}:{case_id}:{trial_id or '-'}:{len(previous) + 1}",
             "prepared_at": now,
+            "trial_id": trial_id,
         }, expected_run_revision=run["revision"], expected_run_status=run["status"])
         try:
             return self.store.attempts.dispatch(

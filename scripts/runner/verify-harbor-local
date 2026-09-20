@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# 真实固定 Harbor Runner + 真实 Docker 的校准验证（不调用任何付费模型）。
+#
+# 用法：scripts/runner/verify-harbor-local /absolute/runner/bin/python
+#
+# 前置：scripts/runner/install-harbor 已安装固定环境；本机 Docker 可用。
+# 该脚本执行：
+#   1) 用真实 Harbor 模型加载平台生成的原生 JobConfig（配置兼容）；
+#   2) 在真实 Docker 上跑仓库内确定性校准任务（oracle Agent，已知通过/失败）；
+#   3) 平台侧冻结证据 → 纯 Parser → 覆盖率与 disposition 断言。
+set -euo pipefail
+RUNNER_PYTHON="${1:?Usage: verify-harbor-local /absolute/runner/bin/python}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+# 真实层 1：Job 采集语义（固定 Harbor + 真实 Docker + oracle Agent）。
+# 真实层 2：生产链路（API → Dispatcher → 真实 Runner → Parser → 评分 → 报告）。
+MOTTE_HARBOR_RUNNER_PYTHON="$RUNNER_PYTHON" uv run pytest -q \
+    tests/integration/test_harbor_job_fixture.py \
+    tests/integration/test_harbor_calibration.py

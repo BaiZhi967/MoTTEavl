@@ -1,0 +1,51 @@
+{
+ "files": {
+  "agent-timeout__wo62aM7": [
+   "agent/oracle.txt",
+   "artifacts/manifest.json",
+   "config.json",
+   "exception.txt",
+   "lock.json",
+   "result.json",
+   "trial.log",
+   "verifier/reward.txt",
+   "verifier/test-stdout.txt"
+  ],
+  "verifier-timeout__8wiDJKo": [
+   "agent/oracle.txt",
+   "artifacts/manifest.json",
+   "config.json",
+   "exception.txt",
+   "lock.json",
+   "result.json",
+   "trial.log",
+   "verifier/test-stdout.txt"
+  ]
+ },
+ "hashes": {
+  "job-result.json": "sha256:832a14e71cc5b66561a08f12f839f58dbdd7fc812fefb5ccd663794180189525",
+  "trials/agent-timeout__wo62aM7/agent/oracle.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "trials/agent-timeout__wo62aM7/artifacts/manifest.json": "sha256:ec6219deb7c3b3da2e4a81e1cd07ca541b87f0b747b1a7bbd951407b52e9434c",
+  "trials/agent-timeout__wo62aM7/config.json": "sha256:6fecb132421c52aa6dca9ac8226cf5933124857319f990178ba599c6f14dc722",
+  "trials/agent-timeout__wo62aM7/exception.txt": "sha256:cf99fe3ea3584e92f2bf13150dbac53f3ad89c2c067b9e18cb9d1b2a5683d7b3",
+  "trials/agent-timeout__wo62aM7/lock.json": "sha256:6985c133a955d0a41d1c3af7f0ad50946ebea112a957f8527f3f291727567764",
+  "trials/agent-timeout__wo62aM7/result.json": "sha256:704cbd9a1c31cd95f1a583959dab6ee8edebb639ade987c3722c4eefffb0cfbc",
+  "trials/agent-timeout__wo62aM7/trial.log": "sha256:39d85dd16ee46d4e5cc73061596c4db664d03b909978ad39a4f8e1882e841a7a",
+  "trials/agent-timeout__wo62aM7/verifier/reward.txt": "sha256:9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "trials/agent-timeout__wo62aM7/verifier/test-stdout.txt": "sha256:9dba0c2c226f4b174a56741ed1df3226160704c223152ab39af5d3143f7575e5",
+  "trials/verifier-timeout__8wiDJKo/agent/oracle.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "trials/verifier-timeout__8wiDJKo/artifacts/manifest.json": "sha256:ec6219deb7c3b3da2e4a81e1cd07ca541b87f0b747b1a7bbd951407b52e9434c",
+  "trials/verifier-timeout__8wiDJKo/config.json": "sha256:f9f4879ee1e06cce632242c81fecd81d800200028dade3cf47d2ffc501560751",
+  "trials/verifier-timeout__8wiDJKo/exception.txt": "sha256:cf99fe3ea3584e92f2bf13150dbac53f3ad89c2c067b9e18cb9d1b2a5683d7b3",
+  "trials/verifier-timeout__8wiDJKo/lock.json": "sha256:7bf8352c50d88fb9a9b9e2408e266c00de781de138aa2c2c729101f4445298df",
+  "trials/verifier-timeout__8wiDJKo/result.json": "sha256:23c47acc5d310b529661f05359fbb46819601a05e96a83b282cb292ba89f242d",
+  "trials/verifier-timeout__8wiDJKo/trial.log": "sha256:d9435a72576713dfa822f61d1dc42c6e964b407555d7310e5b5b8a8ecead5bbc",
+  "trials/verifier-timeout__8wiDJKo/verifier/test-stdout.txt": "sha256:f96d2205c385b62e62edcfd787abd33540afb6dc5a47f20a2a05b5cfd3e3ca6f"
+ },
+ "job": "m3-recon-errors",
+ "sanitized": {
+  "absolute_paths": true,
+  "log_limit_bytes": 4096,
+  "tracebacks": true
+ }
+}

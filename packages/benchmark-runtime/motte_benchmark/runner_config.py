@@ -28,7 +28,10 @@ from typing import Any
 from .protocol import BenchmarkRuntimeError
 
 DEFAULT_WRAPPER = "/opt/motte-runner/bin/opencompass-entry"
-_KNOWN_BENCHMARKS = ("ceval", "cmmlu")
+#: Harbor（Terminal-Bench）Runner 的固定 wrapper，独立于 OpenCompass。
+HARBOR_DEFAULT_WRAPPER = "/opt/motte-runner/bin/harbor-entry"
+HARBOR_BENCHMARKS = ("terminal-bench",)
+_KNOWN_BENCHMARKS = ("ceval", "cmmlu", *HARBOR_BENCHMARKS)
 _LOADED = False
 
 
@@ -93,11 +96,45 @@ def load_runner_adapter_config(path: str | Path) -> dict[str, Any]:
     return document
 
 
+def _register_harbor(entry: dict[str, Any]) -> None:
+    """注册 Harbor 适配器（独立 runner 包装器，不套用 OpenCompass 形态）。"""
+    from . import registry
+    from .harbor.adapter import ADAPTER_ID, HarborJobAdapter
+
+    argv = entry.get("argv")
+    extra_env = {str(k): str(v) for k, v in (entry.get("extra_env") or {}).items()}
+    limits = entry.get("default_limits") or None
+    data_root = entry.get("data_root")
+    if argv is None and entry.get("module") is None:
+        argv = [HARBOR_DEFAULT_WRAPPER]
+    if argv is not None:
+        registry.register_adapter(
+            ADAPTER_ID,
+            lambda a=argv, e=extra_env, lim=limits, root=data_root: HarborJobAdapter(
+                argv=[str(item) for item in a], extra_env=e, default_limits=lim,
+                data_root=root,
+            ),
+            replace=True,
+        )
+        return
+    module = entry.get("module")
+    registry.register_adapter(
+        ADAPTER_ID,
+        lambda m=module, e=extra_env, lim=limits, root=data_root: HarborJobAdapter(
+            module=m, extra_env=e, default_limits=lim, data_root=root,
+        ),
+        replace=True,
+    )
+
+
 def _register_from_entry(entry: dict[str, Any]) -> None:
     from . import registry
     from .opencompass.adapter import OpenCompassJobAdapter
 
     benchmark = str(entry.get("benchmark"))
+    if benchmark in HARBOR_BENCHMARKS:
+        _register_harbor(entry)
+        return
     argv = entry.get("argv")
     extra_env = {str(k): str(v) for k, v in (entry.get("extra_env") or {}).items()}
     limits = entry.get("default_limits") or None
@@ -135,10 +172,14 @@ def ensure_builtin_adapters(*, force: bool = False) -> list[str]:
         config = load_runner_adapter_config(path)
         for entry in config["adapters"]:
             _register_from_entry(entry)
-    elif Path(DEFAULT_WRAPPER).exists():
-        # 固定环境 wrapper 已部署：两个 benchmark 共用同一入口。
-        for benchmark in _KNOWN_BENCHMARKS:
-            _register_from_entry({"benchmark": benchmark, "argv": [DEFAULT_WRAPPER]})
+    else:
+        if Path(DEFAULT_WRAPPER).exists():
+            # 固定环境 wrapper 已部署：两个 OpenCompass benchmark 共用同一入口。
+            for benchmark in ("ceval", "cmmlu"):
+                _register_from_entry({"benchmark": benchmark, "argv": [DEFAULT_WRAPPER]})
+        if Path(HARBOR_DEFAULT_WRAPPER).exists():
+            # Harbor Runner 独立部署：Harbor 自己管理任务环境生命周期。
+            _register_harbor({"benchmark": "terminal-bench"})
     _LOADED = True
     return list(_registered_snapshot())
 
@@ -151,6 +192,8 @@ def _registered_snapshot() -> tuple[str, ...]:
 
 __all__ = [
     "DEFAULT_WRAPPER",
+    "HARBOR_BENCHMARKS",
+    "HARBOR_DEFAULT_WRAPPER",
     "ensure_builtin_adapters",
     "load_runner_adapter_config",
     "runner_config_path",

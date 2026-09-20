@@ -35,6 +35,21 @@ def _pass_record(record: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _attempt_trial_id(record: dict[str, Any]) -> str:
+    """CaseAttempt 的 Trial 维度（M3-T02）。
+
+    空串表示"不属于某个计划 Trial"的旧写入，冲突域与 M2 完全一致；非空
+    表示本 attempt 属于一个事前冻结的 Trial，其冲突域收窄到该 Trial——
+    同一 Task 的其他 Trial 因此可以各自独立地开始/完成。
+    """
+    trial_id = record.get("trial_id")
+    if trial_id is None:
+        return ""
+    if not isinstance(trial_id, str):
+        raise ValueError("attempt trial_id must be a string when provided")
+    return trial_id
+
+
 class SQLiteAttempts:
     def __init__(self, path: str) -> None:
         self._path = path
@@ -49,6 +64,8 @@ class SQLiteAttempts:
         stored.setdefault("attempt_no", 1)
         if type(stored["attempt_no"]) is not int or stored["attempt_no"] < 1:
             raise ValueError("attempt_no must be a positive integer")
+        trial_id = _attempt_trial_id(stored)
+        stored["trial_id"] = trial_id
         try:
             with closing(_connect(self._path)) as connection, connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -61,22 +78,25 @@ class SQLiteAttempts:
                     ).fetchone()
                     if run_row != (expected_run_revision, expected_run_status):
                         raise RunConflictError(f"run revision or status changed: {stored['run_id']}")
-                if connection.execute(
+                if not trial_id and connection.execute(
                     "SELECT 1 FROM case_runs WHERE run_id = ? AND case_id = ?",
                     (stored["run_id"], stored["case_id"]),
                 ).fetchone() is not None:
                     raise RunConflictError(f"case result already exists: {stored['case_id']}")
                 if connection.execute(
                     "SELECT 1 FROM case_attempts WHERE run_id = ? AND case_id = ? "
-                    "AND status IN ('prepared', 'dispatching', 'indeterminate')",
-                    (stored["run_id"], stored["case_id"]),
+                    "AND trial_id = ? AND status IN ('prepared', 'dispatching', 'indeterminate')",
+                    (stored["run_id"], stored["case_id"], trial_id),
                 ).fetchone() is not None:
-                    raise RunConflictError(f"case already has an open attempt: {stored['case_id']}")
+                    raise RunConflictError(
+                        f"case already has an open attempt: {stored['case_id']}",
+                    )
                 connection.execute(
-                    "INSERT INTO case_attempts(id, run_id, case_id, attempt_no, status, revision, payload) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO case_attempts(id, run_id, case_id, attempt_no, status, revision, payload, trial_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (stored["id"], stored["run_id"], stored["case_id"], stored["attempt_no"],
-                     stored["status"], stored["revision"], json.dumps(stored, sort_keys=True)),
+                     stored["status"], stored["revision"], json.dumps(stored, sort_keys=True),
+                     trial_id),
                 )
         except sqlite3.IntegrityError as error:
             raise RunConflictError("attempt id or attempt_no already exists") from error
@@ -175,6 +195,12 @@ class SQLiteAttempts:
                 raise RunConflictError(f"attempt missing: {attempt_id}")
             previous = json.loads(row[0])
             pending = validate_event(event, previous["run_id"])
+            if case_run is not None and _attempt_trial_id(previous):
+                # 一个 Trial 的结果不写任务级 CaseRun：逻辑 CaseRun 由聚合阶段
+                # 一次形成，否则"先完成一个 Trial"会写死整个 Task（需求 4.2）。
+                raise RunConflictError(
+                    "trial-scoped attempts must not write the task-level case result",
+                )
             if case_run is not None and (
                 case_run.get("run_id") != previous["run_id"]
                 or case_run.get("case_id") != previous["case_id"]
@@ -550,6 +576,8 @@ class MemoryAttempts:
         stored.setdefault("attempt_no", 1)
         if type(stored["attempt_no"]) is not int or stored["attempt_no"] < 1:
             raise ValueError("attempt_no must be a positive integer")
+        trial_id = _attempt_trial_id(stored)
+        stored["trial_id"] = trial_id
         with self._lock:
             if (expected_run_revision is None) != (expected_run_status is None):
                 raise ValueError("provide both expected Run revision and status")
@@ -559,10 +587,11 @@ class MemoryAttempts:
                 or run.get("status") != expected_run_status
             ):
                 raise RunConflictError(f"run revision or status changed: {stored['run_id']}")
-            if self._cases.get(stored["run_id"], stored["case_id"]) is not None:
+            if not trial_id and self._cases.get(stored["run_id"], stored["case_id"]) is not None:
                 raise RunConflictError(f"case result already exists: {stored['case_id']}")
             if any(
                 item["run_id"] == stored["run_id"] and item["case_id"] == stored["case_id"]
+                and _attempt_trial_id(item) == trial_id
                 and item["status"] in {"prepared", "dispatching", "indeterminate"}
                 for item in self._rows.values()
             ):
@@ -638,6 +667,12 @@ class MemoryAttempts:
                 raise RunConflictError(f"attempt missing: {attempt_id}")
             previous = self._rows[attempt_id]
             pending = validate_event(event, previous["run_id"])
+            if case_run is not None and _attempt_trial_id(previous):
+                # 一个 Trial 的结果不写任务级 CaseRun：逻辑 CaseRun 由聚合阶段
+                # 一次形成，否则"先完成一个 Trial"会写死整个 Task（需求 4.2）。
+                raise RunConflictError(
+                    "trial-scoped attempts must not write the task-level case result",
+                )
             if case_run is not None and (
                 case_run.get("run_id") != previous["run_id"]
                 or case_run.get("case_id") != previous["case_id"]

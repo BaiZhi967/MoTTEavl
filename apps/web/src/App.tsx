@@ -22,6 +22,13 @@ import { DirectLlmOperate } from "./evalTypes/directllm/DirectLlmOperate";
 import { DirectLlmResult } from "./evalTypes/directllm/DirectLlmResult";
 import { AgentCompare, AgentMonitor, AgentOperate, AgentResult } from "./evalTypes/agent/AgentPages";
 import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
+import {
+  TerminalBenchCompare,
+  TerminalBenchMonitor,
+  TerminalBenchOperate,
+  TerminalBenchResult,
+  TerminalBenchTasks,
+} from "./evalTypes/terminalbench/TerminalBenchPages";
 
 const CmmluPages = makeExternalPages("cmmlu", {
   title: "CMMLU（独立身份的外部基准）",
@@ -96,6 +103,11 @@ export default function App() {
           <Route path="/replay" element={<ReplayOperate />} />
           <Route path="/replay/monitor" element={<ReplayMonitor />} />
           <Route path="/replay/runs/:runId/result" element={<ReplayResult />} />
+          <Route path="/terminal-bench" element={<TerminalBenchOperate />} />
+          <Route path="/terminal-bench/tasks" element={<TerminalBenchTasks />} />
+          <Route path="/terminal-bench/monitor" element={<TerminalBenchMonitor />} />
+          <Route path="/terminal-bench/runs/:runId/result" element={<TerminalBenchResult />} />
+          <Route path="/terminal-bench/compare" element={<TerminalBenchCompare />} />
           <Route path="/runs/:runId/monitor" element={<FallbackMonitorPage />} />
           <Route path="/runs/:runId/result" element={<FallbackResultPage />} />
           <Route path="*" element={<Navigate to="/gsm8k" replace />} />

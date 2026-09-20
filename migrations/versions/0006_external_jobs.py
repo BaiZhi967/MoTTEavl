@@ -14,6 +14,13 @@ down_revision = "0005_agent_invocations"
 branch_labels = None
 depends_on = None
 
+#: 与 ``downgrade()`` 对应的删除语句（测试夹具逆序清理时使用）。
+DOWN_STATEMENTS: tuple[str, ...] = (
+    "DROP TABLE IF EXISTS external_job_conflicts",
+    "DROP TABLE IF EXISTS external_job_records",
+    "DROP TABLE IF EXISTS external_jobs",
+)
+
 
 def upgrade() -> None:
     op.execute(

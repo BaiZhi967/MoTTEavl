@@ -651,3 +651,159 @@ export const compareRuns = (baseline: string, candidate: string, factors = "mode
 
 export const evaluateRunGate = (body: Record<string, unknown>) =>
   request<GateResultView>("/api/v1/gates", jsonBody(body));
+
+// ---------------------------------------------------------------------------
+// Terminal-Bench（Harbor，M3-T09）
+// ---------------------------------------------------------------------------
+
+export interface TerminalBenchRunProgress {
+  id: string;
+  status: string;
+  created_at?: string | null;
+  /** 有效 Trial 通过率（分母是有效 Trial）；没有有效 Trial 时为 null，不填 0。 */
+  valid_trial_pass_rate: number | null;
+}
+
+export interface TerminalBenchPreset {
+  scenario: string;
+  dataset_revision: string;
+  tasks: number;
+  runner_connected: boolean;
+  runs: TerminalBenchRunProgress[];
+}
+
+export interface TerminalBenchOverview {
+  items: TerminalBenchPreset[];
+  total: number;
+  runner: { adapter_id: string; harbor_version: string; connected: boolean };
+  benchmark: string;
+}
+
+export interface TerminalBenchTask {
+  task_key: string;
+  normalized_relative_path: string;
+  display_name?: string | null;
+  source_id: string;
+  dataset_revision: string;
+  file_count: number | null;
+  total_bytes: number | null;
+  has_tests: boolean | null;
+  has_solution: boolean | null;
+  declared_license?: string | null;
+}
+
+export interface TerminalBenchPreflightReport {
+  ok: boolean;
+  /** 阻塞原因码；ok=false 时创建运行必须被禁用（fail-closed）。 */
+  reasons: string[];
+  /** 原因码 → 操作员可执行说明（服务端登记，前端不猜含义）。 */
+  messages: Record<string, string>;
+  checks: Record<string, unknown>;
+  profile_fingerprint: string;
+  platform_custom_profile: boolean;
+}
+
+export interface TerminalBenchRunRequest {
+  model: string;
+  agent_id: string;
+  agent_version: string;
+  n_trials: number;
+  task_keys?: string[];
+  timeout_sec?: number;
+  job_timeout_sec?: number;
+  aggregation?: "first-trial" | "mean-success";
+}
+
+export interface TerminalBenchTaskRow {
+  task_key: string;
+  normalized_relative_path?: string | null;
+  planned_trials: number;
+  observed_trials: number;
+  valid_trials: number;
+  invalid_trials: number;
+  valid_trial_pass_rate: number | null;
+  task_pass: boolean | null;
+  task_pass_reason: string;
+  /** run 级评分聚合（与服务端 scoring aggregate 同键）。 */
+  aggregate?: Record<string, any>;
+}
+
+export interface TerminalBenchTrialRow {
+  trial_id: string;
+  repeat_index: number | null;
+  disposition: string;
+  verifier_status: string;
+  /** canonical reward 维度；缺失为 null（未知），不是 0。 */
+  reward: number | null;
+  valid: boolean;
+  coverage?: Record<string, any>;
+  source_trial_id: string | null;
+}
+
+export interface TerminalBenchArtifact {
+  artifact_id: string;
+  kind: string;
+  sha256?: string | null;
+  size_bytes?: number | null;
+  complete: boolean;
+  truncated: boolean;
+  note?: string | null;
+}
+
+export interface TerminalBenchTrialDetail {
+  run_id: string;
+  trial_id: string;
+  task_key: string;
+  repeat_index: number | null;
+  disposition: string;
+  termination: Record<string, any>;
+  verifier_observation: {
+    status: string;
+    rewards?: Record<string, number>;
+    error?: Record<string, any> | null;
+    evidence_refs?: Array<Record<string, any>>;
+  };
+  usage: { cost_usd?: number | null; tokens?: Record<string, any> | null; coverage?: string };
+  coverage: { items?: Record<string, string>; missing?: string[]; partial?: string[] };
+  artifacts: TerminalBenchArtifact[];
+  terminal_text: string | null;
+  terminal_truncated: boolean;
+  evidence_complete: boolean;
+}
+
+export const getTerminalBenchOverview = () =>
+  request<TerminalBenchOverview>("/api/v1/benchmarks/terminal-bench");
+
+export const getTerminalBenchTasks = () =>
+  request<{ items: TerminalBenchTask[]; total: number }>("/api/v1/benchmarks/terminal-bench/tasks");
+
+export const getTerminalBenchPreflight = (params: {
+  model?: string; n_trials?: number; task_keys?: string[];
+}) => {
+  const query = new URLSearchParams();
+  if (params.model !== undefined) query.set("model", params.model);
+  if (params.n_trials !== undefined) query.set("n_trials", String(params.n_trials));
+  if (params.task_keys?.length) query.set("task_keys", params.task_keys.join(","));
+  return request<TerminalBenchPreflightReport>(
+    `/api/v1/benchmarks/terminal-bench/preflight?${query.toString()}`,
+  );
+};
+
+/** 202：一次 Run 对应一个 Harbor Job，多 Task × 多 Trial 都在该 Job 内。 */
+export const createTerminalBenchRun = (body: TerminalBenchRunRequest) =>
+  request<RunRecord>("/api/v1/benchmarks/terminal-bench/runs", jsonBody(body));
+
+export const getRunTasks = (runId: string) =>
+  request<{ run_id: string; items: TerminalBenchTaskRow[]; total: number }>(
+    `/api/v1/runs/${runId}/tasks`,
+  );
+
+export const getRunTaskTrials = (runId: string, taskKey: string) =>
+  request<{ run_id: string; task_key: string; items: TerminalBenchTrialRow[]; total: number }>(
+    `/api/v1/runs/${runId}/tasks/${encodeURIComponent(taskKey)}/trials`,
+  );
+
+export const getRunTrial = (runId: string, trialId: string) =>
+  request<TerminalBenchTrialDetail>(
+    `/api/v1/runs/${runId}/trials/${encodeURIComponent(trialId)}`,
+  );

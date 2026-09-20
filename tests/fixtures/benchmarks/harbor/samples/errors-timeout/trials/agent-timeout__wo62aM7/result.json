@@ -1,0 +1,120 @@
+{
+ "agent_execution": {
+  "finished_at": "2026-09-20T00:17:58.171229Z",
+  "started_at": "2026-09-20T00:17:53.169773Z"
+ },
+ "agent_info": {
+  "model_info": null,
+  "name": "oracle",
+  "version": "1.0.0"
+ },
+ "agent_result": {
+  "cost_usd": null,
+  "metadata": null,
+  "model_usage": null,
+  "n_cache_tokens": null,
+  "n_input_tokens": null,
+  "n_output_tokens": null,
+  "rollout_details": null
+ },
+ "agent_setup": {
+  "finished_at": "2026-09-20T00:17:53.169701Z",
+  "started_at": "2026-09-20T00:17:53.169660Z"
+ },
+ "config": {
+  "agent": {
+   "concurrency_group": null,
+   "extra_allowed_hosts": [],
+   "import_path": null,
+   "kwargs": {},
+   "load_trajectory": null,
+   "max_timeout_sec": null,
+   "mcp_servers": [],
+   "model_name": null,
+   "n_concurrent": null,
+   "name": "oracle",
+   "override_setup_timeout_sec": null,
+   "override_timeout_sec": null,
+   "resume_trajectory": false,
+   "skills": []
+  },
+  "agent_setup_timeout_multiplier": null,
+  "agent_timeout_multiplier": null,
+  "artifacts": [],
+  "environment": {
+   "cpu_enforcement_policy": "auto",
+   "delete": true,
+   "extra_allowed_hosts": [],
+   "extra_docker_compose": [],
+   "force_build": false,
+   "import_path": null,
+   "kwargs": {},
+   "memory_enforcement_policy": "auto",
+   "mounts": null,
+   "override_cpus": null,
+   "override_gpus": null,
+   "override_memory_mb": null,
+   "override_storage_mb": null,
+   "override_tpu": null,
+   "type": "docker"
+  },
+  "environment_build_timeout_multiplier": null,
+  "extra_instruction_paths": [],
+  "extra_instructions": [],
+  "install_only": false,
+  "job_id": "f7642816-01c9-40ce-ad3f-953bc04e4760",
+  "source_trial": null,
+  "task": {
+   "download_dir": null,
+   "git_commit_id": null,
+   "git_url": null,
+   "name": null,
+   "overwrite": false,
+   "path": "<HOST_PATH>",
+   "ref": null,
+   "source": "tasks-errors"
+  },
+  "timeout_multiplier": 1.0,
+  "trial_name": "agent-timeout__wo62aM7",
+  "trials_dir": "<HOST_PATH>",
+  "user_agent": null,
+  "verifier": {
+   "disable": false,
+   "max_timeout_sec": null,
+   "override_timeout_sec": null
+  },
+  "verifier_timeout_multiplier": null
+ },
+ "environment_setup": {
+  "finished_at": "2026-09-20T00:17:53.169594Z",
+  "started_at": "2026-09-20T00:17:51.480669Z"
+ },
+ "exception_info": {
+  "exception_message": "Agent execution timed out after 5.0 seconds",
+  "exception_traceback": "<TRACEBACK_REDACTED_BY_CAPTURE>\n",
+  "exception_type": "AgentTimeoutError",
+  "occurred_at": "2026-09-20T00:17:58.177248Z"
+ },
+ "finished_at": "2026-09-20T00:18:09.316455Z",
+ "id": "2f71fb0f-2d0d-4b5d-ada1-d2919fa2d152",
+ "source": "tasks-errors",
+ "started_at": "2026-09-20T00:17:51.402521Z",
+ "step_results": null,
+ "task_checksum": "53b511c95c26635dd3ceb63fe67aac368beab1475cae0f421883e6ce487d3eba",
+ "task_id": {
+  "path": "<HOST_PATH>"
+ },
+ "task_name": "agent-timeout",
+ "trial_name": "agent-timeout__wo62aM7",
+ "trial_uri": "file://<HOST_PATH>",
+ "verifier": {
+  "finished_at": "2026-09-20T00:17:58.751281Z",
+  "started_at": "2026-09-20T00:17:58.524158Z"
+ },
+ "verifier_environment_mode": "shared",
+ "verifier_result": {
+  "rewards": {
+   "reward": 0.0
+  }
+ }
+}

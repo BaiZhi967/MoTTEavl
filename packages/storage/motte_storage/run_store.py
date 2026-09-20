@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS case_attempts (
   status TEXT NOT NULL,
   revision INTEGER NOT NULL,
   payload TEXT NOT NULL,
+  trial_id TEXT NOT NULL DEFAULT '',
   UNIQUE (run_id, case_id, attempt_no)
 );
 CREATE INDEX IF NOT EXISTS case_attempts_run_idx ON case_attempts(run_id);
@@ -579,6 +580,7 @@ class RunStore:
     external_jobs: Any = None
     benchmark_datasets: Any = None
     baselines: Any = None
+    trials: Any = None
 
 
 def _upgrade_score_sets(connection: sqlite3.Connection) -> None:
@@ -607,6 +609,15 @@ def _upgrade_score_sets(connection: sqlite3.Connection) -> None:
     """)
 
 
+def _upgrade_case_attempt_trial(connection: sqlite3.Connection) -> None:
+    """旧库补 ``case_attempts.trial_id``（M3-T02）：旧行保持空串语义。"""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(case_attempts)")}
+    if columns and "trial_id" not in columns:
+        connection.execute(
+            "ALTER TABLE case_attempts ADD COLUMN trial_id TEXT NOT NULL DEFAULT ''",
+        )
+
+
 def SQLiteRunStore(path: str | Path) -> RunStore:
     from .audit_store import SQLiteAttempts, SQLiteCommands, SQLiteScoreSets, SQLiteScoringPasses
 
@@ -621,10 +632,12 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
             if "revision" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
             _upgrade_score_sets(connection)
+            _upgrade_case_attempt_trial(connection)
     from .baselines import SQLiteBaselines
     from .benchmark_datasets import SQLiteBenchmarkDatasets
     from .external_jobs import SQLiteExternalJobs
     from .invocations import SQLiteInvocations
+    from .trials import SQLiteTrials
 
     return RunStore(
         runs=_SQLiteRuns(path),
@@ -639,6 +652,7 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         external_jobs=SQLiteExternalJobs(path),
         benchmark_datasets=SQLiteBenchmarkDatasets(path),
         baselines=SQLiteBaselines(path),
+        trials=SQLiteTrials(path),
     )
 
 
@@ -655,6 +669,7 @@ def InMemoryRunStore() -> RunStore:
     from .benchmark_datasets import MemoryBenchmarkDatasets
     from .external_jobs import MemoryExternalJobs
     from .invocations import MemoryInvocations
+    from .trials import MemoryTrials
 
     return RunStore(
         runs=runs,
@@ -669,4 +684,5 @@ def InMemoryRunStore() -> RunStore:
         external_jobs=MemoryExternalJobs(lock),
         benchmark_datasets=MemoryBenchmarkDatasets(lock),
         baselines=MemoryBaselines(lock),
+        trials=MemoryTrials(lock),
     )

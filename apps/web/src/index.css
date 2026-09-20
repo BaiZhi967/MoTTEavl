@@ -1295,6 +1295,45 @@ td.row-actions .link {
   display: inline-block;
 }
 
+/* ---------- Terminal-Bench：Job → Task → Trial 树与终端日志 ---------- */
+
+.tb-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tb-tree .tb-tree {
+  margin: 4px 0 8px 16px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.tb-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.terminal-log {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
 /* ---------- Direct LLM case 流式卡片 ---------- */
 
 .case-stream {

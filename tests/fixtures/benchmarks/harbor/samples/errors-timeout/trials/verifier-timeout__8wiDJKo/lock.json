@@ -1,0 +1,36 @@
+{
+ "agent": {
+  "extra_allowed_hosts": [],
+  "kwargs": {},
+  "mcp_servers": [],
+  "name": "oracle",
+  "resume_trajectory": false,
+  "skills": []
+ },
+ "bridge_inputs": {},
+ "environment": {
+  "cpu_enforcement_policy": "auto",
+  "delete": true,
+  "extra_allowed_hosts": [],
+  "extra_docker_compose": [],
+  "force_build": false,
+  "kwargs": {},
+  "memory_enforcement_policy": "auto",
+  "type": "docker"
+ },
+ "install_only": false,
+ "schema_version": 2,
+ "skills": [],
+ "task": {
+  "digest": "sha256:b8063ffa788329aa536d2ec2080f629830342d0d33016548c33b9352aa8368e6",
+  "name": "verifier-timeout",
+  "path": "<HOST_PATH>",
+  "source": "tasks-errors",
+  "type": "local"
+ },
+ "timeout_multiplier": 1.0,
+ "verifier": {
+  "disable": false,
+  "environment_mode": "shared"
+ }
+}

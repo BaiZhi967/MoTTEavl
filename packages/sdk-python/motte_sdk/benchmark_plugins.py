@@ -78,6 +78,14 @@ def plugin_for_scenario(scenario: dict[str, Any] | None) -> tuple[str, str] | No
     return suite, version
 
 
+#: Terminal-Bench（Harbor）suite 身份：与 motte_sdk.terminalbench 保持一致。
+BENCHMARK_ID = "terminal-bench"
+SUITE = "terminal-bench-harbor"
+SUITE_VERSION = "1"
+ADAPTER_ID = "terminal-bench-harbor"
+RUNNER_VERSION = "harbor-0.23.0"
+
+
 def suite_for_run(run: dict[str, Any]) -> tuple[str, str] | None:
     provenance = (run.get("manifest") or {}).get("benchmark_provenance")
     if not isinstance(provenance, dict):
@@ -136,6 +144,153 @@ def aggregate_with_plugin(run: dict[str, Any], scores: list[dict[str, Any]]) -> 
     if identity is None:
         raise ValueError("run has no benchmark provenance")
     return benchmark_plugin(*identity).aggregate(run, scores)
+
+
+def _terminal_bench_prepare(
+    scenario: dict[str, Any], manifest: dict[str, Any], resources: Any,
+) -> dict[str, Any]:
+    """Terminal-Bench（Harbor）manifest 已由门面冻结；这里校验身份并补评分身份。"""
+    from motte_benchmark.harbor.adapter import ADAPTER_ID
+    from motte_benchmark.harbor.parser import PARSER_VERSION
+
+    external = manifest.get("external_benchmark")
+    if not isinstance(external, dict) or not external.get("adapter_id"):
+        raise ValueError("terminal-bench manifest requires external_benchmark")
+    if str(external.get("adapter_id")) != ADAPTER_ID:
+        raise ValueError(
+            f"terminal-bench manifest adapter_id must be {ADAPTER_ID}, "
+            f"got {external.get('adapter_id')!r}",
+        )
+    plan = (external.get("runner_config") or {}).get("plan") or {}
+    if not plan.get("trials"):
+        raise ValueError("terminal-bench manifest requires the frozen trial plan")
+    task_manifest = manifest.get("task_manifest") or {}
+    if not task_manifest.get("task_keys"):
+        raise ValueError("terminal-bench manifest requires the prepared task set")
+    provenance = manifest.setdefault("benchmark_provenance", {})
+    provenance.update({
+        "id": provenance.get("id") or BENCHMARK_ID,
+        "version": provenance.get("harbor_version") or RUNNER_VERSION,
+        "parser_version": PARSER_VERSION,
+        "aggregation": provenance.get("aggregation") or "first-trial",
+    })
+    manifest["evaluation"] = {
+        "suite": provenance.get("suite") or SUITE,
+        "plugin_version": provenance.get("plugin_version") or SUITE_VERSION,
+        "scorer": "harbor-terminal-bench",
+        "scorer_version": PARSER_VERSION,
+    }
+    return manifest
+
+
+def _terminal_bench_scores(
+    run: dict[str, Any], results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Trial 层分数：每个计划 Trial 一行（含无效行，覆盖因此可见）。"""
+    from motte_eval.harbor import trial_row
+
+    rows: list[dict[str, Any]] = []
+    for row in results:
+        payload = row.get("result") if isinstance(row.get("result"), dict) else {}
+        if not payload.get("trial_id"):
+            continue
+        rows.append(trial_row(payload))
+    return rows
+
+
+def _terminal_bench_aggregate(
+    run: dict[str, Any], scores: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Task/Trial 两层聚合 + 覆盖门禁 + 成本与时长（不重跑任何任务）。"""
+    from motte_eval.harbor import (
+        cost_summary,
+        coverage_gate,
+        duration_summary,
+        rescore_identity,
+        task_aggregate,
+    )
+
+    manifest = run.get("manifest") or {}
+    provenance = manifest.get("benchmark_provenance") or {}
+    external = manifest.get("external_benchmark") or {}
+    trials = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
+    payloads = [
+        (row.get("result") or {}) for row in run.get("cases") or []
+        if isinstance(row.get("result"), dict) and (row.get("result") or {}).get("trial_id")
+    ]
+    planned_per_task: dict[str, int] = {}
+    for plan in trials:
+        key = str(plan.get("task_key"))
+        planned_per_task[key] = planned_per_task.get(key, 0) + 1
+    aggregation = str(provenance.get("aggregation") or "first-trial")
+    aggregate = task_aggregate(
+        trials=payloads, aggregation=aggregation, planned_per_task=planned_per_task,
+    )
+    aggregate["gate"] = coverage_gate(aggregate)
+    aggregate["cost"] = cost_summary(payloads)
+    aggregate["durations"] = duration_summary(payloads)
+    aggregate["rescore_identity"] = rescore_identity(
+        aggregate=aggregate, trials=payloads,
+        parser_version=str(provenance.get("parser_version") or "harbor-terminal-bench-parser@1"),
+    )
+    # 计划外层同样可用的键（报告与前端不依赖内部结构）。
+    aggregate["selected_cases"] = aggregate["selected_tasks"]
+    aggregate["scored_cases"] = aggregate["scored_tasks"]
+    aggregate["coverage"] = aggregate["valid_trial_coverage"]
+    aggregate["denominator"] = "planned_trials"
+    aggregate["aggregation_policy"] = aggregate["aggregation"]
+    return aggregate
+
+
+def import_terminal_bench_trials(
+    store: Any, run: dict[str, Any], results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """把采集到的 Trial 结果写入 Trial 存储（先建计划，再逐条幂等落结果）。
+
+    计划来自冻结 manifest（不依赖本次采集），因此"某个 Trial 没跑成"也会
+    留下 pending/not_attempted 记录，覆盖统计不会因缺行而虚高。
+    """
+    manifest = run.get("manifest") or {}
+    external = manifest.get("external_benchmark") or {}
+    plan = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
+    trials = getattr(store, "trials", None)
+    if trials is None or not plan:
+        return {"created": 0, "stored": 0, "identical": 0, "conflicts": 0, "skipped": True}
+    created = trials.create_plans([dict(item) for item in plan])
+    statuses: dict[str, int] = {}
+    for item in created:
+        statuses[str(item["status"])] = statuses.get(str(item["status"]), 0) + 1
+    conflicts: list[dict[str, Any]] = [
+        item for item in created if item["status"] == "conflict"
+    ]
+    stored = 0
+    identical = 0
+    for row in results:
+        payload = row.get("result") if isinstance(row.get("result"), dict) else None
+        if not payload or not payload.get("trial_id"):
+            continue
+        from motte_contracts.trial import canonical_hash
+
+        outcome = trials.put_result(
+            str(payload["trial_id"]), payload,
+            source_hash=canonical_hash(payload),
+            parser_version=str(payload.get("parser_version") or "harbor-terminal-bench-parser@1"),
+        )
+        if outcome["status"] == "stored":
+            stored += 1
+        elif outcome["status"] == "identical":
+            identical += 1
+        elif outcome["status"] == "conflict":
+            conflicts.append(outcome)
+    return {
+        "created": statuses.get("created", 0),
+        "identical_plans": statuses.get("identical", 0),
+        "stored": stored,
+        "identical": identical,
+        "conflicts": conflicts,
+        "planned": len(plan),
+        "skipped": False,
+    }
 
 
 def _load_builtins() -> None:
@@ -374,3 +529,15 @@ def _load_builtins() -> None:
                 adapter_version="1",
             )
         )
+
+    register_benchmark_plugin(
+        BenchmarkPlugin(
+            suite_id=SUITE,
+            contract_version=SUITE_VERSION,
+            prepare_manifest=_terminal_bench_prepare,
+            score=_terminal_bench_scores,
+            aggregate=_terminal_bench_aggregate,
+            adapter_id=ADAPTER_ID,
+            adapter_version="1",
+        )
+    )

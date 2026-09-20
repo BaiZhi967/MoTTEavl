@@ -212,6 +212,186 @@ def _handle_external_benchmark(args: argparse.Namespace, benchmark_id: str) -> i
     return 2
 
 
+def _preflight_report() -> dict:
+    """CLI 侧读取 Runner 探测报告；缺失/畸形按"未上报"处理，预检随之失败关闭。"""
+    path = os.environ.get("MOTTE_HARBOR_PREFLIGHT_REPORT")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _handle_terminal_bench(args: argparse.Namespace) -> int:
+    """Terminal-Bench（Harbor）CLI：prepare / tasks / preflight / run / status / trials。
+
+    与 API 共用 ``motte_sdk.terminalbench`` 门面，因此任务身份、预检原因码与
+    Trial 视图在两端一致；执行同样只入队，不在本进程跑任何任务。
+    """
+    from uuid import uuid4
+
+    import json as _json
+
+    from motte_sdk import terminalbench as tb
+    from motte_sdk.execution_backends import resolve_execution
+    from motte_sdk.service import build_run_service
+
+    service = build_run_service(args.db)
+    store = service.store
+    command = args.terminal_bench_command
+
+    if command == "prepare":
+        try:
+            record = tb.prepare_terminal_bench_dataset(
+                store,
+                task_root=args.task_root,
+                source_id=args.source_id,
+                dataset_revision=args.revision,
+                license_id=args.license_id,
+                license_evidence=args.license_evidence,
+                source_kind="pinned-source" if args.pinned_source else "local",
+            )
+        except Exception as error:  # noqa: BLE001 - 合同错误以结构化错误返回
+            return _error(getattr(error, "code", "TASK_PREPARE_FAILED"), str(error))
+        manifest = record.get("manifest") or {}
+        print(json.dumps({
+            "state": record.get("state"),
+            "dataset_revision": record.get("dataset_revision"),
+            "source_id": manifest.get("source_id"),
+            "manifest_hash": record.get("manifest_hash"),
+            "tasks": len(tb.task_view(record)),
+            "invalid_tasks": manifest.get("invalid_tasks") or [],
+            "license_id": record.get("license_id"),
+        }, ensure_ascii=False))
+        return 0
+
+    if command == "tasks":
+        record = tb.prepared_dataset(store, dataset_revision=args.dataset_revision)
+        if record is None:
+            return _error("DATASET_UNPREPARED", "no prepared Terminal-Bench task set")
+        items = tb.task_view(record)
+        if args.json:
+            print(_json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+            return 0
+        for item in items:
+            print(
+                f"{item['task_key']}  {item['normalized_relative_path']}  "
+                f"tests={item['has_tests']} solution={item['has_solution']}",
+            )
+        return 0
+
+    if command == "preflight":
+        record = tb.prepared_dataset(store, dataset_revision=args.dataset_revision)
+        if record is None:
+            return _error("DATASET_UNPREPARED", "no prepared Terminal-Bench task set")
+        profile = tb.terminal_bench_profile(
+            agent_id=args.agent_id, agent_version=args.agent_version,
+            n_trials=max(args.n_trials, 1),
+        )
+        report = tb.preflight_terminal_bench(
+            record=record, profile=profile,
+            task_keys=[item for item in (args.task_keys or "").split(",") if item] or None,
+            docker=_preflight_report(),
+        )
+        print(_json.dumps({
+            "ok": report["allowed"],
+            "reasons": report["reason_codes"],
+            "messages": report["messages"],
+            "checks": report["checks"],
+            "profile_fingerprint": report["profile_fingerprint"],
+            "platform_custom_profile": report["platform_custom_profile"],
+        }, ensure_ascii=False))
+        return 0 if report["allowed"] else 1
+
+    if command == "run":
+        from motte_benchmark.registry import registered_adapter_ids
+
+        record = tb.prepared_dataset(store, dataset_revision=args.dataset_revision)
+        if record is None:
+            return _error("DATASET_UNPREPARED", "no prepared Terminal-Bench task set")
+        if tb.ADAPTER_ID not in registered_adapter_ids():
+            return _error(
+                "RUNNER_NOT_CONNECTED",
+                "the Harbor adapter is not registered; deploy the pinned runner "
+                "environment (scripts/runner/install-harbor) first",
+            )
+        profile = tb.terminal_bench_profile(
+            agent_id=args.agent_id, agent_version=args.agent_version,
+            n_trials=max(args.n_trials, 1), aggregation=args.aggregation,
+            timeouts={
+                "job_sec": args.job_timeout_sec, "agent_sec": args.agent_timeout_sec,
+                "verifier_sec": args.verifier_timeout_sec,
+            },
+        )
+        selected = [item for item in (args.task_keys or "").split(",") if item]
+        report = tb.preflight_terminal_bench(
+            record=record, profile=profile, task_keys=selected or None,
+            docker=_preflight_report(),
+        )
+        if not report["allowed"]:
+            print(_json.dumps({"error": {
+                "code": "PREFLIGHT_FAILED",
+                "message": "Terminal-Bench preflight did not pass",
+                "details": {"reasons": report["reason_codes"],
+                            "messages": report["messages"]},
+            }}, ensure_ascii=False), file=sys.stderr)
+            return 1
+        planned_run_id = f"run-{uuid4().hex}"
+        inputs = tb.build_run_inputs(
+            record=record, run_id=planned_run_id, job_id=f"job-{uuid4().hex}",
+            profile=profile, task_keys=selected or None,
+        )
+        resolved = resolve_execution(tb.SCENARIO_VERSION, inputs["manifest"])
+        run = service.create_run(
+            tb.SCENARIO_VERSION, resolved, inputs["case_ids"],
+            requested_manifest={"benchmark": tb.BENCHMARK_ID},
+            run_id=planned_run_id,
+        )
+        print(_json.dumps({
+            "id": run["id"], "status": run["status"], "scenario": tb.SCENARIO_VERSION,
+            "execution": resolved.get("execution") or {},
+            "trials": len(inputs["trials"]),
+            "提示": "由 Worker 执行：uv run python -m apps.worker.motte_worker --once",
+        }, ensure_ascii=False))
+        return 0
+
+    if command == "status":
+        rows = tb.task_rows(store, args.run_id)
+        if args.json:
+            print(_json.dumps({"items": rows, "total": len(rows)}, ensure_ascii=False))
+            return 0
+        for row in rows:
+            print(
+                f"{row['task_key']}  planned={row['planned_trials']} "
+                f"valid={row['valid_trials']} pass={row['task_pass']}",
+            )
+        if rows:
+            aggregate = rows[0]["aggregate"]
+            print(_json.dumps({
+                "valid_trial_pass_rate": aggregate["valid_trial_pass_rate"],
+                "valid_trial_coverage": aggregate["valid_trial_coverage"],
+                "gate": rows[0]["gate"],
+            }, ensure_ascii=False))
+        return 0
+
+    if command == "trials":
+        items = tb.trial_rows(store, args.run_id, args.task_key)
+        print(_json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+        return 0
+
+    if command == "trial":
+        detail = tb.trial_detail(store, args.run_id, args.trial_id)
+        if detail is None:
+            return _error("TRIAL_NOT_FOUND", f"{args.trial_id} is not in run {args.run_id}")
+        print(_json.dumps(detail, ensure_ascii=False))
+        return 0
+
+    return 2
+
+
 def _handle_ceval(args: argparse.Namespace) -> int:
     """C-Eval 外部基准：真实实现见 _handle_external_benchmark。"""
     return _handle_external_benchmark(args, "ceval")
@@ -335,6 +515,55 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cmmlu = sub.add_parser("cmmlu", help="CMMLU 外部基准（独立身份；数据准备/预检/创建运行）")
     _add_external_benchmark_subcommands(cmmlu, "cmmlu_command")
+
+    terminal_bench = sub.add_parser(
+        "terminal-bench", help="Terminal-Bench（Harbor 外部基准；任务准备/预检/Trial 查看）",
+    )
+    tb_sub = terminal_bench.add_subparsers(dest="terminal_bench_command", required=True)
+    tb_prepare = tb_sub.add_parser("prepare", help="只读准备受控任务根目录（不执行任务包脚本）")
+    tb_prepare.add_argument("--task-root", required=True, help="受控任务根目录")
+    tb_prepare.add_argument("--source-id", required=True, help="任务来源标识")
+    tb_prepare.add_argument("--revision", required=True, help="数据集 revision（非占位）")
+    tb_prepare.add_argument("--license-id", help="任务集许可证标识")
+    tb_prepare.add_argument("--license-evidence", help="许可证据说明")
+    tb_prepare.add_argument("--pinned-source", action="store_true", help="来源为固定 revision")
+    tb_prepare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    tb_tasks = tb_sub.add_parser("tasks", help="列出已准备任务")
+    tb_tasks.add_argument("--dataset-revision", help="指定 revision（缺省取最新）")
+    tb_tasks.add_argument("--json", action="store_true")
+    tb_tasks.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    tb_preflight = tb_sub.add_parser("preflight", help="只读预检（零模型调用/零任务启动）")
+    tb_preflight.add_argument("--agent-id", default="oracle")
+    tb_preflight.add_argument("--agent-version", default="1.0.0")
+    tb_preflight.add_argument("--n-trials", type=int, default=1, dest="n_trials")
+    tb_preflight.add_argument("--task-keys", help="逗号分隔的 task_key 子集")
+    tb_preflight.add_argument("--dataset-revision", help="指定 revision（缺省取最新）")
+    tb_preflight.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    tb_run = tb_sub.add_parser("run", help="创建 job-based queued Run（由 Worker 执行）")
+    tb_run.add_argument("--model", required=True, help="已发布 ModelProfile id")
+    tb_run.add_argument("--agent-id", default="oracle")
+    tb_run.add_argument("--agent-version", default="1.0.0")
+    tb_run.add_argument("--n-trials", type=int, default=1, dest="n_trials", help="计划重复数")
+    tb_run.add_argument("--aggregation", choices=("first-trial", "mean-success"),
+                        default="first-trial", help="Task 层聚合规则（事前固定）")
+    tb_run.add_argument("--task-keys", help="逗号分隔的 task_key 子集")
+    tb_run.add_argument("--dataset-revision", help="指定 revision（缺省取最新）")
+    tb_run.add_argument("--agent-timeout-sec", type=float, dest="agent_timeout_sec")
+    tb_run.add_argument("--verifier-timeout-sec", type=float, dest="verifier_timeout_sec")
+    tb_run.add_argument("--job-timeout-sec", type=float, dest="job_timeout_sec")
+    tb_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    tb_status = tb_sub.add_parser("status", help="Task 层结果与覆盖门禁")
+    tb_status.add_argument("--run-id", required=True)
+    tb_status.add_argument("--json", action="store_true")
+    tb_status.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    tb_trials = tb_sub.add_parser("trials", help="某 Task 的计划 Trial 列表")
+    tb_trials.add_argument("--run-id", required=True)
+    tb_trials.add_argument("--task-key", required=True)
+    tb_trials.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    tb_trial = tb_sub.add_parser("trial", help="单 Trial 详情（终止/Verifier/证据引用）")
+    tb_trial.add_argument("--run-id", required=True)
+    tb_trial.add_argument("--trial-id", required=True)
+    tb_trial.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
     direct = sub.add_parser("direct-llm", help="Direct LLM 通用直连评测（导入 JSONL 数据集，创建运行）")
     direct_sub = direct.add_subparsers(dest="direct_command", required=True)
@@ -1102,6 +1331,9 @@ def main(argv=None):
             record_live_smoke(report, args.record)
         print(json.dumps(report, ensure_ascii=False))
         return exit_code
+
+    if args.command == "terminal-bench":
+        return _handle_terminal_bench(args)
 
     if args.command == "ceval":
         return _handle_ceval(args)

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { CalculatorIcon, ChatTextIcon, ClockCounterClockwiseIcon, GraduationCapIcon, RobotIcon, type IconProps } from "@phosphor-icons/react";
+import { CalculatorIcon, ChatTextIcon, ClockCounterClockwiseIcon, GraduationCapIcon, RobotIcon, TerminalWindowIcon, type IconProps } from "@phosphor-icons/react";
 
 export interface RunLike {
   scenario_version: string;
@@ -86,9 +86,24 @@ const CMMLU_SUITE: EvalTypeSuite = {
   matchRun: (run) => run.scenario_version.startsWith("cmmlu-external@"),
 };
 
+/**
+ * Terminal-Bench（Harbor）运行：场景名以 terminal-bench 开头，或执行后端是
+ * harbor-external。必须排在 CEVAL 之前——ceval 的兜底条件（backend_id ===
+ * "external-benchmark"）会吞掉同后端的 Harbor 运行，先判 Harbor 才能拿到正确归属。
+ */
+export const TERMINAL_BENCH_SUITE: EvalTypeSuite = {
+  id: "terminal-bench",
+  label: "Terminal-Bench（Harbor）",
+  icon: TerminalWindowIcon,
+  matchRun: (run) =>
+    run.scenario_version.startsWith("terminal-bench")
+    || run.manifest?.execution?.backend_id === "harbor-external",
+};
+
 export const EVAL_SUITES: EvalTypeSuite[] = [
   AGENT_TASKS_SUITE,
   CMMLU_SUITE,
+  TERMINAL_BENCH_SUITE,
   CEVAL_SUITE,
   GSM8K_SUITE,
   DIRECT_LLM_SUITE,

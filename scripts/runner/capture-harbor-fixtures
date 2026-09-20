@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+"""Capture a real Harbor jobs directory into sanitized repository fixtures.
+
+The M3 parser must be verified against the *native* payloads of the pinned
+Harbor release, not against hand-written JSON. This tool takes a jobs directory
+produced by a real `harbor run` and writes a de-identified subset into
+``tests/fixtures/benchmarks/harbor/samples``:
+
+- absolute host paths are replaced by ``<HOST>/...`` markers,
+- exception tracebacks are replaced by their type/message plus a marker,
+- large logs are truncated with an explicit marker (never silently),
+- the recorded file list is written to ``SOURCES.json`` with the payload hash
+  of every captured file.
+
+Usage::
+
+    scripts/runner/capture-harbor-fixtures <jobs-dir> <sample-name> [--keep-traceback]
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+
+#: 每个 trial 目录里允许抽取的文件；`result.json` 是原生结果契约的载体。
+TRIAL_FILES = (
+    "result.json",
+    "config.json",
+    "lock.json",
+    "exception.txt",
+    "trial.log",
+    "verifier/reward.txt",
+    "verifier/reward.json",
+    "verifier/test-stdout.txt",
+    "verifier/test-stderr.txt",
+    "artifacts/manifest.json",
+)
+LOG_LIMIT = 4096
+_ABS_PATH = re.compile(r"(/Users/[^\s\"']+|/tmp/[^\s\"']+|/private/[^\s\"']+)")
+_TRACEBACK = re.compile(
+    r'(?P<prefix>"exception_traceback"\s*:\s*")[^"]*(?P<suffix>")',
+    re.DOTALL,
+)
+
+
+def _sanitize_text(text: str, *, keep_traceback: bool) -> str:
+    text = str(_ABS_PATH.sub("<HOST_PATH>", text))
+    if not keep_traceback:
+        text = _TRACEBACK.sub(
+            lambda match: (
+                match.group("prefix") + "<TRACEBACK_REDACTED_BY_CAPTURE>" + match.group("suffix")
+            ),
+            text,
+        )
+        if text.lstrip().startswith("Traceback (most recent call last)"):
+            text = "<TRACEBACK_REDACTED_BY_CAPTURE>\n"
+    if len(text) > LOG_LIMIT:
+        text = text[:LOG_LIMIT] + "\n<TRUNCATED_BY_CAPTURE limit=%d>\n" % LOG_LIMIT
+    return text
+
+
+def _sanitize(value: object, *, keep_traceback: bool) -> object:
+    if isinstance(value, str):
+        return _sanitize_text(value, keep_traceback=keep_traceback)
+    if isinstance(value, dict):
+        return {
+            key: _sanitize(item, keep_traceback=keep_traceback)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize(item, keep_traceback=keep_traceback) for item in value]
+    return value
+
+
+def _write(target: Path, text: str) -> str:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _find_job_dir(jobs_dir: Path) -> Path:
+    """接受 jobs 根目录或单个 job 目录，返回含 ``result.json`` 的 job 目录。"""
+    if (jobs_dir / "result.json").is_file():
+        return jobs_dir
+    candidates = sorted(
+        path
+        for path in jobs_dir.iterdir()
+        if path.is_dir() and (path / "result.json").is_file()
+    )
+    if not candidates:
+        raise SystemExit(f"no job directory with result.json under {jobs_dir}")
+    return candidates[-1]
+
+
+def capture(
+    jobs_dir: Path, sample_dir: Path, *, keep_traceback: bool = False,
+) -> dict[str, object]:
+    job_dir = _find_job_dir(jobs_dir)
+    recorded: dict[str, object] = {"job": job_dir.name, "files": {}}
+    files: dict[str, str] = {}
+
+    job_result = job_dir / "result.json"
+    if job_result.is_file():
+        payload = _sanitize(json.loads(job_result.read_text()), keep_traceback=keep_traceback)
+        text = json.dumps(payload, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+        files["job-result.json"] = text
+
+    trials: dict[str, dict[str, str]] = {}
+    for trial_dir in sorted(path for path in job_dir.iterdir() if path.is_dir()):
+        captured: dict[str, str] = {}
+        rels = list(TRIAL_FILES)
+        # Agent logs are not a fixed filename per agent; capture whatever the
+        # real run wrote so trajectory evidence exists in the fixture too.
+        for extra in sorted(
+            str(path.relative_to(trial_dir)).replace("\\", "/")
+            for path in (trial_dir / "agent").rglob("*")
+            if path.is_file()
+        ):
+            if extra not in rels:
+                rels.append(extra)
+        for rel in rels:
+            source = trial_dir / rel
+            if not source.is_file():
+                continue
+            raw = source.read_text(encoding="utf-8", errors="replace")
+            if rel.endswith(".json"):
+                try:
+                    payload = _sanitize(json.loads(raw), keep_traceback=keep_traceback)
+                except json.JSONDecodeError:
+                    text = _sanitize_text(raw, keep_traceback=keep_traceback)
+                else:
+                    text = json.dumps(payload, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+            else:
+                text = _sanitize_text(raw, keep_traceback=keep_traceback)
+            captured[rel] = text
+        if captured:
+            trials[trial_dir.name] = captured
+
+    for name, captured in trials.items():
+        for rel, text in captured.items():
+            files[f"trials/{name}/{rel}"] = text
+        recorded["files"][name] = sorted(captured)
+
+    hashes = {rel: _write(sample_dir / rel, text) for rel, text in sorted(files.items())}
+    recorded["hashes"] = hashes
+    recorded["sanitized"] = {
+        "absolute_paths": True,
+        "tracebacks": not keep_traceback,
+        "log_limit_bytes": LOG_LIMIT,
+    }
+    (sample_dir / "SOURCES.json").write_text(
+        json.dumps(recorded, indent=1, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return recorded
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("jobs_dir", type=Path)
+    parser.add_argument("sample_dir", type=Path)
+    parser.add_argument("--keep-traceback", action="store_true")
+    args = parser.parse_args()
+    recorded = capture(
+        args.jobs_dir, args.sample_dir, keep_traceback=args.keep_traceback,
+    )
+    print(json.dumps({
+        "job": recorded["job"],
+        "files": len(recorded["hashes"]),  # type: ignore[arg-type]
+        "trials": sorted(recorded["files"]),  # type: ignore[arg-type]
+    }, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

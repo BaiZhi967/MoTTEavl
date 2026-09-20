@@ -9,7 +9,7 @@ from typing import Any
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 
-from .audit_store import _pass_record
+from .audit_store import _attempt_trial_id, _pass_record
 from .benchmark_datasets import RevisionConflictError, _content_identity, _record_id, _validate
 from .integrity import (
     ATTEMPT_TRANSITIONS,
@@ -44,6 +44,8 @@ class PgAttempts:
         stored.setdefault("attempt_no", 1)
         if type(stored["attempt_no"]) is not int or stored["attempt_no"] < 1:
             raise ValueError("attempt_no must be a positive integer")
+        trial_id = _attempt_trial_id(stored)
+        stored["trial_id"] = trial_id
         try:
             with _connect(self._dsn) as connection:
                 with connection.cursor() as cursor:
@@ -59,24 +61,28 @@ class PgAttempts:
                             raise RunConflictError(
                                 f"run revision or status changed: {stored['run_id']}"
                             )
-                    cursor.execute(
-                        "SELECT 1 FROM case_runs WHERE run_id = %s AND case_id = %s",
-                        (stored["run_id"], stored["case_id"]),
-                    )
-                    if cursor.fetchone() is not None:
-                        raise RunConflictError(f"case result already exists: {stored['case_id']}")
+                    if not trial_id:
+                        cursor.execute(
+                            "SELECT 1 FROM case_runs WHERE run_id = %s AND case_id = %s",
+                            (stored["run_id"], stored["case_id"]),
+                        )
+                        if cursor.fetchone() is not None:
+                            raise RunConflictError(
+                                f"case result already exists: {stored['case_id']}"
+                            )
                     cursor.execute(
                         "SELECT 1 FROM case_attempts WHERE run_id = %s AND case_id = %s "
-                        "AND status IN ('prepared', 'dispatching', 'indeterminate') FOR UPDATE",
-                        (stored["run_id"], stored["case_id"]),
+                        "AND trial_id = %s AND status IN ('prepared', 'dispatching', 'indeterminate') FOR UPDATE",  # noqa: E501
+                        (stored["run_id"], stored["case_id"], trial_id),
                     )
                     if cursor.fetchone() is not None:
-                        raise RunConflictError(f"case already has an open attempt: {stored['case_id']}")
+                        raise RunConflictError(
+                            f"case already has an open attempt: {stored['case_id']}"
+                        )
                     cursor.execute(
-                        "INSERT INTO case_attempts(id, run_id, case_id, attempt_no, status, revision, payload) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO case_attempts(id, run_id, case_id, attempt_no, status, revision, payload, trial_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",  # noqa: E501
                         (stored["id"], stored["run_id"], stored["case_id"], stored["attempt_no"],
-                         stored["status"], stored["revision"], Json(stored)),
+                         stored["status"], stored["revision"], Json(stored), trial_id),
                     )
         except UniqueViolation as error:
             raise RunConflictError("attempt id or attempt_no already exists") from error
@@ -180,6 +186,10 @@ class PgAttempts:
                     raise RunConflictError(f"attempt missing: {attempt_id}")
                 previous = row[0]
                 pending = validate_event(event, previous["run_id"])
+                if case_run is not None and _attempt_trial_id(previous):
+                    raise RunConflictError(
+                        "trial-scoped attempts must not write the task-level case result",
+                    )
                 if case_run is not None and (
                     case_run.get("run_id") != previous["run_id"]
                     or case_run.get("case_id") != previous["case_id"]
@@ -991,3 +1001,118 @@ class PgBaselines:
                 )
                 rows = cursor.fetchall()
         return [_as_payload(row[0]) for row in rows]
+
+
+class PgTrials:
+    """PostgreSQL Trial 仓库（M3-T02）：与 Memory/SQLite 同语义。
+
+    幂等/冲突语义复用 ``motte_storage.trials`` 的共享实现，避免三个后端
+    各写一套判定逻辑。
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def create_plans(self, plans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from .trials import _apply_plan, _plan_record
+
+        results: list[dict[str, Any]] = []
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                for plan in plans:
+                    incoming = _plan_record(plan)
+                    cursor.execute(
+                        "SELECT payload FROM trials WHERE trial_id = %s",
+                        (incoming["trial_id"],),
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        cursor.execute(
+                            "INSERT INTO trials(trial_id, run_id, task_key, repeat_index, status, plan_hash, payload, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",  # noqa: E501
+                            (
+                                incoming["trial_id"], incoming["run_id"], incoming["task_key"],
+                                int(incoming["repeat_index"]), incoming["status"],
+                                incoming["plan_hash"], Json(incoming), incoming["created_at"],
+                            ),
+                        )
+                        results.append({
+                            "status": "created", "trial_id": incoming["trial_id"],
+                            "plan": incoming,
+                        })
+                        continue
+                    results.append(_apply_plan(_as_payload(row[0]), incoming))
+        return results
+
+    def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM trials WHERE run_id = %s ORDER BY task_key, repeat_index, trial_id",  # noqa: E501
+                    (run_id,),
+                )
+                rows = cursor.fetchall()
+        return [_as_payload(row[0]) for row in rows]
+
+    def list_for_task(self, run_id: str, task_key: str) -> list[dict[str, Any]]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM trials WHERE run_id = %s AND task_key = %s ORDER BY repeat_index, trial_id",  # noqa: E501
+                    (run_id, task_key),
+                )
+                rows = cursor.fetchall()
+        return [_as_payload(row[0]) for row in rows]
+
+    def get(self, trial_id: str) -> dict[str, Any] | None:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT payload FROM trials WHERE trial_id = %s", (trial_id,))
+                row = cursor.fetchone()
+        return _as_payload(row[0]) if row is not None else None
+
+    def put_result(
+        self, trial_id: str, result: dict[str, Any], *,
+        source_hash: str, parser_version: str,
+    ) -> dict[str, Any]:
+        from .trials import _canonical, _now_iso, _result_conflict, validate_result
+
+        stored = validate_result(result)
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload, result_payload FROM trials WHERE trial_id = %s FOR UPDATE",
+                    (trial_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return {"status": "unknown_trial", "trial_id": trial_id}
+                current = _as_payload(row[0])
+                result_hash = _canonical(stored)
+                if row[1] is not None:
+                    if current.get("source_hash") == source_hash and current.get(
+                        "result_hash",
+                    ) == result_hash:
+                        return {
+                            "status": "identical", "trial_id": trial_id,
+                            "result": _as_payload(row[1]),
+                        }
+                    return _result_conflict(
+                        current, stored, source_hash=source_hash,
+                        parser_version=parser_version,
+                    )
+                current.update({
+                    "result": stored,
+                    "result_hash": result_hash,
+                    "source_hash": source_hash,
+                    "parser_version": parser_version,
+                    "status": str(stored.get("disposition") or "unknown"),
+                    "finished_at": _now_iso(),
+                })
+                cursor.execute(
+                    "UPDATE trials SET status = %s, payload = %s, result_payload = %s, finished_at = %s WHERE trial_id = %s",  # noqa: E501
+                    (
+                        current["status"], Json(current), Json(stored),
+                        current["finished_at"], trial_id,
+                    ),
+                )
+        return {"status": "stored", "trial_id": trial_id, "result": deepcopy(stored)}

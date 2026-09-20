@@ -21,6 +21,7 @@ def test_builtin_plugins_are_registered_without_service_branches():
         ("direct-llm", "1"),
         ("direct-llm", "2"),
         ("gsm8k", "1"),
+        ("terminal-bench-harbor", "1"),
     ]
 
 

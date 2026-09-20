@@ -1,0 +1,9 @@
+{
+ "job_id": "f7642816-01c9-40ce-ad3f-953bc04e4760",
+ "task": {
+  "path": "<HOST_PATH>",
+  "source": "tasks-errors"
+ },
+ "trial_name": "agent-timeout__wo62aM7",
+ "trials_dir": "<HOST_PATH>"
+}

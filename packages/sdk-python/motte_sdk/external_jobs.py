@@ -345,6 +345,10 @@ class DurableExternalJobRunner:
         self.work_root = str(work_root)
         self.parser_version = parser_version
         self._service: Any = None
+        # 直接注入工件存储时也要立刻接上证据冻结通道：否则"解析前的完整字节"
+        # 不会落盘，恢复路径就只能依赖可清理的工作目录（R2-06/R3-07 的前置）。
+        if self.artifacts is not None:
+            self._wire_evidence_sink()
 
     def bind_service(self, service: Any) -> None:
         self._service = service

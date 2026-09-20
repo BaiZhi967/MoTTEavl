@@ -1,0 +1,36 @@
+{
+ "agent": {
+  "extra_allowed_hosts": [],
+  "kwargs": {},
+  "mcp_servers": [],
+  "name": "oracle",
+  "resume_trajectory": false,
+  "skills": []
+ },
+ "bridge_inputs": {},
+ "environment": {
+  "cpu_enforcement_policy": "auto",
+  "delete": true,
+  "extra_allowed_hosts": [],
+  "extra_docker_compose": [],
+  "force_build": false,
+  "kwargs": {},
+  "memory_enforcement_policy": "auto",
+  "type": "docker"
+ },
+ "install_only": false,
+ "schema_version": 2,
+ "skills": [],
+ "task": {
+  "digest": "sha256:fc5029172a3922cd7ddd40aafbc432e329547dc91e41310d66d1f9e3b18b060f",
+  "name": "hello-pass",
+  "path": "<HOST_PATH>",
+  "source": "tasks",
+  "type": "local"
+ },
+ "timeout_multiplier": 1.0,
+ "verifier": {
+  "disable": false,
+  "environment_mode": "shared"
+ }
+}

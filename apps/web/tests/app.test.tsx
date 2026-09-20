@@ -22,6 +22,18 @@ vi.mock("../src/api/client", () => ({
   getBenchmarkOverview: vi.fn(async () => ({ items: [], total: 0 })),
   importBenchmark: vi.fn(),
   createBenchmarkRun: vi.fn(),
+  getTerminalBenchOverview: vi.fn(async () => ({
+    items: [],
+    total: 0,
+    runner: { adapter_id: "terminal-bench-harbor", harbor_version: "0.23.0", connected: false },
+    benchmark: "terminal-bench",
+  })),
+  getTerminalBenchTasks: vi.fn(async () => ({ items: [], total: 0 })),
+  getTerminalBenchPreflight: vi.fn(),
+  createTerminalBenchRun: vi.fn(),
+  getRunTasks: vi.fn(async () => ({ run_id: "", items: [], total: 0 })),
+  getRunTaskTrials: vi.fn(),
+  getRunTrial: vi.fn(),
   subscribeRunEvents: vi.fn(() => () => undefined),
 }));
 
@@ -70,5 +82,12 @@ describe("应用路由（收尾）", () => {
     expect(screen.getByRole("link", { name: /GSM8K 数学评测/ })).toBeTruthy();
     expect(screen.getByRole("link", { name: /Direct LLM 评测/ })).toBeTruthy();
     expect(screen.getByRole("link", { name: /^Replay$/ })).toBeTruthy();
+  });
+
+  it("侧边栏与路由含 Terminal-Bench（Harbor）专区", async () => {
+    renderWithLocation("/terminal-bench");
+    expect(screen.getByRole("link", { name: /Terminal-Bench（Harbor）/ })).toBeTruthy();
+    // 操作页渲染（数据集版本一栏出现即说明路由与客户端装配正确）
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision")).toBeTruthy());
   });
 });
