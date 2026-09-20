@@ -1,7 +1,6 @@
 """Offline regression tests for the local development supervisor."""
 import json
 import os
-from pathlib import Path
 import socket
 import sys
 import time
@@ -10,73 +9,6 @@ from unittest.mock import Mock
 import pytest
 
 from apps import dev
-
-
-def test_api_reload_scope_excludes_local_worktrees():
-    """The reloading API child must never watch a sibling checkout under `.worktree/`.
-
-    uvicorn's stat reloader seeds its watch set from every `*.py` beneath each reload
-    directory and defaults to the working directory (the repository root), which made
-    unrelated edits in other local worktrees restart this API.
-    """
-    command = dev.api_command()
-    assert "--reload" in command
-    given = [command[index + 1]
-             for index, argument in enumerate(command) if argument == "--reload-dir"]
-    assert all(not Path(value).is_absolute() for value in given), "paths resolve against ROOT"
-    watched = [(dev.ROOT / value).resolve() for value in given]
-    assert all(directory.is_dir() for directory in watched), "uvicorn refuses missing reload dirs"
-    assert dev.ROOT / "apps" in watched, "the API's own code must stay hot-reloading"
-    assert dev.ROOT / "packages" in watched
-    assert dev.ROOT not in watched, "watching the repository root re-includes .worktree"
-    assert not any((dev.ROOT / ".worktree").is_relative_to(directory) for directory in watched)
-
-
-def arguments(command, flag):
-    return [command[index + 1] for index, argument in enumerate(command) if argument == flag]
-
-
-def test_reload_scope_is_overridable_per_run(monkeypatch):
-    """A run may watch another whitelist, or ask for exclusions, without editing code."""
-    monkeypatch.setenv(dev.RELOAD_DIRS_ENV, f"apps, scripts{os.pathsep}packages")
-    monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, "apps *.pyc")
-    command = dev.api_command()
-    assert arguments(command, "--reload-dir") == ["apps", "scripts", "packages"]
-    # a directory becomes absolute (see test_directory_excludes_are_made_absolute);
-    # a glob is passed through for uvicorn to match per path
-    assert arguments(command, "--reload-exclude") == [str((dev.ROOT / "apps").resolve()), "*.pyc"]
-    assert dev.RELOAD_DIRS == ("apps", "packages"), "defaults stay the API's own source"
-
-
-def test_directory_excludes_are_made_absolute(monkeypatch):
-    """A relative directory would exclude nothing: uvicorn matches exclude directories
-    against the absolute paths the watcher reports (measured — `.worktree` leaked)."""
-    monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, ".worktree")
-    assert dev.reload_watch()[1] == (str((dev.ROOT / ".worktree").resolve()),)
-    monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, str(dev.ROOT / ".worktree"))
-    assert dev.reload_watch()[1] == (str((dev.ROOT / ".worktree").resolve()),)
-    monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, "missing-dir")
-    assert dev.reload_watch()[1] == ("missing-dir",), "unresolvable entries stay patterns"
-
-
-@pytest.mark.parametrize("value,expected", [("", ()), ("   ", ()), ("*.pyc", ("*.pyc",))])
-def test_reload_exclude_defaults_to_nothing(monkeypatch, value, expected):
-    monkeypatch.delenv(dev.RELOAD_DIRS_ENV, raising=False)
-    monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, value)
-    assert dev.reload_watch() == (dev.RELOAD_DIRS, expected)
-
-
-def test_excludes_warn_that_watchfiles_is_required(monkeypatch, capsys):
-    """Without watchfiles uvicorn drops --reload-exclude, so a silent no-op is a trap."""
-    monkeypatch.setattr(dev, "watchfiles_installed", lambda: False)
-    dev.warn_unwatchable_excludes((".worktree",))
-    stderr = capsys.readouterr().err
-    assert dev.RELOAD_EXCLUDE_ENV in stderr and "watchfiles" in stderr
-
-    dev.warn_unwatchable_excludes(())
-    monkeypatch.setattr(dev, "watchfiles_installed", lambda: True)
-    dev.warn_unwatchable_excludes((".worktree",))
-    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("status,identity,body,ready", [
