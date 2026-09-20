@@ -51,7 +51,14 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
         return body
 
     def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        """Anthropic Messages SSE 事件 → 归一化；未知事件类型 fail closed。"""
+        """Anthropic Messages SSE 事件 → 归一化；未知事件类型 fail closed。
+
+        计量跨事件累积（M4 review R26）：``message_start`` 携带 input/
+        cache 计量，``message_delta`` 携带 output 计量——逐事件合并后在
+        usage 事件里上报累计值。工具身份（id/name）来自
+        ``content_block_start`` 的 tool_use block；真实 stop_reason 来自
+        ``message_delta``（``message_stop`` 只是流终止帧，不是停止原因）。
+        """
         from .errors import ProviderHTTPError
 
         event_type = data.get("type")
@@ -73,26 +80,73 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
                 f"anthropic stream delta has unknown type: {delta_type!r}",
                 error_class="protocol",
             )
-        if event_type == "message_delta":
-            usage = ((data.get("usage") or {}).get("output_tokens") is not None and data.get("usage")) or None
-            if usage:
+        if event_type == "content_block_start":
+            block = data.get("content_block") or {}
+            if block.get("type") == "tool_use":
                 return [{
-                    "type": self.STREAM_USAGE, "delta": "",
-                    "payload": {"usage": dict(usage)},
+                    "type": self.STREAM_TOOL_DELTA,
+                    "delta": "",
+                    "payload": {
+                        "index": int(data.get("index") or 0),
+                        "id": block.get("id"),
+                        "name": block.get("name"),
+                    },
                 }]
             return []
-        if event_type in ("message_start", "content_block_start", "content_block_stop", "ping"):
+        if event_type == "message_start":
+            message = data.get("message") or {}
+            usage = message.get("usage")
+            if isinstance(usage, dict) and usage:
+                merged = self._merge_stream_usage(usage)
+                if merged:
+                    return [{
+                        "type": self.STREAM_USAGE, "delta": "",
+                        "payload": {"usage": dict(merged)},
+                    }]
+            return []
+        if event_type == "message_delta":
+            usage = data.get("usage")
+            stop_reason = data.get("stop_reason")
+            if isinstance(stop_reason, str) and stop_reason:
+                self._stream_stop_reason = stop_reason
+            events: list[dict[str, Any]] = []
+            if isinstance(usage, dict) and usage:
+                merged = self._merge_stream_usage(usage)
+                if merged:
+                    events.append({
+                        "type": self.STREAM_USAGE, "delta": "",
+                        "payload": {"usage": dict(merged)},
+                    })
+            return events
+        if event_type in ("content_block_stop", "ping"):
             # 已知生命周期/心跳事件：无增量语义，静默通过
             return []
         if event_type == "message_stop":
             return [{
                 "type": self.STREAM_FINISH, "delta": "",
-                "payload": {"finish_reason": "stop"},
+                "payload": {"finish_reason": self._stream_stop_reason or "stop"},
             }]
         raise ProviderHTTPError(
             f"anthropic stream event has unknown type: {event_type!r}",
             error_class="protocol",
         )
+
+    def _reset_stream_state(self) -> None:
+        self._stream_usage_state = {}
+        self._stream_stop_reason = None
+
+    def _merge_stream_usage(self, usage: dict[str, Any]) -> dict[str, Any]:
+        """按事件累积计量：input（message_start）+ output（message_delta）。"""
+        merged = dict(getattr(self, "_stream_usage_state", None) or {})
+        for key in (
+            "input_tokens", "output_tokens",
+            "cache_read_input_tokens", "cache_creation_input_tokens",
+        ):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                merged[key] = value
+        self._stream_usage_state = merged
+        return merged
 
     def build_request_body(self, request: ModelRequest) -> dict[str, Any]:
         merged = self.merged_parameters(request)

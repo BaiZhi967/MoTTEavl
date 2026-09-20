@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import {
   HarnessMonitor,
@@ -69,8 +69,12 @@ describe("HarnessPages（外部 Runtime）", () => {
         <HarnessOperate />
       </MemoryRouter>,
     );
-    expect(await screen.findByText("pi-agent@1")).toBeTruthy();
-    expect(screen.getByText("claude-cli@1")).toBeTruthy();
+    expect((await screen.findAllByText("pi-agent@1")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("claude-cli@1").length).toBeGreaterThanOrEqual(1);
+    // R20：创建链路面板存在（场景/runtime/profile + 内联配置）。
+    expect(screen.getByText("创建 Runtime Run")).toBeTruthy();
+    expect(screen.getByText("Runtime Profile")).toBeTruthy();
+    expect(screen.getByLabelText("场景（agent-tasks）")).toBeTruthy();
     // 三层就绪标记渲染
     const flags = screen.getAllByText("已安装");
     expect(flags.length).toBeGreaterThanOrEqual(2);
@@ -122,8 +126,77 @@ describe("HarnessPages（外部 Runtime）", () => {
         <HarnessOperate />
       </MemoryRouter>,
     );
-    await screen.findByText("codex-app-server@1");
+    await screen.findAllByText("codex-app-server@1");
     expect(screen.getByText(/命令消费者接通前，消息入口保持关闭/)).toBeTruthy();
     expect(screen.getAllByText(/交互/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("R20：创建表单选择已发布 runtime 并提交后调用创建接口", async () => {
+    const fetchMock = stubFetch({
+      "/api/v1/runtimes": {
+        total: 1,
+        items: [{
+          name: "pi-agent", version: "1", kind: "pi-bridge",
+          transport: "bridge-stdio-jsonl", upstream_version: "pi@0.73.1",
+          model_control: "runner-configured", interactive: false, published: true,
+          readiness: {
+            backend: "pi-agent", pinned_version: "0.73.1", installed: true,
+            protocol_ready: true, execution_ready: false, reasons: {},
+          },
+        }],
+      },
+      "/api/v1/scenarios": {
+        items: [{ name: "agent-suite", version: "1", suite: "agent-tasks" }],
+      },
+      "/api/v1/runtime_profiles": { items: [], total: 0 },
+      "/api/v1/runs": {
+        id: "run-new-1", status: "queued",
+        manifest: { runtime: "pi-agent@1" }, created_at: "2026-09-20",
+      },
+    });
+    render(
+      <MemoryRouter>
+        <HarnessOperate />
+      </MemoryRouter>,
+    );
+    const scenarioSelect = await screen.findByLabelText("场景（agent-tasks）");
+    fireEvent.change(scenarioSelect, { target: { value: "agent-suite@1" } });
+    const runtimeSelect = screen.getByLabelText("Runtime（已发布）");
+    fireEvent.change(runtimeSelect, { target: { value: "pi-agent" } });
+    const settingsBox = screen.getByLabelText("原生设置 JSON（runner-configured；至少 model 字段）");
+    fireEvent.change(settingsBox, {
+      target: { value: '{"model":"scripted-1"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /预检并创建/ }));
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(calls).toContain("/api/v1/runs");
+    });
+    const createCall = fetchMock.mock.calls.find(
+      (call) => String(call[0]) === "/api/v1/runs",
+    );
+    const body = JSON.parse(String((createCall?.[1] as RequestInit)?.body));
+    expect(body.scenario_version).toBe("agent-suite@1");
+    expect(body.manifest.runtime).toBe("pi-agent@1");
+    expect(body.manifest.runtime_profile.native_settings.model).toBe("scripted-1");
+  });
+
+  it("R21：运行页详情链接指向已注册的 monitor 路由", async () => {
+    stubFetch({
+      "/api/v1/runs": {
+        total: 1,
+        items: [{
+          id: "run-link-1", status: "completed",
+          manifest: { runtime: "pi-agent@1" }, created_at: "2026-09-20",
+        }],
+      },
+    });
+    render(
+      <MemoryRouter>
+        <HarnessMonitor />
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: "run-link-1" });
+    expect(link.getAttribute("href")).toBe("/runs/run-link-1/monitor");
   });
 });

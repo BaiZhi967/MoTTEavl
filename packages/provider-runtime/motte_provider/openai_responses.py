@@ -62,6 +62,21 @@ class OpenAIResponsesProvider(BaseHTTPProvider):
                             "name": (data.get("item") or {}).get("name")
                             if isinstance(data.get("item"), dict) else None},
             }]
+        if event_type == "response.output_item.added":
+            # R26：function_call item 的身份（call_id/name）在此事件携带，
+            # 参数增量里未必重复——登记为空 delta 的工具身份事件。
+            item = data.get("item")
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                return [{
+                    "type": self.STREAM_TOOL_DELTA,
+                    "delta": "",
+                    "payload": {
+                        "index": int(data.get("output_index") or 0),
+                        "id": item.get("call_id"),
+                        "name": item.get("name"),
+                    },
+                }]
+            return []
         if event_type == "response.completed":
             response = data.get("response") or {}
             usage = response.get("usage") if isinstance(response, dict) else None

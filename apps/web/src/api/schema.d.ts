@@ -1336,6 +1336,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runtime_profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runtime Profiles
+         * @description 已发布 runtime profile 版本（不可变资源；M4 review R20）。
+         */
+        get: operations["list_runtime_profiles_api_v1_runtime_profiles_get"];
+        put?: never;
+        /**
+         * Publish Runtime Profile
+         * @description 发布一个 runtime profile 版本（不可变；name@version 唯一）。
+         */
+        post: operations["publish_runtime_profile_api_v1_runtime_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runtimes": {
         parameters: {
             query?: never;
@@ -1346,6 +1370,9 @@ export interface paths {
         /**
          * List Runtimes
          * @description Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。
+         *
+         *     readiness 走真实零成本探测（bridge probe / --version，M4 review
+         *     R19），不再把计算函数所需输入留给未实现的调用者。
          */
         get: operations["list_runtimes_api_v1_runtimes_get"];
         put?: never;
@@ -4961,6 +4988,61 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runtime_profiles_api_v1_runtime_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    publish_runtime_profile_api_v1_runtime_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

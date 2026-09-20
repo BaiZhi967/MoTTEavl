@@ -1264,8 +1264,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
 
     @application.get("/api/v1/runtimes")
     def list_runtimes():
-        """Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。"""
-        from motte_harness.compatibility import backend_ids, readiness_for_backend
+        """Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。
+
+        readiness 走真实零成本探测（bridge probe / --version，M4 review
+        R19），不再把计算函数所需输入留给未实现的调用者。
+        """
+        from motte_harness.compatibility import backend_ids, probed_readiness
         from motte_sdk.runtime_backends import CANONICAL_RUNTIME_VERSIONS
 
         resources = application.state.resource_store
@@ -1278,7 +1282,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 published = resources.runtimes.get(backend_id, "1")
             except Exception:  # noqa: BLE001 - 目录读取失败不 500
                 published = None
-            readiness = readiness_for_backend(backend_id)
+            readiness = probed_readiness(backend_id)
             items.append({
                 "name": backend_id,
                 "version": "1",
@@ -1301,15 +1305,69 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         published = publish_canonical_runtime_versions(resources)
         return {"published": sorted(published), "total": len(published)}
 
+    @application.get("/api/v1/runtime_profiles")
+    def list_runtime_profiles():
+        """已发布 runtime profile 版本（不可变资源；M4 review R20）。"""
+        resources = application.state.resource_store
+        try:
+            items = resources.runtime_profiles.list()
+        except Exception:  # noqa: BLE001 - 目录读取失败不 500
+            items = []
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/runtime_profiles", status_code=201)
+    def publish_runtime_profile(body: dict):
+        """发布一个 runtime profile 版本（不可变；name@version 唯一）。"""
+        from datetime import UTC, datetime
+
+        from motte_contracts.runtime import RuntimeProfileVersion
+        from pydantic import ValidationError
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "RUNTIME_PROFILE_INVALID", "message": "body must be an object"}},
+            )
+        payload = {
+            "published_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            **body,
+        }
+        try:
+            profile = RuntimeProfileVersion.model_validate(payload)
+        except ValidationError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "RUNTIME_PROFILE_INVALID",
+                    "message": f"runtime profile fields are invalid: {error.error_count()} error(s)",
+                }},
+            )
+        # runtime 引用必须指向已发布的 runtime 版本。
+        name, _, version = profile.runtime.rpartition("@")
+        try:
+            runtime = application.state.resource_store.runtimes.get(name, version)
+        except Exception:  # noqa: BLE001
+            runtime = None
+        if runtime is None:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "RUNTIME_NOT_FOUND",
+                    "message": f"runtime {profile.runtime!r} is not published",
+                }},
+            )
+        stored = application.state.resource_store.runtime_profiles.put(profile.model_dump())
+        return stored
+
     @application.get("/api/v1/runtimes/{name}/readiness")
     def runtime_readiness(name: str):
         from motte_harness.compatibility import (
             CompatibilityError,
-            readiness_for_backend,
+            probed_readiness,
         )
 
         try:
-            state = readiness_for_backend(name)
+            state = probed_readiness(name)
         except CompatibilityError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return state

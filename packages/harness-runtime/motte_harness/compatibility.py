@@ -226,6 +226,68 @@ def version_from_output(output: str) -> str | None:
     return _parse_version(output)
 
 
+def probe_readiness_inputs(
+    backend_id: str,
+    *,
+    manifest_path: Path | str | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """执行零成本探测，为 readiness_for_backend 提供真实输入（R19）。
+
+    - pi-bridge：spawn 一次 bridge probe（无模型调用），取协议版本；
+    - CLI backend：跑 ``binary --version``（离线、无副作用），取输出文本。
+
+    探测失败返回 None 输入（readiness 据此给出 protocol_ready=false 与
+    可区分的原因），绝不把"未提供"冒充"探测通过"。
+    """
+    import shutil
+    import subprocess
+
+    manifest = load_runtime_compatibility(manifest_path)
+    _, entry = _backend_entry(backend_id, manifest)
+    kind = str(entry.get("kind") or "")
+    if kind == "pi-bridge":
+        try:
+            from motte_agent.pi import PiAgentRuntime
+
+            runtime = PiAgentRuntime(timeout_seconds=timeout)
+            if not runtime.available():
+                return {"probe_result": None}
+            probe = runtime.probe()
+            return {"probe_result": {
+                "protocol": probe.get("protocol"),
+                "bridge_version": probe.get("version"),
+                "execution_ready": False,
+            }}
+        except Exception:  # noqa: BLE001 - probe 失败按未提供处理
+            return {"probe_result": None}
+    binary = str(entry.get("upstream", {}).get("binary") or backend_id)
+    resolved = shutil.which(binary) or (binary if Path(binary).is_file() else None)
+    if resolved is None:
+        return {"version_output": None}
+    try:
+        completed = subprocess.run(  # noqa: S603 - 受控固定 argv，无 shell
+            [resolved, "--version"],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"version_output": None}
+    return {"version_output": (completed.stdout or "") + (completed.stderr or "")}
+
+
+def probed_readiness(
+    backend_id: str,
+    *,
+    manifest_path: Path | str | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """readiness_for_backend + 真实探测输入（公共入口统一走这里，R19）。"""
+    inputs = probe_readiness_inputs(
+        backend_id, manifest_path=manifest_path, timeout=timeout,
+    )
+    return readiness_for_backend(backend_id, manifest_path=manifest_path, **inputs)
+
+
 def backend_ids(path: Path | str | None = None) -> tuple[str, ...]:
     manifest = load_runtime_compatibility(path)
     return tuple(

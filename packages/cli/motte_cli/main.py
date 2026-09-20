@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 def _runtime_catalog():
-    from motte_harness.compatibility import backend_ids, readiness_for_backend
+    from motte_harness.compatibility import backend_ids, probed_readiness
     from motte_sdk.runtime_backends import CANONICAL_RUNTIME_VERSIONS
 
     items = []
@@ -23,7 +23,8 @@ def _runtime_catalog():
             "upstream_version": definition.get("upstream_version"),
             "model_control": definition.get("model_control"),
             "interactive": bool(definition.get("interactive")),
-            "readiness": readiness_for_backend(backend_id),
+            # 真实零成本探测（bridge probe / --version，M4 review R19）。
+            "readiness": probed_readiness(backend_id),
         })
     return items
 
@@ -50,10 +51,10 @@ def _cmd_runtime(args):
                     print(f"    {level}: {reason}")
         return 0
     if command == "readiness":
-        from motte_harness.compatibility import CompatibilityError, readiness_for_backend
+        from motte_harness.compatibility import CompatibilityError, probed_readiness
 
         try:
-            state = readiness_for_backend(args.name)
+            state = probed_readiness(args.name)
         except CompatibilityError as error:
             print(f"runtime: {error}")
             return 2

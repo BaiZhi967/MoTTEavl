@@ -6905,9 +6905,63 @@
         "summary": "Run Terminal Bench Trial Artifact Bytes"
       }
     },
+    "/api/v1/runtime_profiles": {
+      "get": {
+        "description": "已发布 runtime profile 版本（不可变资源；M4 review R20）。",
+        "operationId": "list_runtime_profiles_api_v1_runtime_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runtime Profiles"
+      },
+      "post": {
+        "description": "发布一个 runtime profile 版本（不可变；name@version 唯一）。",
+        "operationId": "publish_runtime_profile_api_v1_runtime_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Runtime Profile"
+      }
+    },
     "/api/v1/runtimes": {
       "get": {
-        "description": "Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。",
+        "description": "Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。\n\nreadiness 走真实零成本探测（bridge probe / --version，M4 review\nR19），不再把计算函数所需输入留给未实现的调用者。",
         "operationId": "list_runtimes_api_v1_runtimes_get",
         "responses": {
           "200": {

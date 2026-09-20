@@ -222,12 +222,50 @@ class TestAnthropicStreaming:
             _collect(provider.stream(_request()))
 
     def test_missing_usage_stays_unknown(self):
-        stream = [e for e in ANTHROPIC_STREAM if e.get("type") != "message_delta"]
+        # 完全没有 usage 事件：unknown，不填 0。
+        stream = [
+            event for event in ANTHROPIC_STREAM
+            if event.get("type") not in ("message_delta", "message_start")
+        ]
+        stream.insert(0, {"type": "message_start", "message": {}})
         provider, _ = self._provider(_sse_lines(stream))
         events = _collect(provider.stream(_request()))
         finish = events[-1]["payload"]
         assert finish["usage"] is None
         assert finish["usage_reported"] is False
+
+    def test_input_usage_from_message_start_is_reported(self):
+        # R26：message_start 的 input/cache 计量不再被丢弃——即使流中
+        # 没有 message_delta 的 output 计量，input 侧也如实上报。
+        provider, _ = self._provider(_sse_lines(ANTHROPIC_STREAM))
+        events = _collect(provider.stream(_request()))
+        finish = events[-1]["payload"]
+        assert finish["usage"]["input_tokens"] == 5
+        assert finish["usage"]["output_tokens"] == 3
+        assert finish["usage_reported"] is True
+
+    def test_tool_identity_and_stop_reason_survive(self):
+        # R26：content_block_start 的 tool id/name 与 message_delta 的
+        # stop_reason 进入最终 finish。
+        provider, _ = self._provider(_sse_lines([
+            {"type": "message_start", "message": {"usage": {"input_tokens": 42}}},
+            {"type": "content_block_start", "index": 1,
+             "content_block": {"type": "tool_use", "id": "call_1",
+                               "name": "write_file"}},
+            {"type": "content_block_delta", "index": 1,
+             "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+            {"type": "message_delta", "stop_reason": "tool_use",
+             "usage": {"output_tokens": 3}},
+            {"type": "message_stop"},
+        ]))
+        events = _collect(provider.stream(_request()))
+        finish = events[-1]["payload"]
+        assert finish["finish_reason"] == "tool_use"
+        assert finish["tool_call_count"] == 1
+        assert finish["tool_calls"][0]["id"] == "call_1"
+        assert finish["tool_calls"][0]["name"] == "write_file"
+        assert finish["usage"]["input_tokens"] == 42
+        assert finish["usage"]["output_tokens"] == 3
 
     def test_consumer_abort_closes_stream(self):
         provider, response = self._provider(_sse_lines(ANTHROPIC_STREAM))
@@ -249,6 +287,63 @@ def test_stream_event_types_are_canonical():
     assert BaseHTTPProvider.STREAM_TEXT_DELTA == "text_delta"
     assert BaseHTTPProvider.STREAM_FINISH == "finish"
     del allowed
+
+
+def test_openai_done_sentinel_is_not_invalid_json():
+    """R24：标准 ``data: [DONE]`` 终止帧是传输哨兵，不是非法 JSON。"""
+    lines = _sse_lines(CHAT_STREAM)
+    # 在 usage 事件之后、EOF 之前插入独立成帧的 [DONE]（前后空行分隔）。
+    lines += ["data: [DONE]", ""]
+    transport, _ = _transport_with(lines)
+    provider = _provider(OpenAICompatibleProvider, transport)
+    events = _collect(provider.stream(_request()))
+    finish = events[-1]["payload"]
+    assert finish["usage"]["prompt_tokens"] == 11
+
+
+def test_stream_without_terminal_event_fails_closed():
+    """R25：EOF 而无原生 terminal → 显式失败，不冒充 finish(None)。"""
+    stream = [
+        {"type": "response.created", "response": {"id": "r1"}},
+        {"type": "response.output_text.delta", "delta": "partial"},
+    ]
+    transport, _ = _transport_with(_sse_lines(stream))
+    provider = _provider(OpenAIResponsesProvider, transport)
+    with pytest.raises(Exception) as raised:
+        _collect(provider.stream(_request()))
+    assert "terminal" in str(raised.value)
+
+
+def test_single_finish_event_per_stream():
+    """R25：正常流只有一个 finish（原生 terminal 只登记，不重复产出）。"""
+    provider_transport, _ = _transport_with(_sse_lines(CHAT_STREAM))
+    provider = _provider(OpenAICompatibleProvider, provider_transport)
+    events = _collect(provider.stream(_request()))
+    finishes = [e for e in events if e["type"] == "finish"]
+    assert len(finishes) == 1
+    assert events[-1]["type"] == "finish"
+
+
+def test_responses_tool_identity_from_output_item_added():
+    """R26：function_call item 的 call_id/name 经 output_item.added 登记。"""
+    stream = [
+        {"type": "response.created", "response": {"id": "r1"}},
+        {"type": "response.output_item.added", "output_index": 1,
+         "item": {"type": "function_call", "call_id": "call_9",
+                  "name": "read_file"}},
+        {"type": "response.function_call_arguments.delta",
+         "delta": "{\"path\":\"a\"}", "output_index": 1},
+        {"type": "response.completed", "response": {
+            "status": "completed", "usage": {"input_tokens": 4, "output_tokens": 1}}},
+    ]
+    transport, _ = _transport_with(_sse_lines(stream))
+    provider = _provider(OpenAIResponsesProvider, transport)
+    events = _collect(provider.stream(_request()))
+    finish = events[-1]["payload"]
+    assert finish["tool_call_count"] == 1
+    assert finish["tool_calls"][0]["id"] == "call_9"
+    assert finish["tool_calls"][0]["name"] == "read_file"
+    assert finish["tool_calls"][0]["arguments"] == "{\"path\":\"a\"}"
 
 
 def test_pi_consumer_stream_terminal_consistency():

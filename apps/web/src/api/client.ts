@@ -199,6 +199,23 @@ export const getRuntimes = () =>
 export const publishRuntimes = () =>
   request<{ published: string[]; total: number }>("/api/v1/runtimes/publish", jsonBody({}));
 
+export interface RuntimeProfileRecord {
+  name: string;
+  version: string;
+  runtime: string;
+  native_settings: Record<string, unknown>;
+  workspace: { source: string; root?: string };
+  budgets: Record<string, unknown>;
+  credential_refs: string[];
+  published_at: string;
+}
+
+export const getRuntimeProfiles = () =>
+  request<{ items: RuntimeProfileRecord[]; total: number }>("/api/v1/runtime_profiles");
+
+export const publishRuntimeProfile = (body: Record<string, unknown>) =>
+  request<RuntimeProfileRecord>("/api/v1/runtime_profiles", jsonBody(body));
+
 export const createRun = (body: { scenario_version: string; manifest?: any; case_ids?: string[] }) =>
   request<RunRecord>("/api/v1/runs", jsonBody(body));
 

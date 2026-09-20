@@ -123,6 +123,9 @@ class BaseHTTPProvider:
         """
         raise NotImplementedError
 
+    def _reset_stream_state(self) -> None:
+        """每次 stream 调用前重置 adapter 内的跨事件累积状态（默认无状态）。"""
+
     # ----------------------------------------------------------------- 流式
 
     def stream(self, request: ModelRequest):
@@ -131,20 +134,32 @@ class BaseHTTPProvider:
         - 增量事件：type=text_delta / tool_delta（delta 为文本增量）；
         - 终态事件：usage（payload.usage 原生计量）与 finish（payload 含
           finish_reason / 组装后的完整响应摘要）；
+        - **单一 finish**（M4 review R25）：adapter 归一化的原生 terminal
+          只登记 finish_reason，最终 finish 由基站在流末统一产出一次——
+          正常流不会收到两个 finish；
         - 断流（消费方停止迭代）即取消：连接关闭，无重试；
+        - EOF 而无原生 terminal → 显式失败（protocol），不冒充完整流；
+        - OpenAI 风格的 ``data: [DONE]`` 帧是传输层哨兵，不是终态事件，
+          静默略过（M4 review R24）；
         - 事件顺序：增量 ... usage? finish（usage 缺失时如实省略，不填 0）。
         """
         body = self.build_stream_request_body(request)
         body.update(reasoning_patch(self.reasoning, self.reasoning_level))
+        self._reset_stream_state()
         started_any_text: list[str] = []
         tool_fragments: dict[int, dict[str, Any]] = {}
         terminal_usage: dict[str, Any] | None = None
         finish_reason: str | None = None
         chunks = 0
+        terminal_seen = False
         try:
             for sse in self.transport.post_sse(self.request_path, body):
+                data_text = sse["data"]
+                if isinstance(data_text, str) and data_text.strip() == "[DONE]":
+                    # 传输层终止哨兵：不是 JSON 事件，也不是 assistant 终态。
+                    continue
                 try:
-                    data = json.loads(sse["data"])
+                    data = json.loads(data_text)
                 except json.JSONDecodeError as error:
                     raise ProviderHTTPError(
                         f"stream chunk is not JSON: {error}", error_class="protocol",
@@ -159,15 +174,23 @@ class BaseHTTPProvider:
                         started_any_text.append(event.get("delta") or "")
                     elif event["type"] == self.STREAM_TOOL_DELTA:
                         index = int((event.get("payload") or {}).get("index") or 0)
-                        fragment = tool_fragments.setdefault(index, {"arguments": "", "name": None})
+                        fragment = tool_fragments.setdefault(
+                            index, {"arguments": "", "name": None, "id": None},
+                        )
                         fragment["arguments"] += event.get("delta") or ""
                         name = (event.get("payload") or {}).get("name")
                         if name:
                             fragment["name"] = name
+                        call_id = (event.get("payload") or {}).get("id")
+                        if call_id:
+                            fragment["id"] = call_id
                     elif event["type"] == self.STREAM_USAGE:
                         terminal_usage = dict((event.get("payload") or {}).get("usage") or {})
                     elif event["type"] == self.STREAM_FINISH:
+                        # 原生 terminal 只登记：finish 在流末统一产出一次。
+                        terminal_seen = True
                         finish_reason = (event.get("payload") or {}).get("finish_reason")
+                        continue
                     yield event
         except ProviderError:
             raise
@@ -175,6 +198,11 @@ class BaseHTTPProvider:
             raise ProviderHTTPError(
                 f"stream failed: {error}", error_class="network",
             ) from error
+        if not terminal_seen:
+            raise ProviderHTTPError(
+                "stream ended without a native terminal event",
+                error_class="protocol",
+            )
         yield {
             "type": self.STREAM_FINISH,
             "delta": "",
@@ -182,6 +210,15 @@ class BaseHTTPProvider:
                 "finish_reason": finish_reason,
                 "usage": terminal_usage,
                 "text_preview": "".join(started_any_text)[:256],
+                "tool_calls": [
+                    {
+                        "index": index,
+                        "id": fragment.get("id"),
+                        "name": fragment.get("name"),
+                        "arguments": fragment.get("arguments"),
+                    }
+                    for index, fragment in sorted(tool_fragments.items())
+                ],
                 "tool_call_count": len(tool_fragments),
                 "chunks": chunks,
                 "usage_reported": terminal_usage is not None,
