@@ -104,6 +104,19 @@ function realModelFromSpec(modelSpec, providerSpec) {
   if (typeof providerSpec.base_url === "string" && providerSpec.base_url) {
     model.baseUrl = providerSpec.base_url;
   }
+  // provider 实现按模态字段分流（如 image 输入）；未声明时默认纯文本。
+  model.input = typeof modelSpec.input === "string" && modelSpec.input
+    ? modelSpec.input
+    : "text";
+  model.output = typeof modelSpec.output === "string" && modelSpec.output
+    ? modelSpec.output
+    : "text";
+  return model;
+}
+
+function realApiKeyFromSpec(providerSpec) {
+  // key 只经环境名下发（协议里永不出现秘密原文）；未声明环境名时交给
+  // SDK 的 provider 环境解析（如 provider=openai 读 OPENAI_API_KEY）。
   if (typeof providerSpec.api_key_env === "string" && providerSpec.api_key_env) {
     const key = process.env[providerSpec.api_key_env];
     if (!key) {
@@ -111,9 +124,9 @@ function realModelFromSpec(modelSpec, providerSpec) {
         `provider api key env ${providerSpec.api_key_env} is not set in the bridge process`,
       );
     }
-    model.apiKey = key;
+    return key;
   }
-  return model;
+  return undefined;
 }
 
 export class PiSession {
@@ -150,10 +163,12 @@ export class PiSession {
       this.providerSpec = providerSpec;
       this.responses = null;
       this.realModel = realModelFromSpec(this.modelSpec, providerSpec);
+      this.modelApiKey = realApiKeyFromSpec(providerSpec);
     } else {
       this.transportMode = "scripted";
       this.providerSpec = null;
       this.realModel = null;
+      this.modelApiKey = undefined;
       this.responses = scriptedResponses(config.responses);
     }
 
@@ -194,13 +209,21 @@ export class PiSession {
   _buildAgent() {
     const model = this._buildModel();
     const session = this;
+    // 真实传输：streamSimple 的 key 走 options.apiKey（模型对象上的 key
+    // 不会被 provider wrapper 读取）；scripted 传输直接用 streamSimple。
+    const streamFn = this.transportMode === "http" && this.modelApiKey
+      ? (modelArg, context, options) => streamSimple(modelArg, context, {
+          ...options,
+          apiKey: this.modelApiKey,
+        })
+      : streamSimple;
     const agent = new Agent({
       initialState: {
         model,
         systemPrompt: this.systemPrompt,
         tools: this.workspaceTools.select(this.toolNames),
       },
-      streamFn: streamSimple,
+      streamFn,
       beforeToolCall: async () => {
         // SDK 先发 tool_execution_start 再调 beforeToolCall：预算计数必须
         // 在放行处自增（事件回调里的计数会把第一个工具就判超限）。
