@@ -550,7 +550,7 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_import = sub.add_parser(
         "inspect-import", help="Inspect eval-log 只读导入（不执行日志内容）",
     )
-    inspect_import.add_argument("file", help="Inspect .eval 日志文件路径（JSONL）")
+    inspect_import.add_argument("file", help="Inspect .json EvalLog 文件路径（--full 完整导出；二进制 .eval 不支持）")
     inspect_import.add_argument("--name", help="导入名称（审计用）")
     inspect_import.add_argument("--json", action="store_true")
 

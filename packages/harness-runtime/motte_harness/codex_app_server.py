@@ -1,7 +1,14 @@
-"""M4-T10：codex app-server 传输（JSON-RPC over stdio 子集）。
+"""M4-T10：codex app-server 传输（JSON-RPC over stdio 子集）——**草案**。
 
-真实二进制（pinned @openai/codex@0.155.1）经 `codex app-server` 子命令
-启动；版本漂移在构造时 fail closed。离线验证用 `SyntheticTransport`
+**当前状态（M4 review R17）：未接线生产。** 注册 backend 的 interactive
+能力为 False（无持久命令消费者），API 消息端点对 app-server run 返回
+501 RUN_COMMANDS_NOT_IMPLEMENTED——不接收 202 让命令永久 queued。
+
+本模块的方法名/审批语义按早期笔记构造，**尚未与官方 app-server 协议**
+（initialize/newConversation/sendUserMessage/... + approval request/
+respond）对齐；真实接线前不得声称支持。真实二进制（pinned
+@openai/codex@0.155.1）经 `codex app-server` 子命令启动；版本漂移在构造
+时 fail closed。离线验证用 `SyntheticTransport`
 （tests/runtime/test_command_delivery.py）；真实会话证据属 live 单列。
 """
 from __future__ import annotations
