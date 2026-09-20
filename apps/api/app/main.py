@@ -1223,6 +1223,60 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         items = [{**report, "protocol_ready": True, "execution_ready": False} for report in reports]
         return {"items": items, "total": len(items)}
 
+    # ------------------------------------------------------------ M4 runtimes
+
+    @application.get("/api/v1/runtimes")
+    def list_runtimes():
+        """Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。"""
+        from motte_harness.compatibility import backend_ids, readiness_for_backend
+        from motte_sdk.runtime_backends import CANONICAL_RUNTIME_VERSIONS
+
+        resources = application.state.resource_store
+        items = []
+        for backend_id in backend_ids():
+            canonical = CANONICAL_RUNTIME_VERSIONS.get(backend_id) or {}
+            definition = canonical.get("definition") or {}
+            published = None
+            try:
+                published = resources.runtimes.get(backend_id, "1")
+            except Exception:  # noqa: BLE001 - 目录读取失败不 500
+                published = None
+            readiness = readiness_for_backend(backend_id)
+            items.append({
+                "name": backend_id,
+                "version": "1",
+                "kind": definition.get("kind"),
+                "transport": definition.get("transport"),
+                "upstream_version": (canonical.get("definition") or {}).get("upstream_version"),
+                "model_control": definition.get("model_control"),
+                "interactive": bool(definition.get("interactive")),
+                "published": published is not None,
+                "readiness": readiness,
+            })
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/runtimes/publish")
+    def publish_runtimes():
+        """把规范 runtime 版本发布进资源仓库（幂等；不可变版本资源）。"""
+        from motte_sdk.runtime_backends import publish_canonical_runtime_versions
+
+        resources = application.state.resource_store
+        published = publish_canonical_runtime_versions(resources)
+        return {"published": sorted(published), "total": len(published)}
+
+    @application.get("/api/v1/runtimes/{name}/readiness")
+    def runtime_readiness(name: str):
+        from motte_harness.compatibility import (
+            CompatibilityError,
+            readiness_for_backend,
+        )
+
+        try:
+            state = readiness_for_backend(name)
+        except CompatibilityError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return state
+
     @application.get("/api/v1/skills")
     def list_skills():
         registry = getattr(application.state, "skill_registry", None) or {}

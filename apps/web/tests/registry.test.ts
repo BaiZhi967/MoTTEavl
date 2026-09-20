@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { EVAL_SUITES, suiteForRun, suiteRoutes } from "../src/evalTypes/registry";
 
 describe("evalTypes 注册表", () => {
-  it("注册七个套件且 id 唯一", () => {
+  it("注册套件且 id 唯一（M4 起含外部 runtimes）", () => {
     expect(EVAL_SUITES.map((suite) => suite.id)).toEqual([
       "agent-tasks", "cmmlu", "terminal-bench", "ceval", "gsm8k", "direct-llm", "replay",
+      "runtimes",
     ]);
     expect(new Set(EVAL_SUITES.map((suite) => suite.id)).size).toBe(EVAL_SUITES.length);
   });

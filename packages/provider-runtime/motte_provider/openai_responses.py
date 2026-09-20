@@ -34,6 +34,61 @@ class OpenAIResponsesProvider(BaseHTTPProvider):
     SUPPORTED_PARAMETERS = SUPPORTED_PARAMETERS
     _API_NAMES = _API_NAMES
 
+    _KNOWN_STREAM_EVENTS = frozenset({
+        "response.output_text.delta", "response.output_text.done",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.completed", "response.failed", "response.incomplete",
+        "response.created", "response.in_progress", "response.output_item.added",
+        "response.output_item.done", "response.content_part.added",
+        "response.content_part.done",
+    })
+
+    def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Responses API 流事件 → 归一化；未知事件类型 fail closed。"""
+        from .errors import ProviderHTTPError
+
+        event_type = data.get("type")
+        if event_type == "response.output_text.delta":
+            return [{
+                "type": self.STREAM_TEXT_DELTA,
+                "delta": str(data.get("delta") or ""), "payload": {},
+            }]
+        if event_type == "response.function_call_arguments.delta":
+            return [{
+                "type": self.STREAM_TOOL_DELTA,
+                "delta": str(data.get("delta") or ""),
+                "payload": {"index": int(data.get("output_index") or 0),
+                            "name": (data.get("item") or {}).get("name")
+                            if isinstance(data.get("item"), dict) else None},
+            }]
+        if event_type == "response.completed":
+            response = data.get("response") or {}
+            usage = response.get("usage") if isinstance(response, dict) else None
+            events: list[dict[str, Any]] = []
+            if isinstance(usage, dict) and usage:
+                events.append({
+                    "type": self.STREAM_USAGE, "delta": "",
+                    "payload": {"usage": dict(usage)},
+                })
+            events.append({
+                "type": self.STREAM_FINISH, "delta": "",
+                "payload": {"finish_reason": response.get("status")
+                            if isinstance(response, dict) else "completed"},
+            })
+            return events
+        if event_type == "response.failed":
+            raise ProviderHTTPError(
+                "responses stream reported response.failed",
+                error_class="provider",
+            )
+        if event_type in self._KNOWN_STREAM_EVENTS:
+            return []
+        raise ProviderHTTPError(
+            f"responses stream event has unknown type: {event_type!r}",
+            error_class="protocol",
+        )
+
     def build_request_body(self, request: ModelRequest) -> dict[str, Any]:
         merged = self.merged_parameters(request)
         body: dict[str, Any] = {"model": self.model}

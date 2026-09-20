@@ -21,6 +21,7 @@ import { DirectLlmMonitor } from "./evalTypes/directllm/DirectLlmMonitor";
 import { DirectLlmOperate } from "./evalTypes/directllm/DirectLlmOperate";
 import { DirectLlmResult } from "./evalTypes/directllm/DirectLlmResult";
 import { AgentCompare, AgentMonitor, AgentOperate, AgentResult } from "./evalTypes/agent/AgentPages";
+import { HarnessMonitor, HarnessOperate } from "./evalTypes/harness/HarnessPages";
 import { ReplayOperate, ReplayMonitor, ReplayResult } from "./evalTypes/replay/ReplayPages";
 import {
   TerminalBenchCompare,
@@ -77,6 +78,8 @@ export default function App() {
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
           <Route path="/agent-tasks" element={<AgentOperate />} />
+          <Route path="/runtimes" element={<HarnessOperate />} />
+          <Route path="/runtimes/monitor" element={<HarnessMonitor />} />
           <Route path="/agent-tasks/monitor" element={<AgentMonitor />} />
           <Route path="/agent-tasks/runs/:runId/result" element={<AgentResult />} />
           <Route path="/agent-tasks/compare" element={<AgentCompare />} />

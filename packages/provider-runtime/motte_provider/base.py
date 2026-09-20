@@ -6,6 +6,7 @@ canonical 脱敏与 ProviderCallError 证据携带全部由基类统一处理。
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from copy import deepcopy
 
@@ -16,7 +17,7 @@ from motte_contracts.messages import ModelRequest, ModelResponse
 from motte_trace.redaction import redact
 
 from .capabilities import validate_parameters
-from .errors import ProviderError, classify_exception
+from .errors import ProviderError, ProviderHTTPError, classify_exception
 from .identity import assess_identity, validate_identity_config
 from .pricing import PriceTable, cost_detail, parse_price_table
 from .transport import HTTPTransport, TransportOutcome
@@ -65,6 +66,13 @@ class BaseHTTPProvider:
     _API_NAMES: ClassVar[dict[str, str]] = {}
     IMPLEMENTATION_VERSION: ClassVar[str] = "unversioned"
 
+    # M4-T08 流式事件类型（StreamEvent.type 的受控取值）
+    STREAM_TEXT_DELTA = "text_delta"
+    STREAM_TOOL_DELTA = "tool_delta"
+    STREAM_USAGE = "usage"
+    STREAM_FINISH = "finish"
+    STREAM_ERROR = "error"
+
     def __init__(
         self,
         transport: HTTPTransport,
@@ -102,6 +110,83 @@ class BaseHTTPProvider:
 
     def normalize_response(self, body: dict[str, Any]) -> ModelResponse:
         raise NotImplementedError
+
+    def build_stream_request_body(self, request: ModelRequest) -> dict[str, Any]:
+        """流式请求体：默认在完整请求体上加 stream=true（adapter 可覆写）。"""
+        return {**self.build_request_body(request), "stream": True}
+
+    def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """把一条 SSE data JSON 归一化为 StreamEvent 列表（adapter 实现）。
+
+        未知协议事件必须 fail closed（抛 ProviderHTTPError(protocol)），
+        不允许静默忽略后冒充完整流。
+        """
+        raise NotImplementedError
+
+    # ----------------------------------------------------------------- 流式
+
+    def stream(self, request: ModelRequest):
+        """流式调用：产出 text/tool 增量与终态 usage/finish 事件（M4-T08）。
+
+        - 增量事件：type=text_delta / tool_delta（delta 为文本增量）；
+        - 终态事件：usage（payload.usage 原生计量）与 finish（payload 含
+          finish_reason / 组装后的完整响应摘要）；
+        - 断流（消费方停止迭代）即取消：连接关闭，无重试；
+        - 事件顺序：增量 ... usage? finish（usage 缺失时如实省略，不填 0）。
+        """
+        body = self.build_stream_request_body(request)
+        body.update(reasoning_patch(self.reasoning, self.reasoning_level))
+        started_any_text: list[str] = []
+        tool_fragments: dict[int, dict[str, Any]] = {}
+        terminal_usage: dict[str, Any] | None = None
+        finish_reason: str | None = None
+        chunks = 0
+        try:
+            for sse in self.transport.post_sse(self.request_path, body):
+                try:
+                    data = json.loads(sse["data"])
+                except json.JSONDecodeError as error:
+                    raise ProviderHTTPError(
+                        f"stream chunk is not JSON: {error}", error_class="protocol",
+                    ) from error
+                if not isinstance(data, dict):
+                    raise ProviderHTTPError(
+                        "stream chunk must be a JSON object", error_class="protocol",
+                    )
+                chunks += 1
+                for event in self.normalize_stream_event(data):
+                    if event["type"] == self.STREAM_TEXT_DELTA:
+                        started_any_text.append(event.get("delta") or "")
+                    elif event["type"] == self.STREAM_TOOL_DELTA:
+                        index = int((event.get("payload") or {}).get("index") or 0)
+                        fragment = tool_fragments.setdefault(index, {"arguments": "", "name": None})
+                        fragment["arguments"] += event.get("delta") or ""
+                        name = (event.get("payload") or {}).get("name")
+                        if name:
+                            fragment["name"] = name
+                    elif event["type"] == self.STREAM_USAGE:
+                        terminal_usage = dict((event.get("payload") or {}).get("usage") or {})
+                    elif event["type"] == self.STREAM_FINISH:
+                        finish_reason = (event.get("payload") or {}).get("finish_reason")
+                    yield event
+        except ProviderError:
+            raise
+        except Exception as error:  # noqa: BLE001 - 网络层断流等
+            raise ProviderHTTPError(
+                f"stream failed: {error}", error_class="network",
+            ) from error
+        yield {
+            "type": self.STREAM_FINISH,
+            "delta": "",
+            "payload": {
+                "finish_reason": finish_reason,
+                "usage": terminal_usage,
+                "text_preview": "".join(started_any_text)[:256],
+                "tool_call_count": len(tool_fragments),
+                "chunks": chunks,
+                "usage_reported": terminal_usage is not None,
+            },
+        }
 
     # ----------------------------------------------------------------- 公共流程
 

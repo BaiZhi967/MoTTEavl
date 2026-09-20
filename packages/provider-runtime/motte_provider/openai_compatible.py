@@ -64,6 +64,58 @@ class OpenAICompatibleProvider(BaseHTTPProvider):
                 body["tool_choice"] = request.tool_choice
         return body
 
+    def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """chat.completions 流块 → 归一化事件；未知形状 fail closed（M4-T08）。"""
+        from .errors import ProviderHTTPError
+
+        if not isinstance(data.get("choices"), list):
+            # 终态 usage 块：choices 为空数组，usage 在顶层（include_usage）
+            if isinstance(data.get("usage"), dict) and data["usage"]:
+                return [{
+                    "type": self.STREAM_USAGE, "delta": "",
+                    "payload": {"usage": dict(data["usage"])},
+                }]
+            raise ProviderHTTPError(
+                "openai chat stream chunk has unknown shape", error_class="protocol",
+            )
+        events: list[dict[str, Any]] = []
+        if isinstance(data.get("usage"), dict) and data["usage"]:
+            events.append({
+                "type": self.STREAM_USAGE, "delta": "",
+                "payload": {"usage": dict(data["usage"])},
+            })
+        choice = data["choices"][0] if data["choices"] else {}
+        if not isinstance(choice, dict):
+            raise ProviderHTTPError(
+                "openai chat stream choice has unknown shape", error_class="protocol",
+            )
+        delta = choice.get("delta") or {}
+        if isinstance(delta.get("content"), str) and delta["content"]:
+            events.append({
+                "type": self.STREAM_TEXT_DELTA, "delta": delta["content"], "payload": {},
+            })
+        for index, call in enumerate(delta.get("tool_calls") or []):
+            if not isinstance(call, dict):
+                raise ProviderHTTPError(
+                    "openai chat tool delta has unknown shape", error_class="protocol",
+                )
+            function = call.get("function") or {}
+            events.append({
+                "type": self.STREAM_TOOL_DELTA,
+                "delta": str(function.get("arguments") or ""),
+                "payload": {
+                    "index": int(call.get("index") or index),
+                    "id": call.get("id"),
+                    "name": function.get("name"),
+                },
+            })
+        if choice.get("finish_reason"):
+            events.append({
+                "type": self.STREAM_FINISH, "delta": "",
+                "payload": {"finish_reason": choice.get("finish_reason")},
+            })
+        return events
+
     def normalize_response(self, data: dict[str, Any]) -> ModelResponse:
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}

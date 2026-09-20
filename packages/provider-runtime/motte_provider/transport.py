@@ -157,6 +157,54 @@ class HTTPTransport:
                 error.outcome = outcome
                 raise error from exc
 
+    def post_sse(self, path: str, payload: dict, *, headers_extra: dict | None = None):
+        """POST 并以生成器产出 SSE 事件（M4-T08 流式通道）。
+
+        - Accept: text/event-stream；每个事件以 ``{"event": str|None, "data": str}`` 产出；
+        - 流式不做重试（可能已交付部分数据，重放会重复副作用）；
+        - 消费方提前停止迭代（GeneratorExit/close）即断流取消。
+        """
+        url = self.base_url + path.lstrip("/")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            **self._default_headers,
+            **(headers_extra or {}),
+        }
+        if self._api_key:
+            if self._auth == "x-api-key":
+                headers["x-api-key"] = self._api_key
+            else:
+                headers["Authorization"] = f"Bearer {self._api_key}"
+        request = Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        response = self._opener(request, timeout=self.timeout)
+        try:
+            event_name: str | None = None
+            data_lines: list[str] = []
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="strict").rstrip("\r\n") if isinstance(raw_line, bytes) else str(raw_line).rstrip("\r\n")
+                if line == "":
+                    if data_lines:
+                        yield {"event": event_name, "data": "\n".join(data_lines)}
+                    event_name = None
+                    data_lines = []
+                    continue
+                if line.startswith(":"):
+                    continue  # SSE 注释/心跳
+                if line.startswith("event:"):
+                    event_name = line[len("event:"):].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[len("data:"):].strip())
+            if data_lines:
+                yield {"event": event_name, "data": "\n".join(data_lines)}
+        finally:
+            close = getattr(response, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:  # noqa: BLE001 - 断流关闭失败不影响已交付事件
+                    pass
+
     def _retry_delay(self, headers: object, attempt: int) -> float:
         """Resolve Retry-After (delta or HTTP date), falling back to backoff."""
         retry_after = None

@@ -430,3 +430,8 @@ def canonical_runtime_version(name: str, definition_payload: dict[str, Any]) -> 
         "definition": definition_payload.get("definition") or definition_payload,
         "published_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }).model_dump()
+
+
+# 自装（幂等）：execution_backends 先加载时已在导入期安装；本模块先加载
+# （例如 CLI/API 直接引用 CANONICAL_RUNTIME_VERSIONS）时在此补装。
+install_runtime_backends()

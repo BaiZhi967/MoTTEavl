@@ -6736,6 +6736,77 @@
         "summary": "Run Terminal Bench Trial Artifact Bytes"
       }
     },
+    "/api/v1/runtimes": {
+      "get": {
+        "description": "Runtime 目录：已发布版本资源 + 兼容矩阵分层就绪（零模型调用）。",
+        "operationId": "list_runtimes_api_v1_runtimes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runtimes"
+      }
+    },
+    "/api/v1/runtimes/publish": {
+      "post": {
+        "description": "把规范 runtime 版本发布进资源仓库（幂等；不可变版本资源）。",
+        "operationId": "publish_runtimes_api_v1_runtimes_publish_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Publish Runtimes"
+      }
+    },
+    "/api/v1/runtimes/{name}/readiness": {
+      "get": {
+        "operationId": "runtime_readiness_api_v1_runtimes__name__readiness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Runtime Readiness"
+      }
+    },
     "/api/v1/scenarios": {
       "get": {
         "operationId": "list_items_api_v1_scenarios_get",

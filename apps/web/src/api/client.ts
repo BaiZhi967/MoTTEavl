@@ -169,6 +169,36 @@ const jsonBody = (body: unknown): RequestInit => jsonRequest("POST", body);
 export const getRuns = (status?: string) =>
   request<{ items: RunRecord[]; total: number }>(`/api/v1/runs${status ? `?status=${status}` : ""}`);
 
+// ---------------------------------------------------------------- M4 runtimes
+
+export interface RuntimeReadiness {
+  backend: string;
+  pinned_version: string;
+  installed: boolean;
+  installed_version: string | null;
+  protocol_ready: boolean;
+  execution_ready: boolean;
+  reasons: Record<string, string>;
+}
+
+export interface RuntimeCatalogItem {
+  name: string;
+  version: string;
+  kind: string | null;
+  transport: string | null;
+  upstream_version: string | null;
+  model_control: string | null;
+  interactive: boolean;
+  published: boolean;
+  readiness: RuntimeReadiness;
+}
+
+export const getRuntimes = () =>
+  request<{ items: RuntimeCatalogItem[]; total: number }>("/api/v1/runtimes");
+
+export const publishRuntimes = () =>
+  request<{ published: string[]; total: number }>("/api/v1/runtimes/publish", jsonBody({}));
+
 export const createRun = (body: { scenario_version: string; manifest?: any; case_ids?: string[] }) =>
   request<RunRecord>("/api/v1/runs", jsonBody(body));
 

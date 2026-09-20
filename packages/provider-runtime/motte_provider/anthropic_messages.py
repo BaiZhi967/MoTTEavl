@@ -45,6 +45,55 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
     SUPPORTED_PARAMETERS = SUPPORTED_PARAMETERS
     _API_NAMES = _API_NAMES
 
+    def build_stream_request_body(self, request: ModelRequest) -> dict[str, Any]:
+        body = self.build_request_body(request)
+        body["stream"] = True
+        return body
+
+    def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Anthropic Messages SSE 事件 → 归一化；未知事件类型 fail closed。"""
+        from .errors import ProviderHTTPError
+
+        event_type = data.get("type")
+        if event_type == "content_block_delta":
+            delta = data.get("delta") or {}
+            delta_type = delta.get("type")
+            if delta_type == "text_delta":
+                return [{
+                    "type": self.STREAM_TEXT_DELTA,
+                    "delta": str(delta.get("text") or ""), "payload": {},
+                }]
+            if delta_type == "input_json_delta":
+                return [{
+                    "type": self.STREAM_TOOL_DELTA,
+                    "delta": str(delta.get("partial_json") or ""),
+                    "payload": {"index": int(data.get("index") or 0)},
+                }]
+            raise ProviderHTTPError(
+                f"anthropic stream delta has unknown type: {delta_type!r}",
+                error_class="protocol",
+            )
+        if event_type == "message_delta":
+            usage = ((data.get("usage") or {}).get("output_tokens") is not None and data.get("usage")) or None
+            if usage:
+                return [{
+                    "type": self.STREAM_USAGE, "delta": "",
+                    "payload": {"usage": dict(usage)},
+                }]
+            return []
+        if event_type in ("message_start", "content_block_start", "content_block_stop", "ping"):
+            # 已知生命周期/心跳事件：无增量语义，静默通过
+            return []
+        if event_type == "message_stop":
+            return [{
+                "type": self.STREAM_FINISH, "delta": "",
+                "payload": {"finish_reason": "stop"},
+            }]
+        raise ProviderHTTPError(
+            f"anthropic stream event has unknown type: {event_type!r}",
+            error_class="protocol",
+        )
+
     def build_request_body(self, request: ModelRequest) -> dict[str, Any]:
         merged = self.merged_parameters(request)
         body: dict[str, Any] = {

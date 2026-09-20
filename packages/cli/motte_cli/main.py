@@ -8,6 +8,73 @@ import tempfile
 from pathlib import Path
 
 
+def _runtime_catalog():
+    from motte_harness.compatibility import backend_ids, readiness_for_backend
+    from motte_sdk.runtime_backends import CANONICAL_RUNTIME_VERSIONS
+
+    items = []
+    for backend_id in backend_ids():
+        definition = (CANONICAL_RUNTIME_VERSIONS.get(backend_id) or {}).get("definition") or {}
+        items.append({
+            "name": backend_id,
+            "version": "1",
+            "kind": definition.get("kind"),
+            "transport": definition.get("transport"),
+            "upstream_version": definition.get("upstream_version"),
+            "model_control": definition.get("model_control"),
+            "interactive": bool(definition.get("interactive")),
+            "readiness": readiness_for_backend(backend_id),
+        })
+    return items
+
+
+def _cmd_runtime(args):
+    command = getattr(args, "runtime_command", None) or "list"
+    as_json = getattr(args, "json", False)
+    if command == "list":
+        items = _runtime_catalog()
+        if as_json:
+            print(json.dumps({"items": items}, ensure_ascii=False))
+        else:
+            for item in items:
+                readiness = item["readiness"]
+                flags = "/".join(
+                    "Y" if readiness[level] else "N"
+                    for level in ("installed", "protocol_ready", "execution_ready")
+                )
+                print(
+                    f"  {item['name']}@{item['version']} [{item['kind']}/{item['transport']}] "
+                    f"installed/protocol/execution={flags} upstream={item['upstream_version']}"
+                )
+                for level, reason in sorted(readiness["reasons"].items()):
+                    print(f"    {level}: {reason}")
+        return 0
+    if command == "readiness":
+        from motte_harness.compatibility import CompatibilityError, readiness_for_backend
+
+        try:
+            state = readiness_for_backend(args.name)
+        except CompatibilityError as error:
+            print(f"runtime: {error}")
+            return 2
+        print(json.dumps(state, ensure_ascii=False) if as_json else state)
+        return 0
+    if command == "publish":
+        from motte_storage.factory import create_resource_store
+
+        from motte_sdk.runtime_backends import publish_canonical_runtime_versions
+
+        published = publish_canonical_runtime_versions(create_resource_store())
+        names = sorted(published)
+        if as_json:
+            print(json.dumps({"published": names}, ensure_ascii=False))
+        else:
+            print("published runtime versions: " + ", ".join(names))
+        return 0
+    print(f"runtime: unknown subcommand {command!r}")
+    return 2
+
+
 def _load_json(raw: str):
     if raw.startswith("@"):
         with open(raw[1:], encoding="utf-8") as handle:
@@ -478,6 +545,14 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="环境自检")
     doctor.add_argument("--json", action="store_true")
     doctor.add_argument("--jsonl", action="store_true")
+
+    runtime = sub.add_parser("runtime", help="M4 外部 runtime：目录 / 分层就绪 / 发布规范版本")
+    runtime_sub = runtime.add_subparsers(dest="runtime_command")
+    runtime_sub.add_parser("list", help="列出 runtime 目录与分层就绪（零模型调用）")
+    runtime_readiness = runtime_sub.add_parser("readiness", help="单个 runtime 的分层就绪详情")
+    runtime_readiness.add_argument("name", help="backend 名（pi-agent / claude-cli / codex-cli / codex-app-server）")
+    runtime_sub.add_parser("publish", help="发布规范 runtime 版本到资源仓库（幂等）")
+    runtime.add_argument("--json", action="store_true")
 
     run = sub.add_parser("run", help="创建 queued Run（由 Worker 异步执行）")
     run.add_argument("--spec", required=True, help="run 定义 JSON 或 @文件：{scenario_version, manifest, case_ids}")
@@ -1336,6 +1411,9 @@ def main(argv=None):
                 else:
                     print(f"  {name}: installed ({report.get('detail')})")
         return 0
+
+    if args.command == "runtime":
+        return _cmd_runtime(args)
 
     if args.command == "run":
         from motte_sdk.resolve import ManifestResolutionError, prepare_run

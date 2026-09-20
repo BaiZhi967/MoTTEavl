@@ -100,6 +100,13 @@ export const TERMINAL_BENCH_SUITE: EvalTypeSuite = {
     || run.manifest?.execution?.backend_id === "harbor-external",
 };
 
+const RUNTIMES_SUITE: EvalTypeSuite = {
+  id: "runtimes",
+  label: "外部 Runtime",
+  icon: TerminalWindowIcon,
+  matchRun: (run) => typeof run.manifest?.runtime === "string" && run.manifest.runtime.length > 0,
+};
+
 export const EVAL_SUITES: EvalTypeSuite[] = [
   AGENT_TASKS_SUITE,
   CMMLU_SUITE,
@@ -108,6 +115,7 @@ export const EVAL_SUITES: EvalTypeSuite[] = [
   GSM8K_SUITE,
   DIRECT_LLM_SUITE,
   REPLAY_SUITE,
+  RUNTIMES_SUITE,
 ];
 
 export function suiteForRun(run: RunLike): EvalTypeSuite | null {

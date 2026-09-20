@@ -598,6 +598,10 @@ register_backend(ExecutionBackendSpec(
 
 # M4：安装 runtime backend 注册（pi-agent / claude-cli / codex-cli /
 # codex-app-server）。T01 阶段 validate 可用；build 在 T04/T06/T07/T10 接线。
-from .runtime_backends import install_runtime_backends as _install_runtime_backends
+# 循环导入容错：runtime_backends 先加载时由其底部自行安装。
+try:
+    from .runtime_backends import install_runtime_backends as _install_runtime_backends
 
-_install_runtime_backends()
+    _install_runtime_backends()
+except ImportError:
+    pass
