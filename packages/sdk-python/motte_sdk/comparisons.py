@@ -17,12 +17,121 @@ review R12 修复：
 """
 from __future__ import annotations
 
-from typing import Any
+import math
+from typing import Any, Mapping
 
 from motte_contracts.comparison import ComparisonPolicy, RunReportRef
 from motte_eval.comparison import ComparisonResult, compare_run_reports
 from motte_eval.coverage import coverage_summary
 from motte_eval.gates import evaluate_gate
+
+#: Terminal-Bench（Harbor）的 suite 身份：指标与覆盖按 **Trial 口径** 装配。
+TERMINAL_BENCH_SUITE = "terminal-bench-harbor"
+#: ``motte_eval.harbor.task_aggregate`` 冻结在 pass summary 里的 Trial 指标。
+_TRIAL_AGGREGATE_KEYS = (
+    "valid_trial_pass_rate", "valid_trial_coverage", "selected_trials",
+    "valid_trials", "valid_pass_trials", "invalid_trials",
+)
+
+
+def _is_terminal_bench_run(manifest: Mapping[str, Any]) -> bool:
+    provenance = manifest.get("benchmark_provenance")
+    return isinstance(provenance, dict) and provenance.get("suite") == TERMINAL_BENCH_SUITE
+
+
+def _planned_trials(manifest: Mapping[str, Any]) -> list[Any]:
+    """冻结计划里的全部 Trial；两个冻结位置互为缺省（review R18）。"""
+    task_manifest = manifest.get("task_manifest")
+    plan = task_manifest.get("trials") if isinstance(task_manifest, dict) else None
+    if not isinstance(plan, list):
+        external = manifest.get("external_benchmark")
+        runner_config = external.get("runner_config") if isinstance(external, dict) else None
+        plan_config = runner_config.get("plan") if isinstance(runner_config, dict) else None
+        plan = plan_config.get("trials") if isinstance(plan_config, dict) else None
+    return plan if isinstance(plan, list) else []
+
+
+def _is_trial_aggregate(aggregate: Mapping[str, Any]) -> bool:
+    return all(key in aggregate for key in _TRIAL_AGGREGATE_KEYS)
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _count(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _trial_row_counts(scores: list[dict[str, Any]]) -> tuple[int, int, int, int]:
+    """ScoreSet 的 Trial 行 → (观测, 有效, 通过, 无效)：``denominator`` 决定资格。"""
+    rows = [row for row in scores if row.get("unit") == "trial"]
+    valid = [row for row in rows if row.get("denominator") is True]
+    passed = [row for row in valid if row.get("passed") is True]
+    return len(rows), len(valid), len(passed), len(rows) - len(valid)
+
+
+def _terminal_bench_summary(
+    manifest: Mapping[str, Any],
+    record: Mapping[str, Any],
+    scores: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Terminal-Bench 的覆盖与指标（review R18）：分母是**计划 Trial**。
+
+    优先用该 ScoringPass 冻结的 ``summary["aggregate"]``（``motte_eval.harbor.
+    task_aggregate`` 的口径）；缺 aggregate 时按该 pass 的 ScoreSet + 冻结计划
+    重算同一口径。质量与覆盖分开：``valid_trial_pass_rate`` 的分母是有效
+    Trial，``valid_trial_coverage`` 的分母是计划 Trial；成本未知时保持 None。
+    """
+    summary = record.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    aggregate = summary.get("aggregate")
+    planned = len(_planned_trials(manifest))
+    cost_known = False
+    cost_total: float | None = None
+    frozen_rate: float | None = None
+    if isinstance(aggregate, dict) and _is_trial_aggregate(aggregate):
+        observed = _count(aggregate.get("observed_trials"))
+        valid = _count(aggregate.get("valid_trials"))
+        passed = _count(aggregate.get("valid_pass_trials"))
+        invalid = _count(aggregate.get("invalid_trials"))
+        planned = planned or _count(aggregate.get("selected_trials"))
+        frozen_rate = _number(aggregate.get("valid_trial_pass_rate"))
+        cost = aggregate.get("cost") if isinstance(aggregate.get("cost"), dict) else {}
+        # 只有成本完整（有已知成本且明确没有未知 Trial）时总额才可用，否则保持 None。
+        cost_known = (
+            _count(cost.get("known_trials")) > 0 and cost.get("unknown_cost") is False
+        )
+        cost_total = _number(cost.get("known_cost_usd")) if cost_known else None
+    else:
+        observed, valid, passed, invalid = _trial_row_counts(scores)
+    # 计划缺失或短于观测时退回观测数：分母不小于已经观测到的事实。
+    selected = max(planned, observed)
+    pass_rate = frozen_rate if frozen_rate is not None else (
+        round(passed / valid, 6) if valid else None
+    )
+    view = coverage_summary(
+        denominator="planned_trials",
+        selected=selected,
+        judged=valid,
+        scored=passed,
+        attempted=observed,
+        unknown=invalid,
+        cost={"known": cost_known, "total_usd": cost_total, "currency": "USD"},
+        metric_values={
+            "valid_trial_pass_rate": pass_rate,
+            "cost.total_usd": cost_total,
+        },
+    )
+    # 覆盖值以 coverage_summary 的计算为准（judged / planned）。
+    view["metric_values"]["valid_trial_coverage"] = view["coverage"]
+    return view
 
 
 class ComparisonError(ValueError):
@@ -106,6 +215,11 @@ class ComparisonService:
         view["case_ids"] = list(run.get("case_ids") or [])
         return view
 
+    def _score_rows(self, record: dict[str, Any]) -> list[dict[str, Any]]:
+        if self.store.score_sets is None:
+            return []
+        return list(self.store.score_sets.list_for_pass(str(record.get("id"))))
+
     def candidate_summary(
         self, run_id: str, *, scoring_pass_id: str | None = None,
     ) -> dict[str, Any]:
@@ -114,11 +228,16 @@ class ComparisonService:
         优先使用 pass summary 冻结的 aggregate（创建 pass 时已算好）；
         缺 aggregate 时按该 pass 的 ScoreSet 重算同样的口径。Run 的
         case_ids 只作分母，不再从 case_runs 现场拼分子（review R12）。
+        Terminal-Bench 的 Run 走 Trial 口径（review R18）：分母是计划 Trial，
+        指标是 ``valid_trial_pass_rate`` / ``valid_trial_coverage``。
         """
         run = self.store.runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
         record = _resolve_pass(self.store, run_id, scoring_pass_id)
+        manifest = run.get("manifest") or {}
+        if _is_terminal_bench_run(manifest):
+            return _terminal_bench_summary(manifest, record, self._score_rows(record))
         selected_ids = list(run.get("case_ids") or [])
         selected = len(selected_ids)
         summary = record.get("summary") or {}

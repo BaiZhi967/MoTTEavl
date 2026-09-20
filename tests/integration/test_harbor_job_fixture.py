@@ -43,6 +43,19 @@ TASKS_ERRORS_ROOT = TASKS_ROOT.parent / "tasks-errors"
 SAMPLE = "pass-fail-2x2"
 
 
+def repo_bridge_env() -> dict[str, str]:
+    """让固定 Runner 用仓库当前源码跑桥接层（而不是上次部署的拷贝）。"""
+    import os
+
+    repo_root = Path(__file__).resolve().parents[2]
+    return {
+        "PYTHONPATH": os.pathsep.join([
+            str(repo_root / "packages/benchmark-runtime"),
+            str(repo_root / "packages/contracts"),
+        ]),
+    }
+
+
 class FixtureHarborAdapter(HarborJobAdapter):
     """把脱敏的真实产物铺进工作目录，替代子进程 Runner。
 
@@ -125,10 +138,10 @@ class StartCountingAdapter(FixtureHarborAdapter):
         return super().start(spec, handle)
 
 
-def _build_store(tmp_path: Path):
+def _build_store(tmp_path: Path, *, task_root: Path = TASKS_ROOT):
     service = build_run_service(tmp_path / "runs.db")
     record = tb.prepare_terminal_bench_dataset(
-        service.store, task_root=str(TASKS_ROOT), source_id="motte-harbor-fixtures",
+        service.store, task_root=str(task_root), source_id="motte-harbor-fixtures",
         dataset_revision="fixtures-2026-09-20", license_id="Apache-2.0",
     )
     return service, record
@@ -149,23 +162,44 @@ def _spec(record: dict[str, Any], inputs: dict[str, Any], work_root: Path) -> Ex
     )
 
 
-def _run(service, record, tmp_path: Path, *, adapter_class=StartCountingAdapter):
+def _run(
+    service, record, tmp_path: Path, *, adapter_class=StartCountingAdapter,
+    task_root: Path = TASKS_ROOT, sample: str = SAMPLE, n_trials: int = 2,
+    run_id: str = "run-one",
+):
     inputs = tb.build_run_inputs(
-        record=record, run_id="run-one", job_id="job-one",
-        profile=tb.terminal_bench_profile(n_trials=2),
+        record=record, run_id=run_id, job_id="job-one",
+        profile=tb.terminal_bench_profile(n_trials=n_trials),
     )
     work_root = tmp_path / "jobs"
-    adapter = adapter_class(SAMPLES / SAMPLE, argv=["/bin/true"])
+    # data_root 是冻结副本的源根：执行只读 work_dir/frozen-tasks（review R03）。
+    adapter = adapter_class(SAMPLES / sample, argv=["/bin/true"], data_root=str(task_root))
     job_store = MemoryExternalJobs()
     runner = DurableExternalJobRunner(
         ExternalJobSupervisor(adapter, poll_interval_seconds=0.01, sleep=lambda _s: None),
         job_store, artifacts=ArtifactStore(str(tmp_path / "artifacts")),
         work_root=str(work_root), parser_version=PARSER_VERSION,
     )
-    run = {"id": "run-one", "case_ids": inputs["case_ids"],
+    run = {"id": run_id, "case_ids": inputs["case_ids"],
            "manifest": inputs["manifest"]}
     outcome = runner(run)
     return inputs, adapter, job_store, runner, run, outcome
+
+
+def _execute_via_service(
+    service, inputs: dict[str, Any], runner, *, run_id: str = "run-one",
+) -> dict[str, Any]:
+    """走公共创建/执行入口（review R01：不能只调用私有 ``_import_trials``）。
+
+    与生产一致：先 ``create_run`` 冻结 Run 身份（trial_id 由 run_id 派生），
+    再由 ``execute_external_job`` 驱动同一个 DurableExternalJobRunner。
+    """
+    service.create_run(
+        inputs["scenario_version"], inputs["manifest"], inputs["case_ids"],
+        run_id=run_id,
+    )
+    run = service._load(run_id)
+    return service.execute_external_job(run_id, run, job_entry=lambda _r: runner(run))
 
 
 def test_harbor_one_job_many_tasks_trials(tmp_path: Path) -> None:
@@ -201,25 +235,132 @@ def test_harbor_one_job_many_tasks_trials(tmp_path: Path) -> None:
 
 
 def test_trial_results_import_into_the_trial_store(tmp_path: Path) -> None:
-    """采集结果写入 Trial 存储：计划 4 个、结果与 disposition 一一对应。"""
-    service, record = _build_store(tmp_path)
-    inputs, _adapter, _job_store, _runner, run, outcome = _run(service, record, tmp_path)
+    """公共路径导入：计划 4 个、结果与 disposition 一一对应且不互相覆盖。
 
-    service_rows = {
-        f"{row['stable_case_key']}": {"result": row["output"]} for row in outcome["results"]
-    }
-    imported = service._import_trials(run, service_rows)
-    assert imported["skipped"] is False
-    assert imported["created"] == 4, "计划来自冻结 manifest，先落计划再落结果"
-    assert imported["stored"] == 4
-    assert not imported["conflicts"]
+    review R01 的反例是"按 case 覆盖 Trial"：2 Task × 2 repeat 只能得到 2 条
+    分数、其余计划停在 pending。这里断言公共创建/执行后的最终事实：4 个计划
+    单元全部有结果、4 条 Trial 分数、每个 Task 的覆盖都是 2/2。
+    """
+    service, record = _build_store(tmp_path)
+    inputs, _adapter, _job_store, runner, _run_doc, _outcome = _run(
+        service, record, tmp_path,
+    )
+    view = _execute_via_service(service, inputs, runner)
+    assert view["status"] == "completed", view.get("error")
 
     rows = service.store.trials.list_for_run("run-one")
-    assert len(rows) == 4
+    assert len(rows) == 4, "两 Task × 两 repeat 必须是 4 个计划单元"
     assert {row["status"] for row in rows} == {"succeeded", "failed"}
-    # 重复导入是幂等的：结果与 hash 都不变。
-    again = service._import_trials(run, service_rows)
-    assert again["created"] == 0 and again["stored"] == 0 and again["identical"] == 4
+    assert all(row["result"] for row in rows), "每个计划单元都有终态结果"
+
+    scores = view["scores"]
+    trial_ids = {score["trial_id"] for score in scores}
+    assert len(trial_ids) == 4, f"每个 Trial 一条分数：{sorted(trial_ids)}"
+    assert all(score["metric_id"] == "reward" for score in scores)
+
+    # 每个 Task 的覆盖是 2/2：一个 Task 的 repeat 不吞掉另一个。
+    per_task: dict[str, int] = {}
+    for score in scores:
+        per_task[score["case_id"]] = per_task.get(score["case_id"], 0) + 1
+    assert sorted(per_task.values()) == [2, 2], per_task
+
+    aggregate = view["scoring_pass"]["summary"]["aggregate"]
+    assert aggregate["selected_trials"] == 4
+    assert aggregate["valid_trials"] == 4
+    assert aggregate["valid_trial_coverage"] == 1.0
+
+    # 重评分只读冻结证据：同 Run 的 Trial 行数不变、分母不漂移。
+    rescored = service.rescore("run-one")
+    rescored_scores = rescored["scores"]
+    assert len(rescored_scores) == 4
+    assert {score["trial_id"] for score in rescored_scores} == trial_ids
+    assert rescored["scoring_pass"]["summary"]["aggregate"]["valid_trial_coverage"] == 1.0
+
+
+def test_planned_repeats_without_results_stay_in_the_denominator(tmp_path: Path) -> None:
+    """2 Task × 3 repeat：没跑成的那一轮留在分母里，覆盖不是 1.0。
+
+    review R01 的另一半要求：错误/取消/未尝试也要有完整 disposition，不能
+    因为"没产出结果"就从覆盖分母里消失。
+    """
+    service, record = _build_store(tmp_path)
+    inputs, _adapter, _job_store, runner, _run_doc, outcome = _run(
+        service, record, tmp_path, n_trials=3,
+    )
+    # fixture 只有两轮真实产物，第三轮按 not_attempted 记录（真实"计划未跑"）。
+    assert len(outcome["results"]) == 6
+    view = _execute_via_service(service, inputs, runner)
+
+    rows = service.store.trials.list_for_run("run-one")
+    assert len(rows) == 6
+    pending = [row for row in rows if row["result"] is None]
+    not_attempted = [
+        row for row in rows
+        if (row.get("result") or {}).get("disposition") == "not_attempted"
+    ]
+    assert len(pending) + len(not_attempted) == 2, (len(pending), len(not_attempted))
+
+    aggregate = view["scoring_pass"]["summary"]["aggregate"]
+    assert aggregate["selected_trials"] == 6
+    assert aggregate["valid_trials"] == 4
+    assert aggregate["valid_trial_coverage"] == round(4 / 6, 6)
+    assert aggregate["gate"]["passed"] is False, "覆盖不足时门禁必须拒绝"
+    assert any("valid_trial_coverage" in reason for reason in aggregate["gate"]["reasons"])
+
+
+def test_verifier_error_trial_keeps_identity_and_evidence(tmp_path: Path) -> None:
+    """Verifier 错误的 Trial 保留身份与证据，不能变成"未跑"或有效通过。"""
+    service, record = _build_store(tmp_path, task_root=TASKS_ERRORS_ROOT)
+    inputs, _adapter, _job_store, runner, _run_doc, _outcome = _run(
+        service, record, tmp_path, task_root=TASKS_ERRORS_ROOT,
+        sample="errors-timeout", n_trials=1,
+    )
+    view = _execute_via_service(service, inputs, runner)
+    assert view["status"] in {"completed", "failed", "needs_review"}, view["status"]
+
+    rows = service.store.trials.list_for_run("run-one")
+    assert len(rows) == 2
+    payloads = {row["task_key"]: row["result"] for row in rows}
+    assert all(payload is not None for payload in payloads.values())
+    statuses = {
+        payload["verifier_observation"]["status"] for payload in payloads.values()
+    }
+    assert "verifier_error" in statuses, statuses
+    # 无效 Trial 不产生质量判定，但仍是**记录**（分数行存在、值为空）。
+    scores = {score["trial_id"]: score for score in view["scores"]}
+    assert len(scores) == 2
+    invalid = [
+        score for score in scores.values()
+        if score["metric_status"] == "verifier_error"
+    ]
+    assert invalid and all(score["passed"] is None for score in invalid)
+    assert all(score["denominator"] is False for score in invalid)
+    aggregate = view["scoring_pass"]["summary"]["aggregate"]
+    assert aggregate["invalid_trials"] >= 1
+    assert aggregate["valid_trial_coverage"] < 1.0
+
+
+def test_public_run_view_accepts_trial_shaped_case_rows(tmp_path: Path) -> None:
+    """公共 ``GET /runs/{id}`` 的响应契约必须接受 Trial 形态的任务级行。
+
+    真实回归（review R01 修复中由真实 Harbor 链路发现）：任务级行若带
+    ``CaseRun`` 契约之外的顶层键，响应校验会直接 500——只有真实链路才会走到
+    那个响应模型，所以这里显式用契约校验一次。
+    """
+    from motte_contracts.run import Run as RunContract
+
+    service, record = _build_store(tmp_path)
+    inputs, _adapter, _job_store, runner, _run_doc, _outcome = _run(service, record, tmp_path)
+    _execute_via_service(service, inputs, runner)
+
+    view = service.get_run("run-one")
+    RunContract.model_validate(view)
+    assert view["cases"], "任务级 Case 行必须存在"
+    for row in view["cases"]:
+        assert set(row) <= set(RunContract.model_fields["cases"].annotation.__args__[0].model_fields)
+    scored = [row for row in view["cases"] if (row.get("result") or {}).get("aggregate_only")]
+    assert scored, "Trial 形态必须有派生聚合行"
+    assert all(row["result"]["unscored"] is True for row in scored)
 
 
 def test_recovery_observes_only_and_never_restarts(tmp_path: Path) -> None:
@@ -282,7 +423,9 @@ def test_adapter_records_owner_tokens_and_residual_state(tmp_path: Path) -> None
         profile=tb.terminal_bench_profile(n_trials=1),
     )
     spec = _spec(record, inputs, tmp_path / "jobs")
-    adapter = FixtureHarborAdapter(SAMPLES / SAMPLE, argv=["unused-fixture-runner"])
+    adapter = FixtureHarborAdapter(
+        SAMPLES / SAMPLE, argv=["unused-fixture-runner"], data_root=str(TASKS_ROOT),
+    )
     handle = adapter.prepare(spec)
     started = adapter.start(spec, handle)
     owned = started.owned_resources
@@ -326,7 +469,10 @@ def test_error_sample_distinguishes_agent_and_verifier_failure(tmp_path: Path) -
         profile=tb.terminal_bench_profile(n_trials=1),
     )
     work_root = tmp_path / "jobs-err"
-    adapter = StartCountingAdapter(SAMPLES / "errors-timeout", argv=["unused-fixture-runner"])
+    adapter = StartCountingAdapter(
+        SAMPLES / "errors-timeout", argv=["unused-fixture-runner"],
+        data_root=str(TASKS_ERRORS_ROOT),
+    )
     runner = DurableExternalJobRunner(
         ExternalJobSupervisor(adapter, poll_interval_seconds=0.01, sleep=lambda _s: None),
         MemoryExternalJobs(), artifacts=ArtifactStore(str(tmp_path / "artifacts-err")),
@@ -384,6 +530,9 @@ def test_real_harbor_docker_calibration(tmp_path: Path) -> None:  # pragma: no c
     adapter = HarborJobAdapter(
         argv=[str(Path(runner_python).parent / "harbor-entry")],
         data_root=str(TASKS_ROOT),
+        # 用**仓库当前源码**跑桥接层：否则验证的是上一份部署快照，
+        # 桥接模块改动后真实链路会悄悄验证旧代码（install-harbor 是部署路径）。
+        extra_env=repo_bridge_env(),
     )
     supervisor = ExternalJobSupervisor(adapter, poll_interval_seconds=1.0)
     runner = DurableExternalJobRunner(

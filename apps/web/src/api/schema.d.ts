@@ -529,7 +529,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Terminal Bench Preflight */
+        /**
+         * Terminal Bench Preflight
+         * @description 只读预检：与创建请求使用同一组能力判定（review R20）。
+         */
         get: operations["terminal_bench_preflight_api_v1_benchmarks_terminal_bench_preflight_get"];
         put?: never;
         post?: never;
@@ -1252,6 +1255,50 @@ export interface paths {
         };
         /** Run Terminal Bench Trial */
         get: operations["run_terminal_bench_trial_api_v1_runs__run_id__trials__trial_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Terminal Bench Trial Artifact
+         * @description 按 Trial 归属读取冻结证据内容（有界 + 脱敏；见 review R19）。
+         */
+        get: operations["run_terminal_bench_trial_artifact_api_v1_runs__run_id__trials__trial_id__artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}/bytes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Terminal Bench Trial Artifact Bytes
+         * @description 下载**冻结的原始证据字节**（同一归属与 hash 校验，不做有损解码）。
+         *
+         *     文本内容请用不带 ``/bytes`` 的路由（脱敏 + 截断）；这里返回 Bucket 里的
+         *     原始字节，因此响应如实标注：它不是脱敏视图，只对拥有该 Run/Trial 归属
+         *     的调用者可用（review R19 的"下载"路径）。
+         */
+        get: operations["run_terminal_bench_trial_artifact_bytes_api_v1_runs__run_id__trials__trial_id__artifacts__artifact_id__bytes_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4687,6 +4734,72 @@ export interface operations {
             path: {
                 run_id: string;
                 trial_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_terminal_bench_trial_artifact_api_v1_runs__run_id__trials__trial_id__artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                trial_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_terminal_bench_trial_artifact_bytes_api_v1_runs__run_id__trials__trial_id__artifacts__artifact_id__bytes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                trial_id: string;
+                artifact_id: string;
             };
             cookie?: never;
         };

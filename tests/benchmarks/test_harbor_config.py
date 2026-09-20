@@ -30,7 +30,7 @@ def _profile(**overrides: object) -> dict[str, object]:
         "n_trials": 3,
         "timeouts": {
             "agent_sec": 120.0, "verifier_sec": 90.0, "job_sec": 900.0,
-            "environment_build_sec": 300.0, "agent_setup_sec": 60.0,
+            "agent_setup_sec": 60.0,
         },
         "environment": {"type": "docker", "delete": True},
         "resources": {"cpus": 2, "memory_mb": 2048},
@@ -77,9 +77,26 @@ def test_harbor_config_rejects_unknown_and_pins_defaults() -> None:
     assert config["job"]["datasets"] == [], "explicit task list only; never a whole directory"
     assert [entry["path"] for entry in config["job"]["tasks"]] == ["tasks/task-0", "tasks/task-1"]
     assert config["timeouts"] == {
-        "agent_sec": 120.0, "verifier_sec": 90.0, "environment_build_sec": 300.0,
+        "agent_sec": 120.0, "verifier_sec": 90.0, "environment_build_sec": None,
         "agent_setup_sec": 60.0, "job_sec": 900.0,
     }
+    # 期限必须真的进入原生字段与倍率（review R07）：请求值 == 生效值。
+    agent_section = config["job"]["agents"][0]
+    assert agent_section["override_timeout_sec"] == 120.0
+    assert agent_section["override_setup_timeout_sec"] == 60.0
+    assert config["job"]["verifier"]["override_timeout_sec"] == 90.0
+    for key in (
+        "timeout_multiplier", "agent_timeout_multiplier", "verifier_timeout_multiplier",
+        "agent_setup_timeout_multiplier", "environment_build_timeout_multiplier",
+    ):
+        assert config["job"][key] == 1.0, key
+    effective = config["effective_timeouts"]
+    assert effective["agent_sec"]["effective_sec"] == 120.0
+    assert effective["verifier_sec"]["effective_sec"] == 90.0
+    assert effective["agent_setup_sec"]["effective_sec"] == 60.0
+    assert effective["job_sec"]["effective_sec"] == 900.0
+    assert effective["job_sec"]["enforced_by"] == "platform-supervisor"
+    assert effective["agent_sec"]["harbor_field"] == "agents[].override_timeout_sec"
     assert config["config_hash"] == frozen_config_hash(config)
 
     with pytest.raises(HarborConfigError) as unknown:
@@ -165,6 +182,27 @@ def test_plan_and_task_set_must_match() -> None:
             plans=dropped, profile=profile, dataset_revision="rev-1",
         )
     assert incomplete.value.code == "HARBOR_PLAN_INCOMPLETE"
+
+
+def test_environment_build_timeout_is_refused_not_faked() -> None:
+    """R07：Harbor 无法表达的期限在创建时拒绝，不"接受秒数但不执行"。"""
+    with pytest.raises(HarborConfigError) as unsupported:
+        _config(_profile(timeouts={"environment_build_sec": 300.0}))
+    assert unsupported.value.code == "HARBOR_TIMEOUT_UNSUPPORTED"
+    assert "environment.build_timeout_sec" in str(unsupported.value)
+    # 未声明时记录为 None（由任务自带值生效），不冒充平台强制。
+    config, _plans = _config()
+    assert config["effective_timeouts"]["environment_build_sec"] == {
+        "requested_sec": None,
+        "multiplier": 1.0,
+        "effective_sec": None,
+        "enforced_by": "task-authored",
+        "harbor_field": None,
+        "note": (
+            "harbor 0.23.0 只能用任务自带 environment.build_timeout_sec 乘倍率；"
+            "平台不接受该参数（HARBOR_TIMEOUT_UNSUPPORTED）"
+        ),
+    }
 
 
 def test_change_of_agent_or_environment_changes_the_frozen_identity() -> None:

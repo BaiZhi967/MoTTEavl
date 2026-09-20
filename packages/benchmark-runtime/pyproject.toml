@@ -2,3 +2,8 @@
 name = "motte-benchmark-runtime"
 version = "0.1.0"
 requires-python = ">=3.12"
+# 任务自带的 Docker Compose 必须被策略检查（review R02）：用 yaml.safe_load
+# 只读解析，不执行任务内容；解析不可用时 fail closed（TASK_COMPOSE_UNINSPECTABLE）。
+dependencies = [
+  "pyyaml>=6,<7",
+]

@@ -1,7 +1,7 @@
 """覆盖与合法分母（M6-T02 Lite）。
 
-按注册指标的分母口径聚合（selected_cases / judged_cases ...），不统一
-强改旧套件公式；互斥 disposition 合计必须等于 selected（缺样本不删除）。
+按注册指标的分母口径聚合（selected_cases / judged_cases / planned_trials），
+不统一强改旧套件公式；互斥 disposition 合计必须等于 selected（缺样本不删除）。
 空分母、NaN 指标值不能通过；费用 known/null 分开，零成功的单位成本
 不适用（不当 0）。
 """
@@ -44,10 +44,13 @@ def coverage_summary(
     denominator_value = {
         "selected_cases": selected,
         "judged_cases": judged,
+        # Trial 口径（review R18）：分母是**计划** Trial 数，分子是有效 Trial 数，
+        # 与 registered metric 的 denominator 声明一致。
+        "planned_trials": selected,
     }.get(denominator)
     coverage = (
         round(judged / selected, 6)
-        if denominator == "selected_cases" and selected > 0
+        if denominator in ("selected_cases", "planned_trials") and selected > 0
         else round(scored / judged, 6)
         if denominator == "judged_cases" and judged > 0
         else None

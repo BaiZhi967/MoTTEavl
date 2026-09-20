@@ -1,8 +1,9 @@
 # Harbor 取消、清理与残留核查 runbook
 
-> 状态：**所有权、清理报告与残留清单已实现并有测试**；真实 Harbor 任务容器
-> 级的取消演练未执行（**not_run**，见 [M3 验证记录](../verification/M3.md)）。
-> 本文只描述本平台实际拥有的资源与操作顺序；不覆盖 Harbor 内部状态机。
+> 状态：**所有权、清理报告与残留清单已实现并有测试**，且真实 Docker 上的
+> 运行中取消 / SIGKILL 残留定位已实跑通过（review R04/R05 复验；
+> 见 [M3 验证记录](../verification/M3.md)）。本文只描述本平台实际拥有的
+> 资源与操作顺序；不覆盖 Harbor 内部状态机。
 
 ## 1. 所有权模型
 
@@ -11,19 +12,31 @@
 | 资源 | 归属凭证 |
 |---|---|
 | Runner 进程树 | argv/env 中的 launch token + 启动身份（pid、host、started_at）；跨会话凭 argv 核验（Linux `/proc/<pid>/cmdline`、macOS `ps -p <pid> -o command=`） |
-| 任务容器 | 资源账本记录的容器标签 `motte.job=<job_id>` |
+| 任务容器 | 容器标签 `motte.job=<job_id>`（平台 overlay 注入 `main` 服务），或 `com.docker.compose.project` 等于本 Job 记录的 project 名（覆盖任务自带的额外服务） |
 | Job 工作目录 | `work_dir` 路径 + 账本中的 `owner_token` |
 | Harbor Job 目录 | 工作目录内的 `harbor/job-location.json`（越界即拒绝） |
 
-adapter 在 `start`（唯一产生副作用的操作）时刷新资源账本：
+adapter 在 `start`（唯一产生副作用的操作）时刷新资源账本，`interrupt`/`cleanup`
+把**观察到的容器**写回账本：
 
 ```json
 {"owner_token": "<launch_token>", "job_id": "<job_id>", "run_id": "<run_id>",
  "container_label": "motte.job=<job_id>",
- "resources": [{"kind": "job_dir", "path": "<work_dir>", "owner_token": "<launch_token>"}]}
+ "resources": [{"kind": "job_dir", "path": "<work_dir>", "owner_token": "<launch_token>"},
+               {"kind": "container", "id": "<sha256:...>", "project": "<sanitized trial_name>__env",
+                "status": "running", "labels": {"motte.job": "<job_id>", "motte.owner": "...",
+                                                "motte.run": "<run_id>"}}]}
 ```
 
 账本随句柄持久化；清理与中断只依据它，**不推断**未登记的资源。
+
+`cleanup` 的 `state` 只能落在三种取值上，且不得超出可观察证据：
+
+| state | 含义 |
+|---|---|
+| `clean` | daemon 可达，且本 Job 的容器与进程都已消失 |
+| `residual` | 仍能观察到本 Job 的容器/进程/目录残留（逐项列在 `leftovers`） |
+| `unknown` | daemon 不可达或归属无法核验（附原因），**绝不报 `clean`** |
 
 ## 2. 取消顺序与规则
 
@@ -57,8 +70,12 @@ indeterminate**。
 取消或异常后，按以下步骤核查并**逐 Run 记录残留**：
 
 ```bash
-# 1) 本 Job 的容器（标签来自资源账本）
+# 1) 本 Job 的容器（标签来自平台注入的 overlay；含已停止的）
 docker ps -a --filter label=motte.job=<job_id>
+
+# 1b) 任务自带额外服务的容器：按 Runner 记录的 compose project 定位
+#     （定位文件 harbor/job-location.json 的 compose_projects 字段）
+docker ps -a --filter label=com.docker.compose.project=<sanitized_trial_name>__env
 
 # 2) 本 Job 的工作目录（harbor/job-location.json 指向 Harbor Job 目录）
 ls -la <work_dir>
@@ -68,8 +85,22 @@ ls -la <work_dir>/harbor
 ps -p <pid> -o pid=,command=
 ```
 
-清理报告（`cleanup()`）字段：`state`（`clean` / `residual`）、`owner_token`、
+清理报告（`cleanup()`）字段：`state`（`clean` / `residual` / `unknown`）、
+`container_state`、`containers`（观察到的本 Job 容器）、`owner_token`、
 `job_id`、`known_resources`、`job_dir`、`job_dir_present`、`leftovers`。
+
+核查时**先用诱饵容器自查**再清理：放一个与本 Job 无关的容器（例如
+`docker run -d --name decoy --label motte.job=unrelated sleep 600`），清理后确认
+它仍在运行——真实链路的取消测试就是这么做的
+（`tests/integration/test_harbor_live_cancel_and_deadline.py`）。
+
+> 实测示例（review round-1 修复期间的误启 Job）：校验命令漏传 `--validate-config`
+> 导致真实 Job 起了两个任务容器（标签 `motte.job=job-native`、`motte.owner=…`、
+> `motte.run=run-native`）。用平台自己的所有权视图清理：
+> `uv run python - <<'PY' … ContainerOwnership(job_id="job-native").stop_owned(remove=True) …`
+> 结果 `state: clean`、容器列表为空，无关容器未被动过；同时暴露了 wrapper 不转发
+> 调用方参数的问题（已修复为 `"$@"`，见 `scripts/runner/harbor-entry`）。
+
 
 必须记录的内容（每条 Run 一行，进入运行记录/交接记录）：
 
@@ -77,7 +108,8 @@ ps -p <pid> -o pid=,command=
 |---|---|
 | run_id / job_id | 本次 Run 与 Job |
 | launch_token | 本次启动身份（用于判定"是否本 Job 资源"） |
-| state | `clean` 或 `residual` |
+| state | `clean` / `residual` / `unknown`（daemon 不可达时不得写 `clean`） |
+| containers | 观察到的本 Job 容器（id/name/project/status/labels） |
 | leftovers | 残留条目（kind + path/pid + 归属判定依据）；无残留写空列表 |
 | job_dir_present | 工作目录是否仍存在（存在不等于残留，需注明是否含未知内容） |
 | 核查命令与时间 | 上述命令原文与执行时间 |

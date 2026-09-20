@@ -387,6 +387,12 @@ def prepare_task_manifest(
         TaskManifest,
         compute_task_key,
     )
+    # 函数内导入：compose 策略模块复用本模块的路径常量，模块级互相导入会成环。
+    from motte_benchmark.harbor.compose import (  # noqa: PLC0415 - 避免循环导入
+        has_task_compose,
+        inspect_task_compose,
+        uninspectable_fact,
+    )
 
     candidates = discover_task_dirs(root, limits=resolved_limits)
     if not candidates:
@@ -438,6 +444,17 @@ def prepare_task_manifest(
             continue
         content_hash = task_content_hash(hashes)
         upstream_task_id = declared_upstream_task_id(root, relative_dir)
+        # 任务自带的 Compose 由 Harbor 当 overlay 加载（review R02）：预检
+        # 必须检查它实际声明的执行配置，只检查平台声明参数等于没检查。
+        has_compose = has_task_compose(hashes)
+        compose_fact: dict[str, Any] | None = None
+        if has_compose:
+            try:
+                compose_fact = inspect_task_compose(root, relative_dir, file_hashes=hashes)
+            except Exception as error:  # noqa: BLE001 - 检查失败必须 fail closed
+                compose_fact = uninspectable_fact(
+                    f"compose 策略检查失败: {type(error).__name__}: {error}",
+                )
         identity = TaskIdentity(
             source_id=source_id,
             dataset_revision=revision,
@@ -462,6 +479,10 @@ def prepare_task_manifest(
             "has_solution": any(rel.startswith(TASK_SOLUTION_DIR + "/") for rel in hashes),
             "declared_license": declared_task_license(root, relative_dir),
             "normalized_relative_path": relative_dir,
+            # 冻结文件清单判定，而不是当前目录扫描：预检读的 facts 与实际
+            # 执行用的清单必须来自同一份字节。
+            "has_compose_file": has_compose,
+            **({"compose": compose_fact} if compose_fact is not None else {}),
         }
 
     if not tasks:

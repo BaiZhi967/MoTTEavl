@@ -190,10 +190,14 @@ def _terminal_bench_scores(
     from motte_eval.harbor import trial_row
 
     rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for row in results:
         payload = row.get("result") if isinstance(row.get("result"), dict) else {}
-        if not payload.get("trial_id"):
+        trial_id = str(row.get("trial_id") or payload.get("trial_id") or "")
+        if not trial_id or trial_id in seen:
+            # 同一 Trial 只能有一行分数：重复行会让质量分母虚高（review R01）。
             continue
+        seen.add(trial_id)
         rows.append(trial_row(payload))
     return rows
 
@@ -214,10 +218,7 @@ def _terminal_bench_aggregate(
     provenance = manifest.get("benchmark_provenance") or {}
     external = manifest.get("external_benchmark") or {}
     trials = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
-    payloads = [
-        (row.get("result") or {}) for row in run.get("cases") or []
-        if isinstance(row.get("result"), dict) and (row.get("result") or {}).get("trial_id")
-    ]
+    payloads = _trial_payloads(run)
     planned_per_task: dict[str, int] = {}
     for plan in trials:
         key = str(plan.get("task_key"))
@@ -240,6 +241,28 @@ def _terminal_bench_aggregate(
     aggregate["denominator"] = "planned_trials"
     aggregate["aggregation_policy"] = aggregate["aggregation"]
     return aggregate
+
+
+def _trial_payloads(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """聚合用的 Trial 载荷：优先分派侧注入的 Trial 存储视图。
+
+    ``run["trial_results"]`` 由 ``RunService._append_scoring_pass`` 从 Trial
+    存储读出（一个计划 Trial 一条）；``run["cases"]`` 是任务级派生聚合，
+    只在兼容旧快照时作为兜底（review R01：两者不能混为一谈）。
+    """
+    injected = run.get("trial_results")
+    if isinstance(injected, list) and injected:
+        return [dict(item) for item in injected if isinstance(item, dict)]
+    payloads: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in run.get("cases") or []:
+        payload = row.get("result") if isinstance(row.get("result"), dict) else {}
+        trial_id = str(payload.get("trial_id") or "")
+        if not trial_id or trial_id in seen:
+            continue
+        seen.add(trial_id)
+        payloads.append(dict(payload))
+    return payloads
 
 
 def import_terminal_bench_trials(
@@ -267,12 +290,17 @@ def import_terminal_bench_trials(
     identical = 0
     for row in results:
         payload = row.get("result") if isinstance(row.get("result"), dict) else None
-        if not payload or not payload.get("trial_id"):
+        if not payload:
             continue
         from motte_contracts.trial import canonical_hash
 
+        # 目标 Trial 身份取**记录**（冻结计划的 trial_id），不取 payload 自称的
+        # 身份：错配必须由存储的身份校验拒绝，而不是写到另一个 Trial 名下。
+        target = str(row.get("trial_id") or payload.get("trial_id") or "")
+        if not target:
+            continue
         outcome = trials.put_result(
-            str(payload["trial_id"]), payload,
+            target, payload,
             source_hash=canonical_hash(payload),
             parser_version=str(payload.get("parser_version") or "harbor-terminal-bench-parser@1"),
         )

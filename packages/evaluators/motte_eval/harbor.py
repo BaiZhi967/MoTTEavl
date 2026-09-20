@@ -9,7 +9,9 @@
 2. **reward=0 是有效失败**，不是缺失；Agent 退出 0 不覆盖它。Verifier 异常/
    证据缺失既不通过也不当成 0 分，而是降低覆盖。
 3. **聚合规则事前固定**（``first-trial`` / ``mean-success``），不默认择优；
-   没有可用值时返回不适用，而不是扩分母或自动补跑。
+   没有可用值时返回不适用，而不是扩分母或自动补跑。``first-trial`` 只看首个
+   计划 Trial：它缺失或无效就是 ``first_trial_invalid``（不可判断），绝不顺延
+   到后面的有效 Trial；与"完全没有有效 Trial"（``no_valid_trial``）区分。
 4. pass@k 等完整统计属于 M6：这里只提供 Trial 原始值与事前固定的 Task 通过
    规则，并把 Trial 资格（有效/无效、覆盖）交给下游。
 
@@ -103,6 +105,15 @@ def _as_float(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _repeat_index(row: Mapping[str, Any]) -> int:
+    """Trial 行在计划内的 repeat 序号；无法解析时按 0（计划从 0 开始编号）。"""
+    value = (row.get("details") or {}).get("repeat_index")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def task_aggregate(
     *,
     trials: Sequence[Mapping[str, Any]],
@@ -129,15 +140,24 @@ def task_aggregate(
     for task_key, task_rows in list(by_task.items()):
         if not task_rows:
             continue
-        ordered = sorted(task_rows, key=lambda row: row["details"].get("repeat_index") or 0)
+        ordered = sorted(task_rows, key=_repeat_index)
         judged = [row for row in ordered if row["judged"]]
         planned = int((planned_per_task or {}).get(task_key, len(ordered)))
         task_pass = None
+        reason = "no_valid_trial"
         if judged:
             if aggregation == "first-trial":
-                task_pass = bool(judged[0]["passed"])
+                # 计划 Trial 由 plan_trials 事前编号 0..n-1：``first-trial`` 只看
+                # 首个计划 Trial。首个缺失或无效即结论不适用，绝不顺延到后面的
+                # 有效 Trial（那等于临场把政策改成择优）。
+                if _repeat_index(ordered[0]) == 0 and ordered[0]["judged"]:
+                    task_pass = bool(ordered[0]["passed"])
+                    reason = "first-trial"
+                else:
+                    reason = "first_trial_invalid"
             else:
                 task_pass = (sum(1 for row in judged if row["passed"]) / len(judged)) >= 0.5
+                reason = aggregation
         per_task[task_key] = {
             "planned_trials": planned,
             "observed_trials": len(ordered),
@@ -146,9 +166,7 @@ def task_aggregate(
             "failed_trials": sum(1 for row in judged if row["passed"] is False),
             "invalid_trials": len(ordered) - len(judged),
             "task_pass": task_pass,
-            "task_pass_reason": (
-                "no_valid_trial" if task_pass is None else f"{aggregation}"
-            ),
+            "task_pass_reason": reason,
         }
 
     # 计划里有、但完全没有产出的 Task 也必须有行：否则"没跑"会从视图里消失，
@@ -257,8 +275,12 @@ def cost_summary(
     """成本视图：已知小计、未知 Trial 数、计量来源与单位成本。
 
     - 未知成本保持 ``null`` 并计数，不填 0；
-    - 成功单位成本分母为零时返回 ``None``（不适用）；
-    - 明确说明失败 Trial 的费用是否计入分子（这里：计入全部已观测 Trial）。
+    - ``per_success_usd`` 只在成本**完整**（有已知成本且无未知 Trial）且有成功
+      Trial 时有值，否则为 ``None``，缺失原因见 ``per_success_usd_basis``
+      （``complete`` / ``unknown_cost`` / ``no_success`` / ``no_known_cost``）；
+    - ``known_cost_subtotal_per_success_usd`` 是已报道成本小计对成功数的比率，
+      只覆盖报告了成本的 Trial，不能当成整个 Run 的单位成本；
+    - 明确说明失败 Trial 的费用是否计入分子（这里：计入全部已报道成本的 Trial）。
     """
     known_total = 0.0
     known_trials = 0
@@ -274,6 +296,17 @@ def cost_summary(
     rows = trial_scores(trials)
     valid = [row for row in rows if row["judged"]]
     successes = sum(1 for row in valid if row["passed"])
+    subtotal_per_success = (
+        round(known_total / successes, 8) if known_trials and successes else None
+    )
+    if not known_trials:
+        basis, per_success = "no_known_cost", None
+    elif unknown_trials:
+        basis, per_success = "unknown_cost", None
+    elif not successes:
+        basis, per_success = "no_success", None
+    else:
+        basis, per_success = "complete", subtotal_per_success
     return {
         "known_cost_usd": round(known_total, 8) if known_trials else None,
         "known_trials": known_trials,
@@ -282,14 +315,16 @@ def cost_summary(
         "currency": currency if known_trials else None,
         "price_table_version": price_table_version,
         "metering_source": "harbor-agent-result",
-        "per_success_usd": (
-            round(known_total / successes, 8) if successes else None
-        ),
+        "per_success_usd": per_success,
+        "per_success_usd_basis": basis,
+        "known_cost_subtotal_per_success_usd": subtotal_per_success,
         "successes": successes,
         "includes_failed_trials_in_numerator": True,
         "note": (
             "total covers every trial that reported cost, including failed trials; "
-            "per-success divides that total by successful trials"
+            "per_success_usd is only reported when every trial reported cost; "
+            "known_cost_subtotal_per_success_usd divides the reported-cost subtotal "
+            "by successful trials and covers only trials that reported cost"
         ),
     }
 

@@ -1890,8 +1890,11 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         return record, None
 
-    def _tb_model_record(model_id):
-        if not isinstance(model_id, str) or not model_id:
+    def _tb_model_record(model_id, *, required=True):
+        """模型档案解析：oracle 不需要模型，真实 Agent 必须有已发布模型（R10/R20）。"""
+        if model_id is None or model_id == "":
+            if not required:
+                return None, None
             return None, JSONResponse(
                 status_code=422,
                 content={"error": {"code": "MODEL_REQUIRED",
@@ -1915,6 +1918,148 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         return record, None
 
+    #: Terminal-Bench 公共请求 DTO（review R16/R20）：字段名、类型与取值都在这里
+    #: 收口；未知字段与非法类型一律 4xx，绝不能变成 500。
+    _TB_RUN_KEYS = frozenset({
+        "model", "agent_id", "agent_version", "n_trials", "task_keys",
+        "dataset_revision", "aggregation", "timeouts", "resources",
+    })
+    _TB_TIMEOUT_KEYS = (
+        "agent_sec", "verifier_sec", "agent_setup_sec", "environment_build_sec", "job_sec",
+    )
+    _TB_RESOURCE_KEYS = ("cpus", "memory_mb", "storage_mb", "gpus")
+    _TB_AGGREGATIONS = ("first-trial", "mean-success")
+
+    class _TBRequestError(ValueError):
+        """公共请求不合法：``code`` 直接进入 4xx 响应体。"""
+
+        def __init__(self, code, message, details=None):
+            super().__init__(message)
+            self.code = code
+            self.details = details or {}
+
+    def _tb_int(body, key, *, default, minimum=1, maximum=None):
+        value = body.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _TBRequestError(
+                "REQUEST_FIELD_TYPE_INVALID",
+                f"{key} must be an integer, got {type(value).__name__}",
+            )
+        if value < minimum or (maximum is not None and value > maximum):
+            raise _TBRequestError(
+                "REQUEST_FIELD_OUT_OF_RANGE",
+                f"{key} must be between {minimum} and {maximum}, got {value}",
+            )
+        return value
+
+    def _tb_str(body, key, *, default=""):
+        value = body.get(key, default)
+        if value is None:
+            return default
+        if not isinstance(value, str):
+            raise _TBRequestError(
+                "REQUEST_FIELD_TYPE_INVALID",
+                f"{key} must be a string, got {type(value).__name__}",
+            )
+        return value
+
+    def _tb_number_mapping(body, key, allowed):
+        value = body.get(key)
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise _TBRequestError(
+                "REQUEST_FIELD_TYPE_INVALID", f"{key} must be an object",
+            )
+        unknown = sorted(set(value) - set(allowed))
+        if unknown:
+            raise _TBRequestError(
+                "REQUEST_FIELD_UNKNOWN",
+                f"unknown {key} field(s): {', '.join(unknown)}",
+                {"allowed": list(allowed)},
+            )
+        checked = {}
+        for name, item in value.items():
+            if item is None:
+                continue
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise _TBRequestError(
+                    "REQUEST_FIELD_TYPE_INVALID", f"{key}.{name} must be a number",
+                )
+            if float(item) <= 0:
+                raise _TBRequestError(
+                    "REQUEST_FIELD_OUT_OF_RANGE", f"{key}.{name} must be > 0",
+                )
+            checked[name] = item
+        return checked
+
+    def _tb_profile_from_body(body, *, strict_agent=True):
+        """公共请求 → 冻结 Profile（唯一字段名；未知字段/类型不合法即 4xx）。"""
+        unknown = sorted(set(body) - _TB_RUN_KEYS)
+        if unknown:
+            raise _TBRequestError(
+                "REQUEST_FIELD_UNKNOWN",
+                f"unknown request field(s): {', '.join(unknown)}",
+                {"allowed": sorted(_TB_RUN_KEYS)},
+            )
+        aggregations = ("first-trial", "mean-success")
+        aggregation = _tb_str(body, "aggregation", default="first-trial") or "first-trial"
+        if aggregation not in aggregations:
+            raise _TBRequestError(
+                "REQUEST_FIELD_OUT_OF_RANGE",
+                f"aggregation must be one of {list(aggregations)}",
+            )
+        task_keys = body.get("task_keys")
+        if task_keys is None:
+            task_keys = []
+        if not isinstance(task_keys, list) or any(
+            not isinstance(item, str) for item in task_keys
+        ):
+            raise _TBRequestError(
+                "REQUEST_FIELD_TYPE_INVALID", "task_keys must be a list of task_key strings",
+            )
+        profile = tb.terminal_bench_profile(
+            agent_id=_tb_str(body, "agent_id", default="oracle") or "oracle",
+            agent_version=_tb_str(body, "agent_version", default="1.0.0") or "1.0.0",
+            n_trials=_tb_int(body, "n_trials", default=1, maximum=32),
+            aggregation=aggregation,
+            timeouts=_tb_number_mapping(body, "timeouts", _TB_TIMEOUT_KEYS),
+            resources=_tb_number_mapping(body, "resources", _TB_RESOURCE_KEYS),
+        )
+        model_id = _tb_str(body, "model")
+        if model_id:
+            record, error = _tb_model_record(model_id)
+            if error is not None:
+                raise _TBRequestError(
+                    "MODEL_UNAVAILABLE", f"model {model_id!r} cannot be used for this run",
+                )
+            profile["model"] = {
+                "provider": str(record.get("provider") or ""),
+                "model": str(record.get("model") or record.get("id") or model_id),
+            }
+        # Agent 能力用**创建时同一判定**先报出精确错误码（review R20）：不支持
+        # 的 Agent 不该只得到笼统的 PREFLIGHT_FAILED。预检例外：它必须返回
+        # 携带 reason_codes 的报告对象，所以由 ``strict_agent=False`` 跳过，
+        # 能力缺口仍会作为原因码出现在报告里。
+        if strict_agent:
+            from motte_benchmark.harbor.config import HarborConfigError, resolve_agent_profile
+
+            try:
+                resolve_agent_profile(profile)
+            except HarborConfigError as error:
+                raise _TBRequestError(error.code, str(error)) from error
+        return profile
+
+    def _tb_request_error(error):
+        return JSONResponse(
+            status_code=422,
+            content={"error": {
+                "code": getattr(error, "code", "REQUEST_INVALID"),
+                "message": str(error),
+                "details": getattr(error, "details", {}) or {},
+            }},
+        )
+
     def _tb_docker_probe():
         """Runner 侧探测摘要：API 进程不执行 docker；没有上报就按不可用处理。"""
         import os as _os
@@ -1928,20 +2073,6 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             "disk_required_bytes": report.get("disk_required_bytes"),
             "images": list(report.get("images") or []),
         }
-
-    def _tb_profile_from_body(body):
-        return tb.terminal_bench_profile(
-            agent_id=str(body.get("agent_id") or "oracle"),
-            agent_version=str(body.get("agent_version") or "1.0.0"),
-            n_trials=int(body.get("n_trials") or 1),
-            aggregation=str(body.get("aggregation") or "first-trial"),
-            timeouts={
-                "agent_sec": body.get("agent_timeout_sec"),
-                "verifier_sec": body.get("verifier_timeout_sec"),
-                "job_sec": body.get("job_timeout_sec"),
-                "environment_build_sec": body.get("environment_build_timeout_sec"),
-            },
-        )
 
     def _tb_run_or_404(run_id):
         try:
@@ -2051,20 +2182,30 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         agent_id: str = "oracle", agent_version: str = "1.0.0",
         dataset_revision: str | None = None,
     ):
+        """只读预检：与创建请求使用同一组能力判定（review R20）。"""
         record, error = _tb_dataset_or_404(dataset_revision)
         if error is not None:
             return error
-        _model_record, model_error = _tb_model_record(model)
+        try:
+            profile = _tb_profile_from_body({
+                "model": model, "agent_id": agent_id, "agent_version": agent_version,
+                "n_trials": n_trials, "task_keys": task_keys.split(",") if task_keys else [],
+            }, strict_agent=False)
+        except _TBRequestError as request_error:
+            return _tb_request_error(request_error)
+        _model_record, model_error = _tb_model_record(
+            model or None, required=False,
+        )
         if model_error is not None:
             return model_error
-        selected = [item for item in task_keys.split(",") if item]
-        profile = tb.terminal_bench_profile(
-            agent_id=agent_id, agent_version=agent_version, n_trials=max(int(n_trials), 1),
-        )
-        report = tb.preflight_terminal_bench(
-            record=record, profile=profile, task_keys=selected or None,
-            docker=_tb_docker_probe(),
-        )
+        try:
+            report = tb.preflight_terminal_bench(
+                record=record, profile=profile,
+                task_keys=[item for item in task_keys.split(",") if item] or None,
+                docker=_tb_docker_probe(),
+            )
+        except Exception as error:  # noqa: BLE001 - 任务集/配置问题不是 500
+            return _tb_request_error(error)
         return {
             "ok": report["allowed"],
             "reasons": report["reason_codes"],
@@ -2085,9 +2226,10 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         record, error = _tb_dataset_or_404(body.get("dataset_revision"))
         if error is not None:
             return error
-        _model_record, model_error = _tb_model_record(body.get("model"))
-        if model_error is not None:
-            return model_error
+        try:
+            profile = _tb_profile_from_body(body)
+        except _TBRequestError as request_error:
+            return _tb_request_error(request_error)
         from motte_benchmark.registry import registered_adapter_ids
 
         if tb.ADAPTER_ID not in registered_adapter_ids():
@@ -2098,40 +2240,42 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "message": "the Harbor adapter is not registered in this process",
                 }},
             )
-        profile = _tb_profile_from_body(body)
         selected = [str(item) for item in (body.get("task_keys") or [])]
-        report = tb.preflight_terminal_bench(
-            record=record, profile=profile, task_keys=selected or None,
-            docker=_tb_docker_probe(),
-        )
-        if not report["allowed"]:
-            return JSONResponse(
-                status_code=422,
-                content={"error": {
-                    "code": "PREFLIGHT_FAILED",
-                    "message": "Terminal-Bench preflight did not pass",
-                    "details": {
-                        "reasons": report["reason_codes"],
-                        "messages": report["messages"],
-                        "checks": report["checks"],
-                    },
-                }},
+        try:
+            report = tb.preflight_terminal_bench(
+                record=record, profile=profile, task_keys=selected or None,
+                docker=_tb_docker_probe(),
             )
-        from uuid import uuid4 as _uuid4
+            if not report["allowed"]:
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {
+                        "code": "PREFLIGHT_FAILED",
+                        "message": "Terminal-Bench preflight did not pass",
+                        "details": {
+                            "reasons": report["reason_codes"],
+                            "messages": report["messages"],
+                            "checks": report["checks"],
+                        },
+                    }},
+                )
+            from uuid import uuid4 as _uuid4
 
-        from motte_sdk.execution_backends import resolve_execution
+            from motte_sdk.execution_backends import resolve_execution
 
-        planned_run_id = f"run-{_uuid4().hex}"
-        inputs = tb.build_run_inputs(
-            record=record, run_id=planned_run_id, job_id=f"job-{_uuid4().hex}",
-            profile=profile, task_keys=selected or None,
-        )
-        resolved = resolve_execution(tb.SCENARIO_VERSION, inputs["manifest"])
-        run = service.create_run(
-            tb.SCENARIO_VERSION, resolved, inputs["case_ids"],
-            requested_manifest={"benchmark": tb.BENCHMARK_ID},
-            run_id=planned_run_id,
-        )
+            planned_run_id = f"run-{_uuid4().hex}"
+            inputs = tb.build_run_inputs(
+                record=record, run_id=planned_run_id, job_id=f"job-{_uuid4().hex}",
+                profile=profile, task_keys=selected or None,
+            )
+            resolved = resolve_execution(tb.SCENARIO_VERSION, inputs["manifest"])
+            run = service.create_run(
+                tb.SCENARIO_VERSION, resolved, inputs["case_ids"],
+                requested_manifest={"benchmark": tb.BENCHMARK_ID},
+                run_id=planned_run_id,
+            )
+        except Exception as error:  # noqa: BLE001 - 配置/任务集问题一律 4xx
+            return _tb_request_error(error)
         return {
             "id": run["id"], "status": run["status"], "scenario": tb.SCENARIO_VERSION,
             "execution": resolved.get("execution") or {},
@@ -2159,6 +2303,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         run = _tb_run_or_404(run_id)
         if isinstance(run, JSONResponse):
             return run
+        # 展示边界：内容字段脱敏、身份/hash 保留，均在门面里完成（review R08）。
         detail = tb.trial_detail(service.store, run_id, trial_id)
         if detail is None:
             return JSONResponse(
@@ -2169,6 +2314,86 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 }},
             )
         return detail
+
+    @application.get("/api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id:path}/bytes")
+    def run_terminal_bench_trial_artifact_bytes(
+        run_id: str, trial_id: str, artifact_id: str,
+    ):
+        """下载**冻结的原始证据字节**（同一归属与 hash 校验，不做有损解码）。
+
+        文本内容请用不带 ``/bytes`` 的路由（脱敏 + 截断）；这里返回 Bucket 里的
+        原始字节，因此响应如实标注：它不是脱敏视图，只对拥有该 Run/Trial 归属
+        的调用者可用（review R19 的"下载"路径）。
+        """
+        from fastapi import Response
+
+        run = _tb_run_or_404(run_id)
+        if isinstance(run, JSONResponse):
+            return run
+        ref = tb.trial_artifact_ref(service.store, run_id, trial_id, artifact_id)
+        if ref is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "ARTIFACT_NOT_FOUND",
+                    "message": (
+                        f"artifact {artifact_id} does not belong to trial {trial_id} "
+                        f"of run {run_id}"
+                    ),
+                }},
+            )
+        reader = tb.evidence_reader(service.store, run_id)
+        try:
+            data = reader.read_bytes(artifact_id)
+        except (FileNotFoundError, ValueError, OSError) as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {
+                    "code": "ARTIFACT_CONTENT_UNAVAILABLE",
+                    "message": str(error),
+                }},
+            )
+        expected = str(ref.get("sha256") or "").removeprefix("sha256:")
+        if expected:
+            import hashlib
+
+            if hashlib.sha256(data).hexdigest() != expected:
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {
+                        "code": "ARTIFACT_HASH_MISMATCH",
+                        "message": "frozen artifact bytes do not match the recorded hash",
+                    }},
+                )
+        return Response(
+            content=data,
+            media_type=str(ref.get("media_type") or "application/octet-stream"),
+            headers={
+                "X-Motte-Artifact-Sha256": str(ref.get("sha256") or ""),
+                "X-Motte-Artifact-Redacted": "false",
+                "Content-Disposition": "attachment",
+            },
+        )
+
+    @application.get("/api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id:path}")
+    def run_terminal_bench_trial_artifact(run_id: str, trial_id: str, artifact_id: str):
+        """按 Trial 归属读取冻结证据内容（有界 + 脱敏；见 review R19）。"""
+        run = _tb_run_or_404(run_id)
+        if isinstance(run, JSONResponse):
+            return run
+        content = tb.trial_artifact_content(service.store, run_id, trial_id, artifact_id)
+        if content is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "code": "ARTIFACT_NOT_FOUND",
+                    "message": (
+                        f"artifact {artifact_id} does not belong to trial {trial_id} "
+                        f"of run {run_id}"
+                    ),
+                }},
+            )
+        return content
 
 
     # ------------------------------------------- 比较/门禁（M6-Lite 公共服务，只读）
@@ -2240,7 +2465,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     }},
                 )
         try:
-            return comparisons_service.evaluate_gate(
+            conclusion = comparisons_service.evaluate_gate(
                 run_id,
                 policy=policy,
                 baseline_run_id=body.get("baseline_run_id"),
@@ -2261,6 +2486,18 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 status_code=422,
                 content={"error": {"code": error.code, "message": str(error)}},
             )
+        # 覆盖与指标值结构化返回（review R18/R21 的消费侧）：调用方不再从
+        # 规则文本里解析数值，也不再自己猜覆盖单位。
+        try:
+            conclusion["coverage_summary"] = comparisons_service.candidate_summary(
+                run_id,
+                scoring_pass_id=(
+                    scoring_pass_id if isinstance(scoring_pass_id, str) else None
+                ),
+            )
+        except ComparisonError:
+            conclusion["coverage_summary"] = None
+        return conclusion
 
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 

@@ -23,10 +23,20 @@ _GATE_OPS = {
 # 注册指标的口径（review R07）：Gate 按 metric 身份选择数值，不再"指哪
 # 个指标都拿 accuracy 比较"。方向/单位/分母进入规则文本；费用指标在
 # 费用未知时自动不足证据，不依赖调用方记得设置布尔开关。
+# Terminal-Bench（review R18）：Trial 口径的质量与覆盖各有一个注册指标，
+# 分母分别是有效 Trial 与计划 Trial——覆盖不足与质量不足分开判断。
 METRIC_REGISTRY: dict[str, dict] = {
     "accuracy": {
         "direction": "gte", "unit": "ratio", "denominator": "selected_cases",
         "description": "selected-case accuracy (platform recomputation)",
+    },
+    "valid_trial_pass_rate": {
+        "direction": "gte", "unit": "ratio", "denominator": "valid_trials",
+        "description": "Terminal-Bench valid-Trial pass rate (Harbor rewards)",
+    },
+    "valid_trial_coverage": {
+        "direction": "gte", "unit": "ratio", "denominator": "planned_trials",
+        "description": "valid Trials over the frozen trial plan (Harbor)",
     },
     "cost.total_usd": {
         "direction": "lte", "unit": "USD", "denominator": "run",

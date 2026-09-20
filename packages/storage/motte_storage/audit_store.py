@@ -50,6 +50,23 @@ def _attempt_trial_id(record: dict[str, Any]) -> str:
     return trial_id
 
 
+def _indexed_attempt(payload: dict[str, Any], trial_id: Any) -> dict[str, Any]:
+    """读取 attempt 时核对 payload 的 trial_id 与索引列（review R24）。
+
+    ``case_attempts`` 把 trial_id 写两处：JSON payload（身份判定用）与
+    ``trial_id`` 列（查询与冲突域判定用）。两处脱节会让身份保护被绕过，
+    因此读取即报 ``RunConflictError``，而不是挑其中一个当真。
+    """
+    stored = payload.get("trial_id")
+    normalized = stored if isinstance(stored, str) else ("" if stored is None else None)
+    if normalized != (trial_id or ""):
+        raise RunConflictError(
+            "attempt payload trial_id differs from the indexed trial_id: "
+            f"{normalized!r} != {trial_id!r}"
+        )
+    return payload
+
+
 class SQLiteAttempts:
     def __init__(self, path: str) -> None:
         self._path = path
@@ -117,11 +134,11 @@ class SQLiteAttempts:
             if run.get("status") != expected_run_status or run.get("cancellation"):
                 raise RunConflictError(f"run is no longer dispatchable: {run_id}")
             row = connection.execute(
-                "SELECT payload FROM case_attempts WHERE id = ?", (attempt_id,)
+                "SELECT payload, trial_id FROM case_attempts WHERE id = ?", (attempt_id,)
             ).fetchone()
             if row is None:
                 raise RunConflictError(f"attempt missing: {attempt_id}")
-            current_attempt = json.loads(row[0])
+            current_attempt = _indexed_attempt(json.loads(row[0]), row[1])
             if current_attempt.get("run_id") != run_id:
                 raise RunConflictError(f"attempt belongs to another run: {attempt_id}")
             stored = advance_record(
@@ -141,15 +158,15 @@ class SQLiteAttempts:
 
     def get(self, attempt_id: str) -> dict[str, Any] | None:
         with closing(_connect(self._path)) as connection:
-            row = connection.execute("SELECT payload FROM case_attempts WHERE id = ?", (attempt_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+            row = connection.execute("SELECT payload, trial_id FROM case_attempts WHERE id = ?", (attempt_id,)).fetchone()
+        return _indexed_attempt(json.loads(row[0]), row[1]) if row else None
 
     def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
         with closing(_connect(self._path)) as connection:
             rows = connection.execute(
-                "SELECT payload FROM case_attempts WHERE run_id = ? ORDER BY rowid", (run_id,)
+                "SELECT payload, trial_id FROM case_attempts WHERE run_id = ? ORDER BY rowid", (run_id,)
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+        return [_indexed_attempt(json.loads(row[0]), row[1]) for row in rows]
 
     def list_open(self, run_id: str) -> list[dict[str, Any]]:
         return [record for record in self.list_for_run(run_id)
@@ -162,13 +179,14 @@ class SQLiteAttempts:
         with closing(_connect(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT payload FROM case_attempts WHERE id = ?", (attempt_id,)
+                "SELECT payload, trial_id FROM case_attempts WHERE id = ?", (attempt_id,)
             ).fetchone()
             if row is None:
                 raise RunConflictError(f"attempt missing: {attempt_id}")
             stored = advance_record(
-                json.loads(row[0]), expected_revision=expected_revision, expected_status=expected_status,
-                status=status, changes=changes, transitions=ATTEMPT_TRANSITIONS,
+                _indexed_attempt(json.loads(row[0]), row[1]), expected_revision=expected_revision,
+                expected_status=expected_status, status=status, changes=changes,
+                transitions=ATTEMPT_TRANSITIONS,
             )
             if connection.execute(
                 "UPDATE case_attempts SET payload = ?, status = ?, revision = ? "
@@ -189,11 +207,11 @@ class SQLiteAttempts:
         with closing(_connect(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT payload FROM case_attempts WHERE id = ?", (attempt_id,)
+                "SELECT payload, trial_id FROM case_attempts WHERE id = ?", (attempt_id,)
             ).fetchone()
             if row is None:
                 raise RunConflictError(f"attempt missing: {attempt_id}")
-            previous = json.loads(row[0])
+            previous = _indexed_attempt(json.loads(row[0]), row[1])
             pending = validate_event(event, previous["run_id"])
             if case_run is not None and _attempt_trial_id(previous):
                 # 一个 Trial 的结果不写任务级 CaseRun：逻辑 CaseRun 由聚合阶段
@@ -243,11 +261,11 @@ class SQLiteAttempts:
         with closing(_connect(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
-                "SELECT payload FROM case_attempts WHERE run_id = ? AND status = 'dispatching' ORDER BY rowid",
+                "SELECT payload, trial_id FROM case_attempts WHERE run_id = ? AND status = 'dispatching' ORDER BY rowid",
                 (run_id,),
             ).fetchall()
-            for (payload,) in rows:
-                current = json.loads(payload)
+            for payload, trial_id in rows:
+                current = _indexed_attempt(json.loads(payload), trial_id)
                 stored = advance_record(
                     current, expected_revision=current["revision"], expected_status="dispatching",
                     status="indeterminate", changes=None, transitions=ATTEMPT_TRANSITIONS,
@@ -280,13 +298,13 @@ class SQLiteAttempts:
             if run.get("status") != expected_run_status:
                 raise RunConflictError(f"run status changed: {run_id}")
             rows = connection.execute(
-                "SELECT payload FROM case_attempts WHERE run_id = ? "
+                "SELECT payload, trial_id FROM case_attempts WHERE run_id = ? "
                 "AND status IN ('dispatching', 'indeterminate') ORDER BY rowid",
                 (run_id,),
             ).fetchall()
             uncertain: list[dict[str, Any]] = []
-            for (payload,) in rows:
-                current = json.loads(payload)
+            for payload, trial_id in rows:
+                current = _indexed_attempt(json.loads(payload), trial_id)
                 stored = current
                 if current["status"] == "dispatching":
                     stored = advance_record(

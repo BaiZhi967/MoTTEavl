@@ -331,10 +331,19 @@ class RunService:
         cancelled = self._honor_cancellation(run_id)
         if cancelled is not None:
             return cancelled
-        rows_by_case, unmapped = self._external_job_case_rows(run_id, run, outcome)
-        for case_id in list(run.get("case_ids") or []):
-            self.store.case_runs.upsert(rows_by_case[case_id])
-        trial_import = self._import_trials(run, rows_by_case)
+        trial_records, task_rows, unmapped = self._external_job_records(run_id, run, outcome)
+        # 先按 trial_id 完整导入全部 Trial 结果（含失败/取消/未尝试的处置）：
+        # 任务级 Case 聚合不能替代 Trial 原始结果存储（review R01，P0）。
+        try:
+            trial_import = self._import_trials(run, trial_records)
+        except Exception as error:  # noqa: BLE001 - 身份错配必须显式失败
+            trial_import = {
+                "conflicts": [],
+                "invalid": [{
+                    "error_type": type(error).__name__,
+                    "message": str(error),
+                }],
+            }
         if trial_import.get("conflicts"):
             # 同一 Trial 的原始证据变化（hash 冲突）必须阻断最终化，而不是覆盖。
             for conflict in trial_import["conflicts"]:
@@ -348,6 +357,11 @@ class RunService:
             errors_from_trials = True
         else:
             errors_from_trials = False
+        invalid_import = list(trial_import.get("invalid") or [])
+        # 任务级 Case 行由**已导入的 Trial 结果**拼装：它们是派生聚合视图，
+        # 不承载 Trial 身份，因此一个 Task 的多个 repeat 不再互相覆盖。
+        for case_id in list(run.get("case_ids") or []):
+            self.store.case_runs.upsert(task_rows[case_id])
         rows = self.store.case_runs.list_for_run(run_id)
         job_status = str(outcome.get("job_status") or "indeterminate")
         if outcome.get("import", {}).get("conflicts"):
@@ -356,6 +370,19 @@ class RunService:
             row["result"]["error"] for row in rows
             if isinstance(row.get("result"), dict) and row["result"].get("error")
         ]
+        for record in trial_records:
+            error = record.get("error")
+            if isinstance(error, dict) and error:
+                errors.append(error)
+        if invalid_import:
+            errors.append({
+                "code": "TRIAL_IMPORT_INVALID",
+                "message": (
+                    "trial payload identity did not match the frozen plan; "
+                    "the offending payload was rejected and kept out of storage"
+                ),
+                "details": {"rejected": invalid_import[:10], "count": len(invalid_import)},
+            })
         outcome_error = outcome.get("error")
         if isinstance(outcome_error, dict) and outcome_error:
             errors.append(outcome_error)
@@ -448,12 +475,218 @@ class RunService:
         return self._view(run_id)
 
     @staticmethod
-    def _external_job_case_rows(
+    def _frozen_plan_index(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """冻结计划索引：``trial_id`` 与 ``<task_key>#<repeat_index>`` → 计划单元。"""
+        external = (run.get("manifest") or {}).get("external_benchmark") or {}
+        plan = external.get("runner_config") or {}
+        trials = (plan.get("plan") or {}).get("trials") or []
+        index: dict[str, dict[str, Any]] = {}
+        for item in trials:
+            if not isinstance(item, dict):
+                continue
+            trial_id = item.get("trial_id")
+            task_key = item.get("task_key")
+            repeat_index = item.get("repeat_index")
+            if isinstance(trial_id, str) and trial_id:
+                index[trial_id] = item
+            if isinstance(task_key, str) and isinstance(repeat_index, int):
+                index[f"{task_key}#{repeat_index}"] = item
+        return index
+
+    @staticmethod
+    def _synthesized_trial_result(
+        plan: dict[str, Any] | None, item: dict[str, Any], *,
+        declared_status: str | None,
+    ) -> dict[str, Any]:
+        """Runner 行没有 payload 时，按冻结计划补出**完整处置**（review R01）。
+
+        错误/取消/未尝试同样要留下身份与处置：缺行会让覆盖分母悄悄变小，
+        而"没有证据"与"没有记录"是两件事。状态未知时按 ``indeterminate``
+        如实表达（不猜成功也不猜失败）。
+        """
+        status = str(declared_status or "failed")
+        disposition = "not_attempted" if status == "not_attempted" else "indeterminate"
+        payload: dict[str, Any] = {
+            "disposition": disposition,
+            "verifier_observation": {"status": "missing_verifier_evidence"},
+            "coverage": {
+                "items": {
+                    "cost_usd": "unavailable",
+                    "model_identity": "unavailable",
+                    "trajectory": "unavailable",
+                },
+                "reason": "runner produced no trial payload for this planned unit",
+            },
+        }
+        if outcome_error := item.get("error"):
+            payload["error"] = deepcopy(outcome_error)
+        if isinstance(plan, dict):
+            payload["trial_id"] = plan["trial_id"]
+            payload["task_key"] = plan["task_key"]
+            payload["repeat_index"] = plan["repeat_index"]
+        payload["synthesized_by"] = "run-service:trial-disposition"
+        return payload
+
+    @staticmethod
+    def _trial_shaped(run: dict[str, Any]) -> bool:
+        """Run 是否是"一 Job 多计划 Trial"形态（Terminal-Bench/Harbor）。
+
+        结构信号是冻结 manifest 里的 Trial 计划；非 Trial 形态（GSM8K/C-Eval
+        等 M2 外部套件）继续走既有的一行一 Case 映射，语义不变。
+        """
+        external = (run.get("manifest") or {}).get("external_benchmark") or {}
+        return bool((external.get("runner_config") or {}).get("plan"))
+
+    def _external_job_records(
+        self, run_id: str, run: dict[str, Any], outcome: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        """把 job 结局拆成 ``(Trial 记录, 任务级 Case 行, 隔离行)``。
+
+        review R01（P0）：过去按 ``case_id`` 建字典，同一 Task 的第二个 repeat
+        会覆盖第一个，Run 完成时仍丢结果；Trial 形态的 Run 现在**一个计划 Trial
+        一条记录**，任务级 Case 行只是派生聚合、不承载 Trial 身份。非 Trial
+        形态沿用既有映射（M2 语义逐字不变）。冻结选样之外的 Runner 行
+        （unmapped/映射冲突）继续被隔离成审计记录，绝不归属到其它题目。
+        """
+        if not self._trial_shaped(run):
+            rows, unmapped = self._legacy_case_rows(run_id, run, outcome)
+            return ([], rows, unmapped)
+        selected = [str(item) for item in run.get("case_ids") or []]
+        selected_set = set(selected)
+        plan_index = self._frozen_plan_index(run)
+        by_trial: dict[str, dict[str, Any]] = {}
+        unmapped: list[dict[str, Any]] = []
+        for item in outcome.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            payload = item.get("output") if isinstance(item.get("output"), dict) else None
+            trial_id = str(payload.get("trial_id") or "") if payload else ""
+            task_key = str(payload.get("task_key") or "") if payload else ""
+            plan: dict[str, Any] | None = None
+            if trial_id:
+                candidate = plan_index.get(trial_id)
+                plan = candidate if isinstance(candidate, dict) else None
+            else:
+                # 没有 payload 的行只能靠冻结计划归属；无法归属即隔离（不猜）。
+                for key in (item.get("stable_case_key"), item.get("case_id")):
+                    candidate = plan_index.get(str(key or ""))
+                    if isinstance(candidate, dict):
+                        plan = candidate
+                        break
+                if plan is None:
+                    unmapped.append({
+                        "case_id": item.get("case_id"),
+                        "stable_case_key": item.get("stable_case_key"),
+                        "error": item.get("error") or {
+                            "code": "EXTERNAL_ROW_UNIDENTIFIED",
+                            "message": (
+                                "runner row has neither a trial payload nor a frozen "
+                                "plan match; it is quarantined and never attributed"
+                            ),
+                        },
+                    })
+                    continue
+                trial_id = str(plan["trial_id"])
+                task_key = str(plan["task_key"])
+            if task_key not in selected_set:
+                unmapped.append({
+                    "case_id": task_key,
+                    "stable_case_key": item.get("stable_case_key"),
+                    "error": item.get("error"),
+                })
+                continue
+            if trial_id in by_trial:
+                # 同一 Trial 出现两行：保留先到者，重复行进审计（不静默丢弃）。
+                unmapped.append({
+                    "case_id": task_key,
+                    "stable_case_key": item.get("stable_case_key"),
+                    "error": {
+                        "code": "EXTERNAL_TRIAL_DUPLICATE",
+                        "message": f"trial {trial_id} was reported more than once",
+                    },
+                })
+                continue
+            record: dict[str, Any] = {
+                "trial_id": trial_id,
+                "task_key": task_key,
+                "repeat_index": (
+                    payload.get("repeat_index") if payload
+                    else (plan or {}).get("repeat_index")
+                ),
+                "status": item.get("status"),
+                "error": deepcopy(item.get("error")) if item.get("error") else None,
+                "payload": (
+                    deepcopy(payload) if payload
+                    else self._synthesized_trial_result(
+                        plan, item, declared_status=item.get("status"),
+                    )
+                ),
+            }
+            if record["repeat_index"] is None and isinstance(plan, dict):
+                record["repeat_index"] = plan.get("repeat_index")
+            by_trial[trial_id] = record
+
+        trials = [by_trial[key] for key in sorted(
+            by_trial, key=lambda key: (by_trial[key]["task_key"], by_trial[key]["repeat_index"] or 0),
+        )]
+        return (trials, self._task_case_rows(run_id, selected, trials), unmapped)
+
+    @staticmethod
+    def _task_case_rows(
+        run_id: str, selected: list[str], trial_records: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """任务级 Case 行：一行一个逻辑 Task，内容是**派生聚合**而非某个 Trial。"""
+        grouped: dict[str, list[dict[str, Any]]] = {case_id: [] for case_id in selected}
+        for record in trial_records:
+            grouped.setdefault(str(record["task_key"]), []).append(record)
+        rows: dict[str, dict[str, Any]] = {}
+        for case_id, records in grouped.items():
+            observed = [
+                record for record in records
+                if isinstance(record.get("payload"), dict)
+                and record["payload"].get("synthesized_by") is None
+            ]
+            dispositions: dict[str, int] = {}
+            for record in records:
+                disposition = str(
+                    (record.get("payload") or {}).get("disposition") or "unknown",
+                )
+                dispositions[disposition] = dispositions.get(disposition, 0) + 1
+            if not observed:
+                # 该任务一个 Trial 都没产出证据：任务级行保持 not_attempted，
+                # 不伪造 case 级错误（Trial 层的错误已单独进入 Run 错误清单，
+                # 这里再塞一条会遮蔽真正的首个错误码）。
+                rows[case_id] = {
+                    "run_id": run_id, "case_id": case_id,
+                    "outcome": "not_attempted", "result": None,
+                }
+                continue
+            rows[case_id] = {
+                "run_id": run_id, "case_id": case_id, "outcome": "responded",
+                # 任务级行不是可评分的原始结果：质量由 Trial 层判定（需求 4.2）。
+                # "不可评分"标记放在 result 里——公共 CaseRun 契约是 extra=forbid，
+                # 顶层多一个键会让 GET /runs/{id} 直接 500。
+                "result": {
+                    "task_key": case_id,
+                    "aggregate_only": True,
+                    "unscored": True,
+                    "planned_trials": len(records),
+                    "observed_trials": len(observed),
+                    "dispositions": dispositions,
+                },
+            }
+        for case_id in selected:
+            rows.setdefault(case_id, {
+                "run_id": run_id, "case_id": case_id,
+                "outcome": "not_attempted", "result": None,
+            })
+        return rows
+
+    @staticmethod
+    def _legacy_case_rows(
         run_id: str, run: dict[str, Any], outcome: dict[str, Any],
     ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-        """把 job 结局的归一化结果映射为 case 行；缺失的 selected case 记
-        not_attempted。冻结选样之外的 Runner 行（unmapped/映射冲突）被隔离
-        成审计记录，绝不归属到其它题目（review R03）。"""
+        """非 Trial 形态的既有映射（M2）：一行一 Case，缺失记 not_attempted。"""
         selected = set(run.get("case_ids") or [])
         rows: dict[str, dict[str, Any]] = {}
         unmapped: list[dict[str, Any]] = []
@@ -490,10 +723,15 @@ class RunService:
                     "outcome": "not_attempted", "result": None,
                 }
             elif status == "unscored":
+                # "不可评分"标记放进 result：公共 CaseRun 契约是 extra=forbid，
+                # 顶层多键会让 GET /runs/{id} 的响应校验失败（500）。
+                payload = deepcopy(item.get("output"))
                 rows[case_id] = {
                     "run_id": run_id, "case_id": case_id, "outcome": "responded",
-                    "result": deepcopy(item.get("output")),
-                    "unscored": True,
+                    "result": (
+                        {**payload, "unscored": True}
+                        if isinstance(payload, dict) else {"unscored": True, "output": payload}
+                    ),
                 }
             else:
                 rows[case_id] = {
@@ -786,6 +1024,7 @@ class RunService:
             run_view = {
                 **run,
                 "cases": self.store.case_runs.list_for_run(run_id),
+                "trial_results": self._stored_trial_payloads(run_id),
                 **(deepcopy(aggregate_context) or {}),
             }
             try:
@@ -924,12 +1163,14 @@ class RunService:
         return stored
 
     def _import_trials(
-        self, run: dict[str, Any], rows_by_case: dict[str, Any],
+        self, run: dict[str, Any], trial_records: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Terminal-Bench 形态：把采集到的 Trial 结果落进 Trial 存储。
 
-        非 Trial 套件直接返回空结果；Trial 计划来自冻结 manifest，因此
-        缺失的 Trial 会在存储里保持 pending，而不会从覆盖分母里消失。
+        输入是**每个计划 Trial 一条记录**（``_external_job_records``），因此
+        同一 Task 的多个 repeat 各自落库、互不覆盖；记录里的 payload 可能
+        是按冻结计划补出的处置（无 payload 的失败/取消行），错误/取消/未尝试
+        同样有身份。非 Trial 套件直接返回空结果。
         """
         from motte_sdk.benchmark_plugins import import_terminal_bench_trials, suite_for_run
 
@@ -937,11 +1178,47 @@ class RunService:
         if suite is None or suite[0] != "terminal-bench-harbor":
             return {"skipped": True}
         results = [
-            {"result": row.get("result")}
-            for row in rows_by_case.values()
-            if isinstance(row.get("result"), dict)
+            {
+                "case_id": record["task_key"],
+                "trial_id": record["trial_id"],
+                "result": record.get("payload"),
+            }
+            for record in trial_records
+            if isinstance(record.get("payload"), dict)
         ]
         return import_terminal_bench_trials(self.store, run, results)
+
+    def _managed_scoring_rows(
+        self, run: dict[str, Any], results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """评分输入解析：Trial 套件用 Trial 存储，其余沿用传入的 Case 行。
+
+        review R01：Task 级 Case 行是派生聚合（一行一个 Task），把它当评分
+        输入会让质量分母变成"任务数"并丢掉其余 repeat；Trial 套件的评分输入
+        必须来自按 ``trial_id`` 完整导入的 Trial 结果。冻结证据是唯一来源，
+        因此 rescore 与首次评分走同一条路径。
+        """
+        from motte_sdk.benchmark_plugins import suite_for_run
+
+        suite = suite_for_run(run)
+        if suite is None or suite[0] != "terminal-bench-harbor":
+            return results
+        trials = getattr(self.store, "trials", None)
+        if trials is None:
+            return results
+        rows: list[dict[str, Any]] = []
+        for record in trials.list_for_run(run["id"]):
+            payload = record.get("result")
+            if not isinstance(payload, dict):
+                continue
+            rows.append({
+                "case_id": record["task_key"],
+                "trial_id": record["trial_id"],
+                "result": payload,
+                "outcome": "responded",
+            })
+        # Trial 存储为空（例如 manifest 没冻结计划）时保留既有行为。
+        return rows or results
 
     def _score_results(
         self,
@@ -953,7 +1230,7 @@ class RunService:
         if run.get("manifest", {}).get("benchmark_provenance"):
             from motte_sdk.suites import managed_scores
 
-            scores = managed_scores(run, results)
+            scores = managed_scores(run, self._managed_scoring_rows(run, results))
             if emit_events:
                 for score in scores:
                     self._emit(run_id, "score", score)
@@ -1050,6 +1327,67 @@ class RunService:
         )
         self._notify_latest_event(attempt["run_id"])
 
+    def _stored_trial_payloads(self, run_id: str) -> list[dict[str, Any]]:
+        """Trial 存储里的载荷（一个计划 Trial 一条），供聚合与视图消费。"""
+        trials = getattr(self.store, "trials", None)
+        if trials is None:
+            return []
+        payloads: list[dict[str, Any]] = []
+        for record in trials.list_for_run(run_id):
+            payload = record.get("result")
+            if isinstance(payload, dict):
+                payloads.append(deepcopy(payload))
+        return payloads
+
+    def _ensure_trial_dispositions(
+        self, run: dict[str, Any], *, disposition: str,
+    ) -> list[dict[str, Any]]:
+        """给**尚未产出结果**的计划 Trial 补上终态处置（review R01/T07）。
+
+        取消、超时、unsupported 都必须让每个计划单元有处置：缺行会让覆盖
+        分母悄悄变小，也会让"跑过一个 Trial 后被取消"看起来像"什么都没跑"。
+        已落盘的 Trial 结果绝不覆盖（原始证据不可改写）。
+        """
+        from motte_sdk.benchmark_plugins import import_terminal_bench_trials, suite_for_run
+
+        suite = suite_for_run(run)
+        if suite is None or suite[0] != "terminal-bench-harbor":
+            return []
+        trials = getattr(self.store, "trials", None)
+        if trials is None:
+            return []
+        pending = [
+            record for record in trials.list_for_run(run["id"])
+            if record.get("result") is None
+        ]
+        if not pending:
+            return []
+        results = [
+            {
+                "case_id": record["task_key"],
+                "trial_id": record["trial_id"],
+                "result": {
+                    "trial_id": record["trial_id"],
+                    "task_key": record["task_key"],
+                    "repeat_index": record.get("repeat_index"),
+                    "disposition": disposition,
+                    "verifier_observation": {"status": "missing_verifier_evidence"},
+                    "coverage": {
+                        "items": {
+                            "cost_usd": "unavailable",
+                            "model_identity": "unavailable",
+                            "trajectory": "unavailable",
+                        },
+                        "reason": f"run reached a terminal state ({disposition}) before this trial produced evidence",
+                    },
+                    "synthesized_by": "run-service:terminal-disposition",
+                },
+            }
+            for record in pending
+        ]
+        import_terminal_bench_trials(self.store, run, results)
+        return [item["trial_id"] for item in results]
+
     def _finish_unattempted(
         self, run_id: str, *, final_status: str | None = None,
         final_error: dict[str, Any] | None = None,
@@ -1067,6 +1405,12 @@ class RunService:
             for case_id in run["case_ids"]
             if case_id not in done and case_id not in open_case_ids
         ]
+        # 计划 Trial 也要有终态处置：取消/超时后"哪些 Trial 没跑"必须可查，
+        # 而不是只有 Task 层的 not_attempted（review R01/T07）。
+        self._ensure_trial_dispositions(
+            run,
+            disposition="cancelled" if final_status == "cancelled" else "not_attempted",
+        )
         rows = existing_rows + synthetic_rows
         scoring_error: Exception | None = None
         try:

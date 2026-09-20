@@ -29,6 +29,8 @@ PARSER_VERSION = "harbor-terminal-bench-parser@1"
 #: 与 ``motte_benchmark.harbor.config.HARBOR_VERSION`` 对应的上游版本。
 HARBOR_VERSION = "0.23.0"
 MIGRATED_FROM = "native Harbor trial directories (no legacy adapter code reused)"
+#: 冻结任务副本清单在证据里的键（task_key ↔ 执行目录名，review R03/R13）。
+FROZEN_MANIFEST_KEY = "frozen-tasks/manifest.json"
 
 #: 单个冻结文件的解析上限（超过只记 hash 与大小，不解析）。
 MAX_PARSE_BYTES = 8 * 1024 * 1024
@@ -109,6 +111,14 @@ def _timings(payload: Mapping[str, Any]) -> dict[str, float | None]:
     total = _duration_seconds(payload.get("started_at"), payload.get("finished_at"))
     out["total_sec"] = total
     return out
+
+
+def _is_path_suffix(native_parts: list[str], relative: str) -> bool:
+    """原生绝对路径的末段是否正好是计划里的规范相对路径（逐段比较）。"""
+    rel_parts = [part for part in str(relative).replace("\\", "/").split("/") if part]
+    if not rel_parts or len(rel_parts) > len(native_parts):
+        return False
+    return native_parts[-len(rel_parts):] == rel_parts
 
 
 def trial_directories(files: Mapping[str, bytes], *, prefix: str = "harbor/trials/") -> list[str]:
@@ -347,6 +357,39 @@ def read_verifier_observation(
         }
         return observation
 
+    # Verifier 侧异常必须**先**决定错误语义（review R06）：reward 分支提前
+    # return 会把 VerifierTimeoutError 吞掉，让超时/崩溃留下的旧 reward 文件
+    # 冒充"有效通过"。原始 reward 证据仍然保留（审计用），只是不当质量结论。
+    # 非 Verifier 异常（例如 AgentTimeoutError）不在此列：Agent 超时但 Verifier
+    # 正常产出 reward 时，评分路径保持有效。
+    if exception_type in VERIFIER_ERROR_EXCEPTIONS:
+        observation["status"] = "verifier_error"
+        observation["error"] = {
+            "code": exception_type,
+            "message": str(exception.get("exception_message") or exception_type),
+            "details": {
+                "phase": "verifier",
+                "exception_type": exception_type,
+                "raw_rewards": rewards or rewards_from_result or None,
+                "raw_reward_present": raw_reward_present,
+            },
+        }
+        if rewards:
+            observation["rewards"] = rewards
+            observation["source_path"] = (
+                "verifier/reward.json" if json_rewards is not None else "verifier/reward.txt"
+            )
+            source_rel = {
+                "verifier/reward.json": f"harbor/trials/{trial}/verifier/reward.json",
+                "verifier/reward.txt": f"harbor/trials/{trial}/verifier/reward.txt",
+            }[observation["source_path"]]
+            data = files.get(source_rel)
+            if data is not None:
+                import hashlib  # noqa: PLC0415 - 只在需要 hash 时导入
+
+                observation["source_hash"] = "sha256:" + hashlib.sha256(data).hexdigest()
+        return observation
+
     if rewards:
         observation["status"] = "scored"
         observation["rewards"] = rewards
@@ -362,15 +405,6 @@ def read_verifier_observation(
             import hashlib  # noqa: PLC0415 - 只在需要 hash 时导入
 
             observation["source_hash"] = "sha256:" + hashlib.sha256(data).hexdigest()
-        return observation
-
-    if exception_type in VERIFIER_ERROR_EXCEPTIONS:
-        observation["status"] = "verifier_error"
-        observation["error"] = {
-            "code": exception_type,
-            "message": str(exception.get("exception_message") or exception_type),
-            "details": {"phase": "verifier", "exception_type": exception_type},
-        }
         return observation
 
     if exception_type is not None:
@@ -548,9 +582,58 @@ def parse_harbor_files(
         for task in (frozen_plan_payload.get("tasks") or [])
         if isinstance(task, Mapping) and task.get("task_key")
     }
+    # 执行副本的目录名（``frozen-tasks/<目录>``）：Harbor 的 task_name 就是它，
+    # 因此原生 task_id.path 的末段/Trial 名前缀都以它为准（review R03/R13）。
+    key_by_frozen_dir: dict[str, str] = {}
+    frozen_bytes = files.get(FROZEN_MANIFEST_KEY)
+    if frozen_bytes is not None:
+        manifest, _error = _load_json(frozen_bytes, "frozen-tasks/manifest.json")
+        if isinstance(manifest, Mapping):
+            for task_key, entry in (manifest.get("tasks") or {}).items():
+                if isinstance(entry, Mapping) and entry.get("directory"):
+                    key_by_frozen_dir[str(entry["directory"])] = str(task_key)
     basenames: dict[str, list[str]] = {}
     for task_key, relative in display_by_key.items():
         basenames.setdefault(relative.rstrip("/").split("/")[-1], []).append(task_key)
+
+    def _match_native_path(native_path: Any) -> tuple[str | None, str | None]:
+        """按冻结副本目录 / 冻结根下的规范相对路径匹配（review R03/R13）。
+
+        优先级：副本目录名（Harbor 实际执行的那个目录）→ 规范相对路径段后缀。
+        完整路径可区分时不会退化成 basename 猜测；0 个或多个候选都返回 None，
+        交给唯一 basename 这个受控 fallback。
+        """
+        if not isinstance(native_path, str) or not native_path.strip():
+            return (None, None)
+        parts = [
+            part for part in native_path.replace("\\", "/").strip().split("/") if part
+        ]
+        if not parts:
+            return (None, None)
+        frozen_key = key_by_frozen_dir.get(parts[-1])
+        if frozen_key is not None:
+            return (frozen_key, "frozen_dir")
+        matches = [
+            task_key for task_key, relative in display_by_key.items()
+            if _is_path_suffix(parts, relative)
+        ]
+        return (matches[0], "path") if len(matches) == 1 else (None, None)
+
+    def _match_frozen_head(head: str) -> str | None:
+        """Trial 目录名前缀 → 冻结副本目录（Harbor 截断到 32 字符 + 随机后缀）。"""
+        candidates = [
+            task_key for directory, task_key in key_by_frozen_dir.items()
+            if directory.startswith(head) or head.startswith(directory[:32])
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def _native_basename(native_path: Any) -> str | None:
+        if not isinstance(native_path, str) or not native_path.strip():
+            return None
+        parts = [
+            part for part in native_path.replace("\\", "/").strip().split("/") if part
+        ]
+        return parts[-1] if parts else None
 
     trial_dirs = trial_directories(files, prefix=source_trial_prefix)
     assigned: dict[str, dict[str, Any]] = {}
@@ -565,24 +648,36 @@ def parse_harbor_files(
             if isinstance(parsed, Mapping):
                 payload = parsed
         task_key = None
+        matched_by: str | None = None
         task_id = payload.get("task_id")
-        if isinstance(task_id, Mapping) and task_id.get("path"):
-            tail = str(task_id["path"]).rstrip("/").split("/")[-1]
-            candidates = basenames.get(tail, [])
+        native_path = task_id.get("path") if isinstance(task_id, Mapping) else None
+        # 1. 冻结副本目录名 / 完整规范相对路径（最可靠：同名不同目录也能区分）。
+        task_key, matched_by = _match_native_path(native_path)
+        # 2. 唯一 basename 的受控 fallback（原生路径被脱敏或只有 basename 时）。
+        if task_key is None:
+            tail = _native_basename(native_path)
+            candidates = basenames.get(tail or "", [])
             if len(candidates) == 1:
                 task_key = candidates[0]
+                matched_by = "basename"
+        # 3. Trial 目录名前缀（Harbor 用任务目录 basename 生成 trial 名）。
         if task_key is None:
             head = trial_dir.split("__", 1)[0]
-            candidates = basenames.get(head, [])
-            if len(candidates) == 1:
+            frozen_key = _match_frozen_head(head)
+            if frozen_key is not None:
+                task_key, matched_by = frozen_key, "frozen_dir"
+            candidates = basenames.get(head, []) if task_key is None else []
+            if task_key is None and len(candidates) == 1:
                 task_key = candidates[0]
-            elif len(candidates) > 1:
+                matched_by = "trial_name"
+            elif task_key is None and len(candidates) > 1:
                 unmapped.append({
                     "source_trial_id": str(payload.get("id") or trial_dir),
                     "directory": trial_dir,
                     "code": "HARBOR_TASK_NAME_AMBIGUOUS",
                     "message": (
-                        f"task basename {head!r} matches {len(candidates)} planned tasks; "
+                        f"task basename {head!r} matches {len(candidates)} planned tasks and "
+                        f"the native task path {native_path!r} does not identify one; "
                         "refusing to merge identities by name"
                     ),
                     "candidates": sorted(candidates),
@@ -594,6 +689,7 @@ def parse_harbor_files(
                 "directory": trial_dir,
                 "code": "HARBOR_TRIAL_UNMAPPED",
                 "message": "trial directory does not match any planned task",
+                "native_task_path": native_path,
             })
             continue
         suffix_of[trial_dir] = str(payload.get("id") or trial_dir)
@@ -601,6 +697,11 @@ def parse_harbor_files(
             "directory": trial_dir,
             "payload": payload,
             "started_at": payload.get("started_at"),
+            "matching": {
+                "method": matched_by,
+                "native_path": native_path,
+                "normalized_relative_path": display_by_key.get(task_key),
+            },
         })
 
     results: list[dict[str, Any]] = []
@@ -728,6 +829,8 @@ def _trial_result(
         "task_checksum": payload.get("task_checksum"),
         "verifier_environment_mode": payload.get("verifier_environment_mode"),
         "cancelled": cancelled,
+        # 归属证据（review R13）：用完整规范相对路径还是受控 basename fallback。
+        "task_matching": dict(observed.get("matching") or {}),
     }
     coverage = _coverage_for(files, directory, observation, terminal, workspace, usage_known)
     disposition = _disposition_for(

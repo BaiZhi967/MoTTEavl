@@ -11,6 +11,9 @@
 - ``put_result``：终态结果不可覆盖。同 ``trial_id`` 同 ``source_hash``
   同内容 = ``identical``；同 ``trial_id`` 但 ``source_hash`` 或内容不同 =
   ``conflict``（M3-A10：原始证据变化/重复采集必须显式失败，不覆盖旧证据）。
+  写入前先核对身份：``result["trial_id"]`` 必须等于目标 Trial，结果里若带
+  ``run_id`` / ``task_key`` / ``repeat_index`` 必须与冻结计划一致，错配抛
+  ``ValueError`` 且不改动旧记录（review R26）。
 - ``list_for_run`` 返回同一 Run 的全部计划单元（包括尚无结果的），因此
   "全部计划单元都有 disposition" 可以被外部检查，而不是靠缺行推断。
 
@@ -88,11 +91,18 @@ def validate_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _plan_conflict(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    # 出口一律深拷贝：existing 在 Memory 后端就是内部记录，调用者不能借返回值改动证据。
     return {
         "status": "conflict",
         "trial_id": incoming["trial_id"],
-        "existing": {"plan_hash": existing.get("plan_hash"), "plan": existing.get("plan")},
-        "incoming": {"plan_hash": incoming.get("plan_hash"), "plan": incoming.get("plan")},
+        "existing": {
+            "plan_hash": existing.get("plan_hash"),
+            "plan": deepcopy(existing.get("plan")),
+        },
+        "incoming": {
+            "plan_hash": incoming.get("plan_hash"),
+            "plan": deepcopy(incoming.get("plan")),
+        },
     }
 
 
@@ -116,6 +126,35 @@ def _result_conflict(
     }
 
 
+#: TrialResult 里允许出现的归属字段：出现时必须与目标 Trial 的冻结计划一致（R26）。
+_RESULT_IDENTITY_FIELDS = ("run_id", "task_key", "repeat_index")
+
+
+def _check_result_identity(
+    record: dict[str, Any], result: dict[str, Any], trial_id: str,
+) -> None:
+    """拒绝把别的 Trial/Run/Task/repeat 的结果写进目标 Trial（review R26）。
+
+    ``result["trial_id"]`` 是必需匹配项；``run_id`` / ``task_key`` /
+    ``repeat_index`` 出现时必须与冻结计划逐项一致。错配抛 ``ValueError``，
+    调用方必须在任何写入之前调用本函数，旧记录因此不会被改动。
+    """
+    foreign = result.get("trial_id")
+    if foreign != trial_id:
+        raise ValueError(
+            f"trial result identity mismatch: trial_id {foreign!r} != target {trial_id!r}"
+        )
+    for field in _RESULT_IDENTITY_FIELDS:
+        if field not in result:
+            continue
+        expected = record.get(field)
+        if result[field] != expected:
+            raise ValueError(
+                f"trial result identity mismatch: {field} {result[field]!r} "
+                f"!= frozen plan {expected!r}"
+            )
+
+
 def _plan_record(plan: dict[str, Any]) -> dict[str, Any]:
     stored = validate_plan(plan)
     stored.update({
@@ -135,7 +174,10 @@ def _plan_record(plan: dict[str, Any]) -> dict[str, Any]:
 def _apply_plan(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """同 trial_id 同计划：idempotent no-op；异计划保留先写入者并报冲突。"""
     if existing.get("plan_hash") == incoming.get("plan_hash"):
-        return {"status": "identical", "trial_id": incoming["trial_id"], "plan": incoming}
+        return {
+            "status": "identical", "trial_id": incoming["trial_id"],
+            "plan": deepcopy(incoming),
+        }
     return _plan_conflict(existing, incoming)
 
 
@@ -154,8 +196,10 @@ class MemoryTrials:
                 existing = self._rows.get(incoming["trial_id"])
                 if existing is None:
                     self._rows[incoming["trial_id"]] = incoming
+                    # 存入内部字典的是 incoming 本身，返回值必须是副本（review R25）。
                     results.append({
-                        "status": "created", "trial_id": incoming["trial_id"], "plan": incoming,
+                        "status": "created", "trial_id": incoming["trial_id"],
+                        "plan": deepcopy(incoming),
                     })
                 else:
                     results.append(_apply_plan(existing, incoming))
@@ -185,6 +229,7 @@ class MemoryTrials:
             row = self._rows.get(trial_id)
             if row is None:
                 return {"status": "unknown_trial", "trial_id": trial_id}
+            _check_result_identity(row, stored, trial_id)
             result_hash = _canonical(stored)
             if row.get("result") is not None:
                 if row.get("source_hash") == source_hash and row.get("result_hash") == result_hash:
@@ -263,7 +308,10 @@ class SQLiteTrials:
                 row = connection.execute("SELECT payload FROM trials WHERE trial_id = ?", (incoming["trial_id"],)).fetchone()
                 if row is None:
                     connection.execute("INSERT INTO trials (trial_id, run_id, task_key, repeat_index, status, plan_hash, payload, result_payload, created_at, finished_at) VALUES (:trial_id, :run_id, :task_key, :repeat_index, :status, :plan_hash, :payload, :result_payload, :created_at, :finished_at)", self._row(incoming))
-                    results.append({"status": "created", "trial_id": incoming["trial_id"], "plan": incoming})
+                    results.append({
+                        "status": "created", "trial_id": incoming["trial_id"],
+                        "plan": deepcopy(incoming),
+                    })
                     continue
                 results.append(_apply_plan(json.loads(row[0]), incoming))
         return results
@@ -294,6 +342,7 @@ class SQLiteTrials:
             if row is None:
                 return {"status": "unknown_trial", "trial_id": trial_id}
             current = json.loads(row[0])
+            _check_result_identity(current, stored, trial_id)
             result_hash = _canonical(stored)
             if row[1] is not None:
                 if current.get("source_hash") == source_hash and current.get("result_hash") == result_hash:

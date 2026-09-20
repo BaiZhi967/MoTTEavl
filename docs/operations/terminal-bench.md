@@ -93,6 +93,28 @@ drill-down GET /runs/{id}/tasks → /tasks/{key}/trials → /trials/{trial_id}
 `prepare` 把配置/计划落进工作目录（零执行）；`start` 是唯一产生执行副作用的
 操作；采集按"读受控字节 → 冻结内容寻址 Artifact → 从同一份冻结内容解析"。
 
+### 4.1 不可变任务副本（执行内容 = 冻结内容）
+
+排队到执行之间任务文件可能被改动，因此 adapter 的 `prepare` 会把每个选中任务
+**逐字节复制**到 `$MOTTE_WORK_DIR/frozen-tasks/<task_key>/`，复制时按创建时冻结
+的 `plan.task_files`（`{相对路径: sha256}`）核对：缺失、多出、内容不符、符号
+链接都算漂移，直接 `HARBOR_TASK_CONTENT_DRIFT` 并且不启动 Job。Runner 在构造
+原生 `JobConfig` 之前再复验一次副本，并把结果写进 `harbor/frozen-tasks.json`
+（`files_verified`）。Harbor 只读取这份副本（`MOTTE_TASK_ROOT` 指向它），
+所以"执行了什么"与"身份 hash 声称的是什么"始终是同一批字节。
+
+### 4.2 任务自带 Compose 的策略检查
+
+Harbor 会把任务自己的 `environment/docker-compose.yaml` 叠加进 `docker compose`
+命令行，因此任务可以借它注入宿主挂载或额外服务。准备阶段会解析该文件并记录
+策略结论（`task_facts[*].compose`），预检据此 fail-closed：`privileged`、
+host network / host namespace、危险 capabilities、`devices`、被关闭的
+seccomp/apparmor、指向任务目录之外的 bind mount / build context / env_file、
+凭据名插值、`include:`/`extends:` 等无法证明安全的形式都会产生具名原因码
+（`TASK_COMPOSE_*`），并在**零任务启动、零模型调用**时拒绝。无法解析
+（缺 YAML 解析器/文件畸形）按 `TASK_COMPOSE_UNINSPECTABLE` 处理——读不到就
+不放行。
+
 ## 5. CLI
 
 与 API 共用 `motte_sdk.terminalbench` 门面，任务身份、预检原因码与 Trial 视图
@@ -109,25 +131,49 @@ uv run python -m motte_cli terminal-bench tasks [--dataset-revision REV --json]
 
 # 只读预检（零模型调用/零任务启动）
 uv run python -m motte_cli terminal-bench preflight \
-    [--agent-id oracle --agent-version 1.0.0 --n-trials N --task-keys a,b --dataset-revision REV]
+    [--agent-id oracle --agent-version 1.0.0 --model MODEL_ID --n-trials N \
+     --task-keys a,b --dataset-revision REV]
 
-# 创建 queued Run（需已发布 ModelProfile；预检不通过即拒绝）
-uv run python -m motte_cli terminal-bench run --model MODEL_ID \
-    [--n-trials N --aggregation first-trial|mean-success --task-keys a,b \
-     --agent-timeout-sec S --verifier-timeout-sec S --job-timeout-sec S]
+# 创建 queued Run（oracle 无需 --model；真实 Agent 必须有已发布 ModelProfile）
+uv run python -m motte_cli terminal-bench run [--model MODEL_ID] \
+    [--agent-id claude-code --agent-version 2.0.30 \
+     --credential-ref provider=env:ANTHROPIC_API_KEY \
+     --n-trials N --aggregation first-trial|mean-success --task-keys a,b \
+     --agent-timeout-sec S --agent-setup-timeout-sec S --verifier-timeout-sec S \
+     --job-timeout-sec S]
 
-# Task 层结果 / 下钻
+# Task 层结果 / 下钻 / 证据内容
 uv run python -m motte_cli terminal-bench status --run-id RUN [--json]
 uv run python -m motte_cli terminal-bench trials --run-id RUN --task-key KEY
 uv run python -m motte_cli terminal-bench trial --run-id RUN --trial-id ID
+uv run python -m motte_cli terminal-bench trial --run-id RUN --trial-id ID \
+    --artifact 'harbor/trials/<dir>/trial.log' [--text]
 ```
 
 各子命令支持 `--db`（SQLite 路径，缺省 `MOTTE_DB_PATH`）；`--task-keys` 为
-逗号分隔的 `task_key` 子集。`run` 输出的提示命令为：
+逗号分隔的 `task_key` 子集。`--credential-ref NAME=env:VAR` 只登记**引用**，
+值始终来自 Runner 环境（变量缺失时 Runner 在启动前拒绝，退出码 5）。
+`status` 读取冻结 manifest，因此 CLI 与 API 的分母、聚合规则与 Gate 结论一致；
+`trial` 输出的内容来自冻结证据（有界 + 脱敏），不依赖可被清理的工作目录。
+`run` 输出的提示命令为：
 
 ```bash
 uv run python -m apps.worker.motte_worker --once
 ```
+
+### 5.1 期限语义（`timeouts`）
+
+| 键 | 落到哪里 | 语义 |
+|---|---|---|
+| `agent_sec` | Harbor `agents[].override_timeout_sec` | Agent 执行阶段期限 |
+| `agent_setup_sec` | Harbor `agents[].override_setup_timeout_sec` | Agent 安装/准备阶段期限 |
+| `verifier_sec` | Harbor `verifier.override_timeout_sec` | Verifier 阶段期限 |
+| `job_sec` | Supervisor `limits.max_wall_seconds` | Job 总期限：到点中断、保留部分证据并清理 |
+| `environment_build_sec` | — | **创建时拒绝**（`HARBOR_TIMEOUT_UNSUPPORTED`）：Harbor 0.23.0 只能按任务自带 `environment.build_timeout_sec` 乘倍率缩放，没有 per-trial 覆盖字段，平台不接受"收了秒数却不执行" |
+
+公共请求的期限字段名统一为 `timeouts`（HTTP 请求体对象；CLI 为 `--*-timeout-sec`），
+旧扁平名（`agent_timeout_sec` 等）会被显式拒绝（422 `REQUEST_FIELD_UNKNOWN`），
+不会静默忽略；未知字段与类型错误同样是 4xx，不是 500。
 
 ## 6. HTTP 端点
 
@@ -136,11 +182,16 @@ uv run python -m apps.worker.motte_worker --once
 | `GET /api/v1/benchmarks/terminal-bench` | 概览：已准备 revision、任务数、Runner 连接状态、本套件 Run 摘要 |
 | `POST /api/v1/benchmarks/terminal-bench/prepare` | 只读准备（201；治理/结构失败 422 + 原因码） |
 | `GET /api/v1/benchmarks/terminal-bench/tasks` | 任务清单（`dataset_revision` 可选） |
-| `GET /api/v1/benchmarks/terminal-bench/preflight` | 只读预检（`model`/`n_trials`/`task_keys`/`agent_id`/`agent_version`/`dataset_revision`） |
-| `POST /api/v1/benchmarks/terminal-bench/runs` | 创建 Run（202）；未准备/模型非 published/Runner 未连接/预检失败 → 422 且 0 次启动 |
-| `GET /api/v1/runs/{run_id}/tasks` | Task 层汇总（计划/有效/通过、覆盖、门禁） |
+| `GET /api/v1/benchmarks/terminal-bench/preflight` | 只读预检（`model`/`n_trials`/`task_keys`/`agent_id`/`agent_version`/`dataset_revision`）；与创建路径共用同一 Agent 能力判定，能力缺口以 `reason_codes` 返回 |
+| `POST /api/v1/benchmarks/terminal-bench/runs` | 创建 Run（202）；未准备/模型非 published/Runner 未连接/预检失败/字段非法 → 422 且 0 次启动。请求体字段名见第 5.1 节，未知字段与类型错误是可解释 4xx |
+| `GET /api/v1/runs/{run_id}/tasks` | Task 层汇总（计划/有效/通过、覆盖、门禁、全 Run 成本与时长） |
 | `GET /api/v1/runs/{run_id}/tasks/{task_key}/trials` | 某 Task 的全部计划 Trial（含 pending） |
-| `GET /api/v1/runs/{run_id}/trials/{trial_id}` | 单 Trial 详情（终止、Verifier、证据引用与完整度；严格校验 run 归属，否则 404） |
+| `GET /api/v1/runs/{run_id}/trials/{trial_id}` | 单 Trial 详情（终止、Verifier、证据引用与完整度、可读 `terminal` 文本；严格校验 run 归属，否则 404）。内容字段在展示边界脱敏，身份/hash 逐字保留 |
+| `GET /api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}` | 读取某个证据引用的**内容**（有界 + 脱敏 + hash 校验）；不可读时给出原因而非伪造内容 |
+| `GET /api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}/bytes` | 下载**冻结的原始字节**（同一归属与 hash 校验；响应头 `X-Motte-Artifact-Redacted: false`，不做有损解码） |
+
+超过 64 KiB 的文本只返回前 64 KiB 并标 `truncated: true`；二进制内容返回
+`encoding: "binary"` 与提示，正文走 `/bytes` 下载路径。
 
 Web：`/terminal-bench` 五页（操作/任务/监控/结果/比较），数据全部来自上述端点。
 
@@ -181,7 +232,15 @@ API/CLI 进程**不执行 docker**：Runner 侧探测结果写入 JSON，路径�
   `~/.config/gcloud`、`~/.docker`、`~/.kube` 等）、平台数据库文件与平台内部
   环境变量；命中即预检拒绝（上表对应原因码）。
 - 凭据只以 `{"ref": "env:NAME"}` 引用形式进入 Runner 配置；任何原始值
-  `SECRET_VALUE_IN_CREDENTIALS` 拒绝，配置 dump/日志/Artifact 不落明文。
+  `SECRET_VALUE_IN_CREDENTIALS` 拒绝。Runner 在启动前检查引用指向的环境变量
+  是否存在（缺失即退出码 5），**从不**把值写进配置文件、日志或 Artifact。
+  公共展示（API/CLI/Web）对错误与日志内容复用 `motte_trace.redaction` 脱敏，
+  身份与 hash 逐字保留。
+- 任务容器归属：Runner 通过 `EnvironmentConfig.extra_docker_compose` 注入平台
+  overlay，给 Harbor 的 `main` 服务打上 `motte.job` / `motte.run` / `motte.owner`
+  标签；Runner 把每个 Trial 的 compose project 名也写进定位文件。平台清理只
+  按这两类身份定位本 Job 的容器，绝不做全局 prune（见
+  [取消/清理 runbook](harbor-cleanup.md)）。
 - 网络策略与 Verifier 可见性**记入 profile fingerprint**（`profile_fingerprint`）。
   任一项与上游不同（挂载、网络策略非 `allowed`、Verifier 可见性非
   `upstream`）时 Run 标记 `platform_custom_profile: true`，**不得对外宣称为
@@ -193,22 +252,54 @@ API/CLI 进程**不执行 docker**：Runner 侧探测结果写入 JSON，路径�
 ## 9. 成本与限额
 
 - 未观测到的成本保持 `null`（**不填 0**）；未知成本的 Trial 单独计数。
-- `per_success_usd` 在没有成功 Trial 时返回不适用（`null`），不扩大分母、
-  不自动补跑；已知成本小计包含失败 Trial 的费用（`includes_failed_trials_in_numerator`）。
+- `per_success_usd` 只在成本**完整**（`known_trials > 0` 且 `unknown_trials == 0`）
+  且存在成功 Trial 时给出，否则为 `null` 并由 `per_success_usd_basis`
+  （`complete` / `unknown_cost` / `no_success` / `no_known_cost`）说明原因；
+  `known_cost_subtotal_per_success_usd` 是明确命名的**小计**比率（只覆盖报告了
+  成本的 Trial）。失败 Trial 的费用计入分子（`includes_failed_trials_in_numerator`）。
 - Agent、Verifier、环境构建/启动与总时长分别报告，不把容器启动时间当作
   模型推理延迟。
-- 平台侧限额：计划重复 `n_trials` ≤ 32；原生 Runner 重试本阶段不开放
-  （`HARBOR_RETRY_NOT_ALLOWED`），计划重复用 `n_trials` 表达；三层期限
-  （`agent_sec` / `verifier_sec` / `job_sec`）独立设置。
+- 平台侧限额：计划重复 `n_trials` ≤ 32（HTTP 请求必须传整数，字符串 422）；
+  原生 Runner 重试本阶段不开放（`HARBOR_RETRY_NOT_ALLOWED`），计划重复用
+  `n_trials` 表达；期限语义见第 5.1 节。
 
-## 10. 本阶段不包含
+## 10. Agent 表与模型映射
+
+平台只放行显式登记的 Agent（`AGENT_SPECS`），不做"名字看起来对就接受"：
+
+| agent_id | Harbor 原生 Agent | 版本 | 模型 | 凭据引用 |
+|---|---|---|---|---|
+| `oracle` | `harbor.agents.oracle:OracleAgent` | 固定 `1.0.0` | 不需要（确定性校准） | 不需要 |
+| `claude-code` | `harbor.agents.installed.claude_code:ClaudeCode` | 操作员显式钉住（省略即 latest → 拒绝） | 必需，`provider/model` 映射到 `model_name` | 必需 `env:ANTHROPIC_API_KEY` 或 `env:ANTHROPIC_AUTH_TOKEN` |
+
+映射细节：`profile.model.{provider,model}` → 原生 `agents[].model_name`；
+钉住的 CLI 版本 → `agents[].kwargs.version`（Harbor 的
+`InstalledAgentOptions.version`，`extra="forbid"`，未知选项会在启动前失败）。
+Runner 在 `--validate-config` 模式下用真实 Harbor 的 Agent options 模型校验
+这份配置（零模型调用、零容器），结果写进 `harbor/config-validation.json`：
+
+```bash
+# 只校验不执行：真实 Harbor 接受平台生成的 Agent 配置
+PYTHONPATH=$PWD/packages/benchmark-runtime:$PWD/packages/contracts \
+MOTTE_WORK_DIR=<work> MOTTE_TASK_ROOT=<work>/frozen-tasks \
+MOTTE_LAUNCH_TOKEN=<token> ANTHROPIC_API_KEY=<来自 Runner 环境> \
+/opt/motte-runner/bin/harbor-entry --validate-config \
+    --launch-token <token> --job-id <job> --run-id <run>
+```
+
+注意：`install-harbor` 会把桥接模块拷贝进 Runner venv，因此**改动桥接层后
+必须重新部署**；真实链路测试与上面的校验命令都通过 `PYTHONPATH` 指向仓库
+源码，避免验证到上一次部署的快照。
+
+## 11. 本阶段不包含
 
 - 真实模型/Agent 的 live 验收（**blocked**：需用户显式授权可审阅的任务清单、
-  模型、Profile、重复数、预算与期限）。
+  模型、Profile、重复数、预算与期限）。`claude-code` 的**实现与离线原生配置
+  校验**已完成，但"真实调用通过"不在本阶段结论里。
 - 上游完整任务集实机运行：89 题 `terminal-bench 2.0` 与 10 题
   `terminal-bench-sample 2.0`（**not_run**）。
 - 云端 Harbor 服务、多机调度、训练数据生成、自动公开提交榜单。
-- 除 `docker` 之外的环境类型；除 `oracle 1.0.0` 之外未经验证的 Agent。
+- 除 `docker` 之外的环境类型；除上表两个 Agent 之外未经验证的 Agent。
 
 分层验收清单见 [兼容矩阵](harbor-compatibility.md)；本机真实命令与结果见
 [M3 验证记录](../verification/M3.md)。

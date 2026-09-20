@@ -225,6 +225,56 @@ def _preflight_report() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _tb_model_mapping(args: argparse.Namespace) -> dict[str, str] | None:
+    """``--model`` → 冻结 Profile 的 ``{provider, model}``（review R10）。
+
+    只接受**已发布**的 ModelProfile id：CLI 指定一个不存在的模型时必须在入队
+    前失败，而不是"成功 queued、跑的时候才发现没有模型"。oracle 可以不带模型。
+    """
+    model_id = getattr(args, "model", None)
+    if not model_id:
+        return None
+    from motte_storage.factory import create_resource_store
+
+    resources = create_resource_store(getattr(args, "db", None))
+    record = resources.models.get(model_id)
+    if record is None:
+        raise ValueError(f"unknown model profile: {model_id}")
+    if str(record.get("lifecycle") or record.get("status") or "") != "published":
+        raise ValueError(f"model profile is not published: {model_id}")
+    return {
+        "provider": str(record.get("provider") or ""),
+        "model": str(record.get("model") or record.get("id") or model_id),
+    }
+
+
+def _tb_profile_from_args(args: argparse.Namespace) -> dict:
+    """CLI → 冻结 Profile：字段名与 API DTO 一致（``timeouts`` 是唯一来源）。"""
+    from motte_sdk import terminalbench as tb
+
+    timeouts = {
+        "agent_sec": getattr(args, "agent_timeout_sec", None),
+        "verifier_sec": getattr(args, "verifier_timeout_sec", None),
+        "agent_setup_sec": getattr(args, "agent_setup_timeout_sec", None),
+        "job_sec": getattr(args, "job_timeout_sec", None),
+    }
+    credentials = {}
+    for item in getattr(args, "credential_ref", None) or []:
+        name, _, ref = str(item).partition("=")
+        if not name or not ref:
+            raise ValueError("--credential-ref must be NAME=env:VAR")
+        credentials[name] = {"ref": ref}
+    return tb.terminal_bench_profile(
+        agent_id=getattr(args, "agent_id", "oracle"),
+        agent_version=getattr(args, "agent_version", "1.0.0"),
+        n_trials=max(getattr(args, "n_trials", 1), 1),
+        aggregation=getattr(args, "aggregation", "first-trial"),
+        model=_tb_model_mapping(args),
+        timeouts={key: value for key, value in timeouts.items() if value is not None},
+        credentials=credentials,
+    )
+
+
 def _handle_terminal_bench(args: argparse.Namespace) -> int:
     """Terminal-Bench（Harbor）CLI：prepare / tasks / preflight / run / status / trials。
 
@@ -287,15 +337,15 @@ def _handle_terminal_bench(args: argparse.Namespace) -> int:
         record = tb.prepared_dataset(store, dataset_revision=args.dataset_revision)
         if record is None:
             return _error("DATASET_UNPREPARED", "no prepared Terminal-Bench task set")
-        profile = tb.terminal_bench_profile(
-            agent_id=args.agent_id, agent_version=args.agent_version,
-            n_trials=max(args.n_trials, 1),
-        )
-        report = tb.preflight_terminal_bench(
-            record=record, profile=profile,
-            task_keys=[item for item in (args.task_keys or "").split(",") if item] or None,
-            docker=_preflight_report(),
-        )
+        try:
+            profile = _tb_profile_from_args(args)
+            report = tb.preflight_terminal_bench(
+                record=record, profile=profile,
+                task_keys=[item for item in (args.task_keys or "").split(",") if item] or None,
+                docker=_preflight_report(),
+            )
+        except Exception as error:  # noqa: BLE001 - 能力/任务集问题不是崩溃
+            return _error(getattr(error, "code", "PREFLIGHT_INVALID"), str(error))
         print(_json.dumps({
             "ok": report["allowed"],
             "reasons": report["reason_codes"],
@@ -318,19 +368,15 @@ def _handle_terminal_bench(args: argparse.Namespace) -> int:
                 "the Harbor adapter is not registered; deploy the pinned runner "
                 "environment (scripts/runner/install-harbor) first",
             )
-        profile = tb.terminal_bench_profile(
-            agent_id=args.agent_id, agent_version=args.agent_version,
-            n_trials=max(args.n_trials, 1), aggregation=args.aggregation,
-            timeouts={
-                "job_sec": args.job_timeout_sec, "agent_sec": args.agent_timeout_sec,
-                "verifier_sec": args.verifier_timeout_sec,
-            },
-        )
         selected = [item for item in (args.task_keys or "").split(",") if item]
-        report = tb.preflight_terminal_bench(
-            record=record, profile=profile, task_keys=selected or None,
-            docker=_preflight_report(),
-        )
+        try:
+            profile = _tb_profile_from_args(args)
+            report = tb.preflight_terminal_bench(
+                record=record, profile=profile, task_keys=selected or None,
+                docker=_preflight_report(),
+            )
+        except Exception as error:  # noqa: BLE001 - 创建前拒绝，不产生 queued Run
+            return _error(getattr(error, "code", "RUN_REQUEST_INVALID"), str(error))
         if not report["allowed"]:
             print(_json.dumps({"error": {
                 "code": "PREFLIGHT_FAILED",
@@ -340,16 +386,19 @@ def _handle_terminal_bench(args: argparse.Namespace) -> int:
             }}, ensure_ascii=False), file=sys.stderr)
             return 1
         planned_run_id = f"run-{uuid4().hex}"
-        inputs = tb.build_run_inputs(
-            record=record, run_id=planned_run_id, job_id=f"job-{uuid4().hex}",
-            profile=profile, task_keys=selected or None,
-        )
-        resolved = resolve_execution(tb.SCENARIO_VERSION, inputs["manifest"])
-        run = service.create_run(
-            tb.SCENARIO_VERSION, resolved, inputs["case_ids"],
-            requested_manifest={"benchmark": tb.BENCHMARK_ID},
-            run_id=planned_run_id,
-        )
+        try:
+            inputs = tb.build_run_inputs(
+                record=record, run_id=planned_run_id, job_id=f"job-{uuid4().hex}",
+                profile=profile, task_keys=selected or None,
+            )
+            resolved = resolve_execution(tb.SCENARIO_VERSION, inputs["manifest"])
+            run = service.create_run(
+                tb.SCENARIO_VERSION, resolved, inputs["case_ids"],
+                requested_manifest={"benchmark": tb.BENCHMARK_ID},
+                run_id=planned_run_id,
+            )
+        except Exception as error:  # noqa: BLE001 - 配置/任务集问题一律结构化失败
+            return _error(getattr(error, "code", "RUN_CREATE_FAILED"), str(error))
         print(_json.dumps({
             "id": run["id"], "status": run["status"], "scenario": tb.SCENARIO_VERSION,
             "execution": resolved.get("execution") or {},
@@ -359,22 +408,33 @@ def _handle_terminal_bench(args: argparse.Namespace) -> int:
         return 0
 
     if command == "status":
-        rows = tb.task_rows(store, args.run_id)
+        # 冻结 manifest 必须一起传给视图：否则"计划里有、结果里没有"的 Task
+        # 会从分母里消失，CLI 的覆盖率就会比 API/报告虚高（review R17）。
+        try:
+            run = service.get_run(args.run_id)
+        except KeyError:
+            return _error("RUN_NOT_FOUND", args.run_id)
+        rows = tb.task_rows(store, args.run_id, manifest=run.get("manifest") or {})
         if args.json:
-            print(_json.dumps({"items": rows, "total": len(rows)}, ensure_ascii=False))
+            print(_json.dumps({
+                "run_id": args.run_id, "status": run.get("status"),
+                "items": rows, "total": len(rows),
+            }, ensure_ascii=False))
             return 0
         for row in rows:
             print(
                 f"{row['task_key']}  planned={row['planned_trials']} "
                 f"valid={row['valid_trials']} pass={row['task_pass']}",
             )
-        if rows:
-            aggregate = rows[0]["aggregate"]
-            print(_json.dumps({
-                "valid_trial_pass_rate": aggregate["valid_trial_pass_rate"],
-                "valid_trial_coverage": aggregate["valid_trial_coverage"],
-                "gate": rows[0]["gate"],
-            }, ensure_ascii=False))
+        aggregate = rows[0]["aggregate"] if rows else {}
+        print(_json.dumps({
+            "status": run.get("status"),
+            "aggregation": aggregate.get("aggregation"),
+            "selected_trials": aggregate.get("selected_trials"),
+            "valid_trial_pass_rate": aggregate.get("valid_trial_pass_rate"),
+            "valid_trial_coverage": aggregate.get("valid_trial_coverage"),
+            "gate": rows[0]["gate"] if rows else None,
+        }, ensure_ascii=False))
         return 0
 
     if command == "trials":
@@ -386,6 +446,21 @@ def _handle_terminal_bench(args: argparse.Namespace) -> int:
         detail = tb.trial_detail(store, args.run_id, args.trial_id)
         if detail is None:
             return _error("TRIAL_NOT_FOUND", f"{args.trial_id} is not in run {args.run_id}")
+        if args.artifact:
+            # 内容读取链路（review R19）：按引用读冻结证据，有界 + 脱敏。
+            content = tb.trial_artifact_content(
+                store, args.run_id, args.trial_id, args.artifact,
+            )
+            if content is None:
+                return _error(
+                    "ARTIFACT_NOT_FOUND",
+                    f"{args.artifact} is not referenced by trial {args.trial_id}",
+                )
+            if args.text and content.get("text") is not None:
+                print(content["text"])
+                return 0
+            print(_json.dumps(content, ensure_ascii=False))
+            return 0
         print(_json.dumps(detail, ensure_ascii=False))
         return 0
 
@@ -535,14 +610,23 @@ def _build_parser() -> argparse.ArgumentParser:
     tb_preflight = tb_sub.add_parser("preflight", help="只读预检（零模型调用/零任务启动）")
     tb_preflight.add_argument("--agent-id", default="oracle")
     tb_preflight.add_argument("--agent-version", default="1.0.0")
+    tb_preflight.add_argument("--model", help="已发布 ModelProfile id（真实 Agent 必需）")
+    tb_preflight.add_argument(
+        "--credential-ref", action="append", dest="credential_ref",
+        help="凭据引用 NAME=env:VAR（可重复；值永不进入平台）",
+    )
     tb_preflight.add_argument("--n-trials", type=int, default=1, dest="n_trials")
     tb_preflight.add_argument("--task-keys", help="逗号分隔的 task_key 子集")
     tb_preflight.add_argument("--dataset-revision", help="指定 revision（缺省取最新）")
     tb_preflight.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     tb_run = tb_sub.add_parser("run", help="创建 job-based queued Run（由 Worker 执行）")
-    tb_run.add_argument("--model", required=True, help="已发布 ModelProfile id")
+    tb_run.add_argument("--model", help="已发布 ModelProfile id（真实 Agent 必需）")
     tb_run.add_argument("--agent-id", default="oracle")
     tb_run.add_argument("--agent-version", default="1.0.0")
+    tb_run.add_argument(
+        "--credential-ref", action="append", dest="credential_ref",
+        help="凭据引用 NAME=env:VAR（可重复；值永不进入平台）",
+    )
     tb_run.add_argument("--n-trials", type=int, default=1, dest="n_trials", help="计划重复数")
     tb_run.add_argument("--aggregation", choices=("first-trial", "mean-success"),
                         default="first-trial", help="Task 层聚合规则（事前固定）")
@@ -550,7 +634,14 @@ def _build_parser() -> argparse.ArgumentParser:
     tb_run.add_argument("--dataset-revision", help="指定 revision（缺省取最新）")
     tb_run.add_argument("--agent-timeout-sec", type=float, dest="agent_timeout_sec")
     tb_run.add_argument("--verifier-timeout-sec", type=float, dest="verifier_timeout_sec")
-    tb_run.add_argument("--job-timeout-sec", type=float, dest="job_timeout_sec")
+    tb_run.add_argument(
+        "--agent-setup-timeout-sec", type=float, dest="agent_setup_timeout_sec",
+        help="Agent 安装/准备阶段期限（映射到 Harbor override_setup_timeout_sec）",
+    )
+    tb_run.add_argument(
+        "--job-timeout-sec", type=float, dest="job_timeout_sec",
+        help="Job 总期限（映射到 Supervisor max_wall_seconds，超时中断并保留部分证据）",
+    )
     tb_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     tb_status = tb_sub.add_parser("status", help="Task 层结果与覆盖门禁")
     tb_status.add_argument("--run-id", required=True)
@@ -563,6 +654,8 @@ def _build_parser() -> argparse.ArgumentParser:
     tb_trial = tb_sub.add_parser("trial", help="单 Trial 详情（终止/Verifier/证据引用）")
     tb_trial.add_argument("--run-id", required=True)
     tb_trial.add_argument("--trial-id", required=True)
+    tb_trial.add_argument("--artifact", help="读取该 Trial 的某个证据引用内容")
+    tb_trial.add_argument("--text", action="store_true", help="只打印文本内容")
     tb_trial.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
     direct = sub.add_parser("direct-llm", help="Direct LLM 通用直连评测（导入 JSONL 数据集，创建运行）")

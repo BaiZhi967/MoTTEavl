@@ -131,13 +131,29 @@ Trial UUID**），两者不可混用：前者由计划派生、跨重复稳定�
 
 | 操作 | 结果 | 规则 |
 |---|---|---|
-| `create_plans` | `created` / `identical` / `conflict` | 同 `trial_id` 同内容 = no-op；同 `trial_id` 异内容 = 冲突，**保留先写入的计划**并返回两份摘要 |
-| `put_result` | `stored` / `identical` / `conflict` | 同 `trial_id` 同 `source_hash` 同内容 = `identical`；`source_hash` 或内容不同 = `conflict` |
+| `create_plans` | `created` / `identical` / `conflict` | 同 `trial_id` 同内容 = no-op；同 `trial_id` 异内容 = 冲突，**保留先写入的计划**并返回两份摘要。并发首写用原子插入冲突处理（`ON CONFLICT DO NOTHING` 后核对内容），两个事务同时首写不会变成唯一键异常 |
+| `put_result` | `stored` / `identical` / `conflict` | 同 `trial_id` 同 `source_hash` 同内容 = `identical`；`source_hash` 或内容不同 = `conflict`。写入前逐项核对**目标 Trial 身份**：`result.trial_id` 必须等于目标，结果里若带 `run_id`/`task_key`/`repeat_index` 必须与冻结计划一致，错配抛 `ValueError` 且不改变旧记录 |
 | 终态结果 | 不可覆盖 | 已落盘结果永不改写（M3-A10：原始证据变化/重复采集必须显式失败） |
 | `list_for_run` | 全量计划单元 | 含尚无结果的 `pending` 行，覆盖统计不靠缺行推断 |
+| 出口对象 | 深拷贝 | Memory 后端返回的每个出口（created/identical/conflict）都与存储内部对象解耦，调用方改写返回值不影响已冻结记录及其 hash |
 
 Trial 导入按冻结 manifest 的计划先建计划、再逐条幂等落结果；冲突使 Job 结局
 转 failed（`EXTERNAL_IMPORT_CONFLICT`），停止最终化并保留两份摘要。
+
+### 6.1 采集 → 导入的映射（一 Job 多 Trial）
+
+- Runner 的每一行是**一个计划 Trial**，导入以 `trial_id` 为键：同一 Task 的多个
+  重复各自落库，**不按 `task_key` 建字典**（那会让第二个重复覆盖第一个，Run
+  完成时仍丢结果）。
+- 失败/取消/未尝试的行也要有完整处置：行里没有 payload 时按冻结计划补出身份与
+  disposition（`not_attempted` / `indeterminate`），错误进审计；"没有证据"与
+  "没有记录"是两件事。
+- 任务级 `case_runs` 行是**派生聚合**（一行一个逻辑 Task，`result.aggregate_only`
+  标记，不承载 Trial 身份）；质量评分只消费 Trial 层结果，覆盖分母来自计划。
+- 取消/超时/unsupported 终态会给尚未产出结果计划单元补终态处置
+  （`_ensure_trial_dispositions`），已落盘的结果绝不覆盖。
+- 旧语义（非 Trial 形态的 M2 外部套件）逐字保持：一行一 Case、`call_failed` /
+  `not_attempted` 的既有形状不变。
 
 ## 7. Migration `0008_trials`
 
@@ -149,5 +165,7 @@ Trial 导入按冻结 manifest 的计划先建计划、再逐条幂等落结果�
   并新增 `(run_id, case_id, trial_id)` 索引。
 - SQLite 在首次打开既有库时**就地补列**（`ALTER TABLE ... ADD COLUMN`），
   不重建、不丢既有计划；PostgreSQL 走 alembic。
-- `downgrade` 只删除新增索引/列与 `trials` 表，**不触碰任何评分**与
-  `case_attempts` 既有行。
+- `downgrade` **拒绝在有 Trial 证据时执行**：`downgrade_blockers(bind)` 会统计
+  `trials` 行数与 `case_attempts` 中 `trial_id <> ''` 的行数，非空则抛错并给出
+  导出/清理步骤（先导出这两处数据、清理后才能降级）；空库降级照常执行，
+  且不触碰任何评分与 `case_attempts` 既有行。

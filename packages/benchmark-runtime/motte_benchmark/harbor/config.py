@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from typing import Any, Mapping, Sequence
 
@@ -66,8 +67,78 @@ ALLOWED_TASK_KEYS: frozenset[str] = frozenset({
     "path", "git_url", "git_commit_id", "name", "ref", "overwrite", "download_dir",
     "source",
 })
-#: 平台支持的 Agent 形态：先只开放确定性校准 Agent，真实 Agent 需另行授权。
+#: 平台支持的 Agent 形态表（review R10）。每项声明：Harbor 原生 Agent 名、
+#: 是否需要模型（oracle 是确定性校准 Agent，不需要模型调用）、是否必须显式
+#: 钉住 CLI 版本、以及在 Runner 环境里**必须存在**的凭据引用名（平台只冻结
+#: ``env:NAME`` 引用，值始终来自 Runner 自己的环境，绝不进平台库）。
+AGENT_SPECS: Mapping[str, Mapping[str, Any]] = {
+    "oracle": {
+        "harbor_name": "oracle",
+        "verified_versions": ("1.0.0",),
+        "requires_model": False,
+        "requires_pinned_version": True,
+        "credential_envs": (),
+    },
+    "claude-code": {
+        # Harbor 0.23.0 的原生 Agent（`harbor.agents.installed.claude_code`）。
+        # CLI 版本由操作员显式钉住（Harbor 的 InstalledAgentOptions.version，
+        # 省略即 latest → 平台拒绝），因此这里不做版本白名单，只要求显式且
+        # 记录在冻结配置里；真实调用仍需单独授权（M3 兼容矩阵如实登记）。
+        "harbor_name": "claude-code",
+        "verified_versions": None,
+        "requires_model": True,
+        "requires_pinned_version": True,
+        "credential_envs": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    },
+}
+#: 已具备实现、可在明确授权后做真实调用的 Agent（oracle 之外的首个真实 Agent）。
 SUPPORTED_AGENTS: Mapping[str, str] = {"oracle": "1.0.0"}
+
+
+def credential_env_names(refs: Mapping[str, str]) -> tuple[str, ...]:
+    """凭据引用 → 环境变量名（``env:NAME``；其他形式在冻结时已被拒绝）。"""
+    return tuple(
+        str(ref).removeprefix("env:") for ref in refs.values()
+        if str(ref).startswith("env:")
+    )
+
+
+def agent_capability_reasons(profile: Mapping[str, Any]) -> list[str]:
+    """Agent 能力检查的**不抛异常**版本：预检与创建共用同一判定（review R20）。
+
+    预检说"可以创建"而创建随后 422/500 是双重标准：两处必须给出同一组结论，
+    差别只在于预检汇总成 ``reason_codes``、创建抛出带 code 的错误。
+    """
+    reasons: list[str] = []
+    agent_id = profile.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        return ["AGENT_NOT_PINNED"]
+    spec = AGENT_SPECS.get(agent_id.strip())
+    if spec is None:
+        return ["AGENT_UNSUPPORTED"]
+    version = profile.get("agent_version")
+    if not isinstance(version, str) or version.strip().lower() in _PLACEHOLDER_VALUES:
+        reasons.append("AGENT_VERSION_NOT_PINNED")
+    elif (
+        spec["verified_versions"] is not None
+        and version.strip() not in spec["verified_versions"]
+    ):
+        reasons.append("AGENT_VERSION_UNSUPPORTED")
+    model = profile.get("model") or {}
+    if spec["requires_model"] and not (
+        isinstance(model, Mapping) and model.get("model")
+    ):
+        reasons.append("AGENT_MODEL_REQUIRED")
+    required = tuple(str(name) for name in spec["credential_envs"])
+    if required:
+        try:
+            names = set(credential_env_names(credential_refs(profile.get("credentials"))))
+        except HarborConfigError:
+            names = set()
+            reasons.append("CREDENTIAL_REF_REQUIRED")
+        if not names & set(required):
+            reasons.append("AGENT_CREDENTIAL_REF_MISSING")
+    return reasons
 
 #: 允许出现的三层期限键（Agent / Verifier / 环境构建与 Job 总期限分开）。
 _TIMEOUT_KEYS = frozenset({
@@ -152,20 +223,45 @@ def resolve_agent_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     ``profile`` 的关键字段：``agent_id`` / ``agent_version`` /
     ``n_trials`` / ``retries`` / ``timeouts`` / ``resources`` / ``environment``
     / ``model`` / ``tools`` / ``credentials`` / ``aggregation``。
+
+    review R10：真实 Agent 也由同一处判定——不在允许表里、版本没显式钉住、
+    需要模型却没有模型、需要凭据引用却没有引用，都在创建前拒绝（fail closed），
+    而不是"先创建再在 Runner 里失败"。这里只做**能力与引用**校验，凭据值永远
+    不进入平台。
     """
     agent_id = _pinned(profile.get("agent_id"), "profile.agent_id")
-    if agent_id not in SUPPORTED_AGENTS:
+    spec = AGENT_SPECS.get(agent_id)
+    if spec is None:
         raise HarborConfigError(
             "HARBOR_AGENT_UNSUPPORTED",
-            f"agent {agent_id!r} is not in the verified set {sorted(SUPPORTED_AGENTS)}; "
+            f"agent {agent_id!r} is not in the verified set {sorted(AGENT_SPECS)}; "
             "an unverified agent must not be advertised as supported (M3-G18)",
         )
     agent_version = _pinned(profile.get("agent_version"), "profile.agent_version")
-    expected = SUPPORTED_AGENTS[agent_id]
-    if agent_version != expected:
+    verified = spec["verified_versions"]
+    if verified is not None and agent_version not in verified:
         raise HarborConfigError(
             "HARBOR_AGENT_UNSUPPORTED",
-            f"agent {agent_id} is verified at version {expected}, not {agent_version!r}",
+            f"agent {agent_id} is verified at version {sorted(verified)}, "
+            f"not {agent_version!r}",
+        )
+    model = profile.get("model") or {}
+    if not isinstance(model, Mapping):
+        raise HarborConfigError("HARBOR_CONFIG_INVALID", "profile.model must be an object")
+    if spec["requires_model"] and not model.get("model"):
+        raise HarborConfigError(
+            "HARBOR_AGENT_MODEL_REQUIRED",
+            f"agent {agent_id} performs real model calls; profile.model.model is required "
+            "(oracle is the only agent that runs without a model)",
+        )
+    credential_names = credential_env_names(credential_refs(profile.get("credentials")))
+    required_envs = tuple(str(name) for name in spec["credential_envs"])
+    if required_envs and not set(required_envs) & set(credential_names):
+        raise HarborConfigError(
+            "HARBOR_AGENT_CREDENTIAL_REF_MISSING",
+            f"agent {agent_id} needs one of {list(required_envs)} as a credential "
+            "reference, e.g. {'credentials': {'provider': {'ref': "
+            f"'env:{required_envs[0]}'}}}}; values are never passed to the platform",
         )
     trials = _positive_int(profile.get("n_trials", 1), "profile.n_trials")
     if trials > 32:
@@ -222,8 +318,16 @@ def resolve_agent_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
 
 def _agent_section(
     frozen: Mapping[str, Any], timeout_sec: float | None,
+    setup_timeout_sec: float | None = None,
 ) -> dict[str, Any]:
-    agent: dict[str, Any] = {"name": frozen["agent_id"]}
+    """原生 Agent 段：真实 Agent 的 CLI 版本走 ``kwargs.version``（review R10）。
+
+    Harbor 0.23.0 的 ``InstalledAgentOptions.version`` 是"要安装的 CLI 版本，
+    省略即 latest"，因此非 oracle Agent 必须把钉住的版本显式传进去——否则
+    平台声称的"固定 Agent 版本"就只是文档。
+    """
+    spec = AGENT_SPECS.get(str(frozen["agent_id"]), {})
+    agent: dict[str, Any] = {"name": spec.get("harbor_name") or frozen["agent_id"]}
     model = frozen.get("model") or {}
     if model.get("model"):
         provider = model.get("provider")
@@ -232,7 +336,7 @@ def _agent_section(
         )
     elif frozen["agent_id"] != "oracle":
         raise HarborConfigError(
-            "HARBOR_CONFIG_INVALID",
+            "HARBOR_AGENT_MODEL_REQUIRED",
             f"agent {frozen['agent_id']} requires profile.model.model",
         )
     if model.get("ref"):
@@ -241,8 +345,15 @@ def _agent_section(
             "profile.model.ref is not mapped in the pinned schema; remove it or extend "
             "the allowlist with a real harbor field",
         )
+    if spec.get("requires_pinned_version") and str(frozen["agent_id"]) != "oracle":
+        agent["kwargs"] = {"version": str(frozen["agent_version"])}
     if timeout_sec is not None:
+        # Harbor 0.23.0：agent 期限 = override_timeout_sec（否则任务自带值）
+        # 再乘 agent_timeout_multiplier（平台固定 1.0）。
         agent["override_timeout_sec"] = timeout_sec
+    if setup_timeout_sec is not None:
+        # setup 阶段用独立字段 override_setup_timeout_sec（默认 360 秒）。
+        agent["override_setup_timeout_sec"] = setup_timeout_sec
     _reject_unknown("agent", agent, ALLOWED_AGENT_KEYS)
     return agent
 
@@ -347,10 +458,17 @@ def build_harbor_config(
         _positive_number(timeouts["job_sec"], "timeouts.job_sec")
         if timeouts.get("job_sec") is not None else None
     )
-    environment_build = (
-        _positive_number(timeouts["environment_build_sec"], "timeouts.environment_build_sec")
-        if timeouts.get("environment_build_sec") is not None else None
-    )
+    if timeouts.get("environment_build_sec") is not None:
+        # Harbor 0.23.0 只能按任务自带 ``environment.build_timeout_sec`` 乘
+        # ``environment_build_timeout_multiplier`` 缩放，JobConfig 里没有
+        # per-trial 覆盖字段。平台拒绝"接受秒数但不执行"（review R07）。
+        raise HarborConfigError(
+            "HARBOR_TIMEOUT_UNSUPPORTED",
+            "environment_build_sec cannot be enforced by harbor "
+            f"{HARBOR_VERSION}: the build deadline is the task's own "
+            "environment.build_timeout_sec scaled by a multiplier, with no per-trial "
+            "override; remove it from profile.timeouts (the task value stays in effect)",
+        )
     agent_setup = (
         _positive_number(timeouts["agent_setup_sec"], "timeouts.agent_setup_sec")
         if timeouts.get("agent_setup_sec") is not None else None
@@ -358,6 +476,10 @@ def build_harbor_config(
     agent_timeout = (
         _positive_number(timeouts["agent_sec"], "timeouts.agent_sec")
         if timeouts.get("agent_sec") is not None else None
+    )
+    verifier_timeout = (
+        _positive_number(timeouts["verifier_sec"], "timeouts.verifier_sec")
+        if timeouts.get("verifier_sec") is not None else None
     )
 
     planned_keys = sorted({str(plan["task_key"]) for plan in plans})
@@ -403,27 +525,34 @@ def build_harbor_config(
         "retry": _retry_section(frozen),
         "environment": _environment_section(frozen),
         "verifier": _verifier_section(frozen),
-        "agents": [_agent_section(frozen, agent_timeout)],
+        "agents": [_agent_section(frozen, agent_timeout, agent_setup)],
         "tasks": task_entries,
         # 显式任务列表：平台永远不把整个目录当 dataset（避免同名任务被上游合并）。
         "datasets": [],
         "metrics": [],
     }
-    if job_timeout is not None:
-        job["timeout_multiplier"] = 1.0
-    if environment_build is not None:
-        job["environment_build_timeout_multiplier"] = 1.0
-    if agent_setup is not None:
-        job["agent_setup_timeout_multiplier"] = 1.0
+    # 倍率一律 1.0：请求的秒数必须原样生效，不能靠"任务自带值 × 倍率"表达
+    # （review R07）。每项的实际生效秒数记录在 effective_timeouts 里。
+    multipliers = {
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 1.0,
+        "verifier_timeout_multiplier": 1.0,
+        "agent_setup_timeout_multiplier": 1.0,
+        "environment_build_timeout_multiplier": 1.0,
+    }
+    job.update(multipliers)
     _reject_unknown("job", job, ALLOWED_JOB_KEYS)
 
     timeouts_record = {
         "agent_sec": agent_timeout,
-        "verifier_sec": timeouts.get("verifier_sec"),
-        "environment_build_sec": environment_build,
+        "verifier_sec": verifier_timeout,
+        "environment_build_sec": None,
         "agent_setup_sec": agent_setup,
         "job_sec": job_timeout,
     }
+    effective_timeouts = _effective_timeouts(
+        requested=timeouts_record, multipliers=multipliers,
+    )
     config: dict[str, Any] = {
         "schema": CONFIG_SCHEMA,
         "harbor_version": HARBOR_VERSION,
@@ -432,6 +561,9 @@ def build_harbor_config(
         "dataset_revision": revision,
         "job": job,
         "timeouts": timeouts_record,
+        # 每项**实际生效**的秒数与由谁强制（review R07）：请求值与生效值必须
+        # 可核对，不能让秒数只落在旁路字段里。
+        "effective_timeouts": effective_timeouts,
         "n_trials": frozen["n_trials"],
         "planned_trial_count": len(plans),
         "planned_task_count": len(ordered),
@@ -470,6 +602,87 @@ _PROFILE_KEYS = frozenset({
     "agent_id", "agent_version", "n_trials", "retries", "model", "environment",
     "resources", "timeouts", "tools", "credentials", "aggregation", "limits",
 })
+
+
+#: 每项期限的强制者：Harbor 原生字段 vs 平台 Supervisor（review R07）。
+_TIMEOUT_ENFORCEMENT: Mapping[str, dict[str, Any]] = {
+    "agent_sec": {
+        "harbor_field": "agents[].override_timeout_sec",
+        "multiplier_field": "agent_timeout_multiplier",
+        "enforced_by": "harbor",
+    },
+    "verifier_sec": {
+        "harbor_field": "verifier.override_timeout_sec",
+        "multiplier_field": "verifier_timeout_multiplier",
+        "enforced_by": "harbor",
+    },
+    "agent_setup_sec": {
+        "harbor_field": "agents[].override_setup_timeout_sec",
+        "multiplier_field": "agent_setup_timeout_multiplier",
+        "enforced_by": "harbor",
+    },
+    "environment_build_sec": {
+        "harbor_field": None,
+        "multiplier_field": None,
+        "enforced_by": "task-authored",
+        "note": (
+            "harbor 0.23.0 只能用任务自带 environment.build_timeout_sec 乘倍率；"
+            "平台不接受该参数（HARBOR_TIMEOUT_UNSUPPORTED）"
+        ),
+    },
+    "job_sec": {
+        "harbor_field": None,
+        "multiplier_field": None,
+        "enforced_by": "platform-supervisor",
+        "note": "经 ExternalJobSpec.limits.max_wall_seconds 由 Supervisor 强制",
+    },
+}
+
+
+def _effective_timeouts(
+    *, requested: Mapping[str, Any], multipliers: Mapping[str, float],
+) -> dict[str, Any]:
+    """请求值 × 倍率 = 实际生效值；倍率非 1.0 时必须能解释差异。
+
+    review R07：平台固定倍率 1.0，因此这里断言 ``effective == requested``——
+    任何"接受秒数但没真的执行"的映射都会在创建时暴露，而不是等到运行结束。
+    """
+    out: dict[str, Any] = {}
+    for key, requested_value in requested.items():
+        spec = dict(_TIMEOUT_ENFORCEMENT.get(key) or {})
+        multiplier = 1.0
+        if spec.get("multiplier_field"):
+            multiplier = float(multipliers.get(str(spec["multiplier_field"]), 1.0))
+        if requested_value is None:
+            out[key] = {
+                "requested_sec": None,
+                "multiplier": multiplier,
+                "effective_sec": None,
+                "enforced_by": spec.get("enforced_by"),
+                "harbor_field": spec.get("harbor_field"),
+            }
+            if spec.get("note"):
+                out[key]["note"] = spec["note"]
+            continue
+        effective = float(requested_value) * multiplier
+        if multiplier == 1.0 and not math.isclose(
+            effective, float(requested_value), rel_tol=0.0, abs_tol=1e-9,
+        ):
+            raise HarborConfigError(
+                "HARBOR_TIMEOUT_MAPPING_INVALID",
+                f"{key}: multiplier 1.0 must keep the requested value, got "
+                f"requested={requested_value} effective={effective}",
+            )
+        out[key] = {
+            "requested_sec": float(requested_value),
+            "multiplier": multiplier,
+            "effective_sec": effective,
+            "enforced_by": spec.get("enforced_by"),
+            "harbor_field": spec.get("harbor_field"),
+        }
+        if spec.get("note"):
+            out[key]["note"] = spec["note"]
+    return out
 
 
 def frozen_config_hash(config: Mapping[str, Any]) -> str:

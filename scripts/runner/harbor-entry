@@ -35,7 +35,10 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 export MOTTE_RUNNER_PYTHON="$PYTHON_BIN"
+# 调用方的额外参数必须转发：静默丢弃标志会让"--validate-config"这类
+# 只校验模式变成真实执行（平台侧无法从 exit code 分辨）。
 exec "$PYTHON_BIN" -m motte_benchmark.harbor.entry \
     --launch-token "${MOTTE_LAUNCH_TOKEN:-}" \
     --job-id "${MOTTE_JOB_ID:-}" \
-    --run-id "${MOTTE_RUN_ID:-}"
+    --run-id "${MOTTE_RUN_ID:-}" \
+    "$@"

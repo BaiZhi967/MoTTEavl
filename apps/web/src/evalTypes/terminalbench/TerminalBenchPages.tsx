@@ -20,12 +20,14 @@ import {
 import {
   compareRuns,
   createTerminalBenchRun,
+  describeApiError,
   evaluateRunGate,
   getRun,
   getRuns,
   getRunTaskTrials,
   getRunTasks,
   getRunTrial,
+  getRunTrialArtifact,
   getTerminalBenchOverview,
   getTerminalBenchPreflight,
   getTerminalBenchTasks,
@@ -34,10 +36,15 @@ import {
   type GateResultView,
   type RunRecord,
   type TerminalBenchArtifact,
+  type TerminalBenchArtifactContent,
+  type TerminalBenchCostView,
   type TerminalBenchOverview,
   type TerminalBenchPreflightReport,
+  type TerminalBenchResources,
+  type TerminalBenchRunRequest,
   type TerminalBenchTask,
   type TerminalBenchTaskRow,
+  type TerminalBenchTimeouts,
   type TerminalBenchTrialDetail,
   type TerminalBenchTrialRow,
 } from "../../api/client";
@@ -93,8 +100,114 @@ const COVERAGE_ITEM_LABELS: Record<string, string> = {
 
 /** Harbor Agent Profile：服务端只登记已验证组合，这里不发明新组合。 */
 export const AGENT_PROFILES = [
-  { agent_id: "oracle", agent_version: "1.0.0", label: "oracle@1.0.0（参考解，已登记）" },
+  {
+    agent_id: "oracle",
+    agent_version: "1.0.0",
+    label: "oracle@1.0.0（参考解，已登记）",
+    /** oracle 不需要模型档案；真实 Agent（未登记）才强制要求已发布模型。 */
+    model_required: false,
+  },
 ] as const;
+
+/** n_trials 的合法区间与 API 一致（review R16：字符串或越界都会被 422 拒绝）。 */
+export const N_TRIALS_MIN = 1;
+export const N_TRIALS_MAX = 32;
+
+const N_TRIALS_HINT = `重复次数（n_trials）须为 ${N_TRIALS_MIN}–${N_TRIALS_MAX} 的整数`;
+const SECONDS_HINT = "须为正整数秒（留空用服务端默认值）";
+const RESOURCE_HINT = "须为正整数（留空用服务端默认值；平台不接受 0）";
+
+/** 表单 → 公共请求 DTO 的输入（全部以字符串保存，空串=不下发该字段）。 */
+export interface TerminalBenchFormInputs {
+  profile: { agent_id: string; agent_version: string; model_required: boolean };
+  model: string;
+  nTrials: string;
+  taskKeys: string[];
+  datasetRevision: string | null;
+  aggregation: "first-trial" | "mean-success";
+  timeouts: { agent: string; verifier: string; agentSetup: string; job: string };
+  resources: { cpus: string; memory: string; storage: string; gpus: string };
+}
+
+/**
+ * 表单 → 创建请求 body：字段名与 API 的公共 DTO 一一对应（review R16）。
+ *
+ * ``timeouts`` / ``resources`` 是唯一来源；不认识的字段（例如 ``timeout_sec``）
+ * 会被 API 以 422 REQUEST_FIELD_UNKNOWN 拒绝，因此这里也不生成它们。
+ * ``environment_build_sec`` 平台无法强制（422 HARBOR_TIMEOUT_UNSUPPORTED），
+ * 表单不提供该输入。
+ */
+export function buildTerminalBenchRunRequest(
+  input: TerminalBenchFormInputs,
+): { body: TerminalBenchRunRequest | null; error: string | null } {
+  const nTrialsText = input.nTrials.trim();
+  const nTrials = Number(nTrialsText);
+  if (
+    nTrialsText === ""
+    || !Number.isInteger(nTrials)
+    || nTrials < N_TRIALS_MIN
+    || nTrials > N_TRIALS_MAX
+  ) {
+    return { body: null, error: N_TRIALS_HINT };
+  }
+  const model = input.model.trim();
+  if (input.profile.model_required && !model) {
+    return {
+      body: null,
+      error: `Agent ${input.profile.agent_id} 必须指定已发布的模型档案 id（oracle 才可留空）`,
+    };
+  }
+
+  const timeouts: TerminalBenchTimeouts = {};
+  const timeoutFields: Array<[keyof TerminalBenchTimeouts, string, string]> = [
+    ["agent_sec", "Agent 超时", input.timeouts.agent],
+    ["verifier_sec", "Verifier 超时", input.timeouts.verifier],
+    ["agent_setup_sec", "Agent 准备超时", input.timeouts.agentSetup],
+    ["job_sec", "Job 超时", input.timeouts.job],
+  ];
+  for (const [key, label, raw] of timeoutFields) {
+    const text = raw.trim();
+    if (text === "") continue;
+    const value = Number(text);
+    if (!Number.isInteger(value) || value <= 0) {
+      return { body: null, error: `${label}${SECONDS_HINT}` };
+    }
+    timeouts[key] = value;
+  }
+
+  const resources: TerminalBenchResources = {};
+  const resourceFields: Array<[keyof TerminalBenchResources, string, string]> = [
+    ["cpus", "CPU 数", input.resources.cpus],
+    ["memory_mb", "内存（MB）", input.resources.memory],
+    ["storage_mb", "存储（MB）", input.resources.storage],
+    ["gpus", "GPU 数", input.resources.gpus],
+  ];
+  for (const [key, label, raw] of resourceFields) {
+    const text = raw.trim();
+    if (text === "") continue;
+    const value = Number(text);
+    if (!Number.isInteger(value) || value <= 0) {
+      return { body: null, error: `${label}${RESOURCE_HINT}` };
+    }
+    resources[key] = value;
+  }
+
+  return {
+    body: {
+      // oracle 可以没有模型：省略该字段，而不是发明一个模型 id。
+      ...(model ? { model } : {}),
+      agent_id: input.profile.agent_id,
+      agent_version: input.profile.agent_version,
+      n_trials: nTrials,
+      ...(input.taskKeys.length > 0 ? { task_keys: input.taskKeys } : {}),
+      ...(input.datasetRevision ? { dataset_revision: input.datasetRevision } : {}),
+      aggregation: input.aggregation,
+      ...(Object.keys(timeouts).length > 0 ? { timeouts } : {}),
+      ...(Object.keys(resources).length > 0 ? { resources } : {}),
+    },
+    error: null,
+  };
+}
 
 const AGGREGATION_LABELS: Record<string, string> = {
   "first-trial": "first-trial（首个有效 Trial，事前固定）",
@@ -204,6 +317,49 @@ function describeCheckValue(value: unknown): string {
   return text.length > 200 ? `${text.slice(0, 200)}…` : text;
 }
 
+/** 每成功成本的缺值原因（review R15）：null 不是 0，按 basis 说明为什么没有值。 */
+const PER_SUCCESS_BASIS_LABELS: Record<string, string> = {
+  complete: "成本完整（每个 Trial 都报道了成本）",
+  unknown_cost: "有 Trial 未报道成本，单位成本不成立",
+  no_success: "没有成功 Trial，分母为零，不适用",
+  no_known_cost: "没有任何已知成本，无分子",
+};
+
+function perSuccessBasisText(basis: string | null | undefined): string {
+  const key = basis ?? "";
+  return PER_SUCCESS_BASIS_LABELS[key] ?? (key || "未登记原因");
+}
+
+/** run 级成本视图（aggregate.cost）：非对象或缺字段一律按未知处理，不填 0。 */
+function runCostView(aggregate: Record<string, any> | null): TerminalBenchCostView | null {
+  const cost = aggregate?.cost;
+  if (!cost || typeof cost !== "object") return null;
+  return cost as TerminalBenchCostView;
+}
+
+function describeApiFailure(error: unknown): string {
+  const info = describeApiError(error);
+  return info.code ? `${info.code}：${info.message}` : info.message;
+}
+
+/** 服务端结构化拒绝（4xx）：错误码 + 消息 + 允许取值全部照实显示。 */
+function ApiErrorNotice({ error, testId }: { error: unknown; testId: string }) {
+  const info = describeApiError(error);
+  return (
+    <>
+      <p className="error" data-testid={testId}>
+        {info.code && <span className="mono">{info.code}：</span>}
+        {info.message}
+      </p>
+      {info.allowed.length > 0 && (
+        <p className="hint mono" data-testid={`${testId}-allowed`}>
+          允许字段：{info.allowed.join("、")}
+        </p>
+      )}
+    </>
+  );
+}
+
 function describeError(error: unknown): string | null {
   if (error === null || error === undefined) return null;
   if (typeof error !== "object") return String(error);
@@ -302,13 +458,19 @@ export function TerminalBenchOperate() {
   const [profileIndex, setProfileIndex] = useState(0);
   const [model, setModel] = useState("");
   const [nTrials, setNTrials] = useState("1");
-  const [timeoutSec, setTimeoutSec] = useState("");
+  const [agentTimeoutSec, setAgentTimeoutSec] = useState("");
+  const [verifierTimeoutSec, setVerifierTimeoutSec] = useState("");
+  const [agentSetupTimeoutSec, setAgentSetupTimeoutSec] = useState("");
   const [jobTimeoutSec, setJobTimeoutSec] = useState("");
+  const [cpus, setCpus] = useState("");
+  const [memoryMb, setMemoryMb] = useState("");
+  const [storageMb, setStorageMb] = useState("");
+  const [gpus, setGpus] = useState("");
   const [aggregation, setAggregation] = useState<"first-trial" | "mean-success">("first-trial");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [preflight, setPreflight] = useState<TerminalBenchPreflightReport | null>(null);
-  const [preflightError, setPreflightError] = useState("");
-  const [runError, setRunError] = useState("");
+  const [preflightError, setPreflightError] = useState<unknown>(null);
+  const [runError, setRunError] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -323,7 +485,7 @@ export function TerminalBenchOperate() {
         setOverview(overviewPayload);
         setTasks(taskPayload.items);
       } catch (error) {
-        if (alive) setLoadError(error instanceof Error ? error.message : String(error));
+        if (alive) setLoadError(describeApiFailure(error));
       }
     })();
     return () => { alive = false; };
@@ -332,54 +494,60 @@ export function TerminalBenchOperate() {
   const profile = AGENT_PROFILES[profileIndex];
   const filteredTasks = useMemo(() => tasks.filter((task) => matchesTask(task, query)), [tasks, query]);
   const preset = overview?.items[0] ?? null;
-  const nTrialsNumber = Number(nTrials);
-  const nTrialsInvalid = !Number.isInteger(nTrialsNumber) || nTrialsNumber < 1 || nTrialsNumber > 10
-    ? "重复次数（n_trials）须为 1–10 的整数"
-    : null;
-  const timeoutsInvalid = [timeoutSec, jobTimeoutSec].some((value) => (
-    value !== "" && (!Number.isInteger(Number(value)) || Number(value) <= 0)
-  ))
-    ? "超时须为正整数秒（留空用服务端默认值）"
-    : null;
-  const inputInvalid = nTrialsInvalid ?? timeoutsInvalid;
+  const datasetRevision = preset?.dataset_revision ?? null;
+  // 表单 → 公共 DTO：非法输入在本地拦下（字符串 n_trials 会被 API 422 拒绝）。
+  const request = useMemo(() => buildTerminalBenchRunRequest({
+    profile,
+    model,
+    nTrials,
+    taskKeys: selectedKeys,
+    datasetRevision,
+    aggregation,
+    timeouts: {
+      agent: agentTimeoutSec,
+      verifier: verifierTimeoutSec,
+      agentSetup: agentSetupTimeoutSec,
+      job: jobTimeoutSec,
+    },
+    resources: { cpus, memory: memoryMb, storage: storageMb, gpus },
+  }), [
+    profile, model, nTrials, selectedKeys, datasetRevision, aggregation,
+    agentTimeoutSec, verifierTimeoutSec, agentSetupTimeoutSec, jobTimeoutSec,
+    cpus, memoryMb, storageMb, gpus,
+  ]);
+  const inputInvalid = request.error;
   const preflightOk = preflight?.ok === true;
   const createDisabled = submitting || inputInvalid !== null || !preflightOk;
 
   const submitPreflight = (event: FormEvent) => {
     event.preventDefault();
-    setPreflightError("");
+    setPreflightError(null);
     setPreflight(null);
-    if (inputInvalid !== null) {
-      setPreflightError(inputInvalid);
+    if (request.body === null) {
+      setPreflightError(new Error(inputInvalid ?? "请求参数不合法"));
       return;
     }
     getTerminalBenchPreflight({
-      model,
-      n_trials: nTrialsNumber,
+      model: model.trim(),
+      n_trials: request.body.n_trials,
       task_keys: selectedKeys.length > 0 ? selectedKeys : undefined,
+      agent_id: profile.agent_id,
+      agent_version: profile.agent_version,
+      dataset_revision: datasetRevision ?? undefined,
     })
       .then(setPreflight)
-      .catch((error) => setPreflightError(error instanceof Error ? error.message : String(error)));
+      .catch((error) => setPreflightError(error));
   };
 
   const submitRun = (event: FormEvent) => {
     event.preventDefault();
-    setRunError("");
-    if (!preflightOk || inputInvalid !== null) return;
+    setRunError(null);
+    if (!preflightOk || request.body === null) return;
     setSubmitting(true);
-    createTerminalBenchRun({
-      model,
-      agent_id: profile.agent_id,
-      agent_version: profile.agent_version,
-      n_trials: nTrialsNumber,
-      ...(selectedKeys.length > 0 ? { task_keys: selectedKeys } : {}),
-      ...(timeoutSec !== "" ? { timeout_sec: Number(timeoutSec) } : {}),
-      ...(jobTimeoutSec !== "" ? { job_timeout_sec: Number(jobTimeoutSec) } : {}),
-      aggregation,
-    })
+    createTerminalBenchRun(request.body)
       .then((run) => navigate(ROUTES.monitor([run.id])))
       .catch((error) => {
-        setRunError(error instanceof Error ? error.message : String(error));
+        setRunError(error);
         setSubmitting(false);
       });
   };
@@ -492,24 +660,45 @@ export function TerminalBenchOperate() {
               aria-label="重复次数"
             />
           </label>
-          {nTrialsInvalid && <p className="error">{nTrialsInvalid}</p>}
         </div>
 
         <div className="operate-card">
           <p className="embed-title">预算与限制</p>
           <label>
-            单 Trial 超时（秒）
+            Agent 超时（秒）timeouts.agent_sec
             <input
               className="control"
-              value={timeoutSec}
-              onChange={(event) => { setTimeoutSec(event.target.value); setPreflight(null); }}
+              value={agentTimeoutSec}
+              onChange={(event) => { setAgentTimeoutSec(event.target.value); setPreflight(null); }}
               inputMode="numeric"
               placeholder="留空用服务端默认值"
-              aria-label="单 Trial 超时"
+              aria-label="Agent 超时"
             />
           </label>
           <label>
-            Job 超时（秒）
+            Verifier 超时（秒）timeouts.verifier_sec
+            <input
+              className="control"
+              value={verifierTimeoutSec}
+              onChange={(event) => { setVerifierTimeoutSec(event.target.value); setPreflight(null); }}
+              inputMode="numeric"
+              placeholder="留空用服务端默认值"
+              aria-label="Verifier 超时"
+            />
+          </label>
+          <label>
+            Agent 准备超时（秒）timeouts.agent_setup_sec
+            <input
+              className="control"
+              value={agentSetupTimeoutSec}
+              onChange={(event) => { setAgentSetupTimeoutSec(event.target.value); setPreflight(null); }}
+              inputMode="numeric"
+              placeholder="留空用服务端默认值"
+              aria-label="Agent 准备超时"
+            />
+          </label>
+          <label>
+            Job 总期限（秒）timeouts.job_sec
             <input
               className="control"
               value={jobTimeoutSec}
@@ -535,18 +724,72 @@ export function TerminalBenchOperate() {
               ))}
             </select>
           </label>
-          {timeoutsInvalid && <p className="error">{timeoutsInvalid}</p>}
-          <p className="hint">超时与聚合规则在创建时冻结；运行中不叠加自动重试（重试只改变 Trial 处置，不新增实验样本）。</p>
+          <details className="disclosure">
+            <summary>资源限制（可选）</summary>
+            <label>
+              CPU 数 resources.cpus
+              <input
+                className="control"
+                value={cpus}
+                onChange={(event) => { setCpus(event.target.value); setPreflight(null); }}
+                inputMode="numeric"
+                placeholder="留空用服务端默认值"
+                aria-label="CPU 数"
+              />
+            </label>
+            <label>
+              内存（MB）resources.memory_mb
+              <input
+                className="control"
+                value={memoryMb}
+                onChange={(event) => { setMemoryMb(event.target.value); setPreflight(null); }}
+                inputMode="numeric"
+                placeholder="留空用服务端默认值"
+                aria-label="内存（MB）"
+              />
+            </label>
+            <label>
+              存储（MB）resources.storage_mb
+              <input
+                className="control"
+                value={storageMb}
+                onChange={(event) => { setStorageMb(event.target.value); setPreflight(null); }}
+                inputMode="numeric"
+                placeholder="留空用服务端默认值"
+                aria-label="存储（MB）"
+              />
+            </label>
+            <label>
+              GPU 数 resources.gpus
+              <input
+                className="control"
+                value={gpus}
+                onChange={(event) => { setGpus(event.target.value); setPreflight(null); }}
+                inputMode="numeric"
+                placeholder="留空用服务端默认值"
+                aria-label="GPU 数"
+              />
+            </label>
+          </details>
+          <p className="hint">
+            超时与聚合规则在创建时冻结；运行中不叠加自动重试（重试只改变 Trial 处置，不新增实验样本）。
+            期限字段名就是提交给 API 的字段名，不再有第二套写法。平台不提供环境构建期限
+            （<span className="mono">environment_build_sec</span> 无法被 Harbor 0.23.0 精确强制，
+            提交会被 422 <span className="mono">HARBOR_TIMEOUT_UNSUPPORTED</span> 拒绝）。
+          </p>
         </div>
 
         <div className="operate-card">
           <p className="embed-title">预检与创建</p>
+          {inputInvalid && <p className="error" data-testid="tb-input-error">{inputInvalid}</p>}
           <form onSubmit={submitPreflight} aria-label="Terminal-Bench 预检">
             <div className="actions">
               <button type="submit" disabled={inputInvalid !== null}>预检（零模型调用）</button>
             </div>
           </form>
-          {preflightError && <p className="error" data-testid="tb-preflight-error">{preflightError}</p>}
+          {preflightError !== null && (
+            <ApiErrorNotice error={preflightError} testId="tb-preflight-error" />
+          )}
           {preflight && (
             <div data-testid="tb-preflight">
               <p className="hint" data-testid="tb-preflight-verdict">
@@ -588,12 +831,14 @@ export function TerminalBenchOperate() {
           <form onSubmit={submitRun} aria-label="创建 Terminal-Bench 运行">
             <div className="actions">
               <button type="submit" className="primary" disabled={createDisabled} data-testid="tb-create-run">
-                {submitting ? "提交中…" : `创建运行（${selectedKeys.length === 0 ? "全部 Task" : `${selectedKeys.length} 个 Task`} × ${nTrialsInvalid ? "?" : nTrialsNumber} 次）`}
+                {submitting
+                  ? "提交中…"
+                  : `创建运行（${selectedKeys.length === 0 ? "全部 Task" : `${selectedKeys.length} 个 Task`} × ${request.body ? request.body.n_trials : "?"} 次）`}
               </button>
               {!preflightOk && <span className="hint">创建前必须先通过预检。</span>}
             </div>
           </form>
-          {runError && <p className="error" data-testid="tb-run-error">{runError}</p>}
+          {runError !== null && <ApiErrorNotice error={runError} testId="tb-run-error" />}
         </div>
       </div>
     </div>
@@ -622,7 +867,7 @@ export function TerminalBenchTasks() {
           overviewPayload?.items[0]?.dataset_revision ?? taskPayload.items[0]?.dataset_revision ?? null,
         );
       } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : String(err));
+        if (alive) setError(describeApiFailure(err));
       }
     })();
     return () => { alive = false; };
@@ -713,7 +958,7 @@ function MonitorRunNode({ run, keyPrefix }: { run: RunRecord; keyPrefix: number 
       })
       .catch((err) => {
         if (!alive) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(describeApiFailure(err));
         setIdentity(currentIdentity);
       });
     return () => { alive = false; };
@@ -732,7 +977,7 @@ function MonitorRunNode({ run, keyPrefix }: { run: RunRecord; keyPrefix: number 
         ...current,
         [taskKey]: { identity: currentIdentity, value: payload.items },
       })))
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err) => setError(describeApiFailure(err)));
   };
 
   const queuedWithoutTrials = run.status === "queued"
@@ -857,7 +1102,7 @@ export function TerminalBenchMonitor() {
           setRuns(payload.items.filter(isTerminalBenchRun).slice(0, 5));
         }
       } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : String(err));
+        if (alive) setError(describeApiFailure(err));
       }
     })();
     return () => { alive = false; };
@@ -902,18 +1147,16 @@ export function TerminalBenchMonitor() {
 
 // ------------------------------------------------------------------ 结果页与 Trial 钻取
 
-interface CostSummary {
-  knownCostUsd: number | null;
-  knownTrials: number;
-  unknownTrials: number;
-  successes: number;
-  perSuccessUsd: number | null;
-}
-
-function summarizeCost(
+/**
+ * Task 范围的成本小结（只覆盖**报道了成本**的 Trial）。
+ *
+ * Run 级成本卡消费 ``aggregate.cost``（全 Run，见 runCostView）；这个小结只用于
+ * 「当前 Task」的旁注，必须自带范围说明，不能冒充 Run 总额。
+ */
+function summarizeTaskCost(
   trials: TerminalBenchTrialRow[],
   details: Record<string, TerminalBenchTrialDetail>,
-): CostSummary {
+): { knownCostUsd: number | null; knownTrials: number; unknownTrials: number } {
   let total = 0;
   let knownTrials = 0;
   let unknownTrials = 0;
@@ -926,23 +1169,74 @@ function summarizeCost(
       knownTrials += 1;
     }
   }
-  const successes = trials.filter((row) => row.valid && asNumber(row.reward) !== null && Number(row.reward) > 0).length;
-  return {
-    knownCostUsd: knownTrials > 0 ? total : null,
-    knownTrials,
-    unknownTrials,
-    successes,
-    perSuccessUsd: knownTrials > 0 && successes > 0 ? total / successes : null,
-  };
+  return { knownCostUsd: knownTrials > 0 ? total : null, knownTrials, unknownTrials };
 }
 
-function perSuccessText(cost: CostSummary): string {
-  if (cost.perSuccessUsd !== null) return formatCost(cost.perSuccessUsd);
-  if (cost.successes === 0) return "不适用";
+/**
+ * 每成功成本的展示（review R15）：``per_success_usd`` 为 null 时按 basis 说明
+ * 原因（没有成功 Trial 才是「不适用」），绝不渲染成 $0。
+ */
+function perSuccessText(cost: TerminalBenchCostView | null): string {
+  if (!cost) return "未知";
+  if (asNumber(cost.per_success_usd) !== null) return formatCost(cost.per_success_usd);
+  if (cost.per_success_usd_basis === "no_success") return "不适用";
   return "未知";
 }
 
-/** 工件视图：身份 = run + trial + artifact，切 Trial 立即清空展开项。 */
+/** 终端文本视图：引用 + 内容 + 截断/不可读/二进制分别如实呈现。 */
+function TerminalTextView({ terminal }: { terminal: TerminalBenchArtifactContent | null | undefined }) {
+  if (!terminal) {
+    return <p className="hint" data-testid="tb-terminal-missing">终端文本不可用（未捕获或不可读）。</p>;
+  }
+  const unreadable = terminal.verified === false;
+  const binary = terminal.encoding === "binary";
+  return (
+    <>
+      <dl className="kv" data-testid="tb-terminal-meta">
+        <div><dt>引用</dt><dd className="mono">{terminal.artifact_id}</dd></div>
+        <div><dt>sha256</dt><dd className="mono">{terminal.sha256 ?? "未知"}</dd></div>
+        <div><dt>大小</dt><dd className="mono">{formatBytes(terminal.size_bytes)}</dd></div>
+        <div>
+          <dt>校验</dt>
+          <dd data-testid="tb-terminal-verified">
+            {terminal.verified === true ? "已校验" : terminal.verified === false ? "未校验（内容不可信）" : "未登记"}
+          </dd>
+        </div>
+        <div><dt>编码</dt><dd className="mono">{terminal.encoding ?? "未知"}</dd></div>
+      </dl>
+      {unreadable && (
+        <p className="error" data-testid="tb-terminal-unreadable">
+          内容不可读，不显示日志正文：{terminal.note ?? "服务端未给出原因"}
+        </p>
+      )}
+      {!unreadable && binary && (
+        <p className="hint" data-testid="tb-terminal-binary">
+          二进制内容（encoding=binary），平台不把它当文本渲染：
+          {terminal.note ?? "需要下载冻结工件查看原始字节"}
+        </p>
+      )}
+      {terminal.truncated && (
+        <p className="hint fail" data-testid="tb-terminal-truncated">
+          已截断：以下内容不是完整日志，平台不据此推断被截去的部分。
+        </p>
+      )}
+      {!unreadable && !binary && terminal.text !== null && (
+        <pre className="terminal-log" data-testid="tb-terminal-log">{terminal.text}</pre>
+      )}
+      {!unreadable && !binary && terminal.text === null && (
+        <p className="hint" data-testid="tb-terminal-empty">引用存在但没有内容（服务端未返回文本）。</p>
+      )}
+    </>
+  );
+}
+
+/**
+ * 工件视图：清单显示身份 + 元数据，按身份请求内容。
+ *
+ * review R19：点开一个引用就去读它的冻结内容（含斜杠的 artifact_id 逐段编码）；
+ * 内容身份 = run + trial + artifact，晚到的旧响应必须被丢弃（同 Trial 内换工件、
+ * 换 Trial 都不能让旧内容落到新选择下）。
+ */
 function ArtifactViewer({
   runId,
   trialId,
@@ -953,7 +1247,39 @@ function ArtifactViewer({
   artifacts: TerminalBenchArtifact[];
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [contentState, setContentState] = useState<Identified<TerminalBenchArtifactContent> | null>(null);
+  const [contentError, setContentError] = useState("");
+  const [contentLoading, setContentLoading] = useState(false);
+  const requestToken = useRef(0);
   const selected = artifacts.find((artifact) => artifact.artifact_id === open) ?? null;
+  const contentIdentity = `${runId}:${trialId}:${open ?? ""}`;
+  const content = valueFor(contentState, contentIdentity);
+
+  const toggle = (artifactId: string) => {
+    const next = open === artifactId ? null : artifactId;
+    setOpen(next);
+    setContentError("");
+    // 每次切换换发请求代号：晚到的旧响应不得覆盖新的选择。
+    const token = ++requestToken.current;
+    if (next === null) {
+      setContentLoading(false);
+      setContentState(null);
+      return;
+    }
+    setContentLoading(true);
+    setContentState(null);
+    getRunTrialArtifact(runId, trialId, next)
+      .then((payload) => {
+        if (token !== requestToken.current) return;
+        setContentState({ identity: `${runId}:${trialId}:${next}`, value: payload });
+        setContentLoading(false);
+      })
+      .catch((error) => {
+        if (token !== requestToken.current) return;
+        setContentError(describeApiFailure(error));
+        setContentLoading(false);
+      });
+  };
 
   return (
     <div data-testid="tb-artifact-viewer">
@@ -982,7 +1308,7 @@ function ArtifactViewer({
                     type="button"
                     className="link"
                     aria-expanded={open === artifact.artifact_id}
-                    onClick={() => setOpen(open === artifact.artifact_id ? null : artifact.artifact_id)}
+                    onClick={() => toggle(artifact.artifact_id)}
                   >
                     查看
                   </button>
@@ -1002,7 +1328,31 @@ function ArtifactViewer({
             <span className="field-label">完整度</span>
             <StateBadge value={artifactState(selected)} table={COVERAGE_STATE_LABELS} />
           </p>
+          <p>
+            <span className="field-label">来源路径</span>
+            <span className="mono">{selected.source_path ?? selected.artifact_id}</span>
+          </p>
           {selected.note && <p><span className="field-label">备注</span>{selected.note}</p>}
+          {contentLoading && <p className="hint">读取内容中…</p>}
+          {contentError && <p className="error" data-testid="tb-artifact-error">{contentError}</p>}
+          {content && content.verified === false && (
+            <p className="error" data-testid="tb-artifact-unreadable">
+              内容不可读，不显示正文：{content.note ?? "服务端未给出原因"}
+            </p>
+          )}
+          {content && content.verified !== false && content.encoding === "binary" && (
+            <p className="hint" data-testid="tb-artifact-binary">
+              二进制内容（encoding=binary）：{content.note ?? "需要下载冻结工件查看原始字节"}
+            </p>
+          )}
+          {content && content.truncated && (
+            <p className="hint fail" data-testid="tb-artifact-truncated">
+              已截断：以下内容不是完整内容（完整大小 {formatBytes(content.size_bytes)}）。
+            </p>
+          )}
+          {content && content.verified !== false && content.encoding !== "binary" && content.text !== null && (
+            <pre className="terminal-log" data-testid="tb-artifact-content">{content.text}</pre>
+          )}
         </div>
       )}
     </div>
@@ -1101,18 +1451,7 @@ function TrialDrillDown({
           </dl>
 
           <h3 className="embed-title">终端文本</h3>
-          {detail.terminal_text === null || detail.terminal_text === undefined ? (
-            <p className="hint" data-testid="tb-terminal-missing">终端文本不可用（未捕获或不可读）。</p>
-          ) : (
-            <>
-              {detail.terminal_truncated && (
-                <p className="hint fail" data-testid="tb-terminal-truncated">
-                  终端文本已截断：以下内容不是完整日志，平台不据此推断被截去的部分。
-                </p>
-              )}
-              <pre className="terminal-log" data-testid="tb-terminal-log">{detail.terminal_text}</pre>
-            </>
-          )}
+          <TerminalTextView terminal={detail.terminal} />
 
           <h3 className="embed-title">覆盖与工件完整度</h3>
           <table aria-label="Trial 覆盖项" data-testid="tb-coverage">
@@ -1155,8 +1494,8 @@ function TrialDrillDown({
             artifacts={detail.artifacts ?? []}
           />
           <p className="hint">
-            工件按身份引用（artifact_id / sha256 / 完整度），本页只读清单；
-            「缺工件」表示证据未被采集或被截断，不代表任务失败。
+            工件按身份引用（artifact_id / sha256 / 完整度），点「查看」按 Trial 归属读取冻结内容
+            （有界 + 脱敏）；「缺工件」表示证据未被采集或被截断，不代表任务失败。
           </p>
         </>
       )}
@@ -1210,7 +1549,7 @@ export function TerminalBenchResult() {
     getRunTasks(runId)
       .then((payload) => { if (alive) setTasksState({ identity: runId, value: payload.items }); })
       .catch((err) => {
-        if (alive) setTasksError(err instanceof Error ? err.message : String(err));
+        if (alive) setTasksError(describeApiFailure(err));
       });
     return () => { alive = false; };
     // query 参与重置：深链换 Run/Task/Trial 时旧证据立即失效。
@@ -1235,7 +1574,7 @@ export function TerminalBenchResult() {
       })
       .catch((err) => {
         if (!alive) return;
-        setTrialsError(err instanceof Error ? err.message : String(err));
+        setTrialsError(describeApiFailure(err));
         setTrialsState({ identity: `${runId}:${taskKey}`, value: [] });
       });
     return () => { alive = false; };
@@ -1284,7 +1623,7 @@ export function TerminalBenchResult() {
       })
       .catch((err) => {
         if (token !== drillToken.current) return;
-        setDrillError(err instanceof Error ? err.message : String(err));
+        setDrillError(describeApiFailure(err));
         setDrillLoading(false);
       });
   }, [runId, selectedTrial]);
@@ -1304,12 +1643,14 @@ export function TerminalBenchResult() {
     };
   }, [tasks]);
 
-  const cost = useMemo(() => summarizeCost(trials, details), [trials, details]);
+  const cost = useMemo(() => runCostView(aggregate), [aggregate]);
+  const taskCost = useMemo(() => summarizeTaskCost(trials, details), [trials, details]);
   const passRate = asNumber(aggregate?.valid_trial_pass_rate);
   const invalidTrials = asNumber(aggregate?.invalid_trials);
   const completed = run?.status === "completed";
   const passRateTone: Tone = !completed ? "neutral" : (passRate !== null && passRate > 0 ? "success" : "error");
   const selectedTask = tasks.find((task) => task.task_key === taskKey) ?? null;
+  const subtotal = cost ? asNumber(cost.known_cost_subtotal_per_success_usd) : null;
 
   return (
     <div className="page">
@@ -1355,14 +1696,39 @@ export function TerminalBenchResult() {
                 value: formatCount(invalidTrials),
                 tone: invalidTrials !== null && invalidTrials > 0 ? "error" : "neutral",
               },
-              { label: "已知成本（USD）", value: formatCost(cost.knownCostUsd) },
-              { label: "每成功成本（USD）", value: perSuccessText(cost) },
+              // Run 级成本卡消费全 Run 的 aggregate.cost（review R21：不随 Task 选择变化）
+              {
+                label: "已知成本（USD，全 Run）",
+                value: formatCost(cost?.known_cost_usd),
+                testId: "tb-run-cost-card",
+              },
+              {
+                label: "每成功成本（USD）",
+                value: perSuccessText(cost),
+                testId: "tb-run-per-success-card",
+              },
             ]} />
             <p className="hint" data-testid="tb-cost-note">
               质量分母是有效 Trial，覆盖分母是计划 Trial；无效 Trial 既不算通过也不算 0 分。
-              成本：成本已知的 Trial {cost.knownTrials} 个、成本未知 {cost.unknownTrials} 个，
+              成本口径为整个 Run（不随所选 Task 变化）：成本已知的 Trial {formatCount(cost?.known_trials)} 个、
+              成本未知 {formatCount(cost?.unknown_trials)} 个、成功 Trial {formatCount(cost?.successes)} 个；
               未知量一律显示为「未知」，不参与求值（含失败 Trial 的费用计入分子）。
             </p>
+            <p className="hint" data-testid="tb-cost-basis">
+              每成功成本依据：{perSuccessBasisText(cost?.per_success_usd_basis)}
+              {cost?.per_success_usd_basis && (
+                <span className="mono">（basis: {cost.per_success_usd_basis}）</span>
+              )}
+              {asNumber(cost?.per_success_usd) === null
+                ? "；整个 Run 的单位成本不成立，不填 0"
+                : ""}
+            </p>
+            {subtotal !== null && (
+              <p className="hint" data-testid="tb-cost-subtotal">
+                已报道成本小计：{formatCost(subtotal)} / 每次成功（小计，只覆盖报道了成本的 Trial，
+                不等于整个 Run 的单位成本）
+              </p>
+            )}
             {tasksError && <p className="error">{tasksError}</p>}
 
             <div className="inline-field">
@@ -1384,12 +1750,18 @@ export function TerminalBenchResult() {
                 ))}
               </select>
               {selectedTask && (
-                <span className="hint" data-testid="tb-task-summary">
-                  计划 {formatCount(selectedTask.planned_trials)} / 观测 {formatCount(selectedTask.observed_trials)}
-                  {" "}/ 有效 {formatCount(selectedTask.valid_trials)} / 无效 {formatCount(selectedTask.invalid_trials)}
-                  {" "}/ 通过率 {formatRate(selectedTask.valid_trial_pass_rate)}
-                  {" "}/ Task 判定 {selectedTask.task_pass === null ? `未知（${selectedTask.task_pass_reason || "无有效 Trial"}）` : selectedTask.task_pass ? "通过" : "未通过"}
-                </span>
+                <>
+                  <span className="hint" data-testid="tb-task-summary">
+                    计划 {formatCount(selectedTask.planned_trials)} / 观测 {formatCount(selectedTask.observed_trials)}
+                    {" "}/ 有效 {formatCount(selectedTask.valid_trials)} / 无效 {formatCount(selectedTask.invalid_trials)}
+                    {" "}/ 通过率 {formatRate(selectedTask.valid_trial_pass_rate)}
+                    {" "}/ Task 判定 {selectedTask.task_pass === null ? `未知（${selectedTask.task_pass_reason || "无有效 Trial"}）` : selectedTask.task_pass ? "通过" : "未通过"}
+                  </span>
+                  <span className="hint mono" data-testid="tb-task-cost">
+                    Task 范围：已知成本小计 {formatCost(taskCost.knownCostUsd)}
+                    （{taskCost.knownTrials} 个 Trial 报道成本，{taskCost.unknownTrials} 个未知）
+                  </span>
+                </>
               )}
             </div>
             {tasks.length === 0 && !tasksError && <p className="empty">暂无 Task：该运行还没有产出 Trial。</p>}
@@ -1497,7 +1869,7 @@ export function TerminalBenchCompare() {
       })
       .catch((err) => {
         if (token !== submitRef.current) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(describeApiFailure(err));
       });
   };
 
@@ -1528,6 +1900,10 @@ export function TerminalBenchCompare() {
           {" "}{COMPARE_POLICY.threshold}，覆盖要求 {COMPARE_POLICY.required_coverage}，
           可比重 {String(COMPARE_POLICY.require_comparable)}，成本已知要求 {String(COMPARE_POLICY.require_cost_known)}
           （成本未知只标注，不冒充可比）。
+        </p>
+        <p className="hint" data-testid="tb-compare-coverage-unit">
+          覆盖口径：有效 Trial / 计划 Trial，对应已注册指标 valid_trial_coverage（分母 planned_trials）；
+          质量指标 valid_trial_pass_rate 的分母是有效 Trial。两个指标都由后端注册，页面照实显示 Gate 结论。
         </p>
         {error && <p className="error">{error}</p>}
         {comparison && (
@@ -1566,6 +1942,10 @@ export function TerminalBenchCompare() {
             ) : (
               <p className="error" data-testid="tb-gate-blocked">门禁未通过，不显示放行。</p>
             )}
+            <p className="hint" data-testid="tb-gate-metric">
+              指标 {gate.metric_id ?? COMPARE_POLICY.metric}（要求 {COMPARE_POLICY.op} {COMPARE_POLICY.threshold}），
+              覆盖要求 {COMPARE_POLICY.required_coverage}（分母 planned_trials）
+            </p>
             <table aria-label="固定比较条件">
               <thead><tr><th>条件</th><th>结论</th><th>原因</th></tr></thead>
               <tbody>

@@ -22,44 +22,20 @@ import shutil
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from motte_benchmark.harbor.compose import (
+    CREDENTIAL_NAME_MARKERS,
+    FORBIDDEN_ENV_NAMES,
+    FORBIDDEN_ENV_PREFIXES,
+    FORBIDDEN_HOST_PATHS,
+    compose_violation_codes,
+    looks_like_credential,
+)
 from motte_benchmark.harbor.tasks import HarborTaskError
 from motte_contracts.trial import canonical_hash
 
-#: 任务容器绝对不允许出现的宿主路径（挂载或环境变量都不行）。
-FORBIDDEN_HOST_PATHS: tuple[str, ...] = (
-    "/var/run/docker.sock",
-    "/run/docker.sock",
-    "/etc/shadow",
-    "/etc/sudoers",
-    "~/.ssh",
-    "~/.aws",
-    "~/.config/gcloud",
-    "~/.docker",
-    "~/.kube",
-)
-#: 任务容器不允许继承的宿主环境变量（平台内部变量，按前缀/精确名匹配）。
-FORBIDDEN_ENV_NAMES: tuple[str, ...] = (
-    "MOTTE_PG_DSN", "DATABASE_URL", "ARTIFACT_ROOT", "MOTTE_DB_PATH",
-    "MOTTE_DB_PATH", "MOTTE_RUNNER_PYTHON", "MOTTE_LAUNCH_TOKEN",
-)
-FORBIDDEN_ENV_PREFIXES: tuple[str, ...] = (
-    "AWS_", "OPENAI_", "ANTHROPIC_", "AZURE_", "GOOGLE_", "HF_", "MOTTE_",
-)
-#: 凭据类变量名的通用特征（未知厂商也要被识别，不能只查已知前缀）。
-CREDENTIAL_NAME_MARKERS: tuple[str, ...] = (
-    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "APIKEY",
-    "CREDENTIAL", "ACCESS_KEY", "PRIVATE_KEY", "_KEY", "LICENSE_KEY",
-)
-
-
-def looks_like_credential(name: str) -> bool:
-    """变量名是否像凭据（大小写不敏感，覆盖未登记的厂商）。"""
-    upper = name.upper()
-    return upper in FORBIDDEN_ENV_NAMES or upper.startswith(
-        FORBIDDEN_ENV_PREFIXES,
-    ) or any(marker in upper for marker in CREDENTIAL_NAME_MARKERS)
 #: 预检支持的环境类型（与 config.py 的 allowlist 一致）。
 SUPPORTED_ENVIRONMENT_TYPES: tuple[str, ...] = ("docker",)
+
 #: 需要的宿主平台（Harbor 的 docker 环境按 linux 容器运行）。
 SUPPORTED_DOCKER_PLATFORMS: tuple[str, ...] = ("linux/amd64", "linux/arm64")
 
@@ -135,12 +111,15 @@ def evaluate_preflight(
         reasons.append("ENVIRONMENT_TYPE_UNSUPPORTED")
     checks["environment_type"] = environment_type
 
-    agent_id = profile.get("agent_id")
-    if not isinstance(agent_id, str) or not agent_id:
-        reasons.append("AGENT_NOT_PINNED")
-    checks["agent_id"] = agent_id
-    if not profile.get("agent_version"):
-        reasons.append("AGENT_VERSION_NOT_PINNED")
+    # Agent 能力：allowlist / 版本钉住 / 模型 / 凭据引用都与创建路径同一判定
+    # （review R20：预检放行、创建却失败是双重标准）。
+    from motte_benchmark.harbor.config import agent_capability_reasons
+
+    agent_reasons = agent_capability_reasons(profile)
+    reasons.extend(agent_reasons)
+    checks["agent_id"] = profile.get("agent_id")
+    checks["agent_version"] = profile.get("agent_version")
+    checks["agent_capability"] = sorted(set(agent_reasons))
 
     probe = _probe_docker(docker)
     checks["docker"] = probe
@@ -204,12 +183,47 @@ def evaluate_preflight(
 
     if not tasks:
         reasons.append("NO_TASKS_SELECTED")
+    compose_violations: list[dict[str, Any]] = []
     for task in tasks:
         facts = (task.get("facts") or {}) if isinstance(task.get("facts"), Mapping) else {}
         if facts.get("has_tests") is False:
             reasons.append("TASK_WITHOUT_VERIFIER")
-            break
+        # 任务自带的 Compose 会被 Harbor 加载为 overlay（review R02）：只检查
+        # 平台声明参数会漏掉任务真实声明的 privileged/宿主挂载/host network。
+        # 有 compose 文件却没有检查记录（旧 manifest 或检查失败）→ fail closed。
+        if facts.get("has_compose_file"):
+            compose = facts.get("compose")
+            if not isinstance(compose, Mapping) or "policy_hash" not in compose:
+                reasons.append("TASK_COMPOSE_UNINSPECTABLE")
+                compose_violations.append({
+                    "code": "TASK_COMPOSE_UNINSPECTABLE",
+                    "task_key": task.get("task_key"),
+                    "detail": "任务自带 compose，但 manifest 里没有检查记录",
+                })
+                continue
+            codes = compose_violation_codes(compose)
+            reasons.extend(codes)
+            for item in compose.get("violations") or []:
+                entry = dict(item) if isinstance(item, Mapping) else {"code": str(item)}
+                entry.setdefault("task_key", task.get("task_key"))
+                compose_violations.append(entry)
+    checks["compose_violations"] = compose_violations
     checks["task_count"] = len(tasks)
+    checks["tasks_with_compose"] = sum(
+        1 for task in tasks
+        if isinstance(task.get("facts"), Mapping) and task["facts"].get("has_compose_file")
+    )
+
+    # 任务自带 compose 会改变真实容器配置：与上游默认口径不同，必须体现在
+    # fingerprint 与 platform_custom_profile 上（review R02）。
+    compose_policy_hashes: list[str] = []
+    for task in tasks:
+        facts = task.get("facts") if isinstance(task.get("facts"), Mapping) else {}
+        compose = (facts or {}).get("compose")
+        if isinstance(compose, Mapping) and compose.get("policy_hash"):
+            compose_policy_hashes.append(f"{task.get('task_key')}:{compose['policy_hash']}")
+    compose_policy_hashes.sort()
+    task_authored_environment = bool(compose_policy_hashes)
 
     profile_fingerprint = canonical_hash({
         "harbor_version": harbor_version,
@@ -217,10 +231,16 @@ def evaluate_preflight(
         "network_policy": network_policy,
         "verifier_visibility": verifier_visibility,
         "task_mounts": sorted(normalized_mounts),
-        "platform_custom_profile": bool(task_mounts) or network_policy not in (None, "allowed"),
+        "task_compose_policies": compose_policy_hashes,
+        "platform_custom_profile": (
+            bool(task_mounts)
+            or task_authored_environment
+            or network_policy not in (None, "allowed")
+        ),
     })
     custom_profile = bool(
         task_mounts
+        or task_authored_environment
         or (network_policy not in (None, "allowed"))
         or verifier_visibility not in (None, "upstream")
     )
@@ -293,6 +313,11 @@ def reason_messages(codes: Iterable[str]) -> dict[str, str]:
         "ENVIRONMENT_TYPE_UNSUPPORTED": "所选环境类型未在本平台验证。",
         "AGENT_NOT_PINNED": "未指定 Agent，或 Agent 未固定到具体 ID。",
         "AGENT_VERSION_NOT_PINNED": "Agent 未固定到具体版本。",
+        "AGENT_UNSUPPORTED": "该 Agent 不在本平台已验证的 Agent 表里（不无验证放开）。",
+        "AGENT_VERSION_UNSUPPORTED": "该 Agent 版本未在本平台验证。",
+        "AGENT_MODEL_REQUIRED": "该 Agent 会真实调用模型，必须显式指定已发布模型。",
+        "AGENT_CREDENTIAL_REF_MISSING": "该 Agent 需要凭据引用（env:NAME），未提供。",
+        "CREDENTIAL_REF_REQUIRED": "凭据只能以引用形式提供，不接受明文值。",
         "AGENT_DEPENDENCY_MISSING": "Agent 依赖在 Runner 环境中缺失。",
         "RUNNER_ENV_CREDENTIALS_INLINE": "Runner 环境里出现了明文凭据，必须改为引用。",
         "TASK_CONTAINER_HOST_ENV_EXPOSED": "任务容器会继承宿主凭据环境变量。",
@@ -303,5 +328,44 @@ def reason_messages(codes: Iterable[str]) -> dict[str, str]:
         "VERIFIER_VISIBILITY_UNVERIFIED": "无法确认 Verifier/gold 可见性边界。",
         "TASK_WITHOUT_VERIFIER": "所选任务没有 Verifier（tests/），无法产生评分证据。",
         "NO_TASKS_SELECTED": "没有选择任何任务。",
+        # 任务自带 Docker Compose 的策略拒绝（review R02）：Harbor 会把它当
+        # overlay 加载，因此这些声明就是任务容器的真实配置。
+        "TASK_COMPOSE_UNINSPECTABLE": (
+            "任务自带的 Docker Compose 无法完成策略检查（缺失/不可读/不可解析/"
+            "结构与冻结清单不符），按 fail-closed 拒绝执行。"
+        ),
+        "TASK_COMPOSE_PRIVILEGED": (
+            "任务 compose 声明 privileged 容器（等同宿主 root），必须移除后重新准备。"
+        ),
+        "TASK_COMPOSE_HOST_NETWORK": (
+            "任务 compose 使用 host/container 网络模式，会绕过网络策略，必须移除。"
+        ),
+        "TASK_COMPOSE_HOST_NAMESPACE": (
+            "任务 compose 共享宿主/其他容器的 PID、IPC 或 user 命名空间，必须移除。"
+        ),
+        "TASK_COMPOSE_DANGEROUS_CAPABILITY": (
+            "任务 compose 通过 cap_add 授予危险 capability（如 ALL/SYS_ADMIN），必须移除。"
+        ),
+        "TASK_COMPOSE_DEVICE_EXPOSED": (
+            "任务 compose 把宿主设备（devices/device_cgroup_rules）暴露给任务容器，必须移除。"
+        ),
+        "TASK_COMPOSE_SECURITY_OPT_DISABLED": (
+            "任务 compose 用 security_opt 关闭了 seccomp/apparmor/no-new-privileges 隔离，必须移除。"
+        ),
+        "TASK_COMPOSE_EXTERNAL_BIND": (
+            "任务 compose 的 bind mount 源不在该任务自己的目录内，必须改为任务内路径。"
+        ),
+        "TASK_COMPOSE_EXTERNAL_BUILD_CONTEXT": (
+            "任务 compose 的 build context/dockerfile 引用了任务目录之外的内容，必须改为任务内路径。"
+        ),
+        "TASK_COMPOSE_EXTERNAL_ENV_FILE": (
+            "任务 compose 的 env_file 引用了任务目录之外的文件（可能带入宿主凭据），必须改为任务内文件。"
+        ),
+        "TASK_COMPOSE_CREDENTIAL_FORWARD": (
+            "任务 compose 插值了凭据类环境变量（如 ${SOME_TOKEN}），会把宿主凭据注入任务容器，必须移除。"
+        ),
+        "TASK_COMPOSE_INCLUDE_UNSUPPORTED": (
+            "任务 compose 用 include/extends 引用外部文件，无法证明其内容安全，必须内联后再准备。"
+        ),
     }
     return {code: catalogue.get(code, f"未登记的原因码：{code}") for code in codes}

@@ -361,6 +361,11 @@ class DurableExternalJobRunner:
     def _wire_evidence_sink(self) -> None:
         # 证据冻结通道（review R2-06）：supervisor 解析前写受控 Artifact。
         self.supervisor.evidence_sink = self._evidence_sink
+        # 二进制工件同一条通道（review R11）：适配器不持有存储，只能由分派侧
+        # 把 sink 挂上去；缺失时适配器会如实记 artifact_id=null。
+        adapter = getattr(self.supervisor, "adapter", None)
+        if adapter is not None and hasattr(adapter, "binary_sink"):
+            adapter.binary_sink = self._evidence_sink
 
     def bind_store(self, store: Any) -> None:
         """分派时绑定 Job 存储与工件根（external-benchmark 后端经 attach 注入）。"""

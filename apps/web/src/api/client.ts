@@ -92,6 +92,47 @@ export function modelLabel(run: Pick<RunRecord, "manifest"> | null | undefined):
   return null;
 }
 
+/** 公共 API 的结构化拒绝：保留 code / status / details，页面按服务端语义显示。 */
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly details: Record<string, any>;
+
+  constructor(
+    status: number,
+    payload: { code?: string | null; message?: string | null; details?: Record<string, any> | null },
+    fallbackMessage?: string,
+  ) {
+    const code = payload.code ?? null;
+    const message = payload.message || fallbackMessage || `HTTP ${status}`;
+    super(code ? `${code}：${message}` : message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+    this.details = payload.details ?? {};
+  }
+}
+
+/** 请求失败时的展示信息：错误码 + 消息 + 服务端登记的允许取值。 */
+export function describeApiError(error: unknown): {
+  code: string | null;
+  message: string;
+  allowed: string[];
+  status: number | null;
+} {
+  if (error instanceof ApiRequestError) {
+    const allowed = error.details?.allowed;
+    return {
+      code: error.code,
+      message: error.message,
+      allowed: Array.isArray(allowed) ? allowed.map((item) => String(item)) : [],
+      status: error.status,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { code: null, message, allowed: [], status: null };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -99,8 +140,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = payload?.error?.message || payload?.detail || `HTTP ${response.status}`;
-    throw new Error(message);
+    // 结构化错误原样上抛（code/message/details）：页面不猜含义、也不吞掉身份。
+    const error = payload?.error;
+    if (error && typeof error === "object") {
+      throw new ApiRequestError(response.status, {
+        code: typeof error.code === "string" ? error.code : null,
+        message: typeof error.message === "string" ? error.message : null,
+        details: error.details && typeof error.details === "object" ? error.details : null,
+      });
+    }
+    throw new ApiRequestError(response.status, {
+      message: typeof payload?.detail === "string" ? payload.detail : null,
+    });
   }
   return payload as T;
 }
@@ -589,10 +640,15 @@ export interface ComparisonReportView {
   case_diff: { added: string[]; removed: string[]; changed: string[] };
 }
 
+/** 门禁结论（gate-lite@2）：页面照实渲染 rules / metric_id，不自己下结论。 */
 export interface GateResultView {
-  schema: string;
+  schema?: string;
   passed: boolean;
+  metric_id?: string;
+  policy?: Record<string, any>;
   rules: { id: string; passed: boolean; reason: string }[];
+  conclusion_hash?: string;
+  evaluated_at?: string | null;
 }
 
 export const getExternalCatalog = () =>
@@ -703,15 +759,59 @@ export interface TerminalBenchPreflightReport {
   platform_custom_profile: boolean;
 }
 
+/** 公共请求 DTO（review R16）：字段名与 API 一一对应，未知字段会被 422 拒绝。 */
+export interface TerminalBenchTimeouts {
+  /** Agent 执行期限 → 原生 agents[].override_timeout_sec。 */
+  agent_sec?: number;
+  /** Verifier 期限 → 原生 verifier.override_timeout_sec。 */
+  verifier_sec?: number;
+  /** Agent 准备期限 → 原生 agents[].override_setup_timeout_sec。 */
+  agent_setup_sec?: number;
+  /** Job 总期限 → Supervisor 的 max_wall_seconds。 */
+  job_sec?: number;
+}
+
+export interface TerminalBenchResources {
+  cpus?: number;
+  memory_mb?: number;
+  storage_mb?: number;
+  gpus?: number;
+}
+
 export interface TerminalBenchRunRequest {
-  model: string;
+  /** 已发布的 ModelProfile id；oracle 可省略（真实 Agent 必填）。 */
+  model?: string;
   agent_id: string;
   agent_version: string;
   n_trials: number;
   task_keys?: string[];
-  timeout_sec?: number;
-  job_timeout_sec?: number;
+  dataset_revision?: string;
   aggregation?: "first-trial" | "mean-success";
+  timeouts?: TerminalBenchTimeouts;
+  resources?: TerminalBenchResources;
+}
+
+/** Run 级成本视图（review R15）：per_success_usd 只在成本完整时有值。 */
+export interface TerminalBenchCostView {
+  known_cost_usd: number | null;
+  known_trials: number;
+  unknown_trials: number;
+  unknown_cost: boolean;
+  currency: string | null;
+  per_success_usd: number | null;
+  /** complete / unknown_cost / no_success / no_known_cost。 */
+  per_success_usd_basis: string;
+  /** 只覆盖「报道了成本」的 Trial 的成功成本小计，不是整个 Run 的单位成本。 */
+  known_cost_subtotal_per_success_usd: number | null;
+  successes: number;
+  includes_failed_trials_in_numerator: boolean;
+  note?: string | null;
+}
+
+/** GET /runs/{id}/tasks 的每行都带同一份全 Run 聚合（含 cost）。 */
+export interface TerminalBenchRunAggregate {
+  [key: string]: any;
+  cost?: TerminalBenchCostView;
 }
 
 export interface TerminalBenchTaskRow {
@@ -722,10 +822,11 @@ export interface TerminalBenchTaskRow {
   valid_trials: number;
   invalid_trials: number;
   valid_trial_pass_rate: number | null;
+  valid_trial_coverage?: number | null;
   task_pass: boolean | null;
   task_pass_reason: string;
-  /** run 级评分聚合（与服务端 scoring aggregate 同键）。 */
-  aggregate?: Record<string, any>;
+  /** run 级评分聚合（与服务端 scoring aggregate 同键，含 cost）。 */
+  aggregate?: TerminalBenchRunAggregate;
 }
 
 export interface TerminalBenchTrialRow {
@@ -740,13 +841,35 @@ export interface TerminalBenchTrialRow {
   source_trial_id: string | null;
 }
 
+/** 证据引用（artifact_refs 的元素）：身份 + hash + 完整度。 */
 export interface TerminalBenchArtifact {
   artifact_id: string;
   kind: string;
   sha256?: string | null;
   size_bytes?: number | null;
+  media_type?: string | null;
+  source_path?: string | null;
   complete: boolean;
   truncated: boolean;
+  note?: string | null;
+}
+
+/**
+ * 单个工件/终端内容（GET .../trials/{id} 的 terminal 与 .../artifacts/{id}）。
+ * ``verified=false`` 时 ``text`` 为 null 且必须显示 ``note``；``encoding="binary"``
+ * 表示没有可读文本（不能伪造一段日志）。
+ */
+export interface TerminalBenchArtifactContent {
+  artifact_id: string;
+  kind?: string | null;
+  sha256?: string | null;
+  size_bytes?: number | null;
+  media_type?: string | null;
+  source_path?: string | null;
+  encoding?: string | null;
+  text: string | null;
+  truncated: boolean;
+  verified: boolean | null;
   note?: string | null;
 }
 
@@ -766,9 +889,13 @@ export interface TerminalBenchTrialDetail {
   usage: { cost_usd?: number | null; tokens?: Record<string, any> | null; coverage?: string };
   coverage: { items?: Record<string, string>; missing?: string[]; partial?: string[] };
   artifacts: TerminalBenchArtifact[];
-  terminal_text: string | null;
-  terminal_truncated: boolean;
+  /** 终端/日志引用（没有可读内容时仍保留身份，便于人工核对冻结证据）。 */
+  terminal_ref?: TerminalBenchArtifact | null;
+  /** 终端文本（有界 + 脱敏）；没有引用或不可读时为 null。 */
+  terminal?: TerminalBenchArtifactContent | null;
   evidence_complete: boolean;
+  source_hash?: string | null;
+  parser_version?: string | null;
 }
 
 export const getTerminalBenchOverview = () =>
@@ -778,12 +905,20 @@ export const getTerminalBenchTasks = () =>
   request<{ items: TerminalBenchTask[]; total: number }>("/api/v1/benchmarks/terminal-bench/tasks");
 
 export const getTerminalBenchPreflight = (params: {
-  model?: string; n_trials?: number; task_keys?: string[];
+  model?: string;
+  n_trials?: number;
+  task_keys?: string[];
+  agent_id?: string;
+  agent_version?: string;
+  dataset_revision?: string;
 }) => {
   const query = new URLSearchParams();
   if (params.model !== undefined) query.set("model", params.model);
   if (params.n_trials !== undefined) query.set("n_trials", String(params.n_trials));
   if (params.task_keys?.length) query.set("task_keys", params.task_keys.join(","));
+  if (params.agent_id !== undefined) query.set("agent_id", params.agent_id);
+  if (params.agent_version !== undefined) query.set("agent_version", params.agent_version);
+  if (params.dataset_revision) query.set("dataset_revision", params.dataset_revision);
   return request<TerminalBenchPreflightReport>(
     `/api/v1/benchmarks/terminal-bench/preflight?${query.toString()}`,
   );
@@ -794,7 +929,7 @@ export const createTerminalBenchRun = (body: TerminalBenchRunRequest) =>
   request<RunRecord>("/api/v1/benchmarks/terminal-bench/runs", jsonBody(body));
 
 export const getRunTasks = (runId: string) =>
-  request<{ run_id: string; items: TerminalBenchTaskRow[]; total: number }>(
+  request<{ run_id: string; items: TerminalBenchTaskRow[]; total: number; status?: string }>(
     `/api/v1/runs/${runId}/tasks`,
   );
 
@@ -806,4 +941,19 @@ export const getRunTaskTrials = (runId: string, taskKey: string) =>
 export const getRunTrial = (runId: string, trialId: string) =>
   request<TerminalBenchTrialDetail>(
     `/api/v1/runs/${runId}/trials/${encodeURIComponent(trialId)}`,
+  );
+
+/**
+ * artifact_id 自带斜杠（冻结 bundle 内的相对路径）：逐段编码后拼进路径，
+ * 既保留路径结构又不会让特殊字符跑到路径之外。
+ */
+export function encodeArtifactPath(artifactId: string): string {
+  return artifactId.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+/** 按 Trial 归属读取一个 Artifact 的冻结内容（有界 + 脱敏；不属于该 Trial 时 404）。 */
+export const getRunTrialArtifact = (runId: string, trialId: string, artifactId: string) =>
+  request<TerminalBenchArtifactContent>(
+    `/api/v1/runs/${runId}/trials/${encodeURIComponent(trialId)}`
+    + `/artifacts/${encodeArtifactPath(artifactId)}`,
   );

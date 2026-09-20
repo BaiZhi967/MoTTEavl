@@ -90,10 +90,16 @@ def test_production_chain_api_to_report(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("MOTTE_HARBOR_PREFLIGHT_REPORT", str(report_path))
 
     # 真实适配器：固定 Runner 的 wrapper + 受控任务根目录。
+    repo_root = Path(__file__).resolve().parents[2]
     register_adapter(
         ADAPTER_ID,
         lambda: HarborJobAdapter(
             argv=[str(runner_python.parent / "harbor-entry")], data_root=str(TASKS_ROOT),
+            # 用仓库当前源码跑桥接层（install-harbor 是部署路径，不是测试路径）。
+            extra_env={"PYTHONPATH": os.pathsep.join([
+                str(repo_root / "packages/benchmark-runtime"),
+                str(repo_root / "packages/contracts"),
+            ])},
         ),
     )
 

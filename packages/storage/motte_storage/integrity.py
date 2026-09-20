@@ -87,7 +87,11 @@ def advance_record(
     if status not in transitions.get(expected_status, set()):
         raise ValueError(f"invalid transition: {expected_status} -> {status}")
     changes = changes or {}
-    if {"id", "run_id", "case_id", "attempt_no", "revision", "status"}.intersection(changes):
+    # trial_id 与 run/case/attempt 身份同级不可变（review R24）：改写它会让
+    # trial-scoped attempt 伪装成任务级 attempt，绕过"不写任务级 CaseRun"的保护。
+    if {
+        "id", "run_id", "case_id", "attempt_no", "trial_id", "revision", "status",
+    }.intersection(changes):
         raise ValueError("transition changes cannot replace identity, revision or status")
     return {**deepcopy(current), **deepcopy(changes), "status": status, "revision": expected_revision + 1}
 

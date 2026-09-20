@@ -115,6 +115,46 @@ def test_aggregation_policy_is_fixed_upfront() -> None:
     assert empty["per_task"]["task-a"]["task_pass_reason"] == "no_valid_trial"
 
 
+def test_first_trial_follows_the_frozen_repeat_order() -> None:
+    """review R14：首个**计划** Trial 无效 → 不可判断，不得顺延到首个有效 Trial。
+
+    ``first-trial`` 的语义是"只看事前计划的第一个 Trial"；先把错误 Trial 过滤掉
+    再取第一个有效值等于临场改聚合政策（择优）。
+    """
+    trials = [
+        _trial(0, None, status="verifier_error", disposition="indeterminate"),
+        _trial(1, 1.0),
+    ]
+    aggregate = task_aggregate(trials=trials, aggregation="first-trial")
+    task = aggregate["per_task"]["task-a"]
+    assert task["task_pass"] is None, "首个计划 Trial 无效就不能给出任务层结论"
+    assert task["task_pass_reason"] == "first_trial_invalid"
+    # 质量与覆盖仍按各自分母如实报告，只是任务层结论不适用。
+    assert aggregate["valid_trial_pass_rate"] == 1.0
+    assert aggregate["valid_trial_coverage"] == 0.5
+
+    # 首个计划 Trial（repeat 0）没有任何结果：同样不可判断。
+    missing_first = task_aggregate(
+        trials=[_trial(1, 1.0)], aggregation="first-trial",
+        planned_per_task={"task-a": 2},
+    )
+    assert missing_first["per_task"]["task-a"]["task_pass"] is None
+    assert missing_first["per_task"]["task-a"]["task_pass_reason"] == "first_trial_invalid"
+
+    # 首个计划 Trial 有效但失败（reward=0）→ 明确的 False，不是不可判断。
+    first_failed = task_aggregate(
+        trials=[_trial(0, 0.0, disposition="failed"), _trial(1, 1.0)],
+        aggregation="first-trial",
+    )
+    assert first_failed["per_task"]["task-a"]["task_pass"] is False
+    assert first_failed["per_task"]["task-a"]["task_pass_reason"] == "first-trial"
+
+    # mean-success 政策不受影响：两个有效 Trial 都通过 → True。
+    mean = task_aggregate(trials=trials, aggregation="mean-success")
+    assert mean["per_task"]["task-a"]["task_pass"] is True
+    assert mean["per_task"]["task-a"]["task_pass_reason"] == "mean-success"
+
+
 def test_planned_denominator_covers_units_that_never_reported() -> None:
     """计划里存在但完全没产出的 Trial 仍在分母里（覆盖可见）。"""
     trials = [_trial(0, 1.0)]
@@ -140,17 +180,63 @@ def test_cost_keeps_unknown_null_and_zero_success_na() -> None:
     assert summary["known_trials"] == 2
     assert summary["unknown_trials"] == 1
     assert summary["unknown_cost"] is True
-    assert summary["per_success_usd"] == 0.75, "失败 Trial 的费用计入分子"
+    # review R15：成本不完整时不能给出"每成功成本"，只能给明确命名的已报道小计比率。
+    assert summary["per_success_usd"] is None
+    assert summary["per_success_usd_basis"] == "unknown_cost"
+    assert summary["known_cost_subtotal_per_success_usd"] == 0.75, "失败 Trial 的费用计入分子"
+    assert "reported" in summary["note"]
     assert summary["includes_failed_trials_in_numerator"] is True
     assert summary["price_table_version"] == "harbor-native@1"
 
     failing = cost_summary([_trial(0, 0.0, disposition="failed", cost=0.5)])
     assert failing["known_cost_usd"] == 0.5
     assert failing["per_success_usd"] is None, "零成功时单位成本不适用，不是 0"
+    assert failing["per_success_usd_basis"] == "no_success"
+    assert failing["known_cost_subtotal_per_success_usd"] is None
 
     unknown_only = cost_summary([_trial(0, 1.0)])
     assert unknown_only["known_cost_usd"] is None
     assert unknown_only["unknown_trials"] == 1
+
+
+def test_per_success_cost_requires_complete_known_cost() -> None:
+    """review R15：全部成本未知时不得生成 0 成本比率（四种组合）。
+
+    ``per_success_usd`` 只在成本**完整**（有已知成本且无未知 Trial）且有成功
+    Trial 时有值；否则按 ``per_success_usd_basis`` 说明缺失原因，完整成本口径的
+    比率另存于 ``known_cost_subtotal_per_success_usd``（只覆盖已报道成本的 Trial）。
+    """
+    # 全部未知：有成功 Trial 也没有成本证据 → unknown，不是 0.0。
+    all_unknown = cost_summary([_trial(0, 1.0), _trial(1, 1.0)])
+    assert all_unknown["known_cost_usd"] is None
+    assert all_unknown["unknown_cost"] is True
+    assert all_unknown["per_success_usd"] is None
+    assert all_unknown["per_success_usd_basis"] == "no_known_cost"
+    assert all_unknown["known_cost_subtotal_per_success_usd"] is None
+
+    # 部分未知：单位成本不可给；小计比率只按已报道成本的小计计算。
+    partial = cost_summary([
+        _trial(0, 1.0, cost=1.0),
+        _trial(1, 0.0, disposition="failed"),
+    ])
+    assert (partial["known_trials"], partial["unknown_trials"]) == (1, 1)
+    assert partial["per_success_usd"] is None
+    assert partial["per_success_usd_basis"] == "unknown_cost"
+    assert partial["known_cost_subtotal_per_success_usd"] == 1.0
+
+    # 全部已知：完整成本下才有单位成本（失败 Trial 的费用计入分子）。
+    complete = cost_summary([
+        _trial(0, 1.0, cost=1.0),
+        _trial(1, 0.0, disposition="failed", cost=0.5),
+    ])
+    assert complete["per_success_usd"] == 1.5
+    assert complete["per_success_usd_basis"] == "complete"
+    assert complete["known_cost_subtotal_per_success_usd"] == 1.5
+
+    # 零成功：即使成本完整，单位成本也不适用。
+    zero_success = cost_summary([_trial(0, 0.0, disposition="failed", cost=0.5)])
+    assert zero_success["per_success_usd"] is None
+    assert zero_success["per_success_usd_basis"] == "no_success"
 
 
 def test_durations_keep_phases_separate() -> None:

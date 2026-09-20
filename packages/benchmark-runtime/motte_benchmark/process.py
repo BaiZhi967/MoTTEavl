@@ -243,6 +243,14 @@ class ProcessJobAdapter:
             else [sys.executable, "-m", str(self._module)]
         )
 
+    def set_extra_env(self, name: str, value: str) -> None:
+        """在 ``start`` 之前设置子进程环境变量。
+
+        准备阶段才知道的受控路径（例如不可变任务副本根）必须随启动环境传下去，
+        否则 Runner 会去读源目录——那正是"排队后内容漂移"能生效的原因（R03）。
+        """
+        self._extra_env[str(name)] = str(value)
+
     def spawned_processes(self) -> list[int]:
         return list(self._pid_order)
 

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  cancelRun, createBenchmarkRun, createRun, dryRunDirectLlm, getBenchmarkCases,
-  getDirectLlmSources, getRuns, getSourceDetail, importBenchmark, publishModel, setCredential,
-  updateModel, updateProvider,
+  ApiRequestError, cancelRun, createBenchmarkRun, createRun, dryRunDirectLlm, getBenchmarkCases,
+  getDirectLlmSources, getRuns, getRunTrialArtifact, getSourceDetail, importBenchmark, publishModel,
+  setCredential, updateModel, updateProvider,
 } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
@@ -150,5 +150,37 @@ describe("api client", () => {
       model: "reasoner", scenario: "gsm8k-test-full@1", reasoning_level: "high",
       case_selection: { mode: "random", count: 100, seed: "deadbeef" },
     });
+  });
+
+  it("结构化错误保留 code 与 details，不把 4xx 压成一句无身份的信息", async () => {
+    mockFetch(422, {
+      error: {
+        code: "REQUEST_FIELD_UNKNOWN",
+        message: "unknown request field(s): timeout_sec",
+        details: { allowed: ["agent_id", "timeouts"] },
+      },
+    });
+    const failure = await cancelRun("run-1").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ApiRequestError);
+    const apiError = failure as ApiRequestError;
+    expect(apiError.status).toBe(422);
+    expect(apiError.code).toBe("REQUEST_FIELD_UNKNOWN");
+    expect(apiError.details).toEqual({ allowed: ["agent_id", "timeouts"] });
+    expect(apiError.message).toContain("REQUEST_FIELD_UNKNOWN");
+    expect(apiError.message).toContain("unknown request field(s): timeout_sec");
+  });
+
+  it("Trial 工件内容按 path 段编码（artifact_id 自带斜杠）", async () => {
+    const fetchMock = mockFetch(200, {
+      artifact_id: "external-jobs/run-1/job-1/evidence/trial.log",
+      text: "ok", truncated: false, verified: true, encoding: "utf-8", note: null,
+    });
+    const payload = await getRunTrialArtifact(
+      "run-1", "trial-a", "external-jobs/run-1/job-1/evidence/a b#c.log",
+    );
+    expect(payload.text).toBe("ok");
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/v1/runs/run-1/trials/trial-a/artifacts/external-jobs/run-1/job-1/evidence/a%20b%23c.log",
+    );
   });
 });

@@ -143,6 +143,8 @@ def terminal_bench_profile(
     credentials: Mapping[str, Any] | None = None,
     aggregation: str = "first-trial",
     environment: Mapping[str, Any] | None = None,
+    tools: Mapping[str, Any] | None = None,
+    limits: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造一次性 Profile（allowlist 检查在 build_harbor_config 内完成）。"""
     return {
@@ -158,9 +160,24 @@ def terminal_bench_profile(
         "aggregation": aggregation,
         "environment": dict(environment or {"type": "docker", "delete": True}),
         "retries": {"runner": 0, "provider_transport": 0, "operator": 0},
-        "tools": {},
-        "limits": {},
+        "tools": dict(tools or {}),
+        "limits": dict(limits or {}),
     }
+
+
+def job_limits(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """执行限额：声明多少就执行多少（R07）。
+
+    ``job_sec`` 必须变成 Supervisor 真实读取的 ``max_wall_seconds``；只把
+    秒数记进旁路字段会让 UI/API/CLI 接受的期限完全不生效。未声明时不下发
+    该键，交由适配器的有限默认上界兜底。
+    """
+    limits: dict[str, Any] = {"poll_interval_seconds": 0.2}
+    timeouts = profile.get("timeouts") or {}
+    job_sec = timeouts.get("job_sec") if isinstance(timeouts, Mapping) else None
+    if job_sec is not None:
+        limits["max_wall_seconds"] = job_sec
+    return limits
 
 
 def preflight_terminal_bench(
@@ -195,6 +212,31 @@ def preflight_terminal_bench(
     return report
 
 
+def frozen_task_files(
+    manifest: Mapping[str, Any], tasks: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, str]]:
+    """选中任务的文件 hash 清单：``{task_key: {相对路径: sha256}}``。
+
+    冻结在 manifest 里之后，执行侧的不可变副本可以在启动前逐字节复验，
+    "排队后任务文件被改动"必须在启动前被拒绝，而不是照旧执行。
+    """
+    hashes = manifest.get("file_hashes") or {}
+    files: dict[str, dict[str, str]] = {}
+    for task in tasks:
+        content_hash = str(task.get("task_content_hash") or "")
+        per_task = hashes.get(content_hash)
+        if not isinstance(per_task, Mapping) or not per_task:
+            raise HarborTaskError(
+                "TASK_FILE_HASHES_MISSING",
+                "prepared manifest has no file hashes for a selected task; "
+                "re-prepare the task set before freezing a run",
+            )
+        files[str(task["task_key"])] = {
+            str(rel): str(digest) for rel, digest in per_task.items()
+        }
+    return files
+
+
 def build_run_inputs(
     *,
     record: Mapping[str, Any],
@@ -208,6 +250,7 @@ def build_run_inputs(
     manifest = record.get("manifest") or {}
     tasks = select_tasks(manifest, task_keys=list(task_keys or []) or None)
     task_keys = [str(task["task_key"]) for task in tasks]
+    task_files = frozen_task_files(manifest, tasks)
 
     agent_hash, environment_hash = agent_and_environment_hashes(profile)
     plans = plan_trials(
@@ -231,6 +274,12 @@ def build_run_inputs(
         "trials": plans,
         "planned_trial_count": len(plans),
         "dataset_revision": record.get("dataset_revision"),
+        # 执行侧据此物化并复验不可变任务副本（R03）：只冻结相对路径不足
+        # 以防"排队后任务文件被改动"。
+        "task_files": task_files,
+        "task_content_hashes": {
+            str(task["task_key"]): str(task["task_content_hash"]) for task in tasks
+        },
     }
     digest = environment_digest(
         harbor_version=HARBOR_VERSION,
@@ -253,7 +302,9 @@ def build_run_inputs(
         "dataset_revision": str(record.get("dataset_revision")),
         "environment_digest": digest,
         "profile": dict(profile),
-        "limits": {"poll_interval_seconds": 0.2},
+        # 期限是**执行上界**，不是显示值：``max_wall_seconds`` 由 Supervisor
+        # 强制（超时中断 + 保留部分证据），秒数本身不落旁路。
+        "limits": job_limits(profile),
         "parser_version": PARSER_VERSION,
         "runner_config": {
             "harbor": native,
@@ -296,6 +347,10 @@ def build_run_inputs(
         "execution": {"backend_id": "external-benchmark", "backend_version": "1"},
         "external_benchmark": external,
         "case_expectations": {},
+        # 任务内容身份进入比较资格（R09）：同 revision 字符串相同不证明内容相同。
+        "case_content_hashes": {
+            str(task["task_key"]): str(task["task_content_hash"]) for task in tasks
+        },
         "selected_tasks": task_keys,
         "task_manifest": {
             "source_id": manifest.get("source_id"),
@@ -432,7 +487,12 @@ def trial_rows(store: Any, run_id: str, task_key: str) -> list[dict[str, Any]]:
 
 
 def trial_detail(store: Any, run_id: str, trial_id: str) -> dict[str, Any] | None:
-    """单 Trial 详情：终止、Verifier、证据引用与完整度（严格校验 run 归属）。"""
+    """单 Trial 详情：终止、Verifier、证据引用与完整度（严格校验 run 归属）。
+
+    公共展示边界：错误、日志等**内容**字段复用既有脱敏（review R08），身份与
+    hash（``trial_id`` / ``task_key`` / ``sha256`` / ``artifact_id``）逐字保留，
+    绝不用"改写身份"的方式假装脱敏。
+    """
     if store.trials is None:
         return None
     row = store.trials.get(trial_id)
@@ -445,7 +505,7 @@ def trial_detail(store: Any, run_id: str, trial_id: str) -> dict[str, Any] | Non
         (ref for ref in refs if ref.get("kind") in ("harbor-trial-log", "harbor-agent-log")),
         None,
     )
-    return {
+    detail = {
         "run_id": run_id,
         "trial_id": trial_id,
         "task_key": row.get("task_key"),
@@ -461,3 +521,217 @@ def trial_detail(store: Any, run_id: str, trial_id: str) -> dict[str, Any] | Non
         "source_hash": row.get("source_hash"),
         "parser_version": row.get("parser_version"),
     }
+    if terminal is not None:
+        # 终端文本走同一受控读取（归属 → hash → 预算 → 脱敏），UI 不再"只有引用"。
+        detail["terminal"] = trial_terminal_text(store, run_id, trial_id)
+    return redact_display_text(detail)
+
+
+# ------------------------------------------------------------------ 内容读取
+
+#: 单次内容读取的文本预算（超出只给截断标记与完整大小，不静默丢尾部）。
+MAX_DISPLAY_TEXT = 64 * 1024
+
+#: 内容字段名特征：只脱敏这些字段，身份/hash 字段逐字保留（review R08）。
+_DISPLAY_TEXT_MARKERS = (
+    "message", "error", "detail", "stdout", "stderr", "log", "note", "reason",
+    "exception", "traceback", "output", "text", "payload", "command", "arguments",
+)
+
+
+def redact_display_text(value: Any) -> Any:
+    """展示边界脱敏：递归处理内容字段，身份/hash 字段原样返回。
+
+    不能对整个 detail 直接调用 ``redact_secrets``：它的键名规则会把
+    ``task_key`` 这类**身份**字段也替换成 ``[REDACTED]``，等于改写身份。
+    """
+    from motte_trace.redaction import redact_secrets
+
+    if isinstance(value, Mapping):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key).lower()
+            if any(marker in name for marker in _DISPLAY_TEXT_MARKERS):
+                redacted[key] = redact_secrets(item)
+            else:
+                redacted[key] = redact_display_text(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_display_text(item) for item in value]
+    if isinstance(value, str):
+        return redact_secrets(value)
+    return value
+
+
+def trial_artifact_ref(store: Any, run_id: str, trial_id: str, artifact_id: str) -> dict[str, Any] | None:
+    """在 Trial 的证据引用里定位一个 Artifact（严格校验 Run/Trial 归属）。"""
+    row = store.trials.get(trial_id) if store.trials is not None else None
+    if row is None or str(row.get("run_id")) != run_id:
+        return None
+    for ref in (row.get("result") or {}).get("artifact_refs") or []:
+        if str(ref.get("artifact_id") or "") == artifact_id:
+            return dict(ref)
+    return None
+
+
+class FrozenEvidenceReader:
+    """从**冻结证据**读取单个工件，不依赖可被清理的工作目录（review R11/R19）。
+
+    Trial 引用里的 ``artifact_id`` 是冻结 bundle 内的相对路径（文本类证据），
+    也可能是内容寻址的独立 Artifact（二进制证据）。两条路径都只读冻结副本，
+    因此"工作目录被删掉"之后详情仍然可读；内容 hash 与引用不符时如实失败。
+    """
+
+    def __init__(self, store: Any, run_id: str, artifacts: Any = None) -> None:
+        self._store = store
+        self._run_id = run_id
+        self._artifacts = artifacts
+        self._bundle: dict[str, Any] | None = None
+        self.job_id: str | None = None
+        self.bundle_artifact: str | None = None
+        jobs = getattr(store, "external_jobs", None)
+        if jobs is not None:
+            for record in reversed(jobs.jobs_for_run(run_id)):
+                evidence = (record.get("checkpoint") or {}).get("evidence") or {}
+                artifact = evidence.get("raw_bundle_artifact")
+                if artifact:
+                    self.job_id = str(record.get("job_id") or "")
+                    self.bundle_artifact = str(artifact)
+                    break
+
+    def artifacts(self) -> Any:
+        if self._artifacts is None:
+            import os
+
+            from motte_storage.artifacts import ArtifactStore
+
+            self._artifacts = ArtifactStore(os.environ.get("ARTIFACT_ROOT", "var/artifacts"))
+        return self._artifacts
+
+    def _files(self) -> dict[str, Any]:
+        if self._bundle is None:
+            self._bundle = {}
+            if self.bundle_artifact:
+                import json
+
+                try:
+                    raw = self.artifacts().read_bytes(self.bundle_artifact)
+                    payload = json.loads(raw.decode("utf-8"))
+                except (OSError, ValueError, UnicodeDecodeError):
+                    payload = {}
+                files = payload.get("files")
+                if isinstance(files, Mapping):
+                    self._bundle = dict(files)
+        return self._bundle
+
+    def read_bytes(self, artifact_id: str) -> bytes:
+        """按引用读取字节：内容寻址 Artifact 优先，其次冻结 bundle 内的路径。"""
+        if artifact_id.startswith("external-jobs/"):
+            return self.artifacts().read_bytes(artifact_id)
+        entry = self._files().get(artifact_id)
+        if not isinstance(entry, Mapping):
+            raise FileNotFoundError(f"artifact {artifact_id} is not in the frozen evidence")
+        content = entry.get("content")
+        if not isinstance(content, str):
+            raise ValueError(
+                "frozen evidence keeps only the hash for this file; bytes are not stored"
+            )
+        return content.encode("utf-8")
+
+
+def evidence_reader(store: Any, run_id: str, artifacts: Any = None) -> FrozenEvidenceReader:
+    return FrozenEvidenceReader(store, run_id, artifacts)
+
+
+def read_artifact_text(reader: Any, ref: Mapping[str, Any], *, max_bytes: int = MAX_DISPLAY_TEXT) -> dict[str, Any]:
+    """按引用读取工件内容：校验 hash → 有界解码 → 脱敏，不返回超预算正文。
+
+    ``reader`` 需要提供 ``read_bytes(artifact_id)``（``FrozenEvidenceReader``）；
+    缺失或 hash 不符时返回 ``verified=False``，而不是返回一段无法验证的文本。
+    """
+    artifact_id = str(ref.get("artifact_id") or "")
+    payload: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "kind": ref.get("kind"),
+        "sha256": ref.get("sha256"),
+        "size_bytes": ref.get("size_bytes"),
+        "media_type": ref.get("media_type"),
+        "source_path": ref.get("source_path"),
+        "encoding": None,
+        "text": None,
+        "truncated": False,
+        "verified": False,
+        "note": None,
+    }
+    if not artifact_id:
+        payload["note"] = "artifact reference has no readable content (hash only)"
+        return payload
+    if reader is None:
+        payload["note"] = "no evidence reader is available in this process"
+        return payload
+    try:
+        data = reader.read_bytes(artifact_id)
+    except FileNotFoundError as error:
+        payload["note"] = str(error)
+        return payload
+    except ValueError as error:
+        payload["note"] = str(error)
+        return payload
+    except (OSError, KeyError) as error:
+        payload["note"] = f"artifact content unavailable: {type(error).__name__}"
+        return payload
+    expected = str(ref.get("sha256") or "").removeprefix("sha256:")
+    if expected:
+        import hashlib
+
+        if hashlib.sha256(data).hexdigest() != expected:
+            payload["note"] = "artifact content hash differs from the frozen reference"
+            return payload
+        payload["verified"] = True
+    else:
+        payload["verified"] = None
+    if len(data) > max_bytes:
+        data = data[:max_bytes]
+        payload["truncated"] = True
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        payload["encoding"] = "binary"
+        payload["note"] = payload["note"] or (
+            "content is not UTF-8 text; download the frozen artifact for the raw bytes"
+        )
+        return payload
+    payload["encoding"] = "utf-8"
+    from motte_trace.redaction import redact_secrets
+
+    payload["text"] = redact_secrets(text)
+    return payload
+
+
+def trial_terminal_text(
+    store: Any, run_id: str, trial_id: str, *, reader: Any = None,
+    max_bytes: int = MAX_DISPLAY_TEXT,
+) -> dict[str, Any] | None:
+    """Trial 的终端/日志文本（有界 + 脱敏），供 CLI/Web 直接消费。"""
+    row = store.trials.get(trial_id) if store.trials is not None else None
+    if row is None or str(row.get("run_id")) != run_id:
+        return None
+    refs = (row.get("result") or {}).get("artifact_refs") or []
+    terminal = next(
+        (dict(item) for item in refs
+         if item.get("kind") in ("harbor-trial-log", "harbor-agent-log")),
+        None,
+    )
+    if terminal is None:
+        return None
+    return read_artifact_text(reader or evidence_reader(store, run_id), terminal, max_bytes=max_bytes)
+
+
+def trial_artifact_content(
+    store: Any, run_id: str, trial_id: str, artifact_id: str, *, reader: Any = None,
+) -> dict[str, Any] | None:
+    """按 Artifact 身份读取 Trial 证据内容（归属 → hash → 预算 → 脱敏）。"""
+    ref = trial_artifact_ref(store, run_id, trial_id, artifact_id)
+    if ref is None:
+        return None
+    return read_artifact_text(reader or evidence_reader(store, run_id), ref)

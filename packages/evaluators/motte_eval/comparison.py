@@ -20,6 +20,8 @@ class ComparisonResult:
     case_diff: dict[str, list[str]] = field(
         default_factory=lambda: {"added": [], "removed": [], "changed": []},
     )
+    #: 政策显式允许的差异（典型是 model）；记录以便"允许"本身可审计。
+    allowed_differences: tuple[str, ...] = ()
 
 
 def _external(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -32,33 +34,67 @@ def _profile(manifest: dict[str, Any]) -> dict[str, Any]:
     return profile if isinstance(profile, dict) else {}
 
 
-# 冻结 Profile 里除 model（合法变量）外不允许变化的口径字段（review R08）。
-_PROFILE_INVARIANTS: tuple[tuple[str, str], ...] = (
-    ("benchmark_id", "BENCHMARK_IDENTITY_CHANGED"),
-    ("benchmark_version", "BENCHMARK_IDENTITY_CHANGED"),
-    ("dataset_revision", "DATASET_REVISION_CHANGED"),
-    ("split", "SPLIT_CHANGED"),
-    ("few_shot", "FEWSHOT_CHANGED"),
-    ("prompt_template_version", "EXTRACTOR_OR_PROMPT_CHANGED"),
-    ("answer_extractor", "EXTRACTOR_OR_PROMPT_CHANGED"),
-    ("extractor_version", "EXTRACTOR_OR_PROMPT_CHANGED"),
-    ("aggregation", "AGGREGATION_CHANGED"),
-    ("aggregation_version", "AGGREGATION_CHANGED"),
-    ("seed", "SEED_CHANGED"),
-    ("runner_version", "RUNNER_CHANGED"),
-    ("environment_digest", "ENVIRONMENT_CHANGED"),
+# 冻结 Profile 里不允许悄悄变化的口径字段。第三项是取值来源：``profile``
+# 是 M3 冻结的 Profile，``external`` 是 M2 的 external_benchmark 顶层（
+# environment_digest / runner_version / dataset_revision 在 TB 里放这里）。
+_PROFILE_INVARIANTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("benchmark_id", "BENCHMARK_IDENTITY_CHANGED", ("profile",)),
+    ("benchmark_version", "BENCHMARK_IDENTITY_CHANGED", ("profile",)),
+    ("dataset_revision", "DATASET_REVISION_CHANGED", ("profile", "external")),
+    ("split", "SPLIT_CHANGED", ("profile",)),
+    ("few_shot", "FEWSHOT_CHANGED", ("profile",)),
+    ("prompt_template_version", "EXTRACTOR_OR_PROMPT_CHANGED", ("profile",)),
+    ("answer_extractor", "EXTRACTOR_OR_PROMPT_CHANGED", ("profile",)),
+    ("extractor_version", "EXTRACTOR_OR_PROMPT_CHANGED", ("profile",)),
+    ("aggregation", "AGGREGATION_CHANGED", ("profile",)),
+    ("aggregation_version", "AGGREGATION_CHANGED", ("profile",)),
+    ("seed", "SEED_CHANGED", ("profile",)),
+    ("runner_version", "RUNNER_CHANGED", ("profile", "external")),
+    ("environment_digest", "ENVIRONMENT_CHANGED", ("profile", "external")),
+    # M3 冻结实验指纹（review R09）：重复数、Agent、预算/资源、超时、工具与
+    # 环境不同就是不同实验条件，不能被当作模型差异比较。
+    ("agent_id", "AGENT_CHANGED", ("profile",)),
+    ("agent_version", "AGENT_CHANGED", ("profile",)),
+    ("n_trials", "REPEATS_CHANGED", ("profile",)),
+    ("timeouts", "TIMEOUTS_CHANGED", ("profile",)),
+    ("resources", "RESOURCES_CHANGED", ("profile",)),
+    ("tools", "TOOLS_CHANGED", ("profile",)),
+    ("retries", "RETRIES_CHANGED", ("profile",)),
+    ("limits", "LIMITS_CHANGED", ("profile",)),
+    ("environment", "ENVIRONMENT_CHANGED", ("profile",)),
+    # 凭据只比较**引用**（env:NAME），不接触秘密本身。
+    ("credentials", "CREDENTIALS_CHANGED", ("profile",)),
 )
+
+
+def _invariant_value(
+    profile: dict[str, Any], external: dict[str, Any], field: str,
+    sources: tuple[str, ...],
+) -> Any:
+    """按声明顺序取值：``profile`` 优先，缺失时回退 ``external`` 顶层。"""
+    for source in sources:
+        container = profile if source == "profile" else external
+        value = container.get(field)
+        if value is not None:
+            return value
+    return None
 
 
 def _compare_invariants(
     baseline_manifest: dict[str, Any],
     candidate_manifest: dict[str, Any],
     policy: ComparisonPolicy,
-) -> list[str]:
-    """逐字段判定评测口径；缺失身份不默认相等（review R08）。"""
+) -> tuple[list[str], list[str]]:
+    """逐字段判定评测口径；缺失身份不默认相等（review R08）。
+
+    返回 ``(阻断原因, 政策显式允许的差异)``。政策允许的变量（缺省只有
+    model 由下面的专门分支处理）不阻断，但必须留下可审计记录。
+    """
     reasons: list[str] = []
+    allowed: list[str] = []
+    allowed_factors = set(policy.allowed_factors)
     if baseline_manifest.get("model") != candidate_manifest.get("model"):
-        if "model" not in policy.allowed_factors:
+        if "model" not in allowed_factors:
             reasons.append(
                 f"FACTOR_NOT_ALLOWED:model: {baseline_manifest.get('model')!r} -> "
                 f"{candidate_manifest.get('model')!r}",
@@ -67,14 +103,12 @@ def _compare_invariants(
     cand_external = _external(candidate_manifest)
     base_profile = _profile(baseline_manifest)
     cand_profile = _profile(candidate_manifest)
-    for invariant_field, code in _PROFILE_INVARIANTS:
-        base_value = (
-            base_profile.get(invariant_field, base_external.get(invariant_field))
-            if invariant_field == "dataset_revision" else base_profile.get(invariant_field)
+    for invariant_field, code, sources in _PROFILE_INVARIANTS:
+        base_value = _invariant_value(
+            base_profile, base_external, invariant_field, sources,
         )
-        cand_value = (
-            cand_profile.get(invariant_field, cand_external.get(invariant_field))
-            if invariant_field == "dataset_revision" else cand_profile.get(invariant_field)
+        cand_value = _invariant_value(
+            cand_profile, cand_external, invariant_field, sources,
         )
         if (base_value is None) != (cand_value is None):
             # 缺失身份不默认相等（review R08）：一侧冻结、一侧没有 → 阻断。
@@ -82,6 +116,11 @@ def _compare_invariants(
                 f"IDENTITY_MISSING:{invariant_field}: {base_value!r} vs {cand_value!r}"
             )
         elif base_value is not None and base_value != cand_value:
+            if invariant_field in allowed_factors:
+                allowed.append(
+                    f"ALLOWED_FACTOR:{invariant_field}: {base_value!r} -> {cand_value!r}"
+                )
+                continue
             reasons.append(
                 f"{code}:{invariant_field}: {base_value!r} -> {cand_value!r}"
             )
@@ -95,7 +134,25 @@ def _compare_invariants(
                     f"SCORER_CHANGED:{field}: {base_eval.get(field)!r} -> "
                     f"{cand_eval.get(field)!r}",
                 )
-    return reasons
+    return reasons, allowed
+
+
+def _case_ids(manifest: dict[str, Any]) -> list[str]:
+    """比较用的 case 集合：Run 视图的 ``case_ids`` 优先，缺失时用冻结任务集。
+
+    冻结 manifest 自带 ``task_manifest.task_keys``/``selected_tasks``，因此
+    "case 集合"在只有冻结快照（没有活 Run 视图）时也能比对——同 revision
+    但选中任务不同必须表现为 ``CASE_SET_CHANGED``，不能因为缺字段跳过。
+    """
+    ids = [str(item) for item in manifest.get("case_ids") or []]
+    if ids:
+        return ids
+    task_manifest = manifest.get("task_manifest")
+    if isinstance(task_manifest, dict):
+        keys = [str(item) for item in task_manifest.get("task_keys") or []]
+        if keys:
+            return keys
+    return [str(item) for item in manifest.get("selected_tasks") or []]
 
 
 def compare_run_reports(
@@ -112,10 +169,13 @@ def compare_run_reports(
     metric_eligibility: dict[str, bool] = {}
 
     # 逐条件：允许因子之外的差异都阻断整体资格（R08 的完整字段清单）。
-    reasons.extend(_compare_invariants(baseline_manifest, candidate_manifest, policy))
+    invariance_reasons, allowed_differences = _compare_invariants(
+        baseline_manifest, candidate_manifest, policy,
+    )
+    reasons.extend(invariance_reasons)
 
-    base_cases = list(baseline_manifest.get("case_ids") or [])
-    cand_cases = list(candidate_manifest.get("case_ids") or [])
+    base_cases = _case_ids(baseline_manifest)
+    cand_cases = _case_ids(candidate_manifest)
     added = sorted(set(cand_cases) - set(base_cases))
     removed = sorted(set(base_cases) - set(cand_cases))
     changed: list[str] = []
@@ -175,4 +235,5 @@ def compare_run_reports(
             "removed": removed,
             "changed": sorted(set(changed) | set(content_changed)),
         },
+        allowed_differences=tuple(allowed_differences),
     )

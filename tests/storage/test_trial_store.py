@@ -79,6 +79,7 @@ def _downgrade_to_pre_trial_schema(db_path: Path) -> dict[str, object]:
     store.attempts.complete(
         attempt["id"], expected_revision=dispatched["revision"], status="succeeded",
     )
+    legacy = store.attempts.get(attempt["id"])
     connection = sqlite3.connect(db_path)
     try:
         with connection:
@@ -93,7 +94,9 @@ def _downgrade_to_pre_trial_schema(db_path: Path) -> dict[str, object]:
         for row in sqlite3.connect(db_path).execute("SELECT name FROM sqlite_master")
     }
     assert "trials" not in tables
-    return store.attempts.get(attempt["id"])
+    # schema 已被降级，不再通过 store 读取（R24 起读取会核对 trial_id 索引列）；
+    # 旧记录内容在降级前取好，升级后的可读性由下一个 store 实例验证。
+    return legacy
 
 
 def _plan_and_result_contract_rejections() -> None:
@@ -189,6 +192,94 @@ def test_result_import_is_idempotent_and_never_overwrites(trials) -> None:
 def test_plan_and_result_validation_is_strict() -> None:
     """计划/结果的必填字段缺失时显式失败，不写半截记录。"""
     _plan_and_result_contract_rejections()
+
+
+def test_create_plans_returns_records_detached_from_the_store() -> None:
+    """返回值不是内部引用：改动返回值不改变已冻结计划与其 hash（review R25）。"""
+    trials = MemoryTrials()
+    plan = _plan(TASKS[0], 0)
+    trial_id = str(plan["trial_id"])
+    created = trials.create_plans([plan])[0]
+
+    created["plan"]["plan"]["repeat_index"] = 99
+    created["plan"]["plan_hash"] = "sha256:tampered"
+    created["plan"]["status"] = "succeeded"
+    assert trials.get(trial_id)["plan"] == plan
+    assert trials.get(trial_id)["plan_hash"] != "sha256:tampered"
+    assert trials.get(trial_id)["status"] == "pending"
+    # 缓存 hash 与实际内容一致：原计划重复创建仍是 identical（不因外部改动变 conflict）。
+    identical = trials.create_plans([plan])[0]
+    assert identical["status"] == "identical"
+    identical["plan"]["plan"]["repeat_index"] = 7
+    assert trials.get(trial_id)["plan"] == plan
+
+    # 冲突响应里的 existing 同样是副本。
+    conflict = trials.create_plans([{**plan, "agent_config_hash": "sha256:other"}])[0]
+    assert conflict["status"] == "conflict"
+    conflict["existing"]["plan"]["repeat_index"] = 42
+    conflict["existing"]["plan_hash"] = "sha256:tampered"
+    assert trials.get(trial_id)["plan"] == plan
+    assert trials.get(trial_id)["plan_hash"] != "sha256:tampered"
+    assert trials.get(trial_id)["plan_hash"] == identical["plan"]["plan_hash"]
+
+
+def test_put_result_returns_a_copy_of_the_frozen_result() -> None:
+    """put_result 成功/identical 的返回值同样是副本，改不动已冻结结果（review R25）。"""
+    trials = MemoryTrials()
+    plan = _plan(TASKS[0], 0)
+    trial_id = str(plan["trial_id"])
+    trials.create_plans([plan])
+    result = _result(trial_id, disposition="succeeded", status="scored", rewards={"reward": 1.0})
+
+    stored = trials.put_result(
+        trial_id, result, source_hash="sha256:raw", parser_version="p@1",
+    )
+    stored["result"]["disposition"] = "failed"
+    stored["result"]["verifier_observation"]["rewards"]["reward"] = 0.0
+    assert trials.get(trial_id)["result"]["disposition"] == "succeeded"
+    assert trials.get(trial_id)["result"]["verifier_observation"]["rewards"] == {"reward": 1.0}
+    repeat = trials.put_result(
+        trial_id, result, source_hash="sha256:raw", parser_version="p@1",
+    )
+    assert repeat["status"] == "identical"
+
+
+def test_put_result_rejects_result_of_another_trial(trials) -> None:
+    """结果身份错配必须显式拒绝，绝不把别的 Trial/Run/Task 的结果写进目标（review R26）。"""
+    plan = _plan(TASKS[0], 0)
+    other = _plan(TASKS[0], 1)
+    spare = _plan(TASKS[1], 0)
+    trials.create_plans([plan, other, spare])
+    trial_id = str(plan["trial_id"])
+    valid = _result(trial_id, disposition="succeeded", status="scored", rewards={"reward": 1.0})
+    assert trials.put_result(
+        trial_id, valid, source_hash="sha256:raw", parser_version="p@1",
+    )["status"] == "stored"
+
+    foreign = _result(str(other["trial_id"]), disposition="failed", status="scored",
+                      rewards={"reward": 0.0})
+    with pytest.raises(ValueError, match="trial result identity mismatch: trial_id"):
+        trials.put_result(trial_id, foreign, source_hash="sha256:other", parser_version="p@1")
+    # 旧记录原样保留，别的 Trial 也不会被写入。
+    assert trials.get(trial_id)["result"] == valid
+    assert trials.get(str(other["trial_id"]))["result"] is None
+
+    # 结果里出现的归属字段必须与冻结计划一致；错配同样拒绝且不改动旧记录。
+    for field, value in (("run_id", "run-other"), ("task_key", TASKS[1]), ("repeat_index", 1)):
+        mismatched = {**valid, field: value}
+        with pytest.raises(ValueError, match=f"trial result identity mismatch: {field}"):
+            trials.put_result(trial_id, mismatched, source_hash="sha256:raw", parser_version="p@1")
+    assert trials.get(trial_id)["result"] == valid
+
+    # 与冻结计划一致的归属字段照常接受。
+    consistent = {
+        **_result(str(spare["trial_id"]), disposition="failed", status="scored",
+                  rewards={"reward": 0.0}),
+        "run_id": "run-1", "task_key": TASKS[1], "repeat_index": 0,
+    }
+    assert trials.put_result(
+        str(spare["trial_id"]), consistent, source_hash="sha256:spare", parser_version="p@1",
+    )["status"] == "stored"
 
 
 def test_transport_retry_does_not_create_a_trial(trials) -> None:
@@ -326,6 +417,86 @@ def test_attempt_conflict_domain_is_trial_scoped(tmp_path: Path) -> None:
         assert store.case_runs.get("run-1", TASKS[0]) is None
 
 
+def test_attempt_trial_id_cannot_be_rewritten_by_a_transition(tmp_path: Path) -> None:
+    """trial_id 与 run/case/attempt 身份一样不可变，改写不能绕过 Case 写保护（review R24）。"""
+    for store in (InMemoryRunStore(), SQLiteRunStore(tmp_path / "immutable.db")):
+        run = store.runs.create({"id": "run-1", "scenario_version": "x@1", "status": "running"})
+        plan = _plan(TASKS[0], 0)
+        attempt = store.attempts.begin({
+            "run_id": "run-1", "case_id": TASKS[0], "attempt_no": 1,
+            "trial_id": plan["trial_id"],
+        })
+        dispatched = store.attempts.dispatch(
+            attempt["id"], expected_revision=attempt["revision"], run_id="run-1",
+            expected_run_revision=run["revision"], expected_run_status=run["status"],
+        )
+
+        with pytest.raises(ValueError, match="identity"):
+            store.attempts.transition(
+                attempt["id"], expected_revision=dispatched["revision"],
+                expected_status="dispatching", status="failed", changes={"trial_id": ""},
+            )
+        with pytest.raises(ValueError, match="identity"):
+            store.attempts.complete(
+                attempt["id"], expected_revision=dispatched["revision"],
+                changes={"trial_id": ""},
+            )
+        with pytest.raises(ValueError, match="identity"):
+            store.attempts.complete(
+                attempt["id"], expected_revision=dispatched["revision"],
+                changes={"trial_id": plan["trial_id"]},
+            )
+        # 身份未被改写：Trial 维度仍在，任务级 CaseRun 写入继续被拒。
+        assert store.attempts.get(attempt["id"])["trial_id"] == plan["trial_id"]
+        with pytest.raises(RunConflictError, match="task-level case result"):
+            store.attempts.complete(
+                attempt["id"], expected_revision=dispatched["revision"],
+                case_run={"run_id": "run-1", "case_id": TASKS[0], "result": "x"},
+            )
+        assert store.case_runs.get("run-1", TASKS[0]) is None
+
+
+def test_sqlite_attempt_rejects_payload_and_column_drift(tmp_path: Path) -> None:
+    """payload 的 trial_id 与索引列脱节时读取即失败，不让身份漂移绕过保护（review R24）。"""
+    db_path = tmp_path / "drift.db"
+    store = SQLiteRunStore(db_path)
+    store.runs.create({"id": "run-1", "scenario_version": "x@1", "status": "running"})
+    plan = _plan(TASKS[0], 0)
+    attempt = store.attempts.begin({
+        "run_id": "run-1", "case_id": TASKS[0], "attempt_no": 1, "trial_id": plan["trial_id"],
+    })
+    connection = sqlite3.connect(db_path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT payload FROM case_attempts WHERE id = ?", (attempt["id"],),
+            ).fetchone()
+            payload = json.loads(row[0])
+            payload["trial_id"] = ""
+            connection.execute(
+                "UPDATE case_attempts SET payload = ? WHERE id = ?",
+                (json.dumps(payload, sort_keys=True), attempt["id"]),
+            )
+    finally:
+        connection.close()
+
+    with pytest.raises(RunConflictError, match="trial_id"):
+        store.attempts.get(attempt["id"])
+    with pytest.raises(RunConflictError, match="trial_id"):
+        store.attempts.list_for_run("run-1")
+    with pytest.raises(RunConflictError, match="trial_id"):
+        store.attempts.transition(
+            attempt["id"], expected_revision=attempt["revision"],
+            expected_status="prepared", status="failed",
+        )
+    with pytest.raises(RunConflictError, match="trial_id"):
+        store.attempts.complete(
+            attempt["id"], expected_revision=attempt["revision"], status="failed",
+            case_run={"run_id": "run-1", "case_id": TASKS[0], "result": "x"},
+        )
+    assert store.case_runs.get("run-1", TASKS[0]) is None, "漂移状态不得写入任务级 CaseRun"
+
+
 def test_legacy_attempt_and_case_semantics_unchanged(tmp_path: Path) -> None:
     """旧无 Trial 路径保持 M2 行为：已有 CaseRun 仍然阻止新 attempt。"""
     for store in (InMemoryRunStore(), SQLiteRunStore(tmp_path / "legacy.db")):
@@ -405,6 +576,182 @@ def test_scoreset_reuses_existing_trial_dimension(tmp_path: Path) -> None:
         # 同一 Case 出现多 Trial 后，按 Case 单值读取必须显式失败而不是挑一条。
         with pytest.raises(ValueError, match="ambiguous"):
             store.score_sets.get("pass-1", "task-key")
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOTTE_PG_DSN"),
+    reason="real PostgreSQL required (MOTTE_PG_DSN)",
+)
+def test_postgres_put_result_rejects_identity_mismatch() -> None:  # pragma: no cover - 需真实 PG
+    """PG 后端与 Memory/SQLite 同语义：结果身份错配显式拒绝且不落盘（review R26）。"""
+    from uuid import uuid4
+
+    from motte_storage.postgres import create_postgres_run_store
+
+    dsn = os.environ["MOTTE_PG_DSN"]
+    store = create_postgres_run_store(dsn, migrate=True)
+    run_id = f"pg-identity-{uuid4().hex}"
+    plans = [_plan(TASKS[0], 0, run_id=run_id), _plan(TASKS[0], 1, run_id=run_id)]
+    assert [item["status"] for item in store.trials.create_plans(plans)] == ["created", "created"]
+    trial_id = str(plans[0]["trial_id"])
+    foreign = str(plans[1]["trial_id"])
+
+    with pytest.raises(ValueError, match="trial result identity mismatch: trial_id"):
+        store.trials.put_result(
+            trial_id,
+            _result(foreign, disposition="failed", status="scored", rewards={"reward": 0.0}),
+            source_hash="sha256:foreign", parser_version="harbor-parser@1",
+        )
+    with pytest.raises(ValueError, match="trial result identity mismatch: run_id"):
+        store.trials.put_result(
+            trial_id,
+            {**_result(trial_id, disposition="failed", status="scored", rewards={}),
+             "run_id": "run-other"},
+            source_hash="sha256:other-run", parser_version="harbor-parser@1",
+        )
+    assert store.trials.get(trial_id)["result"] is None, "错配结果不得落盘"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOTTE_PG_DSN"),
+    reason="real PostgreSQL required (MOTTE_PG_DSN)",
+)
+def test_postgres_attempt_trial_identity_is_immutable() -> None:  # pragma: no cover - 需真实 PG
+    """PG 后端：trial_id 不可改写，payload 与索引列脱节时读取即失败（review R24）。"""
+    from uuid import uuid4
+
+    import psycopg
+    from psycopg.types.json import Json
+
+    from motte_storage.postgres import create_postgres_run_store
+
+    dsn = os.environ["MOTTE_PG_DSN"]
+    store = create_postgres_run_store(dsn, migrate=True)
+    run_id = f"pg-attempt-{uuid4().hex}"
+    run = store.runs.create({"id": run_id, "scenario_version": "x@1", "status": "running"})
+    plan = _plan(TASKS[0], 0, run_id=run_id)
+    attempt = store.attempts.begin({
+        "run_id": run_id, "case_id": TASKS[0], "attempt_no": 1, "trial_id": plan["trial_id"],
+    })
+    dispatched = store.attempts.dispatch(
+        attempt["id"], expected_revision=attempt["revision"], run_id=run_id,
+        expected_run_revision=run["revision"], expected_run_status=run["status"],
+    )
+    with pytest.raises(ValueError, match="identity"):
+        store.attempts.transition(
+            attempt["id"], expected_revision=dispatched["revision"],
+            expected_status="dispatching", status="failed", changes={"trial_id": ""},
+        )
+    with pytest.raises(ValueError, match="identity"):
+        store.attempts.complete(
+            attempt["id"], expected_revision=dispatched["revision"], changes={"trial_id": ""},
+        )
+    assert store.attempts.get(attempt["id"])["trial_id"] == plan["trial_id"]
+
+    with psycopg.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT payload FROM case_attempts WHERE id = %s", (attempt["id"],),
+            )
+            payload = dict(cursor.fetchone()[0])
+            payload["trial_id"] = ""
+            cursor.execute(
+                "UPDATE case_attempts SET payload = %s WHERE id = %s",
+                (Json(payload), attempt["id"]),
+            )
+    with pytest.raises(RunConflictError, match="trial_id"):
+        store.attempts.get(attempt["id"])
+    with pytest.raises(RunConflictError, match="trial_id"):
+        store.attempts.complete(
+            attempt["id"], expected_revision=dispatched["revision"], status="failed",
+            case_run={"run_id": run_id, "case_id": TASKS[0], "result": "x"},
+        )
+
+
+def _pg_concurrent_first_write(
+    dsn: str, held_plan: dict[str, object], incoming_plan: dict[str, object],
+) -> list[dict[str, object]]:
+    """两连接同步屏障：A 持未提交的同一 trial_id 行，B 首写随后进入。
+
+    B 的返回值/异常原样带回：``UniqueViolation`` 正是不原子首写的反例（review R22）。
+    """
+    import threading
+    import time
+
+    import psycopg
+    from psycopg.types.json import Json
+
+    from motte_storage.pg_audit_store import PgTrials
+    from motte_storage.trials import _plan_record
+
+    held = _plan_record(dict(held_plan))
+    holder = psycopg.connect(dsn)
+    outcome: dict[str, object] = {}
+    try:
+        with holder.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO trials(trial_id, run_id, task_key, repeat_index, status, plan_hash, payload, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",  # noqa: E501
+                (held["trial_id"], held["run_id"], held["task_key"], int(held["repeat_index"]),
+                 held["status"], held["plan_hash"], Json(held), held["created_at"]),
+            )
+        started = threading.Event()
+
+        def writer() -> None:
+            started.set()
+            try:
+                outcome["result"] = PgTrials(dsn).create_plans([dict(incoming_plan)])
+            except BaseException as error:  # noqa: BLE001 - 反例需要原样观察
+                outcome["error"] = error
+
+        thread = threading.Thread(target=writer, daemon=True)
+        thread.start()
+        assert started.wait(timeout=5), "writer thread did not start"
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            with holder.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM pg_locks WHERE NOT granted LIMIT 1")
+                if cursor.fetchone() is not None:
+                    break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("concurrent first write never blocked on the held row")
+        holder.commit()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "concurrent create_plans did not return"
+    finally:
+        holder.close()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["result"]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOTTE_PG_DSN"),
+    reason="real PostgreSQL required (MOTTE_PG_DSN)",
+)
+def test_postgres_create_plans_concurrent_first_write() -> None:  # pragma: no cover - 需真实 PG
+    """两个事务同时首写同一 trial_id：第二个必须 identical/conflict（review R22）。"""
+    from uuid import uuid4
+
+    from motte_storage.postgres import create_postgres_run_store
+
+    dsn = os.environ["MOTTE_PG_DSN"]
+    store = create_postgres_run_store(dsn, migrate=True)
+
+    # 相同 payload 竞争 → identical（重复创建是 no-op）。
+    held = _plan(TASKS[0], 0, run_id=f"pg-race-{uuid4().hex}")
+    same = _pg_concurrent_first_write(dsn, held, held)
+    assert [item["status"] for item in same] == ["identical"]
+    assert store.trials.get(str(held["trial_id"]))["plan"] == held
+
+    # 异内容竞争 → conflict，先写入（已提交）者保留。
+    held_other = _plan(TASKS[1], 0, run_id=f"pg-race-{uuid4().hex}")
+    changed = {**held_other, "agent_config_hash": "sha256:other"}
+    conflict = _pg_concurrent_first_write(dsn, held_other, changed)
+    assert [item["status"] for item in conflict] == ["conflict"]
+    assert conflict[0]["existing"]["plan"] == held_other
+    assert conflict[0]["incoming"]["plan"] == changed
+    assert store.trials.get(str(held_other["trial_id"]))["plan"] == held_other
 
 
 @pytest.mark.skipif(
