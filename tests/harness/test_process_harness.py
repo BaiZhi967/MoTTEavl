@@ -88,10 +88,10 @@ def test_claude_probe_and_run_with_fake_binary(tmp_path):
 
     result = asyncio.run(scenario())
     assert result["harness"] == "claude-cli"
-    assert result["parser"] == "jsonl-v1"
-    assert result["events"][0] == {"type": "assistant", "text": "hi"}
-    assert result["events"][1]["error"] == "malformed_line"
-    assert result["events"][1]["parser"] == "jsonl-v1"
+    # M4-T06 起 run() 走原生 parser：非 result schema 不假成功
+    assert result["parser"] == "claude-json-v1"
+    assert result["events"]["status"] == "insufficient"
+    assert result["events"]["reason"] == "malformed_json"
 
 
 def test_codex_run_records_transport_and_events(tmp_path):
@@ -102,8 +102,9 @@ def test_codex_run_records_transport_and_events(tmp_path):
 
     result = asyncio.run(scenario())
     assert result["harness"] == "codex-cli"
-    assert result["transport"] == "cli"
-    assert result["events"] == [{"type": "item", "item": "done"}]
+    assert result["transport"] == "cli-exec-jsonl"
+    # 无 msg 包装/无终态：insufficient，不冒充事件成功
+    assert result["events"]["status"] == "insufficient"
     assert json.dumps(result)
 
 

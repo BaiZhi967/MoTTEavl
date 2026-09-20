@@ -213,8 +213,38 @@ def _build_pi(run: dict[str, Any]) -> Any:
     )
 
 
+def _build_cli(backend_id: str):
+    """claude-cli@1 / codex-cli@1 的执行装配（M4-T06/T07）。"""
+
+    def build(run: dict[str, Any]) -> Any:
+        from .cli_runtime import CliRuntimeCaseExecutor
+
+        executor = CliRuntimeCaseExecutor(run, backend=backend_id)
+
+        def attach(service: Any, run_id: str) -> None:
+            executor.bind_service(service)
+
+        return ExecutionHandle(
+            backend_id=backend_id,
+            backend_version="1",
+            invoke=executor.invoke,
+            capabilities={
+                "interactive": False,
+                "safe_to_repeat": False,
+                "runtime": True,
+                "events": True,
+                "artifacts": True,
+            },
+            attach=attach,
+        )
+
+    return build
+
+
 _RUNTIME_BUILDS: dict[str, Callable[[dict[str, Any]], Any]] = {
     "pi-agent": _build_pi,
+    "claude-cli": _build_cli("claude-cli"),
+    "codex-cli": _build_cli("codex-cli"),
 }
 
 
@@ -290,7 +320,11 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
             "adapter_version": "claude-batch@1",
             "parser_version": "claude-json-v1",
             "config_schema": {
-                "properties": {"model": {"type": "string"}, "max_turns": {"type": "integer"}},
+                "properties": {
+                    "model": {"type": "string"},
+                    "max_turns": {"type": "integer"},
+                    "binary": {"type": "string"},
+                },
                 "required": ["model"],
             },
             "supported_modes": ["batch"],
@@ -319,7 +353,10 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
             "adapter_version": "codex-batch@1",
             "parser_version": "codex-jsonl-v1",
             "config_schema": {
-                "properties": {"model": {"type": "string"}},
+                "properties": {
+                    "model": {"type": "string"},
+                    "binary": {"type": "string"},
+                },
                 "required": ["model"],
             },
             "supported_modes": ["batch"],

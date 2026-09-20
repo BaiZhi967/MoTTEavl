@@ -1,21 +1,24 @@
-"""Codex CLI harness。
+"""Codex CLI harness（M4-T07：batch transport 固定为 `exec --json`）。
 
-probe：`codex --version`；执行：`codex exec --json <prompt>`（app-server
-JSON-RPC 会话是后续传输形态，先以 CLI 通道打通生命周期与解析）。
+app-server JSON-RPC 是独立 transport/version（M4-T10），不作为 batch 的
+fallback。进程经 SupervisedProcess 有界监督；事件流经 codex-jsonl-v1
+parser（thread/turn/item + 终态语义）。
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 from .install import inspect_installation
+from .parsers.codex import PARSER_VERSION, parse_codex_exec_events
 from .probe import probe_binary
 from .process import ProcessRunner
-from .protocol import PARSER_VERSION, parse_jsonl
+from .supervisor import SupervisedLimits, SupervisedProcess
 
 
 class CodexHarness:
     name = "codex-cli"
-    transport = "cli"  # app-server 传输接入后切换
+    transport = "cli-exec-jsonl"
 
     def __init__(
         self,
@@ -23,11 +26,13 @@ class CodexHarness:
         *,
         timeout: float = 120.0,
         runner: ProcessRunner | None = None,
-        arg_builder: Callable[[str], list[str]] | None = None,
+        arg_builder=None,
     ) -> None:
         self.binary = binary
         self.process = runner or ProcessRunner(timeout=timeout)
-        self._arg_builder = arg_builder or (lambda prompt: [binary, "exec", "--json", prompt])
+        self._arg_builder = arg_builder or (
+            lambda prompt: [binary, "exec", "--json", prompt]
+        )
 
     async def probe(self) -> dict[str, Any]:
         return await probe_binary(self.binary, name=self.name)
@@ -43,5 +48,67 @@ class CodexHarness:
         result["harness"] = self.name
         result["transport"] = self.transport
         result["parser"] = PARSER_VERSION
-        result["events"] = parse_jsonl(result["stdout"]) if result["status"] == "exited" else []
+        result["events"] = (
+            parse_codex_exec_events(result["stdout"])
+            if result["status"] == "exited" else None
+        )
         return result
+
+    def batch_argv(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        config_overrides: list[tuple[str, str]] | None = None,
+        sandbox: str | None = None,
+        skip_git_repo_check: bool = True,
+    ) -> list[str]:
+        argv = [self.binary, "exec", "--json"]
+        if model:
+            argv += ["-m", str(model)]
+        for key, value in config_overrides or []:
+            argv += ["-c", f"{key}={value}"]
+        if sandbox:
+            argv += ["--sandbox", str(sandbox)]
+        if skip_git_repo_check:
+            argv += ["--skip-git-repo-check"]
+        argv.append(prompt)
+        return argv
+
+    def run_batch(
+        self,
+        prompt: str,
+        *,
+        cwd: str | Path,
+        env: dict[str, str] | None = None,
+        argv: list[str] | None = None,
+        limits: SupervisedLimits | None = None,
+        on_event=None,
+    ) -> dict[str, Any]:
+        effective_argv = argv if argv is not None else self.batch_argv(prompt)
+        process = SupervisedProcess(
+            effective_argv, cwd=str(cwd), env=env,
+            limits=limits or SupervisedLimits(total_timeout=300.0),
+            on_stderr=on_event, name=self.name,
+        )
+        process.start()
+        outcome = process.wait()
+        parsed = None
+        if outcome.stdout:
+            parsed = parse_codex_exec_events(outcome.stdout)
+        return {
+            "harness": self.name,
+            "transport": self.transport,
+            "parser": PARSER_VERSION,
+            "process": {
+                "status": outcome.status,
+                "exit_code": outcome.exit_code,
+                "stdout_bytes": outcome.stdout_bytes,
+                "stderr_bytes": outcome.stderr_bytes,
+                "truncated": outcome.truncated,
+                "residual_pids": outcome.residual_pids,
+                "duration_ms": outcome.duration_ms,
+            },
+            "parsed": parsed,
+            "argv": list(effective_argv),
+        }

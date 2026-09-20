@@ -53,7 +53,7 @@ def _safe_component(value: str, label: str) -> str:
     return value
 
 
-class _PiCaseWorkspace:
+class RuntimeCaseWorkspace:
     """Pi Case 工作区（Python 侧快照/清理）。
 
     执行期边界在 bridge 侧（tools.mjs：相对路径 only、symlink 拒绝、配额）。
@@ -173,7 +173,7 @@ class PiRuntimeCaseExecutor:
 
         from motte_agent.pi import PiBridgeSession
 
-        workspace = _PiCaseWorkspace(self.run["id"], case_id)
+        workspace = RuntimeCaseWorkspace(self.run["id"], case_id)
         workspace.materialize_fixture(case.get("fixture") or {})
         before = workspace.snapshot()
 
