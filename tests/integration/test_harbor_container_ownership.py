@@ -51,9 +51,6 @@ def _docker_available() -> bool:
     return probe.returncode == 0
 
 
-DOCKER_AVAILABLE = _docker_available()
-
-
 # ------------------------------------------------------------------ 假客户端
 
 
@@ -291,6 +288,60 @@ def test_conflict_detected_at_action_time_refuses_that_container() -> None:
     assert outcome["reason"], outcome
 
 
+@pytest.mark.parametrize("conflict_labels, expected_codes", [
+    ({OWNER_LABEL_RUN: "another-run"}, {"HARBOR_CONTAINER_RUN_CONFLICT"}),
+    ({OWNER_LABEL_OWNER: "sha256:another-owner"}, {"HARBOR_CONTAINER_OWNER_CONFLICT"}),
+    ({OWNER_LABEL_RUN: "another-run", OWNER_LABEL_OWNER: "sha256:another-owner"},
+     {"HARBOR_CONTAINER_RUN_CONFLICT", "HARBOR_CONTAINER_OWNER_CONFLICT"}),
+])
+def test_project_fallback_never_overrides_existing_identity_conflicts(
+    conflict_labels: dict[str, str], expected_codes: set[str],
+) -> None:
+    """R3-03: missing job label cannot erase explicit run or owner conflicts."""
+    project = "hello-pass__abc1234__env"
+    decoy = FakeContainer(
+        container_id="f" * 64, name="foreign-project-match",
+        labels={COMPOSE_PROJECT_LABEL: project, **conflict_labels},
+    )
+    ownership = _ownership(FakeClient([decoy]), projects=(project,))
+    verdict, conflicts = ownership.classify({"labels": decoy.labels})
+    assert verdict == "conflict"
+    assert {item["code"] for item in conflicts} == expected_codes
+    outcome = ownership.stop_owned(remove=True)
+    assert not decoy.stopped and not decoy.removed
+    assert outcome["state"] == "unknown"
+    assert outcome["reason"]
+    assert outcome["stopped"] == outcome["removed"] == []
+    assert outcome["conflicts"][0]["id"] == decoy.id
+
+
+def test_project_identity_conflict_introduced_after_listing_prevents_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = "hello-pass__abc1234__env"
+    container = FakeContainer(
+        container_id="f" * 64, name="relabelled-after-list",
+        labels={COMPOSE_PROJECT_LABEL: project},
+    )
+    client = FakeClient([container])
+    ownership = _ownership(client, projects=(project,))
+    original_get = client.containers.get
+
+    def get_after_relabel(identifier: str) -> FakeContainer:
+        result = original_get(identifier)
+        result.labels[OWNER_LABEL_RUN] = "another-run"
+        return result
+
+    monkeypatch.setattr(client.containers, "get", get_after_relabel)
+    outcome = ownership.stop_owned(remove=True)
+    assert not container.stopped and not container.removed
+    assert outcome["state"] == "unknown"
+    assert any(
+        conflict["code"] == "HARBOR_CONTAINER_RUN_CONFLICT"
+        for error in outcome["errors"] for conflict in error.get("conflicts", [])
+    )
+
+
 # ------------------------------------------------------------------ Runner 侧
 
 
@@ -344,7 +395,7 @@ def test_adapter_reads_trial_projects_from_the_location_file(tmp_path: Path) -> 
 # ------------------------------------------------------------------ 真实 Docker
 
 
-@pytest.mark.skipif(not DOCKER_AVAILABLE, reason="real Docker daemon required")
+@pytest.mark.live
 def test_real_docker_interrupt_and_cleanup_keep_decoys(tmp_path: Path) -> None:
     """受控真实 Docker：定向停止/删除本 Job 容器，诱饵与冲突项原样保留。
 
@@ -352,6 +403,8 @@ def test_real_docker_interrupt_and_cleanup_keep_decoys(tmp_path: Path) -> None:
     是我们、``motte.run``/``motte.owner`` 却是别人的）——后者必须被拒绝动作，
     并把状态记成 unknown 且附冲突明细（M3-R2-08）。
     """
+    if not _docker_available():
+        pytest.skip("real Docker daemon required")
     import docker
 
     client = docker.from_env()

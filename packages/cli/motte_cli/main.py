@@ -225,8 +225,8 @@ def _preflight_report() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _tb_model_mapping(args: argparse.Namespace) -> dict[str, str] | None:
-    """``--model`` → 冻结 Profile 的 ``{provider, model}``（review R10）。
+def _tb_model_mapping(args: argparse.Namespace) -> dict | None:
+    """``--model`` → 冻结完整模型执行配置，再统一映射或拒绝。
 
     只接受**已发布**的 ModelProfile id：CLI 指定一个不存在的模型时必须在入队
     前失败，而不是"成功 queued、跑的时候才发现没有模型"。oracle 可以不带模型。
@@ -242,10 +242,9 @@ def _tb_model_mapping(args: argparse.Namespace) -> dict[str, str] | None:
         raise ValueError(f"unknown model profile: {model_id}")
     if str(record.get("lifecycle") or record.get("status") or "") != "published":
         raise ValueError(f"model profile is not published: {model_id}")
-    return {
-        "provider": str(record.get("provider") or ""),
-        "model": str(record.get("model") or record.get("id") or model_id),
-    }
+    from motte_sdk.terminalbench import published_model_config
+
+    return published_model_config(record)
 
 
 def _tb_profile_from_args(args: argparse.Namespace) -> dict:

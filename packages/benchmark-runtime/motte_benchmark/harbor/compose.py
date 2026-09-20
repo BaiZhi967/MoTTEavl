@@ -19,9 +19,10 @@
   ``volumes_from`` 一律拒绝（无法证明安全）；
 - 越过任务目录的引用：宿主 bind mount 源、build context、env_file，
   以及 ``include``/``extends`` 指向外部文件（无法证明安全就拒绝）；
-- **Compose 插值按可确定的最坏情形解析**（review R2-04）：``${VAR:-default}``
-  用默认值参与路径判定（Runner 侧已把 compose 环境裁剪成白名单，未声明变量
-  在运行时确实不存在），``${VAR}`` / ``$VAR`` 无法求值时拒绝，而不是当作安全；
+- **宿主来源插值拒绝**（review R3-01）：Runner 白名单和 Compose 环境文件
+  仍能覆盖默认值；没有冻结的有效插值环境就无法证明路径安全，只接受字面路径；
+- **env_file 内容检查**（review R3-02）：受控读取任务内文件，只允许无插值、
+  无引号或续行的单行字面赋值，不能确认安全的 dotenv 形式一律拒绝；
 - 凭据透传（review R2-05）：``environment`` 的列表项 ``KEY``（无 ``=``）与
   mapping 的 ``KEY: null`` 语义都是"把 compose 进程的宿主同名变量传进容器"
   （``KEY: ""`` 在当前 compose 里是空值，但版本间语义不一致，同样按透传判定），
@@ -108,15 +109,12 @@ _DISABLING_SECURITY_OPTS: frozenset[str] = frozenset({
 })
 #: 共享宿主/其他容器命名空间的键（值非 host/container 不拒绝）。
 _HOST_NAMESPACE_KEYS: tuple[str, ...] = ("pid", "ipc", "userns_mode", "uts", "cgroup")
-#: compose 变量插值：``${NAME}`` / ``${NAME:-default}`` / ``${NAME?err}`` / ``$NAME``。
-#: ``operator``/``argument`` 让"可确定的最坏情形"能取到默认值（review R2-04）。
+#: 只识别插值依赖名，不求值；前缀匹配也覆盖默认值里的嵌套变量。
 _INTERPOLATION = re.compile(
-    r"\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)(?:(?P<operator>:?[-?])(?P<argument>[^}]*))?\}"
-    r"|\$(?P<bare>[A-Za-z_][A-Za-z0-9_]*)",
+    r"\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)|\$(?P<bare>[A-Za-z_][A-Za-z0-9_]*)",
 )
-#: 无法求值的插值的占位标记：会穿过 ``:`` 分段，让短语法也能识别（见 _expand_worst_case）。
-_UNRESOLVED_MARK = "\x00"
-_UNRESOLVED_NAME = re.compile(r"\x00([A-Za-z_][A-Za-z0-9_]*)\x00")
+#: env_file 只支持单行 KEY=字面值，复杂 dotenv 语义保守拒绝。
+_LITERAL_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=[^$\\'\"\x00-\x1f\x7f]*")
 #: 顶层资源段：命名卷、secrets、configs（引用必须能解析到定义）。
 _RESOURCE_SECTIONS: tuple[str, ...] = ("volumes", "secrets", "configs")
 #: 命名卷允许的驱动：只有 docker 自己管理的 local 卷不引入平台无法核验的存储。
@@ -186,49 +184,15 @@ def _inside(compose_dir: Path, source: str) -> bool:
     return resolved == compose_dir or compose_dir in resolved.parents
 
 
-def _expand_worst_case(text: str) -> tuple[str, tuple[str, ...]]:
-    """按"可确定的最坏情形"展开 compose 插值。
-
-    ``${VAR:-default}`` / ``${VAR-default}`` 用默认值参与判定：Runner 侧在
-    调用 Harbor 之前已经把 compose 环境裁剪成显式白名单（``env_boundary``），
-    未声明的变量在运行时确实不存在于 compose 环境里，默认值就是实际值。
-    ``${VAR}`` / ``$VAR`` / ``${VAR?err}`` 的值无法确定：替换成占位标记
-    （``\\x00NAME\\x00``）并回报变量名，由调用方按 fail closed 拒绝，
-    而不是假设它安全——占位标记会穿过 ``:`` 分段，因此短语法也能识别。
-    """
-    unresolved: list[str] = []
-
-    def _replace(match: re.Match[str]) -> str:
-        if match.group("operator") in ("-", ":-"):
-            return match.group("argument") or ""
-        name = match.group("braced") or match.group("bare") or ""
-        if not name:  # pragma: no cover - 正则保证非空
-            return ""
-        unresolved.append(name)
-        return f"{_UNRESOLVED_MARK}{name}{_UNRESOLVED_MARK}"
-
-    return (_INTERPOLATION.sub(_replace, text), tuple(sorted(set(unresolved))))
-
-
-def _unresolved_names(*texts: str) -> tuple[str, ...]:
-    """文本里残留的未求值插值变量名（含占位标记，去重排序）。"""
-    names: set[str] = set()
-    for text in texts:
-        names.update(_UNRESOLVED_NAME.findall(text))
-    return tuple(sorted(names))
-
-
 def _volume_entry(entry: Any) -> tuple[str | None, str]:
     """卷条目的 ``(source, kind)``；``kind`` ∈ ``bind``/``named``/``anonymous``。
 
     按 compose 语义：短语法源以 ``/``、``.``、``~`` 开头才是 bind mount，否则是
     命名卷（其定义要展开）；单段条目是容器内路径（匿名卷）。长语法的 ``type``
-    优先，缺省时同样按源的形状判断。短语法先展开插值再按 ``:`` 分段——否则
-    ``${HOST_ROOT:-/}:/host`` 里的冒号会把条目切错。
+    优先，缺省时同样按源的形状判断。调用方先拒绝插值，再按 ``:`` 分段。
     """
     if isinstance(entry, str):
-        expanded, _unresolved = _expand_worst_case(entry)
-        parts = expanded.split(":")
+        parts = entry.split(":")
         if len(parts) == 1:
             return (None, "anonymous")
         source = parts[0]
@@ -290,25 +254,31 @@ def _check_interpolated_source(
     source: str, *, file: str, service: str | None,
     violations: list[dict[str, Any]], origin: str,
 ) -> str | None:
-    """展开插值后的路径源；无法求值时具名拒绝并返回 ``None``。"""
-    expanded, unresolved = _expand_worst_case(source)
-    names = tuple(sorted(set(unresolved) | set(_unresolved_names(expanded))))
-    if names:
+    """宿主来源必须是字面路径；不把默认值当作实际值（R3-01）。"""
+    if "$" in source:
+        names = sorted({
+            match.group("braced") or match.group("bare")
+            for match in _INTERPOLATION.finditer(source)
+        })
         violations.append(_violation(
             "TASK_COMPOSE_UNRESOLVED_INTERPOLATION", file=file, service=service,
             detail=(
-                f"{origin}含有无法求值的插值变量 {list(names)}"
-                "（没有默认值就无法证明它指向任务目录内），必须写成字面路径或带默认值"
+                f"{origin}含有动态或转义表达式，插值依赖 {names}"
+                "；未冻结有效插值环境，默认值不能证明安全，必须使用字面路径"
             ),
         ))
         return None
-    return expanded
+    return source
 
 
 def _check_volume(
     compose_dir: Path, entry: Any, *, file: str, service: str,
     declared_volumes: Mapping[str, Any], violations: list[dict[str, Any]],
 ) -> None:
+    if isinstance(entry, str) and _check_interpolated_source(
+        entry, file=file, service=service, violations=violations, origin="卷声明",
+    ) is None:
+        return
     source, kind = _volume_entry(entry)
     if not source:
         return
@@ -476,11 +446,16 @@ def _check_build(
     elif isinstance(build, Mapping):
         context = build.get("context")
         dockerfile = build.get("dockerfile")
-        if isinstance(dockerfile, str) and not _inside(compose_dir, dockerfile):
-            violations.append(_violation(
-                "TASK_COMPOSE_EXTERNAL_BUILD_CONTEXT", file=file, service=service,
-                detail=f"build.dockerfile 不在任务目录内: {dockerfile}",
-            ))
+        if isinstance(dockerfile, str):
+            expanded = _check_interpolated_source(
+                dockerfile, file=file, service=service, violations=violations,
+                origin="build.dockerfile",
+            )
+            if expanded is not None and not _inside(compose_dir, expanded):
+                violations.append(_violation(
+                    "TASK_COMPOSE_EXTERNAL_BUILD_CONTEXT", file=file, service=service,
+                    detail=f"build.dockerfile 不在任务目录内: {expanded}",
+                ))
         if build.get("additional_contexts"):
             violations.append(_violation(
                 "TASK_COMPOSE_EXTERNAL_BUILD_CONTEXT", file=file, service=service,
@@ -511,17 +486,59 @@ def _check_env_file(
     )
     for item in entries:
         if isinstance(item, Mapping):
+            if (
+                set(item) - {"path", "required", "format"}
+                or ("required" in item and not isinstance(item["required"], bool))
+                or ("format" in item and item["format"] != "raw")
+            ):
+                violations.append(_violation(
+                    "TASK_COMPOSE_UNINSPECTABLE", file=file, service=service,
+                    detail="env_file 含有无法核验的选项",
+                ))
+                continue
             item = item.get("path")
         if not isinstance(item, str) or not item:
+            violations.append(_violation(
+                "TASK_COMPOSE_UNINSPECTABLE", file=file, service=service,
+                detail="env_file 缺少有效文件路径",
+            ))
             continue
         expanded = _check_interpolated_source(
             item, file=file, service=service, violations=violations, origin="env_file",
         )
-        if expanded is not None and not _inside(compose_dir, expanded):
+        if expanded is None:
+            continue
+        if not _inside(compose_dir, expanded):
             violations.append(_violation(
                 "TASK_COMPOSE_EXTERNAL_ENV_FILE", file=file, service=service,
                 detail=f"env_file 不在任务目录内: {expanded}",
             ))
+            continue
+        relative = _resolve_against_compose(compose_dir, expanded).relative_to(compose_dir)
+        data = _read_task_file(compose_dir, relative.as_posix(), violations, file)
+        if data is None:
+            continue
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError:
+            violations.append(_violation(
+                "TASK_COMPOSE_UNINSPECTABLE", file=file, service=service,
+                detail="env_file 不是 UTF-8 文本，无法核验",
+            ))
+            continue
+        for number, line in enumerate(content.split("\n"), start=1):
+            line = line.removesuffix("\r")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            _check_credentials([line], file=file, service=service, violations=violations)
+            if _LITERAL_ENV_ASSIGNMENT.fullmatch(line) is None:
+                violations.append(_violation(
+                    "TASK_COMPOSE_UNINSPECTABLE", file=file, service=service,
+                    detail=(
+                        f"env_file 第 {number} 行不属于受支持的字面 KEY=value 形式；"
+                        "插值、透传、引号和续行无法证明安全"
+                    ),
+                ))
 
 
 def _environment_entries(environment: Any) -> list[tuple[str, str | None]]:

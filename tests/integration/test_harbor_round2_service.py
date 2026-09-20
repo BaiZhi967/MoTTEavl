@@ -221,6 +221,7 @@ def test_retry_refreezes_child_trial_and_job_identity(tmp_path: Path) -> None:
     service._fail("run-parent", ValueError("synthetic parent failure"))
     assert service.get_run("run-parent")["status"] == "failed"
 
+    parent_before = service.store.trials.list_for_run("run-parent")
     child = service.retry("run-parent")
     assert child["parent_run_id"] == "run-parent"
     child_id = child["id"]
@@ -253,7 +254,9 @@ def test_retry_refreezes_child_trial_and_job_identity(tmp_path: Path) -> None:
 
     # 父 Run 的证据不受影响（没有自己的结果被改写/覆盖）。
     parent_rows = service.store.trials.list_for_run("run-parent")
-    assert all(row.get("result") is None for row in parent_rows)
+    assert parent_rows == parent_before
+    assert len(parent_rows) == 4
+    assert all(row["result"]["disposition"] == "indeterminate" for row in parent_rows)
 
 
 # ---------------------------------------------------------------- M3-R2-03
@@ -314,7 +317,9 @@ def test_trial_from_another_run_is_quarantined_not_written(tmp_path: Path) -> No
     assert service.store.trials.get(victim_trial) == victim_before
     # 自己的计划单元没有被别人的结果顶掉。
     own = service.store.trials.list_for_run("run-review")
-    assert own and all(row.get("result") is None for row in own)
+    assert len(own) == 4
+    assert all(row["result"]["disposition"] == "indeterminate" for row in own)
+    assert all(row["result"].get("synthesized_by") for row in own)
 
 
 def test_unknown_trial_id_is_quarantined_and_run_is_not_falsely_completed(
@@ -331,7 +336,9 @@ def test_unknown_trial_id_is_quarantined_and_run_is_not_falsely_completed(
     )
     assert view["status"] == "failed"
     own = service.store.trials.list_for_run("run-unknown-trial")
-    assert own and all(row.get("result") is None for row in own)
+    assert len(own) == 4
+    assert all(row["result"]["disposition"] == "indeterminate" for row in own)
+    assert all(row["result"].get("synthesized_by") for row in own)
 
 
 def test_payload_disagreeing_with_the_frozen_plan_is_quarantined(tmp_path: Path) -> None:
@@ -345,7 +352,10 @@ def test_payload_disagreeing_with_the_frozen_plan_is_quarantined(tmp_path: Path)
     outcome["results"][0]["output"]["repeat_index"] = 99  # 与冻结计划不符
     view = service.execute_external_job("run-mismatch", run, job_entry=lambda _r: outcome)
     assert view["status"] == "failed"
-    assert service.store.trials.get(trial_id)["result"] is None
+    result = service.store.trials.get(trial_id)["result"]
+    assert result["disposition"] == "indeterminate"
+    assert result["repeat_index"] == 0
+    assert result.get("synthesized_by")
 
 
 # ---------------------------------------------------------------- M3-R2-09

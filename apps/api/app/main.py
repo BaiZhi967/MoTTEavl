@@ -2127,10 +2127,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 raise _TBRequestError(
                     "MODEL_UNAVAILABLE", f"model {model_id!r} cannot be used for this run",
                 )
-            profile["model"] = {
-                "provider": str(record.get("provider") or ""),
-                "model": str(record.get("model") or record.get("id") or model_id),
-            }
+            profile["model"] = tb.published_model_config(record)
         # Agent 能力用**创建时同一判定**先报出精确错误码（review R20）：不支持
         # 的 Agent 不该只得到笼统的 PREFLIGHT_FAILED。预检例外：它必须返回
         # 携带 reason_codes 的报告对象，所以由 ``strict_agent=False`` 跳过，

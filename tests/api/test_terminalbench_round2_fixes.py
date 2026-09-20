@@ -46,7 +46,9 @@ def _prepared(client: TestClient) -> dict:
     return response.json()
 
 
-def _published_model(client: TestClient, model_id: str = "m3-harbor-model") -> str:
+def _published_model(
+    client: TestClient, model_id: str = "m3-harbor-model", *, parameters: dict | None = None,
+) -> str:
     provider = client.post("/api/v1/providers", json={
         "name": "m3-provider", "kind": "openai_compatible",
         "base_url": "http://127.0.0.1:9/v1",
@@ -54,6 +56,7 @@ def _published_model(client: TestClient, model_id: str = "m3-harbor-model") -> s
     assert provider.status_code in (200, 201), provider.text
     created = client.post("/api/v1/models", json={
         "id": model_id, "provider": "m3-provider", "capabilities": {},
+        "parameters": parameters or {},
     })
     assert created.status_code in (200, 201), created.text
     published = client.post(f"/api/v1/models/{model_id}/publish")
@@ -472,3 +475,39 @@ def test_preflight_query_types_are_4xx_not_500(
         params={"task_keys": "no-such-task"},
     )
     assert 400 <= deep_task_keys.status_code < 500, deep_task_keys.text
+
+
+@pytest.mark.parametrize("parameters", [{"temperature": 0.23}, {"max_output_tokens": 789}])
+def test_public_run_does_not_silently_drop_published_model_parameters(
+    client, monkeypatch, parameters,
+):
+    _prepared(client)
+    _runner_probe(client, monkeypatch)
+    model_id = _published_model(client, parameters=parameters)
+    response = client.post("/api/v1/benchmarks/terminal-bench/runs", json={
+        "model": model_id, "agent_id": "claude-code", "agent_version": "2.0.30",
+        "credentials": {"provider": {"ref": CREDENTIAL_REF}},
+    })
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "HARBOR_PROFILE_UNSUPPORTED_FIELD"
+    assert next(iter(parameters)) in response.json()["error"]["message"]
+    assert client.get("/api/v1/runs").json()["total"] == 0
+
+
+def test_cli_run_does_not_silently_drop_published_model_parameters(client, monkeypatch, capsys):
+    import os
+
+    from motte_cli.main import main
+
+    _prepared(client)
+    _runner_probe(client, monkeypatch)
+    model_id = _published_model(client, parameters={"temperature": 0.23})
+    capsys.readouterr()
+    code = main([
+        "terminal-bench", "run", "--db", os.environ["MOTTE_DB_PATH"],
+        "--model", model_id, "--agent-id", "claude-code", "--agent-version", "2.0.30",
+        "--credential-ref", "provider=env:ANTHROPIC_API_KEY",
+    ])
+    assert code != 0
+    assert "HARBOR_PROFILE_UNSUPPORTED_FIELD" in capsys.readouterr().err
+    assert client.get("/api/v1/runs").json()["total"] == 0

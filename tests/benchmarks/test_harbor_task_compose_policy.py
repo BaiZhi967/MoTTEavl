@@ -256,13 +256,13 @@ def test_indirect_compose_resources_are_refused_before_any_start(tmp_path: Path)
             "    file: ../../etc/host.conf\n",
             {"TASK_COMPOSE_EXTERNAL_SECRET_FILE"},
         ),
-        # (c) ${VAR:-default} 的默认值参与判定：默认 "/" 就是宿主根。
+        # (c) R3-01: 默认值不是有效值；未冻结插值环境时必须拒绝。
         "interpolated-mount-default": (
             "services:\n"
             "  main:\n"
             "    volumes:\n"
             "      - ${HOST_ROOT:-/}:/host\n",
-            {"TASK_HOST_PATH_EXPOSED", "TASK_COMPOSE_EXTERNAL_BIND"},
+            {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"},
         ),
         # 无默认值（或 $VAR）的插值无法求值：拒绝而不是当作安全。
         "interpolated-mount-unresolved": (
@@ -280,7 +280,7 @@ def test_indirect_compose_resources_are_refused_before_any_start(tmp_path: Path)
             "      - ${HOST_DIR}:/data\n",
             {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"},
         ),
-        # 插值出现在 secrets 文件源：默认值参与判定（/ + etc/shadow 命中禁用路径）。
+        # 插值出现在 secrets 文件源：同样不能把默认值视为有效路径。
         "interpolated-secret-file": (
             "services:\n"
             "  main:\n"
@@ -288,7 +288,7 @@ def test_indirect_compose_resources_are_refused_before_any_start(tmp_path: Path)
             "secrets:\n"
             "  s:\n"
             "    file: ${HOST_ROOT:-/}etc/shadow\n",
-            {"TASK_HOST_PATH_EXPOSED", "TASK_COMPOSE_EXTERNAL_SECRET_FILE"},
+            {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"},
         ),
         # 未定义的命名卷引用：无法证明不暴露宿主路径。
         "undeclared-volume": (
@@ -491,3 +491,124 @@ def test_compose_policy_facts_are_json_serializable(tmp_path: Path) -> None:
     manifest = prepare_task_manifest(tmp_path, source_id="review-r02", dataset_revision="r02-1")
     text = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
     assert "TASK_COMPOSE_PRIVILEGED" in text
+
+
+@pytest.mark.parametrize("source", [
+    "${HOME:-./data}", "${HOME-./data}", "${HOME:+./data}",
+    "${HOME+./data}", "${MISSING:-${HOME}}", "$HOME", "${HOME}",
+])
+def test_host_interpolation_cannot_hide_behind_safe_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str,
+) -> None:
+    """R3-01: HOME survives Runner pruning, so a safe fallback proves nothing."""
+    from motte_benchmark.env_boundary import plan_process_env
+
+    monkeypatch.setenv("HOME", "/synthetic-runner-home")
+    child_env, _ = plan_process_env({"HOME": "/synthetic-runner-home"})
+    assert child_env["HOME"] == "/synthetic-runner-home"
+    _write_task(tmp_path, "hello-pass", compose=(
+        f'services:\n  main:\n    volumes: ["{source}:/host"]\n'
+    ))
+    _assert_refused_publicly(
+        _public_preflight(tmp_path), {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"}, source,
+    )
+
+
+@pytest.mark.parametrize("content", [
+    "COPY=${ANTHROPIC_API_KEY}\n", 'COPY="${ANTHROPIC_API_KEY}"\n',
+    "COPY=${ANTHROPIC_API_KEY:-absent}\n", "COPY=$ANTHROPIC_API_KEY\n",
+    "COPY=${OTHER:-${ANTHROPIC_API_KEY}}\n",
+])
+def test_env_file_cannot_forward_declared_agent_credentials(tmp_path: Path, content: str) -> None:
+    """R3-02: a task must not copy the credential intentionally available to its Agent."""
+    from motte_benchmark.env_boundary import plan_process_env
+
+    child_env, _ = plan_process_env(
+        {"ANTHROPIC_API_KEY": "synthetic-agent-secret"}, declared=("ANTHROPIC_API_KEY",),
+    )
+    assert child_env["ANTHROPIC_API_KEY"] == "synthetic-agent-secret"
+    _write_task(tmp_path, "hello-pass", compose=(
+        "services:\n  main:\n    env_file: ./task.env\n"
+    ), extra={"environment/task.env": content})
+    report = _public_preflight(tmp_path)
+    _assert_refused_publicly(report, {"TASK_COMPOSE_CREDENTIAL_FORWARD"}, content)
+    assert "synthetic-agent-secret" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("content", [
+    "COPY=${UNKNOWN:+value}\n", "COPY=$$ESCAPED\n", "INHERIT\n",
+    "COPY='multiline\nvalue'\n", "COPY=value\\\ncontinued\n", "COPY=value\x00\n",
+])
+def test_env_file_unsupported_dynamic_forms_fail_closed(tmp_path: Path, content: str) -> None:
+    _write_task(tmp_path, "hello-pass", compose=(
+        "services:\n  main:\n    env_file: ./task.env\n"
+    ), extra={"environment/task.env": content})
+    report = _public_preflight(tmp_path)
+    assert report["allowed"] is False, report
+    assert report["task_starts"] == 0
+
+
+def test_literal_task_env_file_remains_allowed(tmp_path: Path) -> None:
+    _write_task(tmp_path, "hello-pass", compose=(
+        "services:\n  main:\n    env_file:\n      - path: ./task.env\n        required: true\n"
+    ), extra={"environment/task.env": "# local values\nGREETING=hello world\nEMPTY=\nCOUNT=3\n"})
+    report = _public_preflight(tmp_path)
+    assert report["allowed"] is True, report["reason_codes"]
+
+
+def test_missing_env_file_is_not_considered_safe(tmp_path: Path) -> None:
+    _write_task(tmp_path, "hello-pass", compose=(
+        "services:\n  main:\n    env_file: ./missing.env\n"
+    ))
+    _assert_refused_publicly(
+        _public_preflight(tmp_path), {"TASK_COMPOSE_UNINSPECTABLE"}, "missing env_file",
+    )
+
+
+@pytest.mark.parametrize("compose", [
+    'services:\n  main:\n    volumes: [{type: bind, source: "${HOME:-./data}", target: /data}]\n',
+    'services:\n  main:\n    build: {context: "${HOME:-.}"}\n',
+    'services:\n  main:\n    build: {context: ., dockerfile: "${HOME:-Dockerfile}"}\n',
+    'services:\n  main:\n    env_file: "${HOME:-./task.env}"\n',
+    'services:\n  main:\n    secrets: [s]\nsecrets:\n  s: {file: "${HOME:-./secret}"}\n',
+    'services:\n  main:\n    volumes: [v:/data]\nvolumes:\n  v:\n    driver_opts: {device: "${HOME:-./data}"}\n',
+])
+def test_all_host_source_fields_refuse_runtime_interpolation(tmp_path: Path, compose: str) -> None:
+    _write_task(tmp_path, "hello-pass", compose=compose)
+    _assert_refused_publicly(
+        _public_preflight(tmp_path), {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"}, compose,
+    )
+
+
+@pytest.mark.parametrize("file_kind", ["symlink", "directory", "invalid-utf8", "oversized"])
+def test_env_file_requires_bounded_regular_utf8_file(tmp_path: Path, file_kind: str) -> None:
+    from motte_benchmark.harbor.compose import inspect_task_compose
+
+    task_dir = _write_task(tmp_path, "hello-pass", compose=(
+        "services:\n  main:\n    env_file: ./task.env\n"
+    ))
+    env_file = task_dir / "environment/task.env"
+    if file_kind == "symlink":
+        outside = tmp_path / "outside.env"
+        outside.write_text("COPY=synthetic-secret\n", encoding="utf-8")
+        env_file.symlink_to(outside)
+    elif file_kind == "directory":
+        env_file.mkdir()
+    else:
+        env_file.write_bytes(b"\xff" if file_kind == "invalid-utf8" else b"a" * (1024**2 + 1))
+    policy = inspect_task_compose(tmp_path, "hello-pass")
+    assert "TASK_COMPOSE_UNINSPECTABLE" in {item["code"] for item in policy["violations"]}
+    assert "synthetic-secret" not in json.dumps(policy)
+
+
+@pytest.mark.parametrize("entry", [
+    "{}", "[null]", "{path: task.env, required: unknown}",
+    "{path: task.env, format: unknown}", "{path: task.env, unknown: true}",
+])
+def test_env_file_unknown_forms_are_not_silently_ignored(tmp_path: Path, entry: str) -> None:
+    _write_task(tmp_path, "hello-pass", compose=(
+        f"services:\n  main:\n    env_file: {entry}\n"
+    ), extra={"environment/task.env": "GREETING=hello\n"})
+    _assert_refused_publicly(
+        _public_preflight(tmp_path), {"TASK_COMPOSE_UNINSPECTABLE"}, entry,
+    )

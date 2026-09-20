@@ -132,6 +132,26 @@ def task_view(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def published_model_config(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze execution settings before Harbor's shared map-or-reject validation.
+
+    ModelProfile null defaults are unset, not requested native options. Capability
+    metadata (such as the context window) is not an execution parameter.
+    """
+    result: dict[str, Any] = {
+        "provider": str(record.get("provider") or ""),
+        "model": str(record.get("model") or record.get("id") or ""),
+    }
+    parameters = {key: value for key, value in (record.get("parameters") or {}).items()
+                  if value is not None}
+    if parameters:
+        result["parameters"] = parameters
+    reasoning_level = (record.get("reasoning") or {}).get("default_level")
+    if reasoning_level is not None:
+        result["reasoning_level"] = reasoning_level
+    return result
+
+
 def terminal_bench_profile(
     *,
     agent_id: str = "oracle",
@@ -771,22 +791,15 @@ def _truncate_utf8(data: bytes, max_bytes: int) -> bytes:
     """按预算截断但保留完整字符边界（增量解码，丢弃结尾的不完整序列）。"""
     import codecs
 
+    prefix = data[:max_bytes]
     decoder = codecs.getincrementaldecoder("utf-8")()
-    kept = bytearray()
-    for index in range(0, len(data), 4096):
-        chunk = data[index:index + 4096]
-        budget = max_bytes - len(kept)
-        if budget <= 0:
-            break
-        if len(chunk) > budget:
-            chunk = chunk[:budget]
-        try:
-            text = decoder.decode(chunk, final=False)
-        except UnicodeDecodeError:
-            # 真正非法的 UTF-8：原样返回预算内的字节，交给调用方判成 binary。
-            return bytes(data[:max_bytes])
-        kept.extend(text.encode("utf-8"))
-    return bytes(kept)
+    try:
+        # The budget counts consumed bytes, including any incomplete final code
+        # point retained by the decoder. Never read beyond it to complete a word.
+        return decoder.decode(prefix, final=False).encode("utf-8")
+    except UnicodeDecodeError:
+        # Preserve genuinely invalid input for the caller's binary classification.
+        return prefix
 
 
 def trial_terminal_text(

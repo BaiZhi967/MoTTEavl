@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from motte_sdk.terminalbench import MAX_DISPLAY_TEXT, read_artifact_text
 
 #: 合成哨兵：形状像密钥，用来验证展示脱敏（不是真实凭据）。
@@ -110,3 +112,26 @@ def test_missing_content_is_honest() -> None:
     assert result["text"] is None
     assert result["verified"] is False
     assert result["note"]
+
+
+@pytest.mark.parametrize("char", ["中", "🚀"])
+@pytest.mark.parametrize("remaining", [1, 2, 3, 4])
+@pytest.mark.parametrize("tail_length", [2, 5000])
+def test_long_utf8_tail_never_skips_bytes_or_exceeds_budget(char, remaining, tail_length):
+    prefix = "a" * (MAX_DISPLAY_TEXT - remaining)
+    payload = (prefix + char + "z" * tail_length).encode()
+    result = read_artifact_text(_Reader(payload), _ref(payload))
+    assert result["encoding"] == "utf-8"
+    assert len(result["text"].encode()) <= MAX_DISPLAY_TEXT
+    expected = prefix
+    if len(char.encode()) <= remaining:
+        expected += char + "z" * min(tail_length, remaining - len(char.encode()))
+    assert result["text"] == expected
+    assert result["verified"] is True
+
+
+def test_invalid_utf8_with_long_tail_is_not_hidden_by_truncation():
+    payload = b"prefix\xff" + b"a" * MAX_DISPLAY_TEXT
+    result = read_artifact_text(_Reader(payload), _ref(payload))
+    assert result["encoding"] == "binary"
+    assert result["text"] is None

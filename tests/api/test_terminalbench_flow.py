@@ -260,8 +260,12 @@ def test_task_and_trial_drilldown_keeps_errors(client: TestClient) -> None:
     assert unknown.json()["error"]["code"] == "TRIAL_NOT_FOUND"
 
     # 跨 Run 归属校验：另一个 Run 的 trial_id 不能从这里读到。
+    other_inputs = tb.build_run_inputs(
+        record=record, run_id="run-other", job_id="job-other",
+        profile=tb.terminal_bench_profile(n_trials=2),
+    )
     other_run = service.create_run(
-        tb.SCENARIO_VERSION, inputs["manifest"], inputs["case_ids"], run_id="run-other",
+        tb.SCENARIO_VERSION, other_inputs["manifest"], other_inputs["case_ids"], run_id="run-other",
     )
     cross = client.get(f"/api/v1/runs/{other_run['id']}/trials/{trials[0]['trial_id']}")
     assert cross.status_code == 404

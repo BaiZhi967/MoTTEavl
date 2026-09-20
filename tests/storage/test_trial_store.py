@@ -802,3 +802,26 @@ def test_postgres_trials_roundtrip_and_two_connection_race() -> None:  # pragma:
     other = [_plan(TASKS[0], 0, run_id=f"pg-other-{uuid4().hex}")]
     store.trials.create_plans(other)
     assert len(store.trials.list_for_run(run_id)) == 6
+
+
+def test_importer_rejects_whole_plan_before_creating_or_writing(trials) -> None:
+    """A later stored-plan conflict cannot leak the earlier plan or result."""
+    from types import SimpleNamespace
+
+    from motte_sdk.benchmark_plugins import import_terminal_bench_trials
+
+    existing = _plan(TASKS[1], 0, run_id="victim")
+    trials.create_plans([existing])
+    victim_before = trials.get(existing["trial_id"])
+    first = _plan(TASKS[0], 0, run_id="incoming")
+    conflicting = {**existing, "run_id": "incoming"}
+    run = {"id": "incoming", "manifest": {"external_benchmark": {
+        "runner_config": {"plan": {"trials": [first, conflicting]}},
+    }}}
+    with pytest.raises(RunConflictError, match="stored plan"):
+        import_terminal_bench_trials(SimpleNamespace(trials=trials), run, [{
+            "trial_id": first["trial_id"],
+            "result": {"trial_id": first["trial_id"], "disposition": "succeeded"},
+        }])
+    assert trials.get(first["trial_id"]) is None
+    assert trials.get(existing["trial_id"]) == victim_before

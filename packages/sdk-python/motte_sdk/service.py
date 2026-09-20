@@ -154,8 +154,13 @@ class RunService:
         if parent_run_id is not None:
             run["parent_run_id"] = parent_run_id
         self._validate_frozen_benchmark_snapshot(run)
+        from .benchmark_plugins import validate_frozen_trial_plans
+
+        validate_frozen_trial_plans(self.store, run)
         event = {"run_id": run_id, "type": "queued", "status": "queued"}
         self.store.runs.create(run, event=event)
+        if self._trial_shaped(run):
+            self._ensure_trial_plans(run)
         self._notify_latest_event(run_id)
         return self._view(run_id)
 
@@ -304,6 +309,8 @@ class RunService:
         """
         # 计划先落库（review R2-01）：取消/超时终态化时要有计划单元可补处置，
         # 否则"跑过一半被取消"看起来像"什么都没跑"，覆盖分母也会消失。
+        if run.get("id") != run_id:
+            raise ValueError("frozen trial plan Run identity does not match dispatch")
         self._ensure_trial_plans(run)
         if run["status"] == "queued":
             self._transition(run_id, "preparing")
@@ -440,6 +447,9 @@ class RunService:
         else:
             # settled 带失败 case 或 job failed：部分结果已保留，终态 failed。
             final_status = "failed"
+        self._ensure_trial_dispositions(
+            run, disposition="cancelled" if final_status == "cancelled" else "indeterminate",
+        )
         metrics = {}
         import_view = outcome.get("import")
         if isinstance(import_view, dict):
@@ -928,6 +938,9 @@ class RunService:
         error: dict[str, Any] = {"code": "PROFILE_STALE"}
         if reason is not None:
             error["message"] = reason
+        if self._trial_shaped(run):
+            self._finish_unattempted(run_id, final_status="profile_stale", final_error=error)
+            return self._view(run_id)
         return self._transition(run_id, "profile_stale", changes={"error": error})
 
     def retry(
@@ -1430,13 +1443,13 @@ class RunService:
         return payloads
 
     def _ensure_trial_plans(self, run: dict[str, Any]) -> dict[str, Any]:
-        """执行前先把冻结计划落库（review R2-01）。
+        """创建时落库，执行/终态化时幂等补齐旧 Run 的冻结计划。
 
         幂等：重复调用只会得到 ``identical``。计划先落库之后，取消/超时终态化
         才有计划单元可补处置，跨进程取消请求也不会因为"计划还不存在"而让
         覆盖分母消失。
         """
-        from motte_sdk.benchmark_plugins import import_terminal_bench_trials, suite_for_run
+        from motte_sdk.benchmark_plugins import suite_for_run, validate_frozen_trial_plans
 
         suite = suite_for_run(run)
         if suite is None or suite[0] != "terminal-bench-harbor":
@@ -1444,8 +1457,7 @@ class RunService:
         trials = getattr(self.store, "trials", None)
         if trials is None:
             return {"skipped": True}
-        external = (run.get("manifest") or {}).get("external_benchmark") or {}
-        plan = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
+        plan = validate_frozen_trial_plans(self.store, run)
         if not plan:
             return {"skipped": True}
         created = trials.create_plans([dict(item) for item in plan])
@@ -1460,7 +1472,6 @@ class RunService:
                 f"frozen trial plan conflicts with stored plans: "
                 f"{[item['trial_id'] for item in conflicts][:5]}"
             )
-        del import_terminal_bench_trials  # 只在类型/套件判定时引用
         return {"planned": len(plan), "statuses": statuses}
 
     def _dispose_rejected_trials(
@@ -1573,6 +1584,7 @@ class RunService:
         trials = getattr(self.store, "trials", None)
         if trials is None:
             return []
+        self._ensure_trial_plans(run)
         pending = [
             record for record in trials.list_for_run(run["id"])
             if record.get("result") is None
@@ -1626,7 +1638,10 @@ class RunService:
         # 而不是只有 Task 层的 not_attempted（review R01/T07）。
         self._ensure_trial_dispositions(
             run,
-            disposition="cancelled" if final_status == "cancelled" else "not_attempted",
+            disposition=(
+                "cancelled" if final_status == "cancelled"
+                else "indeterminate" if run.get("started_at") else "not_attempted"
+            ),
         )
         rows = existing_rows + synthetic_rows
         scoring_error: Exception | None = None
@@ -1959,6 +1974,9 @@ class RunService:
         if evidence is not None:
             error_payload["evidence"] = evidence
         if run["status"] in self.TERMINAL:
+            return self._view(run_id)
+        if self._trial_shaped(run):
+            self._finish_unattempted(run_id, final_status="failed", final_error=error_payload)
             return self._view(run_id)
         return self._transition(run_id, "failed", changes={"error": error_payload})
 

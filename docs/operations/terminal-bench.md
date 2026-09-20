@@ -320,3 +320,13 @@ MOTTE_LAUNCH_TOKEN=<token> ANTHROPIC_API_KEY=<来自 Runner 环境> \
 
 分层验收清单见 [兼容矩阵](harbor-compatibility.md)；本机真实命令与结果见
 [M3 验证记录](../verification/M3.md)。
+
+### 第三轮安全与配置边界（2026-09-20）
+
+任务 Compose 的宿主来源只接受字面路径：即使 `${HOME:-./data}` 的默认值在任务内，实际 Runner 环境也能覆盖它，因此 volume、build context/dockerfile、env_file 和资源文件来源中的 `$` 表达式一律拒绝。请将来源固定为任务目录内的相对路径。
+
+`env_file` 现在受控读取内容，仅允许空行、注释和单行字面 `KEY=value`。插值、无值透传、引号/续行、缺失文件（含 optional）、不安全路径、非 UTF-8 或超限文件均拒绝；不自动回退到宿主环境。此保守子集用于防止 Agent 凭据经 Compose 间接进入任务容器。
+
+API/CLI 选择已发布模型时会冻结非空模型参数并统一映射；固定 Harbor 无法表达的参数会在入队前具名拒绝，不能通过删除配置字段制造成功。Trial 计划在创建时持久化，排队取消也保留完整处置与评分分母；SDK 新 Run 不能复用另一 Run 的冻结 Trial 计划。
+
+复核和验证证据见 [第三轮修复记录](../verification/M3-review-round3-fixes-2026-09-20.md)。

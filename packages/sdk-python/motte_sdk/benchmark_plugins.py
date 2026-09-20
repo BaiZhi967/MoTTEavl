@@ -265,6 +265,40 @@ def _trial_payloads(run: dict[str, Any]) -> list[dict[str, Any]]:
     return payloads
 
 
+def validate_frozen_trial_plans(store: Any, run: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate the complete batch before creating plans or importing any result.
+
+    A matching Trial ID is insufficient: both the frozen plan and any stored
+    record must belong to this Run. Prevalidate every unit so a late conflict
+    cannot leave earlier units partially created.
+    """
+    from motte_storage.integrity import RunConflictError
+    from motte_storage.trials import validate_plan
+
+    external = (run.get("manifest") or {}).get("external_benchmark") or {}
+    raw = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
+    plans = [validate_plan(item) for item in raw]
+    trials = getattr(store, "trials", None)
+    seen: set[str] = set()
+    units: set[tuple[str, int]] = set()
+    for plan in plans:
+        if plan["run_id"] != run.get("id"):
+            raise ValueError("frozen trial plan run_id does not match the current Run")
+        identity = (plan["task_key"], plan["repeat_index"])
+        if plan["trial_id"] in seen or identity in units:
+            raise ValueError("frozen trial plan contains a duplicate trial identity")
+        seen.add(plan["trial_id"])
+        units.add(identity)
+        existing = trials.get(plan["trial_id"]) if trials is not None else None
+        if existing is not None and (
+            existing.get("run_id") != run.get("id") or existing.get("plan") != plan
+        ):
+            raise RunConflictError(
+                f"frozen trial plan conflicts with stored plan: {plan['trial_id']}"
+            )
+    return plans
+
+
 def import_terminal_bench_trials(
     store: Any, run: dict[str, Any], results: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -282,9 +316,7 @@ def import_terminal_bench_trials(
       返回完整 ``accepted`` / ``invalid`` 清单，调用方的派生视图只消费已接受
       的记录。
     """
-    manifest = run.get("manifest") or {}
-    external = manifest.get("external_benchmark") or {}
-    plan = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
+    plan = validate_frozen_trial_plans(store, run)
     trials = getattr(store, "trials", None)
     run_id = str(run.get("id") or "")
     if trials is None or not plan:

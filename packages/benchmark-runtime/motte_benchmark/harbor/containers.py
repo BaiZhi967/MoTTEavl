@@ -144,19 +144,18 @@ class ContainerOwnership:
                 "code": "HARBOR_CONTAINER_FOREIGN_JOB_LABEL",
                 "detail": f"label {OWNER_LABEL_JOB}={job} 指向别的 Job（本 Job {self.job_id}）",
             })
-        if job == self.job_id:
-            if self.run_id and run and run != self.run_id:
-                conflicts.append({
-                    "code": "HARBOR_CONTAINER_RUN_CONFLICT",
-                    "detail": f"label {OWNER_LABEL_RUN}={run} 与记录的 {self.run_id} 不一致",
-                })
-            if self.owner_label and owner and owner != self.owner_label:
-                conflicts.append({
-                    "code": "HARBOR_CONTAINER_OWNER_CONFLICT",
-                    "detail": (
-                        f"label {OWNER_LABEL_OWNER}={owner} 与本次启动的 owner 摘要不一致"
-                    ),
-                })
+        if self.run_id and run and run != self.run_id:
+            conflicts.append({
+                "code": "HARBOR_CONTAINER_RUN_CONFLICT",
+                "detail": f"label {OWNER_LABEL_RUN}={run} 与记录的 {self.run_id} 不一致",
+            })
+        if self.owner_label and owner and owner != self.owner_label:
+            conflicts.append({
+                "code": "HARBOR_CONTAINER_OWNER_CONFLICT",
+                "detail": (
+                    f"label {OWNER_LABEL_OWNER}={owner} 与本次启动的 owner 摘要不一致"
+                ),
+            })
         if conflicts:
             return (OWNERSHIP_CONFLICT, conflicts)
         if job == self.job_id:
