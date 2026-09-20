@@ -98,6 +98,8 @@ class ResolvedManifest(Contract):
     runtime: str | None = None
     runtime_profile: dict[str, Any] | None = None
     runtime_snapshot: dict[str, Any] | None = None
+    # tool_control.enforcement=not-enforced 的 runtime 需要显式确认才允许运行
+    runtime_accept_unenforced_tools: bool = False
 
 
 class CaseRun(Contract):

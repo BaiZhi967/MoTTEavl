@@ -140,9 +140,14 @@ def resolve_execution(
     ]
     runtime_declared = resolved.get("runtime")
     scenario_mode = (scenario or {}).get("mode")
+    # agent-tasks 场景默认派 builtin-agent；显式 runtime 的 Run 走 runtime backend。
     agent_requested = (
-        resolved.get("agent") in (None, "builtin-agent@1") and scenario_mode == "agent-tasks"
-    ) or resolved.get("agent") == "builtin-agent@1"
+        runtime_declared is None
+        and (
+            (resolved.get("agent") in (None, "builtin-agent@1") and scenario_mode == "agent-tasks")
+            or resolved.get("agent") == "builtin-agent@1"
+        )
+    )
     if runtime_declared is not None and runtime_fields:
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_UNSUPPORTED",

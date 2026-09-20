@@ -164,6 +164,7 @@ class PiBridgeSession:
         node_binary: str | None = None,
         idle_timeout: float = 60.0,
         total_timeout: float = 600.0,
+        event_callback: Any = None,
     ) -> None:
         for name, value in (
             ("run_id", run_id), ("case_id", case_id),
@@ -185,6 +186,7 @@ class PiBridgeSession:
         self._node = node_binary or shutil.which("node")
         self.idle_timeout = idle_timeout
         self.total_timeout = total_timeout
+        self.event_callback = event_callback
         self._process: subprocess.Popen[Any] | None = None
         self._lines: Queue[str | None] = Queue()
         self._overflow = Event()
@@ -403,7 +405,13 @@ class PiBridgeSession:
             ) from error
         if not isinstance(event, dict):
             raise PiBridgeError("pi bridge event must be an object", code="PI_PROTOCOL_INVALID")
-        return self._validate_event(event)
+        validated = self._validate_event(event)
+        if self.event_callback is not None:
+            try:
+                self.event_callback(validated)
+            except Exception:  # noqa: BLE001 - 回调失败不破坏协议流
+                pass
+        return validated
 
     def _expect(self, allowed_keys: Any, *, terminal: bool) -> dict[str, Any]:
         event = self._next_event()

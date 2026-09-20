@@ -120,7 +120,14 @@ def resolve_agent_tasks_manifest(
     if mode not in AGENT_MODES:
         raise ValueError(f"unsupported agent mode: {mode!r} (known: {', '.join(AGENT_MODES)})")
     model_ref = manifest.get("model")
-    if not isinstance(model_ref, str) or not model_ref:
+    runtime_declared = manifest.get("runtime")
+    if runtime_declared:
+        # M4：runtime 驱动的 agent-tasks（模型控制在 runtime）不需要平台模型；
+        # agent 配置段也不适用（执行走 runtime backend，不是 builtin agent）。
+        if agent_request:
+            raise ValueError(
+                "runtime-driven agent-tasks cannot also request builtin agent config")
+    elif not isinstance(model_ref, str) or not model_ref:
         raise ValueError("agent-tasks runs require a published model profile reference")
 
     # native-tool 创建期拒绝：不支持 tools 的模型在付费调用之前失败（M1-G03/A06）
@@ -151,13 +158,14 @@ def resolve_agent_tasks_manifest(
 
     resolved = deepcopy(manifest)
     agent_config = resolved.setdefault("agent_config", {})
-    agent_config["mode"] = mode
     agent_config["prompt_version"] = (
         "builtin-react-native@1" if mode == "native-tool" else "builtin-react-legacy@2"
     )
     agent_config["budget"] = run_budget
     agent_config["tools"] = ["list_files", "read_file", "write_file"]
-    resolved["agent"] = f"{AGENT_BACKEND_ID}@{AGENT_BACKEND_VERSION}"
+    if not runtime_declared:
+        agent_config["mode"] = mode
+        resolved["agent"] = f"{AGENT_BACKEND_ID}@{AGENT_BACKEND_VERSION}"
     resolved["cases"] = {
         case["case_id"]: {"case_id": case["case_id"], "prompt": case["input"]}
         for case in selected_cases

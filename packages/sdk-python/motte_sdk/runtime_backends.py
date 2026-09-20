@@ -29,6 +29,7 @@ from pydantic import ValidationError
 from .execution_backends import (
     ExecutionBackendError,
     ExecutionBackendSpec,
+    ExecutionHandle,
     register_backend,
 )
 
@@ -177,7 +178,7 @@ def register_runtime_backend(
 
 
 def _runtime_not_implemented(backend_id: str, version: str) -> Callable[[dict[str, Any]], Any]:
-    """T01 阶段的诚实占位：执行链路未接线时显式拒绝，不假成功。"""
+    """诚实占位：执行链路未接线时显式拒绝，不假成功。"""
 
     def build(run: dict[str, Any]) -> Any:
         raise ExecutionBackendError(
@@ -188,28 +189,198 @@ def _runtime_not_implemented(backend_id: str, version: str) -> Callable[[dict[st
     return build
 
 
+def _build_pi(run: dict[str, Any]) -> Any:
+    """pi-agent@1 的执行装配：每 Case 一个 bridge session（M4-T04）。"""
+    from .pi_runtime import PiRuntimeCaseExecutor
+
+    executor = PiRuntimeCaseExecutor(run)
+
+    def attach(service: Any, run_id: str) -> None:
+        executor.bind_service(service)
+
+    return ExecutionHandle(
+        backend_id="pi-agent",
+        backend_version="1",
+        invoke=executor.invoke,
+        capabilities={
+            "interactive": False,
+            "safe_to_repeat": False,
+            "runtime": True,
+            "events": True,
+            "artifacts": True,
+        },
+        attach=attach,
+    )
+
+
+_RUNTIME_BUILDS: dict[str, Callable[[dict[str, Any]], Any]] = {
+    "pi-agent": _build_pi,
+}
+
+
 def install_runtime_backends() -> None:
     """安装 M4 runtime backend 注册（幂等；供 API/Worker 启动调用）。
 
-    T01 只登记身份与校验；各 backend 的真实 build 在 T04/T06/T07/T10
-    接线后由 ``register_runtime_backend`` 覆盖为执行装配。
+    validate 共享本模块规则；build 来自 _RUNTIME_BUILDS——未接线的 backend
+    保持显式 RUNTIME_EXECUTION_NOT_IMPLEMENTED 拒绝。
     """
     for backend_id in RUNTIME_BACKEND_IDS:
         capabilities = {
             "interactive": backend_id == "codex-app-server",
             "safe_to_repeat": False,
+            "runtime": True,
         }
+        build = _RUNTIME_BUILDS.get(backend_id) or _runtime_not_implemented(backend_id, "1")
         try:
             register_backend(ExecutionBackendSpec(
                 id=backend_id,
                 version="1",
                 validate=runtime_validator(backend_id, "1"),
-                build=_runtime_not_implemented(backend_id, "1"),
+                build=build,
                 capabilities=capabilities,
             ))
         except ValueError:
             # 已注册（例如测试进程重复安装）：保留现有注册。
             continue
+
+
+# 四个 runtime backend 的规范 RuntimeVersion 定义（唯一事实源是
+# docs/protocols/runtime-compatibility.json；此处内联同构内容供资源发布）。
+CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
+    "pi-agent": {
+        "name": "pi-agent", "version": "1",
+        "definition": {
+            "kind": "pi-bridge",
+            "transport": "bridge-stdio-jsonl",
+            "upstream_version": "@mariozechner/pi-agent-core@0.73.1",
+            "adapter_version": "pi-bridge@2",
+            "parser_version": "pi-jsonl-v2",
+            "config_schema": {
+                "properties": {
+                    "model": {"type": "string"},
+                    "script": {"type": "array"},
+                    "system_prompt": {"type": "string"},
+                    "max_steps": {"type": "integer"},
+                },
+                "required": ["model"],
+            },
+            "supported_modes": ["batch"],
+            "interactive": False,
+            "model_control": "runner-configured",
+            "tool_control": {
+                "enforcement": "bridge-sandbox",
+                "enforcement_owner": "platform",
+                "tools": ["read_file", "write_file", "list_files"],
+                "network": "denied",
+                "approval": "deny-default",
+            },
+            "evidence_capabilities": {
+                "session_events": True, "tool_events": True, "usage": False,
+                "cost": False, "model_identity": True, "artifact_collection": True,
+                "cancel": True,
+            },
+        },
+    },
+    "claude-cli": {
+        "name": "claude-cli", "version": "1",
+        "definition": {
+            "kind": "claude-cli",
+            "transport": "cli-batch-json",
+            "upstream_version": "@anthropic-ai/claude-code@2.1.278",
+            "adapter_version": "claude-batch@1",
+            "parser_version": "claude-json-v1",
+            "config_schema": {
+                "properties": {"model": {"type": "string"}, "max_turns": {"type": "integer"}},
+                "required": ["model"],
+            },
+            "supported_modes": ["batch"],
+            "interactive": False,
+            "model_control": "runner-configured",
+            "tool_control": {
+                "enforcement": "not-enforced",
+                "enforcement_owner": "runner",
+                "tools": [],
+                "network": "allowed",
+                "approval": "deny-default",
+            },
+            "evidence_capabilities": {
+                "session_events": True, "tool_events": True, "usage": True,
+                "cost": True, "model_identity": True, "artifact_collection": True,
+                "cancel": True,
+            },
+        },
+    },
+    "codex-cli": {
+        "name": "codex-cli", "version": "1",
+        "definition": {
+            "kind": "codex-cli",
+            "transport": "cli-exec-jsonl",
+            "upstream_version": "@openai/codex@0.155.1",
+            "adapter_version": "codex-batch@1",
+            "parser_version": "codex-jsonl-v1",
+            "config_schema": {
+                "properties": {"model": {"type": "string"}},
+                "required": ["model"],
+            },
+            "supported_modes": ["batch"],
+            "interactive": False,
+            "model_control": "runner-configured",
+            "tool_control": {
+                "enforcement": "not-enforced",
+                "enforcement_owner": "runner",
+                "tools": [],
+                "network": "allowed",
+                "approval": "deny-default",
+            },
+            "evidence_capabilities": {
+                "session_events": True, "tool_events": True, "usage": True,
+                "cost": False, "model_identity": True, "artifact_collection": True,
+                "cancel": True,
+            },
+        },
+    },
+    "codex-app-server": {
+        "name": "codex-app-server", "version": "1",
+        "definition": {
+            "kind": "codex-app-server",
+            "transport": "app-server-jsonrpc",
+            "upstream_version": "@openai/codex@0.155.1",
+            "adapter_version": "codex-app-server@1",
+            "parser_version": "codex-appserver-jsonrpc-v1",
+            "config_schema": {
+                "properties": {"model": {"type": "string"}},
+                "required": ["model"],
+            },
+            "supported_modes": ["interactive"],
+            "interactive": True,
+            "model_control": "runner-configured",
+            "tool_control": {
+                "enforcement": "not-enforced",
+                "enforcement_owner": "runner",
+                "tools": [],
+                "network": "allowed",
+                "approval": "deny-default",
+            },
+            "evidence_capabilities": {
+                "session_events": True, "tool_events": True, "usage": True,
+                "cost": False, "model_identity": True, "artifact_collection": True,
+                "cancel": True, "interactive_commands": True,
+            },
+        },
+    },
+}
+
+
+def publish_canonical_runtime_versions(resources: Any) -> dict[str, Any]:
+    """把规范 runtime 版本发布进资源仓库（幂等；不可变版本资源）。"""
+    from datetime import UTC, datetime
+
+    published_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    published: dict[str, Any] = {}
+    for name, payload in CANONICAL_RUNTIME_VERSIONS.items():
+        record = {**payload, "lifecycle": "published", "published_at": published_at}
+        published[name] = resources.runtimes.put(record)
+    return published
 
 
 def canonical_runtime_version(name: str, definition_payload: dict[str, Any]) -> dict[str, Any]:
