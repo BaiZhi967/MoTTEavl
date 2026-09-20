@@ -10,7 +10,9 @@ class ScenarioSpec(Contract):
     version: int | str
     mode: str
     dataset: str
-    model: str
+    # M4：runtime 驱动的场景（CLI 原生认证 / runner 配置模型）可以不声明
+    # 平台模型；provider 驱动路径仍在 prepare_run 强制模型解析。
+    model: str | None = None
     agent: str | None = None
     skills: list[str] = Field(default_factory=list)
     harness: str | None = None

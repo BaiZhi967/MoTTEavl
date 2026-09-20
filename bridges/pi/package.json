@@ -4,9 +4,14 @@
   "description": "Protocol-only Pi bridge stub; no execution backend is bundled.",
   "private": true,
   "type": "module",
-  "bin": { "motte-pi-bridge": "./bridge.mjs" },
+  "bin": {
+    "motte-pi-bridge": "./bridge.mjs"
+  },
   "scripts": {
     "bridge": "node bridge.mjs",
     "test": "node selftest.mjs"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "0.73.1"
   }
 }

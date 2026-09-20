@@ -16,7 +16,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Callable
 
-# 资源名 → (表名, 键字段)；与 0001_initial 迁移保持一致。
+# 资源名 → (表名, 键字段)；与 0001_initial/0009_runtime_resources 迁移保持一致。
 RESOURCE_TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
     "providers": ("provider_connections", ("name",)),
     "models": ("model_profiles", ("id",)),
@@ -24,6 +24,8 @@ RESOURCE_TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
     "datasets": ("dataset_versions", ("name", "version")),
     "scenarios": ("scenario_versions", ("name", "version")),
     "publications": ("resource_publications", ("id",)),
+    "runtimes": ("runtime_versions", ("name", "version")),
+    "runtime_profiles": ("runtime_profiles", ("name", "version")),
 }
 
 
@@ -37,6 +39,7 @@ class ResourceConflictError(ValueError):
 
 VERSIONED_TABLES = frozenset({
     "price_tables", "dataset_versions", "scenario_versions", "resource_publications",
+    "runtime_versions", "runtime_profiles",
 })
 
 
@@ -152,6 +155,16 @@ def _validate_managed(table: str, record: dict[str, Any]) -> None:
     """Keep managed suite schema checks independent of version immutability."""
     if table == "resource_publications":
         _validate_publication(record)
+        return
+    if table == "runtime_versions":
+        from motte_contracts.runtime import RuntimeVersion
+
+        RuntimeVersion.model_validate(record)
+        return
+    if table == "runtime_profiles":
+        from motte_contracts.runtime import RuntimeProfileVersion
+
+        RuntimeProfileVersion.model_validate(record)
         return
     if table not in ("dataset_versions", "scenario_versions"):
         return
@@ -662,6 +675,8 @@ class ResourceStore:
     datasets: Any
     scenarios: Any
     publications: Any
+    runtimes: Any
+    runtime_profiles: Any
     _pair_publisher: PairPublisher
 
     def publish_dataset_scenario(
@@ -679,6 +694,8 @@ def _build(builder, publisher_builder) -> ResourceStore:
     datasets = builder(*RESOURCE_TABLES["datasets"])
     scenarios = builder(*RESOURCE_TABLES["scenarios"])
     publications = builder(*RESOURCE_TABLES["publications"])
+    runtimes = builder(*RESOURCE_TABLES["runtimes"])
+    runtime_profiles = builder(*RESOURCE_TABLES["runtime_profiles"])
     return ResourceStore(
         providers=providers,
         models=models,
@@ -686,6 +703,8 @@ def _build(builder, publisher_builder) -> ResourceStore:
         datasets=datasets,
         scenarios=scenarios,
         publications=publications,
+        runtimes=runtimes,
+        runtime_profiles=runtime_profiles,
         _pair_publisher=publisher_builder(datasets, scenarios, publications),
     )
 

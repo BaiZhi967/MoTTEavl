@@ -54,18 +54,28 @@ def find_secret_paths(value: Any, path: str = "$") -> list[str]:
 def resolve_manifest(
     manifest: dict[str, Any], resources: Any, *, allow_draft_model: bool = False
 ) -> dict[str, Any]:
-    """展开 manifest 中的 provider/model 引用，返回展开后的副本（不改入参）。"""
+    """展开 manifest 中的 provider/model/runtime 引用，返回展开后的副本（不改入参）。"""
     resolved = deepcopy(manifest or {})
     provider_ref = resolved.get("provider")
     model_ref = resolved.get("model")
+    runtime_snapshot = _resolve_runtime_reference(resolved, resources)
 
     if provider_ref is not None and not isinstance(provider_ref, (str, dict)):
         raise ManifestResolutionError(
             "PROVIDER_CONFIG_INVALID", "manifest.provider must be an object or resource name"
         )
 
+    # M4：runtime 控制模型时（runner-configured / externally-managed），
+    # provider/model 解析按需进行；platform-controlled 维持原有强制路径。
+    platform_controlled = (
+        runtime_snapshot is not None
+        and runtime_snapshot.get("model_control") == "platform-controlled"
+    )
+    if not platform_controlled and runtime_snapshot is not None and model_ref is None:
+        model_ref = None  # CLI 原生认证：不伪造 provider（见 _connection_for）
     connection = _connection_for(
-        provider_ref, model_ref, resources, allow_draft_model=allow_draft_model
+        provider_ref, model_ref, resources, allow_draft_model=allow_draft_model,
+        runtime_snapshot=runtime_snapshot,
     )
     if model_ref is not None:
         if not isinstance(model_ref, str):
@@ -103,6 +113,10 @@ def resolve_manifest(
         resolved["provider"] = effective
 
     snapshots: dict[str, Any] = {}
+    if runtime_snapshot is not None:
+        snapshots["runtime_version"] = runtime_snapshot["snapshot"]
+        resolved["runtime_snapshot"] = runtime_snapshot["snapshot"]
+        resolved["runtime"] = runtime_snapshot["ref"]
     if isinstance(model_ref, str):
         profile = _model_profile(model_ref, resources, allow_draft=allow_draft_model)
         snapshots["model_profile"] = {
@@ -130,6 +144,103 @@ def resolve_manifest(
     if snapshots:
         resolved["resource_snapshots"] = snapshots
     return resolved
+
+
+def _resolve_runtime_reference(
+    resolved: dict[str, Any], resources: Any
+) -> dict[str, Any] | None:
+    """解析 manifest.runtime / runtime_profile 引用为已发布快照。
+
+    - runtime 必须是 ``name@version`` 且命中已发布的 RuntimeVersion；
+    - runtime_profile 可以是内联对象或 ``name@version`` 资源引用（展开后
+      内联进 manifest，快照记录 content_hash，无秘密原文）；
+    - 未声明 runtime 时返回 None，原有 provider/model 路径不受影响。
+    """
+    runtime_ref = resolved.get("runtime")
+    if runtime_ref is None:
+        return None
+    if not isinstance(runtime_ref, str):
+        raise ManifestResolutionError(
+            "RUNTIME_REF_INVALID", "manifest.runtime must be a name@version string"
+        )
+    name, separator, version = runtime_ref.rpartition("@")
+    if not separator or not name or not version:
+        raise ManifestResolutionError(
+            "RUNTIME_REF_INVALID", f"runtime reference must be name@version: {runtime_ref!r}"
+        )
+    runtimes = getattr(resources, "runtimes", None)
+    if runtimes is None:
+        raise ManifestResolutionError(
+            "RUNTIME_STORE_MISSING", "runtime resources are not available in this store"
+        )
+    record = runtimes.get(name, version)
+    if record is None:
+        raise ManifestResolutionError(
+            "RUNTIME_NOT_FOUND", f"runtime not found: {runtime_ref}"
+        )
+    definition = record.get("definition") or {}
+    snapshot = {
+        "name": name,
+        "version": version,
+        "content_hash": _content_hash(record),
+        "lifecycle": record.get("lifecycle", "published"),
+        "model_control": definition.get("model_control"),
+        "kind": definition.get("kind"),
+        "transport": definition.get("transport"),
+        "tool_enforcement": (definition.get("tool_control") or {}).get("enforcement"),
+        "interactive": bool(definition.get("interactive")),
+        "config_schema": deepcopy(definition.get("config_schema") or {}),
+    }
+    profile_ref = resolved.get("runtime_profile")
+    if isinstance(profile_ref, str):
+        profile_name, profile_separator, profile_version = profile_ref.rpartition("@")
+        if not profile_separator:
+            raise ManifestResolutionError(
+                "RUNTIME_PROFILE_REF_INVALID",
+                f"runtime_profile reference must be name@version: {profile_ref!r}",
+            )
+        profile_store = getattr(resources, "runtime_profiles", None)
+        if profile_store is None:
+            raise ManifestResolutionError(
+                "RUNTIME_STORE_MISSING",
+                "runtime profile resources are not available in this store",
+            )
+        profile_record = profile_store.get(profile_name, profile_version)
+        if profile_record is None:
+            raise ManifestResolutionError(
+                "RUNTIME_PROFILE_NOT_FOUND", f"runtime profile not found: {profile_ref}"
+            )
+        if profile_record.get("runtime") != runtime_ref:
+            raise ManifestResolutionError(
+                "RUNTIME_PROFILE_MISMATCH",
+                f"runtime profile {profile_ref} targets {profile_record.get('runtime')!r}",
+            )
+        profile_payload = {
+            key: deepcopy(profile_record[key])
+            for key in ("runtime", "native_settings", "workspace", "budgets", "credential_refs")
+            if key in profile_record
+        }
+        resolved["runtime_profile"] = profile_payload
+    elif profile_ref is not None and not isinstance(profile_ref, dict):
+        raise ManifestResolutionError(
+            "RUNTIME_PROFILE_REF_INVALID",
+            "manifest.runtime_profile must be an object or name@version reference",
+        )
+    profile_payload = resolved.get("runtime_profile")
+    if not isinstance(profile_payload, dict) or profile_payload.get("runtime") != runtime_ref:
+        raise ManifestResolutionError(
+            "RUNTIME_PROFILE_REQUIRED",
+            f"runtime runs require a runtime_profile bound to {runtime_ref}",
+        )
+    from motte_contracts.runtime import RuntimeProfile, validate_runtime_settings
+
+    try:
+        profile = RuntimeProfile.model_validate(profile_payload)
+        validate_runtime_settings(snapshot["config_schema"], profile.native_settings)
+    except ValueError as error:
+        raise ManifestResolutionError("RUNTIME_PROFILE_INVALID", str(error)) from error
+    profile_payload["config_hash"] = _content_hash(profile_payload)
+    return {"ref": runtime_ref, "snapshot": snapshot}
 
 
 def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resources: Any):
@@ -168,6 +279,7 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
                 f"{CASE_SELECTION_KEY} is only supported for benchmark scenarios")
         resolved = resolve_manifest(manifest, resources)
         ids = list(case_ids or [])
+        runtime_control = (resolved.get("runtime_snapshot") or {}).get("model_control")
         if managed:
             if ids:
                 # 子集改由 manifest.case_selection 声明，避免两条并行的选择通道。
@@ -175,7 +287,10 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
                     "benchmark case selection goes through manifest.case_selection, not case_ids")
             ids = list(manifest["cases"])
             provider = resolved.get("provider")
-            if not isinstance(provider, dict):
+            if not isinstance(provider, dict) and runtime_control in (None, "platform-controlled"):
+                # M4：runtime 驱动（runner-configured / externally-managed）的
+                # agent-tasks 允许无平台 provider；模型路径由 runtime backend
+                # 的 validate_runtime_manifest 把关。
                 raise ValueError("benchmark requires a provider or model resource")
             preset = manifest["benchmark_provenance"]
             provider["max_retries"] = preset["max_retries"]
@@ -207,9 +322,16 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
 
 
 def _connection_for(
-    provider_ref: Any, model_ref: Any, resources: Any, *, allow_draft_model: bool = False
+    provider_ref: Any, model_ref: Any, resources: Any, *, allow_draft_model: bool = False,
+    runtime_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """取 provider 连接 payload：显式名字 > 模型档案携带的连接名。"""
+    """取 provider 连接 payload：显式名字 > 模型档案携带的连接名。
+
+    runtime 驱动（非 platform-controlled）且未显式声明 provider/model 时，
+    返回 None：CLI 原生认证不伪造平台 Provider 快照。
+    """
+    if provider_ref is None and model_ref is None and runtime_snapshot is not None:
+        return None
     if isinstance(provider_ref, str):
         return _provider_resource(provider_ref, resources)
     if provider_ref is None and isinstance(model_ref, str):

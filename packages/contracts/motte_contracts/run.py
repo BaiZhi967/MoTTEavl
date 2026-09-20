@@ -94,6 +94,10 @@ class ResolvedManifest(Contract):
     skills: list[str] = Field(default_factory=list)
     harness: str | None = None
     sandbox: dict[str, Any] | None = None
+    # M4：外部 runtime 驱动的 Run（pi-agent / claude-cli / codex-cli …）
+    runtime: str | None = None
+    runtime_profile: dict[str, Any] | None = None
+    runtime_snapshot: dict[str, Any] | None = None
 
 
 class CaseRun(Contract):

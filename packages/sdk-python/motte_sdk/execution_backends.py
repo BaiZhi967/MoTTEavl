@@ -134,11 +134,25 @@ def resolve_execution(
     """
     resolved = deepcopy(manifest)
     requested = resolved.get("execution")
-    runtime_fields = [name for name in ("agent", "skills", "harness", "pi") if resolved.get(name)]
+    runtime_fields = [
+        name for name in ("agent", "skills", "harness", "pi")
+        if resolved.get(name)
+    ]
+    runtime_declared = resolved.get("runtime")
     scenario_mode = (scenario or {}).get("mode")
     agent_requested = (
         resolved.get("agent") in (None, "builtin-agent@1") and scenario_mode == "agent-tasks"
     ) or resolved.get("agent") == "builtin-agent@1"
+    if runtime_declared is not None and runtime_fields:
+        raise ExecutionBackendError(
+            "EXECUTION_BACKEND_UNSUPPORTED",
+            "runtime runs cannot mix legacy runtime fields: " + ", ".join(runtime_fields),
+        )
+    if runtime_declared is not None and agent_requested:
+        raise ExecutionBackendError(
+            "EXECUTION_BACKEND_UNSUPPORTED",
+            "runtime runs cannot also request the builtin agent",
+        )
     if runtime_fields and requested is None and not agent_requested:
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_UNSUPPORTED",
@@ -153,6 +167,15 @@ def resolve_execution(
                 "builtin-agent does not support runtime fields: " + ", ".join(non_agent_fields),
             )
         requested = {"backend_id": "builtin-agent", "backend_version": "1"}
+    if requested is None and runtime_declared is not None:
+        # M4：显式 runtime 引用派生 backend 身份（pi-agent@1 等）。
+        if not isinstance(runtime_declared, str) or "@" not in runtime_declared:
+            raise ExecutionBackendError(
+                "EXECUTION_BACKEND_INVALID",
+                f"manifest.runtime must be name@version: {runtime_declared!r}",
+            )
+        runtime_name, _, runtime_version = runtime_declared.rpartition("@")
+        requested = {"backend_id": runtime_name, "backend_version": runtime_version}
     if requested is None:
         provider = resolved.get("provider")
         mode = (scenario or {}).get("mode")
@@ -236,7 +259,11 @@ def legacy_execution(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reject_unconnected_runtime_fields(manifest: dict[str, Any]) -> None:
-    runtime_fields = [name for name in ("agent", "skills", "harness", "pi") if manifest.get(name)]
+    runtime_fields = [
+        name
+        for name in ("agent", "skills", "harness", "pi", "runtime", "runtime_profile")
+        if manifest.get(name)
+    ]
     if runtime_fields:
         raise ExecutionBackendError(
             "EXECUTION_BACKEND_UNSUPPORTED",
@@ -563,3 +590,9 @@ register_backend(ExecutionBackendSpec(
     available=True,
     execution_mode="job",
 ))
+
+# M4：安装 runtime backend 注册（pi-agent / claude-cli / codex-cli /
+# codex-app-server）。T01 阶段 validate 可用；build 在 T04/T06/T07/T10 接线。
+from .runtime_backends import install_runtime_backends as _install_runtime_backends
+
+_install_runtime_backends()

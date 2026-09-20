@@ -18,8 +18,10 @@ from motte_sdk.execution_backends import (
 
 def test_builtin_backend_registry_is_explicit_and_versioned():
     assert [(spec.id, spec.version) for spec in registered_backends()] == [
-        ("builtin-agent", "1"), ("direct-llm", "1"),
+        ("builtin-agent", "1"), ("claude-cli", "1"), ("codex-app-server", "1"),
+        ("codex-cli", "1"), ("direct-llm", "1"),
         ("external-benchmark", "1"),
+        ("pi-agent", "1"),
         ("replay", "1"),
     ]
     assert backend_for("replay", "1").capabilities["safe_to_repeat"] is True
