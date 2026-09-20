@@ -12,6 +12,8 @@
 
 M3 开工交接（2026-09-20）：[当前详细任务安排](../superpowers/plans/2026-09-20-m3-kickoff.md)及[开发 Agent 提示词](../prompts/M3-development-agent.md)。实现状态与证据边界以各阶段验证记录为准，原规划基线不代表最新代码状态。
 
+M4 开工交接（2026-09-20）：[当前详细任务安排](../superpowers/plans/2026-09-20-m4-kickoff.md)及[开发 Agent 提示词](../prompts/M4-development-agent.md)。以合入 M3 第三轮修复的 `a3cdfbe` 为起点，M4 实现状态仍为 planned。
+
 ## 1. 文档入口
 
 | 阶段 | 文档 | 核心产出 | 目标数 / 工作包数 / 验收场景数 |

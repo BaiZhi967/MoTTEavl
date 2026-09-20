@@ -1,9 +1,17 @@
 from pathlib import Path
-import json, re, subprocess
+import argparse, json, re, subprocess
 
+parser = argparse.ArgumentParser(description="Validate the frozen M1–M7 planning coverage")
+parser.add_argument("--allow-code-changes", action="store_true",
+                    help="validate coverage during implementation, allowing code changes")
+args = parser.parse_args()
 root = Path.cwd()
 base = root / "docs/superpowers/plans/2026-09-19-m1-m7"
 data = json.loads((base / "coverage.json").read_text())
+# 新增/修改是规划时的文件状态，实施后必须仍按固定基线核验。
+baseline_files = set(subprocess.check_output(
+    ["git", "ls-tree", "-r", "--name-only", data["planning_baseline"]], text=True,
+).splitlines())
 tasks = {t["id"]: t for t in data["tasks"]}
 assert len(tasks) == len(data["tasks"]) == 77
 assert data["implementation_status"] == "planned"
@@ -66,7 +74,7 @@ for m in data["milestones"]:
             if path.startswith("apps/web/"):
                 assert path.startswith("apps/web/tests/") and ".test." in path, path
         for label, path in re.findall(r"^- (修改|新增计划) `([^`]+)`。$", plan, re.M):
-            assert (root / path).exists() == (label == "修改"), (label, path)
+            assert (path in baseline_files) == (label == "修改"), (label, path)
     assert "make check" in plan and "pnpm --dir apps/web test" in plan
 assert counts == [137, 77, 119], counts
 assert not any(
@@ -90,7 +98,9 @@ for path in list(base.glob("*.md")) + [root / "docs/roadmap/README.md"]:
 changes = subprocess.check_output(
     ["git", "status", "--porcelain", "--untracked-files=all"], text=True
 )
-assert all(line[3:].startswith("docs/") for line in changes.splitlines()), changes
+docs_only = all(line[3:].startswith("docs/") for line in changes.splitlines())
+if not args.allow_code_changes:
+    assert docs_only, changes
 unchanged = subprocess.check_output(
     ["git", "diff", "--name-only", "--", "docs/roadmap/M*.md", "docs/ROADMAP.md"], text=True
 )
@@ -105,7 +115,8 @@ print(
             "all_tasks_reachable_from_final_review": True,
             "local_links_checked": checked_links,
             "web_tests": "collected_paths",
-            "changes": "docs_only",
+            "changes": "docs_only" if docs_only else "implementation_changes_allowed",
+            "file_labels_baseline": data["planning_baseline"],
             "original_specs": "unchanged",
         },
         ensure_ascii=False,
