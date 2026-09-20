@@ -46,6 +46,11 @@ class ReplayRunRequest(APIModel):
 
 class RunMessageRequest(APIModel):
     content: str = Field(min_length=1)
+    # M4-T10：命令种类 / 会话绑定 / 幂等键（批准类命令绑定 request_hash）
+    kind: str = Field(default="user_message", pattern=r"^(user_message|approve|reject|interrupt)$")
+    payload: dict = Field(default_factory=dict)
+    session_id: str | None = None
+    dedupe_key: str | None = None
 
 
 class RunListResponse(APIModel):

@@ -2027,23 +2027,44 @@ export interface components {
         RunCommand: {
             /** Acknowledged At */
             acknowledged_at?: string | null;
+            /** Actor */
+            actor?: string | null;
+            /** Case Id */
+            case_id?: string | null;
             /** Content */
             content?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Dedupe Key */
+            dedupe_key?: string | null;
             /** Delivered At */
             delivered_at?: string | null;
             error?: components["schemas"]["ExecutionError"] | null;
             /** Execution Token */
             execution_token?: string | null;
+            /** Expected Session Revision */
+            expected_session_revision?: number | null;
+            /** Expired At */
+            expired_at?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
             /** Failed At */
             failed_at?: string | null;
             /** Id */
             id: string;
+            /**
+             * Intervention
+             * @default false
+             */
+            intervention: boolean;
             /** Payload */
             payload?: {
                 [key: string]: unknown;
             };
+            /** Rejected At */
+            rejected_at?: string | null;
+            /** Request Hash */
+            request_hash?: string | null;
             /**
              * Revision
              * @default 1
@@ -2051,6 +2072,8 @@ export interface components {
             revision: number;
             /** Run Id */
             run_id: string;
+            /** Session Id */
+            session_id?: string | null;
             /** @default queued */
             status: components["schemas"]["RunCommandStatus"];
             /**
@@ -2070,7 +2093,7 @@ export interface components {
          * RunCommandStatus
          * @enum {string}
          */
-        RunCommandStatus: "queued" | "delivered" | "acknowledged" | "failed";
+        RunCommandStatus: "queued" | "delivered" | "acknowledged" | "failed" | "rejected" | "expired" | "delivery_unknown";
         /** RunListResponse */
         RunListResponse: {
             /** Items */
@@ -2082,6 +2105,19 @@ export interface components {
         RunMessageRequest: {
             /** Content */
             content: string;
+            /** Dedupe Key */
+            dedupe_key?: string | null;
+            /**
+             * Kind
+             * @default user_message
+             */
+            kind: string;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+            /** Session Id */
+            session_id?: string | null;
         };
         /** RunReport */
         RunReport: {
@@ -4536,6 +4572,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
             /** @description Run not found */
             404: {
                 headers: {
@@ -4548,21 +4593,10 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": unknown;
-                };
+                content?: never;
             };
-            /** @description Validation Error */
+            /** @description Invalid command payload */
             422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description No command consumer is registered */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };

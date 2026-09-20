@@ -45,6 +45,11 @@ class RunCommandStatus(str, Enum):
     delivered = "delivered"
     acknowledged = "acknowledged"
     failed = "failed"
+    # M4-T10：HTTP 202 只表示持久接收；投递被拒、过期、重启后结果不可证
+    # 分别进入终态，绝不回退或重复投递危险批准。
+    rejected = "rejected"
+    expired = "expired"
+    delivery_unknown = "delivery_unknown"
 
 
 class ExecutionSpec(Contract):
@@ -178,8 +183,21 @@ class RunCommand(Contract):
     content: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     execution_token: str | None = None
+    # M4-T10：投递绑定（session/case/dedupe/过期/期望 revision/请求 hash）
+    case_id: str | None = None
+    session_id: str | None = None
+    dedupe_key: str | None = None
+    expires_at: datetime | None = None
+    expected_session_revision: int | None = Field(default=None, ge=1, strict=True)
+    request_hash: str | None = None
+    # 人工干预标记：进入 Run 证据与比较条件（M4-G18）
+    intervention: bool = False
+    # 提交者（审计）：operator / api / worker
+    actor: str | None = None
     created_at: datetime | None = None
     delivered_at: datetime | None = None
     acknowledged_at: datetime | None = None
     failed_at: datetime | None = None
+    rejected_at: datetime | None = None
+    expired_at: datetime | None = None
     error: ExecutionError | None = None

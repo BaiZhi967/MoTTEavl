@@ -479,12 +479,12 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
     @application.post(
         "/api/v1/runs/{run_id}/messages",
-        status_code=409,
+        status_code=202,
         response_model=None,
         responses={
             404: {"description": "Run not found"},
             409: {"description": "Command unsupported for this run"},
-            501: {"description": "No command consumer is registered"},
+            422: {"description": "Invalid command payload"},
         },
     )
     def send_run_message(run_id: str, body: RunMessageRequest):
@@ -506,13 +506,50 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     }
                 },
             )
+        # 交互能力由注册 backend 决定，manifest 声明不可信（M4-G17）：
+        # 未注册/非交互的声称 → 无消费者 → 501，不产生假 accepted。
+        from motte_sdk.execution_backends import ExecutionBackendError, backend_for
+
+        try:
+            spec = backend_for(
+                str(execution.get("backend_id") or ""),
+                str(execution.get("backend_version") or "1"),
+            )
+        except ExecutionBackendError:
+            spec = None
+        if spec is None or spec.capabilities.get("interactive") is not True:
+            return JSONResponse(
+                status_code=501,
+                content={
+                    "error": {
+                        "code": "RUN_COMMANDS_NOT_IMPLEMENTED",
+                        "message": "no registered execution backend has a durable command consumer",
+                    }
+                },
+            )
+        # M4-T10：交互 consumer 已接通——202 只表示持久接收（queued），
+        # 前端等待 GET /commands 的 acknowledged 状态，不把 202 当送达。
+        from datetime import timedelta
+
+        from motte_sdk.commands import submit_command
+
+        expires = datetime.now(UTC) + timedelta(minutes=10)
+        command = submit_command(
+            service,
+            run_id,
+            kind=body.kind,
+            content=body.content,
+            payload=body.payload if isinstance(body.payload, dict) else {},
+            session_id=body.session_id,
+            dedupe_key=body.dedupe_key,
+            expires_at=expires,
+        )
         return JSONResponse(
-            status_code=501,
+            status_code=202,
             content={
-                "error": {
-                    "code": "RUN_COMMANDS_NOT_IMPLEMENTED",
-                    "message": "no registered execution backend has a durable command consumer",
-                }
+                "command_id": command["id"],
+                "status": command["status"],
+                "note": "queued only; poll /runs/{id}/commands for acknowledged",
             },
         )
 
