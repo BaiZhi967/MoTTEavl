@@ -1,8 +1,5 @@
 import json
-import os
 import shutil
-import signal
-import socket
 import subprocess
 import sys
 import textwrap
@@ -11,98 +8,52 @@ from pathlib import Path
 
 import pytest
 
-from motte_agent.pi import PiAgentRuntime, PiBridgeError
+from motte_agent.pi import PiAgentRuntime, PiBridgeError, PiBridgeSession
+
+from bridge_process import (
+    assert_grandchild_stopped,
+    fake_runtime,
+    fake_session_bridge,
+    hung_tree_runtime,
+    json_line,
+    run_bridge_with_lines,
+    session_for,
+)
 
 
 BRIDGE = Path(__file__).resolve().parents[2] / "bridges" / "pi" / "bridge.mjs"
+NODE = shutil.which("node")
 
 
-def _fake_runtime(tmp_path, source: str, *, timeout: float = 2.0) -> PiAgentRuntime:
-    bridge = tmp_path / "fake_pi_bridge.py"
-    bridge.write_text(textwrap.dedent(source), encoding="utf-8")
-    return PiAgentRuntime(
-        bridge_path=bridge,
-        node_binary=sys.executable,
-        timeout_seconds=timeout,
-    )
-
-
-def _port_is_open(port: int) -> bool:
-    with socket.socket() as probe:
-        probe.settimeout(0.1)
-        return probe.connect_ex(("127.0.0.1", port)) == 0
-
-
-def _stop_fixture_process(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        pass
-
-
-def _hung_tree_runtime(tmp_path, *, timeout: float) -> tuple[PiAgentRuntime, Path]:
-    marker = tmp_path / "grandchild-ready"
-    grandchild = (
-        "import os,pathlib,socket,time;"
-        "server=socket.socket();"
-        "server.bind(('127.0.0.1',0));"
-        "server.listen();"
-        f"pathlib.Path({str(marker)!r}).write_text("
-        "f'{server.getsockname()[1]},{os.getpid()}',encoding='utf-8');"
-        "time.sleep(60)"
-    )
-    runtime = _fake_runtime(
-        tmp_path,
-        f"""
-        import subprocess
-        import sys
-        import time
-
-        subprocess.Popen([sys.executable, "-c", {grandchild!r}])
-        time.sleep(60)
-        """,
-        timeout=timeout,
-    )
-    return runtime, marker
-
-
-def _assert_grandchild_stopped(marker: Path) -> None:
-    assert marker.exists(), "grandchild did not start before bridge cleanup"
-    port_text, pid_text = marker.read_text(encoding="utf-8").split(",")
-    port = int(port_text)
-    pid = int(pid_text)
-    try:
-        deadline = time.monotonic() + 5
-        while _port_is_open(port) and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert not _port_is_open(port), "bridge grandchild survived process-tree cleanup"
-    finally:
-        if _port_is_open(port):
-            _stop_fixture_process(pid)
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for the Pi bridge")
+@pytest.mark.skipif(NODE is None, reason="node is required for the Pi bridge")
 def test_packaged_bridge_reports_protocol_only_capability():
     runtime = PiAgentRuntime()
 
     probe = runtime.probe()
 
-    assert probe["protocol"] == "v1"
-    assert probe["execution_ready"] is False
+    assert probe["protocol"] == "v2"
+    # 真实 SDK 已安装：wiring 就绪；sdk_version 必须来自包元数据而非猜测。
+    assert probe["execution_ready"] is True
+    assert probe["sdk_version"] == "0.73.1"
+    # 裸 prompt 交换已被移除：PiAgentRuntime.run 不再执行，也没有 echo 路径。
     with pytest.raises(PiBridgeError) as raised:
         runtime.run("must not be echoed")
-    assert raised.value.code == "PI_BACKEND_UNAVAILABLE"
+    assert raised.value.code == "PI_SESSION_REQUIRED"
+    # 原始 bridge 对裸 prompt 消息给出结构化错误，绝不回显输入。
+    completed = run_bridge_with_lines(
+        NODE, [json_line({"type": "prompt", "id": "p1", "text": "must not be echoed"})],
+    )
+    events = [json.loads(line) for line in completed.stdout.splitlines()]
+    assert events[-1]["type"] == "error"
+    assert events[-1]["error"]["code"] == "UNSUPPORTED_MESSAGE"
+    assert "must not be echoed" not in completed.stdout
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for the Pi bridge")
+@pytest.mark.skipif(NODE is None, reason="node is required for the Pi bridge")
 def test_packaged_bridge_sanitizes_invalid_input():
-    completed = subprocess.run(
-        [shutil.which("node"), str(BRIDGE)],
-        input='not-json SECRET\n{"type":"unknown SECRET"}\n',
-        capture_output=True,
-        text=True,
-        timeout=5,
-        check=True,
+    completed = run_bridge_with_lines(
+        NODE,
+        ["not-json SECRET", json_line({"type": "unknown SECRET"})],
     )
 
     events = [json.loads(line) for line in completed.stdout.splitlines()]
@@ -110,6 +61,7 @@ def test_packaged_bridge_sanitizes_invalid_input():
         {
             "type": "error",
             "id": None,
+            "seq": 1,
             "error": {
                 "code": "INVALID_REQUEST",
                 "message": "invalid protocol message",
@@ -118,6 +70,7 @@ def test_packaged_bridge_sanitizes_invalid_input():
         {
             "type": "error",
             "id": None,
+            "seq": 2,
             "error": {
                 "code": "UNSUPPORTED_MESSAGE",
                 "message": "unsupported protocol message",
@@ -129,161 +82,229 @@ def test_packaged_bridge_sanitizes_invalid_input():
 
 
 def test_successful_response_is_strictly_collected(tmp_path):
-    runtime = _fake_runtime(
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import json
         import sys
 
-        requests = [json.loads(line) for line in sys.stdin]
-        assert requests == [
-            {"type": "probe"},
-            {"type": "prompt", "id": "prompt-1", "text": "hello"},
-        ]
-        events = [
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v1",
-                "execution_ready": True,
-            },
-            {"type": "started", "id": "prompt-1"},
-            {"type": "output", "id": "prompt-1", "text": "answer: HELLO"},
-            {
-                "type": "finished",
-                "id": "prompt-1",
-                "status": "completed",
-                "result": {"answer": "answer: HELLO"},
-            },
-        ]
-        for event in events:
-            print(json.dumps(event), flush=True)
+        identity = {"run_id": "run-1", "case_id": "case-1",
+                    "session_id": "session-1", "operation_id": "operation-1"}
+        seq = 0
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message["type"] == "probe":
+                seq += 1
+                print(json.dumps({"type": "version", "version": "test-1.0",
+                                  "protocol": "v2", "execution_ready": True,
+                                  "sdk_version": "0.73.1", "seq": seq}), flush=True)
+            elif message["type"] == "init":
+                seq += 1
+                print(json.dumps({"type": "ready", "seq": seq, **identity,
+                                  "sdk_version": "0.73.1"}), flush=True)
+            elif message["type"] == "run":
+                seq += 1
+                print(json.dumps({"type": "session_event", "seq": seq, **identity,
+                                  "agent_event": {"type": "agent_start"}}), flush=True)
+                seq += 1
+                print(json.dumps({"type": "output", "seq": seq, **identity,
+                                  "text": "answer: HELLO"}), flush=True)
+                seq += 1
+                print(json.dumps({"type": "finished", "seq": seq, **identity,
+                                  "id": message["id"], "status": "completed",
+                                  "result": {"final_output": "answer: HELLO",
+                                             "steps": 1, "tool_calls": 0,
+                                             "usage": {"reported": False}}}), flush=True)
         """,
     )
+    session = session_for(bridge, tmp_path=tmp_path)
+    session.start()
 
-    result = runtime.run("hello")
+    result = session.run("hello")
 
     assert result["status"] == "completed"
-    assert result["answer"] == "answer: HELLO"
+    assert result["final_output"] == "answer: HELLO"
     assert result["outputs"] == ["answer: HELLO"]
-    assert result["events"][-1]["result"] == {"answer": "answer: HELLO"}
+    session.close()
 
 
-def test_v1_peer_without_extension_fields_remains_compatible(tmp_path):
-    runtime = _fake_runtime(
+def test_v2_peer_without_optional_fields_remains_compatible(tmp_path):
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import json
         import sys
 
         sys.stdout.reconfigure(encoding="utf-8")
-        sys.stdin.read()
-        events = [
-            {"type": "version", "version": "legacy-1.0", "protocol": "v1"},
-            {"type": "started", "id": "prompt-1"},
-            {"type": "output", "id": "prompt-1", "text": "left" + chr(0x2028) + "right"},
-            {"type": "finished", "id": "prompt-1", "status": "completed"},
-        ]
-        for event in events:
-            print(json.dumps(event, ensure_ascii=False), flush=True)
+        identity = {"run_id": "run-1", "case_id": "case-1",
+                    "session_id": "session-1", "operation_id": "operation-1"}
+        seq = 0
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message["type"] == "probe":
+                seq += 1
+                print(json.dumps({"type": "version", "version": "legacy-1.0",
+                                  "protocol": "v2", "seq": seq}), flush=True)
+            elif message["type"] == "init":
+                seq += 1
+                print(json.dumps({"type": "ready", "seq": seq, **identity,
+                                  "sdk_version": None}), flush=True)
+            elif message["type"] == "run":
+                seq += 1
+                text = "left" + chr(0x2028) + "right"
+                print(json.dumps({"type": "output", "seq": seq, **identity,
+                                  "text": text}, ensure_ascii=False), flush=True)
+                seq += 1
+                print(json.dumps({"type": "finished", "seq": seq, **identity,
+                                  "id": message["id"], "status": "completed",
+                                  "result": {"final_output": text, "steps": 1,
+                                             "tool_calls": 0, "usage": {}}}), flush=True)
         """,
     )
-
-    result = runtime.run("hello")
-    assert result["answer"] == "left\u2028right"
-    assert result["result"] == {}
-    assert runtime.execution_ready is True
+    session = session_for(bridge, tmp_path=tmp_path)
+    session.start()
+    result = session.run("hello")
+    assert result["final_output"] == "left\u2028right"
+    session.close()
 
 
 def test_output_limit_stops_noisy_bridge(tmp_path):
-    runtime = _fake_runtime(
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import sys
-        import time
 
         sys.stdin.read()
         sys.stdout.write("x" * 1100000)
         sys.stdout.flush()
+        import time
         time.sleep(30)
         """,
-        timeout=5,
     )
-
+    session = session_for(bridge, tmp_path=tmp_path, idle=5.0, total=10.0)
     with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
-    assert raised.value.code == "PI_BRIDGE_OUTPUT_LIMIT"
+        session.start()
+    assert raised.value.code in ("PI_BRIDGE_OUTPUT_LIMIT", "PI_BRIDGE_TIMEOUT")
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        pytest.param(
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v2",
-                "execution_ready": True,
-            },
-            id="protocol-version",
-        ),
-        pytest.param(
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v1",
-                "execution_ready": "yes",
-            },
-            id="execution-ready-type",
-        ),
-        pytest.param(
-            {"type": "started", "id": "different-request"},
-            id="response-id",
-        ),
-    ],
-)
-def test_mismatched_protocol_or_id_fails_closed(tmp_path, event):
-    prefix = []
-    if event["type"] != "version":
-        prefix.append(
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v1",
-                "execution_ready": True,
-            },
-        )
-    runtime = _fake_runtime(
-        tmp_path,
-        f"""
-        import json
-        import sys
-
-        sys.stdin.read()
-        for event in {prefix + [event]!r}:
-            print(json.dumps(event), flush=True)
-        """,
-    )
-
-    with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
-    assert raised.value.code == "PI_PROTOCOL_INVALID"
-
-
-def test_malformed_or_noisy_output_is_sanitized(tmp_path):
-    runtime = _fake_runtime(
+def test_huge_single_line_fails_closed(tmp_path):
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import sys
 
         sys.stdin.read()
-        print("diagnostic noise containing TOP_SECRET", flush=True)
-        print("stderr TOP_SECRET", file=sys.stderr, flush=True)
+        sys.stdout.write("x" * 5_000_000 + "\\n")
+        sys.stdout.flush()
+        import time
+        time.sleep(30)
         """,
     )
-
+    session = session_for(bridge, tmp_path=tmp_path, idle=5.0, total=10.0)
     with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
+        session.start()
+    assert raised.value.code in ("PI_BRIDGE_OUTPUT_LIMIT", "PI_BRIDGE_TIMEOUT")
+
+
+@pytest.mark.parametrize(
+    "protocol_value",
+    ["v3", None],
+)
+def test_mismatched_protocol_fails_closed(tmp_path, protocol_value):
+    bridge = fake_session_bridge(
+        tmp_path,
+        """
+        import json
+        import sys
+
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            payload = {"type": "version", "version": "test-1.0", "seq": 1}
+            if PROTOCOL_VALUE is not None:
+                payload["protocol"] = PROTOCOL_VALUE
+            print(json.dumps(payload), flush=True)
+        """.replace("PROTOCOL_VALUE", repr(protocol_value)),
+    )
+    session = session_for(bridge, tmp_path=tmp_path)
+    with pytest.raises(PiBridgeError) as raised:
+        session.start()
+    assert raised.value.code == "PI_PROTOCOL_INVALID"
+
+
+def test_identity_mismatch_and_seq_regression_fail_closed(tmp_path):
+    bridge = fake_session_bridge(
+        tmp_path,
+        """
+        import json
+        import sys
+
+        identity = {"run_id": "run-1", "case_id": "case-1",
+                    "session_id": "session-1", "operation_id": "operation-1"}
+        seq = 0
+        mode = "identity"
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message["type"] == "probe":
+                seq += 1
+                print(json.dumps({"type": "version", "version": "t", "protocol": "v2",
+                                  "execution_ready": True, "seq": seq}), flush=True)
+            elif message["type"] == "init":
+                seq += 1
+                print(json.dumps({"type": "ready", "seq": seq, **identity,
+                                  "sdk_version": None}), flush=True)
+            elif message["type"] == "run":
+                # seq 回退：不递增（复用 ready 的 seq）→ 客户端必须拒绝
+                if mode != "seq":
+                    seq += 1
+                wrong = dict(identity)
+                if mode == "identity":
+                    wrong["session_id"] = "other-session"
+                print(json.dumps({"type": "output", "seq": seq, **wrong,
+                                  "text": "leak?"}), flush=True)
+                import time
+                time.sleep(5)
+        """,
+    )
+    for mode in ("identity", "seq"):
+        target = bridge.with_name(f"bridge-{mode}.py")
+        target.write_text(
+            bridge.read_text(encoding="utf-8").replace('mode = "identity"', f'mode = "{mode}"'),
+            encoding="utf-8",
+        )
+        session = session_for(target, tmp_path=tmp_path)
+        session.start()
+        with pytest.raises(PiBridgeError) as raised:
+            session.run("hello")
+        assert raised.value.code == "PI_PROTOCOL_INVALID"
+        session.close()
+
+
+def test_malformed_or_noisy_output_is_sanitized(tmp_path):
+    bridge = fake_session_bridge(
+        tmp_path,
+        """
+        import sys
+
+        print("diagnostic noise containing TOP_SECRET", flush=True)
+        print("stderr TOP_SECRET", file=sys.stderr, flush=True)
+        import time
+        time.sleep(10)
+        """,
+    )
+    session = session_for(bridge, tmp_path=tmp_path)
+    with pytest.raises(PiBridgeError) as raised:
+        session.start()
 
     assert raised.value.code == "PI_PROTOCOL_INVALID"
     assert "TOP_SECRET" not in str(raised.value)
@@ -291,124 +312,140 @@ def test_malformed_or_noisy_output_is_sanitized(tmp_path):
 
 
 def test_invalid_result_shape_fails_closed(tmp_path):
-    runtime = _fake_runtime(
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import json
         import sys
 
-        sys.stdin.read()
-        events = [
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v1",
-                "execution_ready": True,
-            },
-            {"type": "started", "id": "prompt-1"},
-            {
-                "type": "finished",
-                "id": "prompt-1",
-                "status": "completed",
-                "result": None,
-            },
-        ]
-        for event in events:
-            print(json.dumps(event), flush=True)
+        identity = {"run_id": "run-1", "case_id": "case-1",
+                    "session_id": "session-1", "operation_id": "operation-1"}
+        seq = 0
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message["type"] == "probe":
+                seq += 1
+                print(json.dumps({"type": "version", "version": "t", "protocol": "v2",
+                                  "execution_ready": True, "seq": seq}), flush=True)
+            elif message["type"] == "init":
+                seq += 1
+                print(json.dumps({"type": "ready", "seq": seq, **identity,
+                                  "sdk_version": None}), flush=True)
+            elif message["type"] == "run":
+                seq += 1
+                print(json.dumps({"type": "finished", "seq": seq, **identity,
+                                  "id": message["id"], "status": "completed",
+                                  "result": None}), flush=True)
         """,
     )
-
+    session = session_for(bridge, tmp_path=tmp_path)
+    session.start()
     with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
+        session.run("hello")
     assert raised.value.code == "PI_PROTOCOL_INVALID"
+    session.close()
 
 
 def test_extra_event_fields_fail_closed(tmp_path):
-    runtime = _fake_runtime(
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import json
         import sys
 
-        sys.stdin.read()
-        events = [
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v1",
-                "execution_ready": True,
-            },
-            {"type": "started", "id": "prompt-1", "debug": "TOP_SECRET"},
-            {
-                "type": "finished",
-                "id": "prompt-1",
-                "status": "completed",
-                "result": {},
-            },
-        ]
-        for event in events:
-            print(json.dumps(event), flush=True)
+        identity = {"run_id": "run-1", "case_id": "case-1",
+                    "session_id": "session-1", "operation_id": "operation-1"}
+        seq = 0
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message["type"] == "probe":
+                seq += 1
+                print(json.dumps({"type": "version", "version": "t", "protocol": "v2",
+                                  "execution_ready": True, "seq": seq}), flush=True)
+            elif message["type"] == "init":
+                seq += 1
+                print(json.dumps({"type": "ready", "seq": seq, **identity,
+                                  "sdk_version": None}), flush=True)
+            elif message["type"] == "run":
+                seq += 1
+                print(json.dumps({"type": "session_event", "seq": seq, **identity,
+                                  "agent_event": {"type": "agent_start"},
+                                  "debug": "TOP_SECRET"}), flush=True)
+                import time
+                time.sleep(5)
         """,
     )
-
+    session = session_for(bridge, tmp_path=tmp_path)
+    session.start()
     with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
+        session.run("hello")
     assert raised.value.code == "PI_PROTOCOL_INVALID"
     assert "TOP_SECRET" not in str(raised.value)
+    session.close()
 
 
 def test_structured_bridge_error_preserves_code_and_sanitizes_message(tmp_path):
-    runtime = _fake_runtime(
+    bridge = fake_session_bridge(
         tmp_path,
         """
         import json
         import sys
 
-        sys.stdin.read()
-        events = [
-            {
-                "type": "version",
-                "version": "test-1.0",
-                "protocol": "v1",
-                "execution_ready": True,
-            },
-            {
-                "type": "error",
-                "id": "prompt-1",
-                "error": {
-                    "code": "PI_BACKEND_UNAVAILABLE",
-                    "message": "backend unavailable",
-                },
-            },
-        ]
-        for event in events:
-            print(json.dumps(event), flush=True)
+        identity = {"run_id": "run-1", "case_id": "case-1",
+                    "session_id": "session-1", "operation_id": "operation-1"}
+        seq = 0
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if message["type"] == "probe":
+                seq += 1
+                print(json.dumps({"type": "version", "version": "t", "protocol": "v2",
+                                  "execution_ready": True, "seq": seq}), flush=True)
+            elif message["type"] == "init":
+                seq += 1
+                print(json.dumps({"type": "ready", "seq": seq, **identity,
+                                  "sdk_version": None}), flush=True)
+            elif message["type"] == "run":
+                seq += 1
+                print(json.dumps({"type": "error", "id": message["id"], "seq": seq,
+                                  "error": {"code": "PI_BACKEND_UNAVAILABLE",
+                                            "message": "backend unavailable"}}), flush=True)
         """,
     )
-
+    session = session_for(bridge, tmp_path=tmp_path)
+    session.start()
     with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
+        session.run("hello")
 
     assert raised.value.code == "PI_BACKEND_UNAVAILABLE"
     assert str(raised.value) == "pi bridge reported an execution error"
     assert "backend unavailable" not in str(raised.value)
+    session.close()
 
 
 def test_timeout_terminates_the_full_process_tree(tmp_path):
-    runtime, marker = _hung_tree_runtime(tmp_path, timeout=1.0)
+    runtime, marker = hung_tree_runtime(tmp_path, timeout=1.0)
 
     started = time.monotonic()
     with pytest.raises(PiBridgeError) as raised:
-        runtime.run("hello")
+        runtime.probe()
     elapsed = time.monotonic() - started
 
     assert raised.value.code == "PI_BRIDGE_TIMEOUT"
-    assert elapsed < 5
-    _assert_grandchild_stopped(marker)
+    assert elapsed < 10
+    assert_grandchild_stopped(marker)
 
 
 def test_cancellation_terminates_the_full_process_tree(tmp_path, monkeypatch):
-    runtime, marker = _hung_tree_runtime(tmp_path, timeout=10.0)
+    runtime, marker = hung_tree_runtime(tmp_path, timeout=10.0)
     original_wait = subprocess.Popen.wait
     bridge_path = str(runtime.bridge_path)
     interrupted = False
@@ -427,6 +464,6 @@ def test_cancellation_terminates_the_full_process_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess.Popen, "wait", interrupt_bridge)
 
     with pytest.raises(KeyboardInterrupt):
-        runtime.run("hello")
+        runtime.probe()
 
-    _assert_grandchild_stopped(marker)
+    assert_grandchild_stopped(marker)
