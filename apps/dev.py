@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from http.client import HTTPConnection, HTTPException
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,65 @@ API_PORT = 8000
 WEB_PORT = 5173
 START_TIMEOUT = 60.0
 POLL_INTERVAL = 0.1
+# uvicorn's reloader watches every `*.py` beneath each reload directory. Defaulting to the
+# working directory means the repository root, so the sibling checkouts kept under
+# `.worktree/` were watched too: unrelated work in them restarted this API, and every scan
+# stat'ed thousands of files. `--reload-dir` is the lever that works with the standard
+# library watcher uvicorn falls back to when watchfiles is absent, so the default is a
+# whitelist of the directories this API imports. Both sides are overridable per run:
+# MOTTE_DEV_RELOAD_DIRS replaces the whitelist, MOTTE_DEV_RELOAD_EXCLUDE adds exclusion
+# patterns (which need watchfiles to have any effect).
+RELOAD_DIRS = ("apps", "packages")
+RELOAD_DIRS_ENV = "MOTTE_DEV_RELOAD_DIRS"
+RELOAD_EXCLUDE_ENV = "MOTTE_DEV_RELOAD_EXCLUDE"
+
+
+def env_list(name):
+    """Read a directory/pattern list from the environment (whitespace, comma, or `;`)."""
+    raw = os.environ.get(name, "")
+    return [entry for entry in raw.replace(os.pathsep, " ").replace(",", " ").split() if entry]
+
+
+def reload_watch():
+    """Watch scope for the API child as (reload directories, exclude arguments).
+
+    An exclude entry naming an existing directory is passed as an absolute path: uvicorn
+    matches exclude directories against the absolute paths its watcher reports, so a
+    relative `--reload-exclude .worktree` silently excludes nothing (measured). Glob
+    patterns are passed through untouched, since those are matched per path.
+    """
+    excludes = []
+    for entry in env_list(RELOAD_EXCLUDE_ENV):
+        path = Path(entry)
+        candidate = path if path.is_absolute() else ROOT / path
+        excludes.append(str(candidate.resolve()) if candidate.is_dir() else entry)
+    return (tuple(env_list(RELOAD_DIRS_ENV)) or RELOAD_DIRS), tuple(excludes)
+
+
+def watchfiles_installed():
+    return importlib.util.find_spec("watchfiles") is not None
+
+
+def warn_unwatchable_excludes(excludes):
+    """Say so instead of silently watching the excluded files anyway."""
+    if not excludes or watchfiles_installed():
+        return
+    print(f"[dev] {RELOAD_EXCLUDE_ENV}={' '.join(excludes)} has no effect without watchfiles "
+          f"(uvicorn ignores --reload-exclude); install it (uv add --dev watchfiles) or narrow "
+          f"the watch with {RELOAD_DIRS_ENV} instead.", file=sys.stderr, flush=True)
+
+
+def api_command():
+    """Reloading API child command line, scoped to the directories it imports."""
+    directories, excludes = reload_watch()
+    command = [sys.executable, "-m", "uvicorn", "apps.dev:create_dev_app", "--factory",
+               "--reload", "--host", HOST, "--port", str(API_PORT)]
+    for directory in directories:
+        # Relative to the child's working directory, which is ROOT.
+        command += ["--reload-dir", directory]
+    for pattern in excludes:
+        command += ["--reload-exclude", pattern]
+    return command
 
 
 def create_dev_app():
@@ -200,8 +260,8 @@ def run():
             raise RuntimeError("pnpm was not found on PATH; install the pinned prerequisites first.")
         token = uuid.uuid4().hex
         env = {**os.environ, "MOTTE_DEV_TOKEN": token}
-        api = Child("API", [sys.executable, "-m", "uvicorn", "apps.dev:create_dev_app",
-                            "--factory", "--reload", "--host", HOST, "--port", str(API_PORT)], env)
+        warn_unwatchable_excludes(reload_watch()[1])
+        api = Child("API", api_command(), env)
         children.append(api)
         wait_ready(api, token)
         check_port(WEB_PORT)
