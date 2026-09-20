@@ -1,0 +1,15 @@
+{"_fixture": {"schema": "codex-app-server/jsonrpc", "provenance": "synthetic-from-docs (https://developers.openai.com/codex/app-server/)", "live_capture": false, "parser_version": "codex-appserver-jsonrpc-v1", "pinned_cli_version": "0.155.1", "notes": "JSON-RPC over stdio 子集：initialize 握手 + thread/turn 生命周期 + codex/event 通知。方向前缀 --> 客户端发送，<-- 服务端返回；真实会话证据在 T10/live 单列"}}
+{"dir": "-->", "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "motteavl-consumer", "version": "1"}, "protocolVersion": "2025-03-26"}}
+{"dir": "<--", "jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26", "serverInfo": {"name": "codex-app-server", "version": "0.155.1"}}}
+{"dir": "-->", "jsonrpc": "2.0", "method": "notifications/initialized"}
+{"dir": "-->", "jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace/case-1", "model": "gpt-5-codex", "sandbox": "workspace-write"}}
+{"dir": "<--", "jsonrpc": "2.0", "id": 2, "result": {"threadId": "th_fixture_0001"}}
+{"dir": "<--", "jsonrpc": "2.0", "method": "codex/event", "params": {"threadId": "th_fixture_0001", "msg": {"type": "thread.started"}}}
+{"dir": "-->", "jsonrpc": "2.0", "id": 3, "method": "turn/create", "params": {"threadId": "th_fixture_0001", "input": [{"type": "text", "text": "write hello.txt"}]}}
+{"dir": "<--", "jsonrpc": "2.0", "id": 3, "result": {"turnId": "turn_0001"}}
+{"dir": "<--", "jsonrpc": "2.0", "method": "codex/event", "params": {"threadId": "th_fixture_0001", "msg": {"type": "turn.started", "turnId": "turn_0001"}}}
+{"dir": "<--", "jsonrpc": "2.0", "method": "codex/event", "params": {"threadId": "th_fixture_0001", "msg": {"type": "item.started", "item": {"id": "item_0002", "type": "command_execution", "command": "python -c \"open('hello.txt','w').write('hello')\"", "status": "in_progress"}}}
+{"dir": "<--", "jsonrpc": "2.0", "method": "codex/event", "params": {"threadId": "th_fixture_0001", "msg": {"type": "item.completed", "item": {"id": "item_0002", "type": "command_execution", "command": "python -c \"open('hello.txt','w').write('hello')\"", "exit_code": 0, "status": "completed"}}}
+{"dir": "<--", "jsonrpc": "2.0", "method": "codex/event", "params": {"threadId": "th_fixture_0001", "msg": {"type": "turn.completed", "usage": {"input_tokens": 480, "cache_read_input_tokens": 96, "cache_write_input_tokens": 0, "output_tokens": 56}}}
+{"dir": "-->", "jsonrpc": "2.0", "id": 4, "method": "thread/stop", "params": {"threadId": "th_fixture_0001"}}
+{"dir": "<--", "jsonrpc": "2.0", "id": 4, "result": {}}

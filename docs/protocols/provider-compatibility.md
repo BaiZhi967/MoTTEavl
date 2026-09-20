@@ -51,16 +51,23 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 
 | 运行时 | 状态 | 协议 | 验证 |
 |---|---|---|---|
-| `builtin-react` | 协议实现；Run backend 未接通 | 文本 JSON 动作协议（tool/final），observation 回灌，步数预算，全程事件 | 离线 runtime 测试；API `execution_ready=false` |
-| `pi` | 协议桩 v0.1.0 / v1；执行不可用 | 严格 JSONL probe；默认 prompt 返回 `PI_BACKEND_UNAVAILABLE`，不 echo、不执行输入 | Node 自测 + Python malformed/timeout/process-tree 测试；API `execution_ready=false` |
+| `builtin-react` | 协议实现；Run backend 已接通（builtin-agent@1） | 文本 JSON 动作协议（tool/final），observation 回灌，步数预算，全程事件 | 离线 runtime 测试；M1 交付 |
+| `pi`（pi-agent@1） | M4-T02 锁定上游 `@mariozechner/pi-agent-core@0.73.1`（MIT，Node ≥20，pnpm-lock 固定）；真实 SDK bridge 在 M4-T03 接线 | 严格 JSONL v2（probe/init/run/interrupt + session/operation 归属） | 分层就绪 installed/protocol_ready/execution_ready；fail-closed 兼容矩阵见 `runtime-compatibility.json` |
 
-## Harness
+## Harness（M4-T02 起由 runtime-compatibility.json 锁定）
 
-| Harness | 状态 | probe | 传输 | 验证 |
-|---|---|---|---|---|
-| `claude-cli` | 本机 probe；Run backend 未接通 | `claude --version` + 安装检测（路径/来源/版本） | 预留 CLI 通道 | 目录报告 `protocol_ready` 与 `execution_ready=false` |
-| `codex-cli` | 本机 probe；Run backend 未接通 | `codex --version` + 安装检测 | 预留 CLI/app-server 通道 | 目录报告 `protocol_ready` 与 `execution_ready=false` |
-| `inspect` | dry-run 占位 | — | — | Inspect Task/Solver/Scorer 映射待接入 |
+| Harness | pinned 上游 | 传输 | 就绪边界 |
+|---|---|---|---|
+| `claude-cli`（claude-cli@1） | `@anthropic-ai/claude-code@2.1.278`（registry 2026-09-20 核对） | batch：`-p --output-format json` | installed/protocol 由 --version 与 pinned 比对；execution_ready 需 live 小任务证据 |
+| `codex-cli`（codex-cli@1） | `@openai/codex@0.155.1`（registry 2026-09-20 核对） | batch：`exec --json`（JSONL） | 同上；版本漂移 fail closed |
+| `codex-app-server@1` | `@openai/codex@0.155.1` | JSON-RPC stdio 子集（initialize/thread/turn + codex/event） | T10 交付命令消费者；真实会话证据 live 单列 |
+| `inspect` | 只读导入（M4-T11），不执行 | 固定 Inspect eval-log schema | 原始日志 hash + 版本化 parser；不支持执行 |
+
+版本锁定与能力声明的唯一事实源：`docs/protocols/runtime-compatibility.json`
+（含 config_discovery 环境变量/自动发现文件清单与 readiness 规则）。
+协议夹具：`tests/fixtures/harness/`（claude-batch-result-v1.json、
+codex-exec-events-v1.jsonl、codex-app-server-rpc-v1.jsonl；provenance 为
+synthetic-from-docs，live 捕获待授权后补充）。
 
 ## Sandbox
 
@@ -79,7 +86,7 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 | Node | 24 | `.nvmrc` / `.node-version` |
 | pnpm | 9.15.0 | `package.json packageManager` |
 | TypeScript（web） | 5.9（openapi-typescript 尚不支持 TS7） | `apps/web/package.json` |
-| pi-bridge | 0.1.0 / 协议 v1 | `bridges/pi/package.json` |
-| 迁移 | alembic 1.20 / 当前 head `0006_external_jobs` | `alembic.ini` / `migrations/versions/` |
+| pi-bridge | 2.0.0 / 协议 v2（真实 SDK，M4-T03） | `bridges/pi/package.json`（上游 `@mariozechner/pi-agent-core@0.73.1`） |
+| 迁移 | alembic 1.20 / 当前 head `0009_runtime_resources` | `alembic.ini` / `migrations/versions/` |
 
 更新本矩阵的时机：新增/变更 Provider、Agent、Harness、bridge 协议或工具链版本时，随同一提交更新。

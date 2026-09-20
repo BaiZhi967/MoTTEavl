@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "manifest_version": "2026-09-20.1",
+  "verified_at": "2026-09-20",
+  "verification_sources": {
+    "pi-agent-core": "https://www.npmjs.com/package/@mariozechner/pi-agent-core (registry metadata + installed dist inspection)",
+    "claude-code": "https://www.npmjs.com/package/@anthropic-ai/claude-code (registry metadata)",
+    "codex": "https://www.npmjs.com/package/@openai/codex (registry metadata)",
+    "claude_headless_docs": "https://code.claude.com/docs/en/headless",
+    "codex_exec_docs": "https://developers.openai.com/codex/noninteractive/",
+    "codex_app_server_docs": "https://developers.openai.com/codex/app-server/",
+    "pi_repo": "https://github.com/earendil-works/pi"
+  },
+  "verification_boundary": "registry metadata 与官方文档核对；claude/codex 二进制未在本机安装，协议 fixture 为按官方文档格式构造的合成夹具（synthetic-from-docs），真实捕获需 live 授权后补充",
+  "backends": {
+    "pi-agent@1": {
+      "kind": "pi-bridge",
+      "transport": "bridge-stdio-jsonl",
+      "upstream": {
+        "package": "@mariozechner/pi-agent-core",
+        "version": "0.73.1",
+        "model_package": "@mariozechner/pi-ai@0.73.1",
+        "registry": "npm",
+        "license": "MIT",
+        "node_min": "20",
+        "install_scope": "bridges/pi workspace (pnpm-lock.yaml)"
+      },
+      "adapter_version": "pi-bridge@2",
+      "parser_version": "pi-jsonl-v2",
+      "capabilities": {
+        "model_control": "platform-controlled-or-runner-configured",
+        "scripted_model_offline": true,
+        "tool_injection": "bridge-side workspace tools",
+        "session_events": true,
+        "usage": true,
+        "cost": false,
+        "model_identity": true,
+        "cancel": true
+      },
+      "config_discovery": {
+        "env": [],
+        "auto_discovered_files": [],
+        "notes": "bridge 进程不读取操作者 home/全局配置；全部设置经 init 控制消息注入"
+      },
+      "readiness_rules": {
+        "installed": "node >= 20 且 bridges/pi node_modules 中 pi-agent-core 版本 == 0.73.1",
+        "protocol_ready": "bridge probe 返回 protocol v2 且 execution_ready 声明为真",
+        "execution_ready": "真实 SDK session + scripted model 驱动真实工具任务的离线证据（tests/protocol/test_pi_real_adapter.py）"
+      }
+    },
+    "claude-cli@1": {
+      "kind": "claude-cli",
+      "transport": "cli-batch-json",
+      "upstream": {
+        "package": "@anthropic-ai/claude-code",
+        "version": "2.1.278",
+        "registry": "npm",
+        "license": "SEE LICENSE IN README.md",
+        "binary": "claude"
+      },
+      "adapter_version": "claude-batch@1",
+      "parser_version": "claude-json-v1",
+      "batch_invocation": {
+        "argv_pattern": ["claude", "-p", "<prompt>", "--output-format", "json"],
+        "model_flag": "--model <model>",
+        "permission_flag": "--permission-mode <mode>",
+        "max_turns_flag": "--max-turns <n>",
+        "disallowed_tools_flag": "--disallowed-tools <list>",
+        "settings_flag": "--settings <file>",
+        "add_dirs_flag": "--add-dir <dir>"
+      },
+      "capabilities": {
+        "model_control": "runner-configured",
+        "auth": "claude 原生登录（externally-managed；平台不读取 auth 文件内容）",
+        "session_events": true,
+        "usage": true,
+        "cost": true,
+        "model_identity": true,
+        "cancel": "process-interrupt"
+      },
+      "config_discovery": {
+        "env": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_*"],
+        "auto_discovered_files": ["~/.claude/CLAUDE.md", "~/.claude/settings.json", "~/.claude/rules/*", "./CLAUDE.md", "./.claude/*"],
+        "notes": "受控运行必须通过 --settings 提供干净配置或在 ConfigSnapshot 中完整记录发现清单；无法禁用自动发现时 reproducibility=partial"
+      },
+      "readiness_rules": {
+        "installed": "claude 二进制在 PATH 且 --version 可解析",
+        "protocol_ready": "--version 报告的主版本 == 2.1.278 的 pinned 兼容版本（漂移即 fail closed）",
+        "execution_ready": "真实小任务 + 取消 + 非零退出证据（live，另行授权）"
+      }
+    },
+    "codex-cli@1": {
+      "kind": "codex-cli",
+      "transport": "cli-exec-jsonl",
+      "upstream": {
+        "package": "@openai/codex",
+        "version": "0.155.1",
+        "registry": "npm",
+        "license": "Apache-2.0",
+        "binary": "codex"
+      },
+      "adapter_version": "codex-batch@1",
+      "parser_version": "codex-jsonl-v1",
+      "batch_invocation": {
+        "argv_pattern": ["codex", "exec", "--json", "<prompt>"],
+        "model_flag": "-m <model>",
+        "config_flag": "-c <key>=<value>",
+        "sandbox_flag": "--sandbox <mode>",
+        "cd_flag": "--cd <dir>",
+        "skip_git_flag": "--skip-git-repo-check"
+      },
+      "capabilities": {
+        "model_control": "runner-configured",
+        "auth": "codex 原生登录（externally-managed；平台不读取 auth 文件内容）",
+        "session_events": true,
+        "usage": true,
+        "cost": false,
+        "model_identity": true,
+        "cancel": "process-interrupt"
+      },
+      "config_discovery": {
+        "env": ["OPENAI_API_KEY", "CODEX_*"],
+        "auto_discovered_files": ["~/.codex/config.toml", "~/.codex/AGENTS.md", "./AGENTS.md"],
+        "notes": "受控运行用 -c 覆盖配置 + 受控 --cd 工作区；自动发现清单记录进 ConfigSnapshot，否则 partial"
+      },
+      "readiness_rules": {
+        "installed": "codex 二进制在 PATH 且 --version 可解析",
+        "protocol_ready": "--version 报告版本 == 0.155.1（漂移即 fail closed）",
+        "execution_ready": "真实小任务 + 取消 + 非零退出证据（live，另行授权）"
+      }
+    },
+    "codex-app-server@1": {
+      "kind": "codex-app-server",
+      "transport": "app-server-jsonrpc",
+      "upstream": {
+        "package": "@openai/codex",
+        "version": "0.155.1",
+        "registry": "npm",
+        "license": "Apache-2.0",
+        "binary": "codex",
+        "subcommand": "app-server"
+      },
+      "adapter_version": "codex-app-server@1",
+      "parser_version": "codex-appserver-jsonrpc-v1",
+      "protocol_subset": {
+        "initialize": "JSON-RPC initialize/initialized 握手（protocolVersion、capabilities）",
+        "thread_turn": "thread/turn 生命周期（thread.started / turn.started / item.* / turn.completed / turn.failed）",
+        "notifications": "codex/event 通知承载增量事件"
+      },
+      "capabilities": {
+        "model_control": "runner-configured",
+        "auth": "codex 原生登录（externally-managed）",
+        "session_events": true,
+        "usage": true,
+        "cost": false,
+        "model_identity": true,
+        "cancel": "JSON-RPC cancel + 进程 interrupt",
+        "interactive_commands": true
+      },
+      "config_discovery": {
+        "env": ["OPENAI_API_KEY", "CODEX_*"],
+        "auto_discovered_files": ["~/.codex/config.toml"],
+        "notes": "交互增强（M4-T10）单独注册；本 manifest 在 T02 只验证协议子集描述，真实 app-server 会话证据在 T10/live 单列"
+      },
+      "readiness_rules": {
+        "installed": "codex 二进制在 PATH 且 --version 可解析",
+        "protocol_ready": "二进制版本 == 0.155.1 且协议子集经本机 fixture 验证（合成 RPC）",
+        "execution_ready": "真实 app-server 会话 + 命令 ack/恢复证据（T10 合成 + live 单列）"
+      }
+    }
+  }
+}

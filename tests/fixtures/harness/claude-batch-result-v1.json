@@ -1,0 +1,41 @@
+{
+  "_fixture": {
+    "schema": "claude-batch-json/result",
+    "provenance": "synthetic-from-docs (https://code.claude.com/docs/en/headless)",
+    "live_capture": false,
+    "parser_version": "claude-json-v1",
+    "pinned_cli_version": "2.1.278",
+    "notes": "claude -p --output-format json 的单对象结果形态；字段按官方 programmatic usage 文档构造，真实捕获待 live 授权后补充并替换 provenance"
+  },
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 2450,
+  "duration_api_ms": 2100,
+  "num_turns": 2,
+  "result": "I created hello.txt with the requested content.",
+  "session_id": "fixture-session-0001",
+  "total_cost_usd": 0.0123,
+  "usage": {
+    "input_tokens": 420,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 96
+  },
+  "modelUsage": {
+    "claude-sonnet-4-5": {
+      "inputTokens": 420,
+      "outputTokens": 96,
+      "cacheCreationInputTokens": 0,
+      "cacheReadInputTokens": 0,
+      "cost": {
+        "totalCostUsd": 0.0123,
+        "totalDurationMs": 2100,
+        "totalApiDurationMs": 1980,
+        "totalLinesAdded": 1,
+        "totalLinesRemoved": 0
+      }
+    }
+  },
+  "permission_denials": []
+}
