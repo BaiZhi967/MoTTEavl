@@ -92,16 +92,29 @@ def test_each_frozen_condition_produces_its_own_reason():
     baseline = _manifest(agent_id="oracle", agent_version="1.0.0")
     cases = {
         "REPEATS_CHANGED": {"n_trials": 2},
-        "TOOLS_CHANGED": {"tools": {"extra": True}},
         "AGGREGATION_CHANGED": {"aggregation": "mean-success"},
         "ENVIRONMENT_CHANGED": {"environment": {"type": "docker", "delete": False}},
         "CREDENTIALS_CHANGED": {"credentials": {"provider": {"ref": "env:MOTTE_TEST_KEY_REF"}}},
         "TIMEOUTS_CHANGED": {"timeouts": {"agent_sec": 42}},
         "RESOURCES_CHANGED": {"resources": {"memory_mb": 512}},
-        "LIMITS_CHANGED": {"limits": {"poll_interval_seconds": 1.0}},
     }
     for expected_code, overrides in cases.items():
         result = _compare(baseline, _manifest(**overrides))
+        assert result.eligible is False, (expected_code, result.reasons)
+        assert any(reason.startswith(expected_code) for reason in result.reasons), (
+            expected_code, result.reasons,
+        )
+    # tools/limits 在创建路径上必须能映射到固定 Harbor Agent 的原生执行参数
+    # （M3-R2-11：不支持的非空配置会被 HARBOR_PROFILE_UNSUPPORTED_FIELD 拒绝），
+    # 因此这两个"未映射取值"的条件与 retries 一样直接改冻结字段——比较政策
+    # 看到的仍是"冻结实验条件不同 → 不可比"这条不变量。
+    for expected_code, patch in (
+        ("TOOLS_CHANGED", {"tools": {"extra": True}}),
+        ("LIMITS_CHANGED", {"limits": {"poll_interval_seconds": 1.0}}),
+    ):
+        candidate = _manifest()
+        candidate["external_benchmark"]["profile"].update(patch)
+        result = _compare(baseline, candidate)
         assert result.eligible is False, (expected_code, result.reasons)
         assert any(reason.startswith(expected_code) for reason in result.reasons), (
             expected_code, result.reasons,
@@ -179,3 +192,41 @@ def test_missing_identity_is_never_treated_as_equal():
     result = _compare(baseline, candidate)
     assert result.eligible is False
     assert any(r.startswith("IDENTITY_MISSING:n_trials") for r in result.reasons)
+
+
+def _claude_manifest(*, model: str, run_id: str = "run-a") -> dict:
+    return _manifest(
+        run_id=run_id,
+        agent_id="claude-code",
+        agent_version="2.0.30",
+        model={"provider": "anthropic", "model": model},
+        credentials={"provider": {"ref": "env:ANTHROPIC_API_KEY"}},
+    )
+
+
+def test_model_change_is_blocked_when_the_policy_forbids_it():
+    """TB 的模型身份在 ``external.profile.model``：政策不允许换模型时必须阻断。
+
+    review R2-10 的反例：两份 manifest 只有模型不同（Claude Agent、凭据、任务与
+    预算都相同），``allowed_factors`` 为空时修复前返回 ``eligible=true``——因为
+    特殊分支只比较了 manifest 顶层的 ``model``。
+    """
+    baseline = _claude_manifest(model="claude-sonnet-4-5")
+    candidate = _claude_manifest(model="claude-opus-4-1", run_id="run-b")
+    strict = _compare(baseline, candidate, allowed=())
+    assert strict.eligible is False
+    assert any(
+        r.startswith("FACTOR_NOT_ALLOWED:model") for r in strict.reasons
+    ), strict.reasons
+    assert strict.metric_eligibility["quality"] is False
+
+
+def test_allowed_model_change_is_recorded():
+    """政策显式允许换模型时可比较，但差异必须留下可审计记录。"""
+    baseline = _claude_manifest(model="claude-sonnet-4-5")
+    candidate = _claude_manifest(model="claude-opus-4-1", run_id="run-b")
+    result = _compare(baseline, candidate, allowed=("model",))
+    assert result.eligible is True, result.reasons
+    assert any(
+        r.startswith("ALLOWED_FACTOR:model") for r in result.allowed_differences
+    ), result.allowed_differences

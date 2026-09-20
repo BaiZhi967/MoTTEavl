@@ -40,7 +40,10 @@
 | 任一数据集 | 真实模型 Agent（非 oracle） | docker | `blocked` | 需用户显式授权：可审阅任务清单、模型、Profile、重复数、预算与期限；未授权前不执行 | — |
 | 任一数据集 | `oracle` 1.0.0 | 受限网络策略（`none` / `restricted`） | `not_run` | 未执行；受限策略会产生 `platform_custom_profile: true` | 预检逻辑与指纹有测试：`tests/benchmarks/test_harbor_preflight.py` |
 | 任一数据集 | `oracle` 1.0.0 | Verifier 可见性变体（非 `upstream`） | `not_run` | 未执行；变体必须标平台自定义 Profile | 同上 |
-| 任一数据集（含任务自带 `environment/docker-compose.yaml`） | `oracle` 1.0.0 | docker | `offline_fixture` | **已验证**：恶意 Compose（Docker socket、`/:/host`、privileged、host network 等）在零任务启动、零模型调用时被具名原因码拒绝 | `tests/benchmarks/test_harbor_task_compose_policy.py` |
+| 任一数据集（含任务自带 `environment/docker-compose.yaml`） | `oracle` 1.0.0 | docker | `offline_fixture` | **已验证**：恶意 Compose（直接 bind、Docker socket、privileged、host network）与**间接资源**（命名 volume 的 `driver_opts` bind、顶层 `secrets`/`configs` 文件源、`external: true`、无法求值的插值）在零任务启动、零模型调用时被具名原因码拒绝 | `tests/benchmarks/test_harbor_task_compose_policy.py` |
+| 任一数据集 | `oracle` 1.0.0 | docker（Runner 环境白名单） | `local_docker` | **已验证**：任务 compose 的凭据透传（`[VAR]` / `{VAR: null}` / `secrets.environment` / `${VAR}`）被拒绝；Runner→compose 环境为显式白名单，合成宿主秘密不出现在 `docker compose` 可见名字集合与任务容器 `Config.Env` 中；Agent 凭据仍在 Runner 环境（Harbor Agent 需要）但不可被任务命名 | `tests/runtime/test_runner_env_boundary.py`、`tests/integration/test_harbor_compose_env_boundary.py` |
+| 任一数据集 | `oracle` 1.0.0 | docker（清理/所有权核验） | `local_docker` | **已验证**：运行中取消只停止真正拥有的容器；**冒名容器**（同 job 标签、他人 run/owner/project）保留且清理报 `unknown` 并给冲突明细 | `tests/integration/test_harbor_container_ownership.py`、`tests/integration/test_harbor_live_cancel_and_deadline.py` |
+| 仓库校准夹具集 | `claude-code` 2.0.30（模型 `anthropic/claude-sonnet-4-5`，凭据 `env:ANTHROPIC_API_KEY`，执行参数 `reasoning_effort`/`max_turns`/`max_budget_usd`/`allowed_tools`） | docker | `native_config_offline` | **原生配置与执行参数已验证**：真实 Harbor 0.23.0 的 `ClaudeCodeOptions` 接受该 kwargs 并编译出对应 CLI/env（零容器、零模型调用）；公共 API/Web 已接通仅引用形式的凭据入口 | `tests/integration/test_harbor_agent_native.py`、`tests/api/test_terminalbench_round2_fixes.py`、Web `R2-06` |
 
 ## 3. 未验证项的处理
 

@@ -195,6 +195,102 @@ def test_container_without_ownership_evidence_is_not_acted_on() -> None:
     assert outcome["errors"] == [], "不再命中就不再动作，也不谎报错误"
 
 
+def test_ownership_conflict_refuses_cleanup_and_reports_unknown() -> None:
+    """M3-R2-08 反例：job 标签匹配但 run/owner 明确冲突的容器绝不能被动。
+
+    review 复现：假 client 返回一个 ``motte.job`` 匹配、``motte.run`` 与
+    ``motte.owner`` 都不同的容器，``stop_owned(remove=True)`` 仍停止/删除并报告
+    ``clean``。构造器保存的 run_id/owner_label 必须参与判定：明确冲突 → 拒绝
+    动作、状态 unknown 并附冲突明细，绝不用 project fallback 覆盖。
+    """
+    consistent = FakeContainer(
+        container_id="a" * 64, name="consistent",
+        labels={OWNER_LABEL_JOB: "job-owner", OWNER_LABEL_RUN: "run-owner",
+                OWNER_LABEL_OWNER: owner_label_value("token-owner-1")},
+    )
+    owner_conflict = FakeContainer(
+        container_id="b" * 64, name="owner-conflict",
+        labels={OWNER_LABEL_JOB: "job-owner", OWNER_LABEL_RUN: "run-owner",
+                OWNER_LABEL_OWNER: owner_label_value("someone-elses-token")},
+    )
+    run_conflict = FakeContainer(
+        container_id="c" * 64, name="run-conflict",
+        labels={OWNER_LABEL_JOB: "job-owner", OWNER_LABEL_RUN: "another-run",
+                OWNER_LABEL_OWNER: owner_label_value("token-owner-1")},
+    )
+    foreign_job = FakeContainer(
+        container_id="d" * 64, name="foreign-job-same-project",
+        labels={OWNER_LABEL_JOB: "another-job",
+                COMPOSE_PROJECT_LABEL: "hello-pass__abc1234__env"},
+    )
+    project_only = FakeContainer(
+        container_id="e" * 64, name="project-only",
+        labels={COMPOSE_PROJECT_LABEL: "hello-pass__abc1234__env"},
+    )
+    client = FakeClient([consistent, owner_conflict, run_conflict, foreign_job, project_only])
+    ownership = _ownership(client, projects=("hello-pass__abc1234__env",))
+
+    listed = ownership.list_owned()
+    # 冲突项不出现在"可动作"列表里，但必须被显式登记。
+    assert sorted(item["name"] for item in listed["containers"]) == [
+        "consistent", "project-only",
+    ]
+    assert sorted(item["name"] for item in listed["conflicts"]) == [
+        "foreign-job-same-project", "owner-conflict", "run-conflict",
+    ]
+    assert listed["state"] == "unknown", listed
+
+    outcome = ownership.stop_owned(remove=True)
+    assert consistent.stopped and consistent.removed
+    assert project_only.stopped and project_only.removed, "只有 project 证据、无冲突时仍可清理"
+    assert not owner_conflict.stopped and not owner_conflict.removed
+    assert not run_conflict.stopped and not run_conflict.removed
+    assert not foreign_job.stopped and not foreign_job.removed, "别的 Job 标签不得用 project 覆盖"
+    assert outcome["state"] == "unknown", outcome
+    assert outcome["reason"], "unknown 必须附原因"
+    assert sorted(item["name"] for item in outcome["conflicts"]) == [
+        "foreign-job-same-project", "owner-conflict", "run-conflict",
+    ]
+    codes = {
+        conflict["code"]
+        for item in outcome["conflicts"] for conflict in item["conflicts"]
+    }
+    assert codes == {
+        "HARBOR_CONTAINER_FOREIGN_JOB_LABEL",
+        "HARBOR_CONTAINER_OWNER_CONFLICT",
+        "HARBOR_CONTAINER_RUN_CONFLICT",
+    }, codes
+
+    after = ownership.state()
+    assert after["state"] == "unknown", after
+    assert sorted(item["name"] for item in after["conflicts"]) == [
+        "foreign-job-same-project", "owner-conflict", "run-conflict",
+    ]
+
+
+def test_conflict_detected_at_action_time_refuses_that_container() -> None:
+    """定位后标签被改：动作前复验必须拒绝（错误里带冲突明细）。"""
+    container = FakeContainer(
+        container_id="f" * 64, name="relabelled",
+        labels={COMPOSE_PROJECT_LABEL: "hello-pass__abc1234__env"},
+    )
+    client = FakeClient([container])
+    ownership = _ownership(client, projects=("hello-pass__abc1234__env",))
+    assert ownership.list_owned()["state"] == "residual"
+
+    # 列出来之后、动作之前被改成"另一个 Job 带本 Job 的 project 标签"。
+    container.labels[OWNER_LABEL_JOB] = "another-job"
+    outcome = ownership.stop_owned(remove=True)
+    assert not container.stopped and not container.removed
+    conflicts = [
+        error for error in outcome["errors"]
+        if error["code"] == "HARBOR_CONTAINER_OWNERSHIP_CONFLICT"
+    ]
+    assert len(conflicts) == 1, outcome["errors"]
+    assert conflicts[0]["conflicts"][0]["code"] == "HARBOR_CONTAINER_FOREIGN_JOB_LABEL"
+    assert outcome["reason"], outcome
+
+
 # ------------------------------------------------------------------ Runner 侧
 
 
@@ -250,7 +346,12 @@ def test_adapter_reads_trial_projects_from_the_location_file(tmp_path: Path) -> 
 
 @pytest.mark.skipif(not DOCKER_AVAILABLE, reason="real Docker daemon required")
 def test_real_docker_interrupt_and_cleanup_keep_decoys(tmp_path: Path) -> None:
-    """受控真实 Docker：定向停止/删除本 Job 容器，诱饵容器原样保留。"""
+    """受控真实 Docker：定向停止/删除本 Job 容器，诱饵与冲突项原样保留。
+
+    诱饵两类：无关 Job 的容器（标签完全不同）与**冒充本 Job** 的容器（``motte.job``
+    是我们、``motte.run``/``motte.owner`` 却是别人的）——后者必须被拒绝动作，
+    并把状态记成 unknown 且附冲突明细（M3-R2-08）。
+    """
     import docker
 
     client = docker.from_env()
@@ -276,11 +377,24 @@ def test_real_docker_interrupt_and_cleanup_keep_decoys(tmp_path: Path) -> None:
         labels={COMPOSE_PROJECT_LABEL: project},
         remove=False,
     )
+    impostor = client.containers.run(
+        TEST_IMAGE, ["sleep", "600"], detach=True,
+        name=f"motte-impostor-{stamp}",
+        labels={OWNER_LABEL_JOB: job_id, OWNER_LABEL_RUN: "someone-elses-run",
+                OWNER_LABEL_OWNER: owner_label_value("someone-elses-token"),
+                COMPOSE_PROJECT_LABEL: project},
+        remove=False,
+    )
     handle = _fixture_handle(tmp_path, job_id=job_id)
+    # 容器标签与平台记录必须一致（run/owner 都是所有权证据的一部分）。
     handle = handle.model_copy(update={
+        "run_id": "run-real",
         "launch_token": "token-real",
-        "owned_resources": {**handle.owned_resources, "container_owner_label":
-                            owner_label_value("token-real")},
+        "owned_resources": {
+            **handle.owned_resources,
+            "run_id": "run-real",
+            "container_owner_label": owner_label_value("token-real"),
+        },
     })
     (Path(handle.work_dir) / "harbor" / "job-location.json").write_text(
         json.dumps({
@@ -295,27 +409,37 @@ def test_real_docker_interrupt_and_cleanup_keep_decoys(tmp_path: Path) -> None:
     try:
         ownership = adapter.ownership(handle)
         listed = ownership.list_owned()
-        assert listed["state"] == "residual", listed
+        # 冲突项（冒充本 Job）不进可动作列表，但被显式登记 → 状态 unknown。
+        assert listed["state"] == "unknown", listed
         names = sorted(item["name"] for item in listed["containers"])
         assert names == sorted([owned.name, by_project.name]), names
+        assert [item["name"] for item in listed["conflicts"]] == [impostor.name]
         assert all(item["project"] or item["labels"] for item in listed["containers"])
 
-        # interrupt：停止（不删除）本 Job 容器。
+        # interrupt：停止（不删除）本 Job 容器；冲突项与诱饵都不动。
         interrupted = adapter.interrupt(handle)
-        assert interrupted.owned_resources["container_state"] in ("clean", "residual")
+        assert interrupted.owned_resources["container_state"] == "unknown"
         owned.reload()
         by_project.reload()
         decoy.reload()
+        impostor.reload()
         assert owned.status != "running", "本 Job 容器必须被停止"
         assert by_project.status != "running", "按 compose project 命中的容器必须被停止"
         assert decoy.status == "running", "诱饵容器不得被停止"
+        assert impostor.status == "running", "run/owner 冲突的容器不得被停止"
 
-        # cleanup：删除本 Job 容器，诱饵仍在。
+        # cleanup：删除本 Job 容器；诱饵与冲突项仍在，状态如实为 unknown。
         cleanup = adapter.cleanup(handle)
-        assert cleanup["state"] in ("clean", "residual")
-        assert cleanup["container_state"] == "clean", cleanup["container_errors"]
+        assert cleanup["container_state"] == "unknown", cleanup["container_errors"]
+        assert cleanup["state"] in ("residual", "unknown")
         remaining = [item.name for item in cleanup["containers"]]
         assert remaining == [], remaining
+        conflict_errors = [
+            error for error in cleanup["container_errors"]
+            if error["code"] == "HARBOR_CONTAINER_OWNERSHIP_CONFLICT"
+        ]
+        assert len(conflict_errors) == 1, cleanup["container_errors"]
+        assert conflict_errors[0]["container"]["name"] == impostor.name
         assert any(item["kind"] == "container" for item in cleanup["known_resources"]) is False
         assert any(
             item["kind"] == "container"
@@ -326,10 +450,13 @@ def test_real_docker_interrupt_and_cleanup_keep_decoys(tmp_path: Path) -> None:
         with pytest.raises(docker.errors.NotFound):
             client.containers.get(by_project.id)
         assert client.containers.get(decoy.id).status == "running"
-        # daemon 可达且无本 Job 容器 → 有证据的 clean（残留只剩工作目录）。
-        assert adapter.ownership(handle).state()["state"] == "clean"
+        assert client.containers.get(impostor.id).status == "running"
+        # 冲突仍在 → 残留核查不许报 clean。
+        residual = adapter.ownership(handle).state()
+        assert residual["state"] == "unknown", residual
+        assert [item["name"] for item in residual["conflicts"]] == [impostor.name]
     finally:
-        for container in (owned, by_project, decoy):
+        for container in (owned, by_project, decoy, impostor):
             try:
                 container.remove(force=True)
             except Exception:  # noqa: BLE001 - 清理失败不影响断言结论

@@ -1,9 +1,14 @@
 # Harbor 取消、清理与残留核查 runbook
 
 > 状态：**所有权、清理报告与残留清单已实现并有测试**，且真实 Docker 上的
-> 运行中取消 / SIGKILL 残留定位已实跑通过（review R04/R05 复验；
-> 见 [M3 验证记录](../verification/M3.md)）。本文只描述本平台实际拥有的
-> 资源与操作顺序；不覆盖 Harbor 内部状态机。
+> 运行中取消 / SIGKILL 残留定位 / 冒名容器拒绝已实跑通过（review R04/R05 与
+> round-2 R2-08 复验；见 [M3 验证记录](../verification/M3.md)）。本文只描述本平台
+> 实际拥有的资源与操作顺序；不覆盖 Harbor 内部状态机。
+>
+> **操作前核对完整所有权证据**（round-2 R2-08）：job 标签、`motte.run`、
+> `motte.owner` 与 compose project 必须一致（或只有 project 匹配）；出现明确
+> 冲突时**拒绝清理**并报 `unknown` + 冲突明细，绝不用 project fallback 覆盖
+> 明确的 owner 不一致。
 
 ## 1. 所有权模型
 

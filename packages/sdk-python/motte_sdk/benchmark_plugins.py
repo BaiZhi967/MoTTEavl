@@ -272,13 +272,26 @@ def import_terminal_bench_trials(
 
     计划来自冻结 manifest（不依赖本次采集），因此"某个 Trial 没跑成"也会
     留下 pending/not_attempted 记录，覆盖统计不会因缺行而虚高。
+
+    review R2-03/R2-09 的两条硬规则：
+
+    - **当前 Run 边界**：目标 Trial 必须属于本 Run 的冻结计划（``run_id`` 与
+      冻结计划一致）；未知身份显式拒绝（``unknown_trial`` 也是拒绝），绝不
+      写到别的 Run 名下；
+    - **逐条隔离**：单条非法 payload 只影响它自己，合法兄弟结果继续落库；
+      返回完整 ``accepted`` / ``invalid`` 清单，调用方的派生视图只消费已接受
+      的记录。
     """
     manifest = run.get("manifest") or {}
     external = manifest.get("external_benchmark") or {}
     plan = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
     trials = getattr(store, "trials", None)
+    run_id = str(run.get("id") or "")
     if trials is None or not plan:
-        return {"created": 0, "stored": 0, "identical": 0, "conflicts": 0, "skipped": True}
+        return {
+            "created": 0, "stored": 0, "identical": 0, "conflicts": 0, "skipped": True,
+            "accepted": [], "invalid": [],
+        }
     created = trials.create_plans([dict(item) for item in plan])
     statuses: dict[str, int] = {}
     for item in created:
@@ -286,8 +299,15 @@ def import_terminal_bench_trials(
     conflicts: list[dict[str, Any]] = [
         item for item in created if item["status"] == "conflict"
     ]
+    #: 本 Run 冻结计划里的 Trial 身份（跨 Run 写入的唯一合法目标集合）。
+    owned: dict[str, dict[str, Any]] = {
+        str(item["trial_id"]): dict(item) for item in plan if item.get("trial_id")
+    }
     stored = 0
     identical = 0
+    replaced: list[dict[str, Any]] = []
+    accepted: list[str] = []
+    invalid: list[dict[str, Any]] = []
     for row in results:
         payload = row.get("result") if isinstance(row.get("result"), dict) else None
         if not payload:
@@ -298,25 +318,75 @@ def import_terminal_bench_trials(
         # 身份：错配必须由存储的身份校验拒绝，而不是写到另一个 Trial 名下。
         target = str(row.get("trial_id") or payload.get("trial_id") or "")
         if not target:
+            invalid.append({
+                "trial_id": None,
+                "code": "TRIAL_IDENTITY_MISSING",
+                "message": "trial payload carries no trial identity",
+            })
             continue
-        outcome = trials.put_result(
-            target, payload,
-            source_hash=canonical_hash(payload),
-            parser_version=str(payload.get("parser_version") or "harbor-terminal-bench-parser@1"),
-        )
-        if outcome["status"] == "stored":
+        frozen = owned.get(target)
+        if frozen is None:
+            # 不属于本 Run 的冻结计划：显式拒绝，绝不落到别的 Run 名下（R2-03）。
+            invalid.append({
+                "trial_id": target,
+                "code": "TRIAL_NOT_IN_FROZEN_PLAN",
+                "message": (
+                    "trial does not belong to this run's frozen plan; the payload is "
+                    "rejected and no other run's evidence is touched"
+                ),
+            })
+            continue
+        try:
+            outcome = trials.put_result(
+                target, payload,
+                source_hash=canonical_hash(payload),
+                parser_version=str(
+                    payload.get("parser_version") or "harbor-terminal-bench-parser@1"
+                ),
+            )
+        except Exception as error:  # noqa: BLE001 - 逐条隔离，兄弟结果继续落库
+            invalid.append({
+                "trial_id": target,
+                "code": "TRIAL_RESULT_REJECTED",
+                "error_type": type(error).__name__,
+                "message": str(error),
+            })
+            continue
+        status = str(outcome.get("status"))
+        if status == "stored":
             stored += 1
-        elif outcome["status"] == "identical":
+        elif status == "identical":
             identical += 1
-        elif outcome["status"] == "conflict":
+        elif status == "replaced_placeholder":
+            # 平台占位处置被真实冻结结果替换（review R2-01）：算已接受，
+            # 但替换审计必须保留。
+            stored += 1
+            replaced.append({
+                "trial_id": target,
+                "previous": outcome.get("previous"),
+            })
+        elif status == "conflict":
             conflicts.append(outcome)
+        else:
+            # unknown_trial / 其他未预期状态都不能静默忽略（R2-03）。
+            invalid.append({
+                "trial_id": target,
+                "code": "TRIAL_RESULT_NOT_STORED",
+                "message": f"trial store returned {status!r} for a planned trial",
+            })
+            continue
+        accepted.append(target)
     return {
         "created": statuses.get("created", 0),
         "identical_plans": statuses.get("identical", 0),
         "stored": stored,
         "identical": identical,
         "conflicts": conflicts,
+        "replaced_placeholders": replaced,
+        "accepted": accepted,
+        "invalid": invalid,
         "planned": len(plan),
+        "run_id": run_id,
         "skipped": False,
     }
 

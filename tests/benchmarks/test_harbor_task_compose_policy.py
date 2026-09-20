@@ -177,6 +177,239 @@ def test_task_compose_violation_matrix(tmp_path: Path) -> None:
         assert all("未登记" not in text for text in messages.values()), messages
 
 
+def _public_preflight(root: Path, *, profile: dict | None = None) -> dict:
+    """走公共 SDK 预检（API/CLI/Web 共用的那一个）：零启动、零模型调用。"""
+    from motte_sdk import terminalbench as tb
+    from motte_sdk.service import build_run_service
+
+    service = build_run_service(root / "runs.db")
+    record = tb.prepare_terminal_bench_dataset(
+        service.store, task_root=str(root), source_id="review-r2", dataset_revision="r2-1",
+    )
+    return tb.preflight_terminal_bench(
+        record=record, profile=profile or PROFILE, docker=HEALTHY_DOCKER,
+        required_images=["ubuntu:24.04"],
+    )
+
+
+def _assert_refused_publicly(report: dict, codes: set[str], case: str) -> None:
+    assert report["allowed"] is False, (case, report["reason_codes"])
+    assert codes <= set(report["reason_codes"]), (case, report["reason_codes"])
+    assert report["model_calls"] == 0 and report["task_starts"] == 0, case
+    messages = reason_messages(report["reason_codes"])
+    assert all("未登记" not in text for text in messages.values()), (case, messages)
+
+
+def test_indirect_compose_resources_are_refused_before_any_start(tmp_path: Path) -> None:
+    """M3-R2-04 反例：命名卷 driver_opts bind、顶层 secrets 文件、插值挂载。
+
+    review 复现里这三类间接挂载都 ``allowed=True``：服务 volume 只看当前字符串
+    是否"表现为 bind"，命名卷直接放行、不展开顶层定义，secrets/configs 的
+    ``file:`` 源与插值后的真实路径都没有进入等价检查。这里逐个断言公共预检
+    拒绝、原因码具名、且没有任务脚本或容器被启动。
+    """
+    cases: dict[str, tuple[str, set[str]]] = {
+        # (a) 命名卷的 driver_opts 构成宿主 bind（device=/）。
+        "named-volume-driver-bind": (
+            "services:\n"
+            "  main:\n"
+            "    volumes: [hostdata:/host]\n"
+            "volumes:\n"
+            "  hostdata:\n"
+            "    driver: local\n"
+            "    driver_opts:\n"
+            "      type: none\n"
+            "      o: bind\n"
+            "      device: /\n",
+            {"TASK_HOST_PATH_EXPOSED", "TASK_COMPOSE_EXTERNAL_BIND"},
+        ),
+        # 同一形态但挂的是 docker.sock：必须命中 socket 专用码。
+        "named-volume-driver-socket": (
+            "services:\n"
+            "  main:\n"
+            "    volumes: [sock:/sock]\n"
+            "volumes:\n"
+            "  sock:\n"
+            "    driver_opts:\n"
+            "      type: none\n"
+            "      o: bind\n"
+            "      device: /var/run/docker.sock\n",
+            {"TASK_DOCKER_SOCKET_EXPOSED", "TASK_COMPOSE_EXTERNAL_BIND"},
+        ),
+        # (b) 顶层 secrets 的文件源指向宿主敏感路径。
+        "secret-file": (
+            "services:\n"
+            "  main:\n"
+            "    secrets: [host_secret]\n"
+            "secrets:\n"
+            "  host_secret:\n"
+            "    file: /etc/shadow\n",
+            {"TASK_HOST_PATH_EXPOSED", "TASK_COMPOSE_EXTERNAL_SECRET_FILE"},
+        ),
+        # 同上但走 configs，且是任务目录之外的相对路径。
+        "config-file-outside": (
+            "services:\n"
+            "  main:\n"
+            "    configs: [outside]\n"
+            "configs:\n"
+            "  outside:\n"
+            "    file: ../../etc/host.conf\n",
+            {"TASK_COMPOSE_EXTERNAL_SECRET_FILE"},
+        ),
+        # (c) ${VAR:-default} 的默认值参与判定：默认 "/" 就是宿主根。
+        "interpolated-mount-default": (
+            "services:\n"
+            "  main:\n"
+            "    volumes:\n"
+            "      - ${HOST_ROOT:-/}:/host\n",
+            {"TASK_HOST_PATH_EXPOSED", "TASK_COMPOSE_EXTERNAL_BIND"},
+        ),
+        # 无默认值（或 $VAR）的插值无法求值：拒绝而不是当作安全。
+        "interpolated-mount-unresolved": (
+            "services:\n"
+            "  main:\n"
+            "    volumes:\n"
+            "      - $HOST_DIR/data:/data\n",
+            {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"},
+        ),
+        # 花括号形态但没有默认值：同样无法求值。
+        "interpolated-braced-unresolved": (
+            "services:\n"
+            "  main:\n"
+            "    volumes:\n"
+            "      - ${HOST_DIR}:/data\n",
+            {"TASK_COMPOSE_UNRESOLVED_INTERPOLATION"},
+        ),
+        # 插值出现在 secrets 文件源：默认值参与判定（/ + etc/shadow 命中禁用路径）。
+        "interpolated-secret-file": (
+            "services:\n"
+            "  main:\n"
+            "    secrets: [s]\n"
+            "secrets:\n"
+            "  s:\n"
+            "    file: ${HOST_ROOT:-/}etc/shadow\n",
+            {"TASK_HOST_PATH_EXPOSED", "TASK_COMPOSE_EXTERNAL_SECRET_FILE"},
+        ),
+        # 未定义的命名卷引用：无法证明不暴露宿主路径。
+        "undeclared-volume": (
+            "services:\n"
+            "  main:\n"
+            "    volumes: [scratch:/scratch]\n",
+            {"TASK_COMPOSE_UNRESOLVED_RESOURCE"},
+        ),
+        # external: true 的卷由 compose 之外创建，无法核验。
+        "external-volume": (
+            "services:\n"
+            "  main:\n"
+            "    volumes: [shared:/shared]\n"
+            "volumes:\n"
+            "  shared:\n"
+            "    external: true\n",
+            {"TASK_COMPOSE_EXTERNAL_RESOURCE"},
+        ),
+        # 未定义的 secret 引用：同样无法核验。
+        "undeclared-secret": (
+            "services:\n"
+            "  main:\n"
+            "    secrets: [mystery]\n",
+            {"TASK_COMPOSE_UNRESOLVED_RESOURCE"},
+        ),
+    }
+    for name, (compose, codes) in cases.items():
+        root = tmp_path / name
+        _write_task(root, "hello-pass", compose=compose)
+        task = _facts(root)
+        assert codes <= _compose_codes(task["facts"]), (name, task["facts"]["compose"])
+        _assert_refused_publicly(_public_preflight(root), codes, name)
+
+
+def test_declared_task_local_resources_are_accepted(tmp_path: Path) -> None:
+    """任务目录内、无宿主暴露的资源声明仍然允许（不是"有资源就拒绝"）。"""
+    compose = (
+        "services:\n"
+        "  main:\n"
+        "    volumes:\n"
+        "      - ./data:/data\n"
+        "      - scratch:/scratch\n"
+        "    secrets: [local_secret]\n"
+        "volumes:\n"
+        "  scratch: {}\n"
+        "secrets:\n"
+        "  local_secret:\n"
+        "    file: ./secret.txt\n"
+    )
+    _write_task(
+        tmp_path, "hello-pass", compose=compose, extra={"environment/data/.keep": ""},
+    )
+    (tmp_path / "hello-pass/environment/secret.txt").write_text("local\n", encoding="utf-8")
+    task = _facts(tmp_path)
+    codes = _compose_codes(task["facts"])
+    assert codes == set(), codes
+    report = _public_preflight(tmp_path)
+    assert report["allowed"] is True, report["reason_codes"]
+
+
+def test_compose_environment_passthrough_is_refused(tmp_path: Path) -> None:
+    """M3-R2-05 反例：列表 ``KEY`` 与 mapping ``KEY: null`` 是宿主环境透传。
+
+    Compose 的这两种写法没有 ``=``/没有值，语义是"把 compose 进程的宿主同名
+    变量传进容器"；Runner 进程环境里就有真实 Agent 凭据，因此命中凭据名必须
+    在预检阶段具名拒绝——只匹配 ``${...}`` 文本会漏掉它们。
+    """
+    cases: dict[str, tuple[str, set[str]]] = {
+        "list-passthrough": (
+            "services:\n"
+            "  main:\n"
+            "    environment:\n"
+            "      - ANTHROPIC_API_KEY\n",
+            {"TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", "TASK_CONTAINER_HOST_ENV_EXPOSED"},
+        ),
+        "null-mapping": (
+            "services:\n"
+            "  main:\n"
+            "    environment:\n"
+            "      ANTHROPIC_API_KEY: null\n",
+            {"TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", "TASK_CONTAINER_HOST_ENV_EXPOSED"},
+        ),
+        "empty-mapping": (
+            "services:\n"
+            "  main:\n"
+            "    environment:\n"
+            "      ANTHROPIC_API_KEY: \"\"\n",
+            {"TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", "TASK_CONTAINER_HOST_ENV_EXPOSED"},
+        ),
+        "secrets-environment": (
+            "services:\n"
+            "  main:\n"
+            "    secrets: [key_secret]\n"
+            "secrets:\n"
+            "  key_secret:\n"
+            "    environment: MOTTE_PG_DSN\n",
+            {"TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", "TASK_CONTAINER_HOST_ENV_EXPOSED"},
+        ),
+        "platform-db-passthrough": (
+            "services:\n"
+            "  main:\n"
+            "    environment:\n"
+            "      - MOTTE_PG_DSN\n",
+            {"TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", "TASK_CONTAINER_HOST_ENV_EXPOSED"},
+        ),
+        "interpolated-value": (
+            "services:\n"
+            "  main:\n"
+            "    environment:\n"
+            "      FOO: ${AWS_SECRET_ACCESS_KEY}\n",
+            {"TASK_COMPOSE_CREDENTIAL_FORWARD"},
+        ),
+    }
+    for name, (compose, codes) in cases.items():
+        root = tmp_path / name
+        _write_task(root, "hello-pass", compose=compose)
+        task = _facts(root)
+        assert codes <= _compose_codes(task["facts"]), (name, task["facts"]["compose"])
+        _assert_refused_publicly(_public_preflight(root), codes, name)
+
+
 def test_uninspectable_compose_fails_closed(tmp_path: Path) -> None:
     """读不到/解析不了 compose 绝不能放行（fail closed）。"""
     root = tmp_path / "broken"

@@ -3,11 +3,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import React from "react";
 import { MemoryRouter } from "react-router-dom";
 import {
+  AGENT_PROFILES,
+  buildTerminalBenchRunRequest,
   TerminalBenchCompare,
   TerminalBenchMonitor,
   TerminalBenchOperate,
   TerminalBenchResult,
   TerminalBenchTasks,
+  type TerminalBenchFormInputs,
 } from "../src/evalTypes/terminalbench/TerminalBenchPages";
 import {
   ApiRequestError,
@@ -236,6 +239,23 @@ function makeDetail(
   };
 }
 
+/** R2-06：真实请求构建器的输入（默认 oracle，逐字段覆盖）。 */
+function formInputs(overrides: Partial<TerminalBenchFormInputs> = {}): TerminalBenchFormInputs {
+  const base: TerminalBenchFormInputs = {
+    profile: AGENT_PROFILES[0],
+    agentVersion: "",
+    credentials: [{ name: "", env: "" }],
+    model: "",
+    nTrials: "1",
+    taskKeys: [],
+    datasetRevision: null,
+    aggregation: "first-trial",
+    timeouts: { agent: "", verifier: "", agentSetup: "", job: "" },
+    resources: { cpus: "", memory: "", storage: "", gpus: "" },
+  };
+  return { ...base, ...overrides };
+}
+
 beforeEach(() => {
   for (const mock of Object.values(clientMocks)) mock.mockReset();
   clientMocks.getTerminalBenchOverview.mockResolvedValue({
@@ -424,6 +444,254 @@ describe("Terminal-Bench 页面", () => {
     expect(body.n_trials).toBe(32);
     // oracle 的模型可以为空：不发明一个模型 id
     expect(body).not.toHaveProperty("model");
+  });
+
+  it("R2-06：claude-code 只提交凭据引用（名称 → env:变量名），预检与创建带同一组引用", async () => {
+    clientMocks.getTerminalBenchPreflight.mockResolvedValue({
+      ok: true, reasons: [], messages: {}, checks: {},
+      profile_fingerprint: "sha256:profile-r2-06", platform_custom_profile: false,
+    });
+    render(wrap(<TerminalBenchOperate />));
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
+
+    // 默认 oracle：真实 Agent 专属输入不渲染（既有 oracle 路径不变）
+    expect(screen.queryByLabelText("Agent 版本")).toBeNull();
+    expect(screen.queryByLabelText("凭据名称 1")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
+    // 选到真实 Agent 后立刻暴露版本、模型规则与凭据引用三件事
+    expect(screen.getByLabelText("Agent 版本")).toBeTruthy();
+    expect(screen.getByLabelText("凭据名称 1")).toBeTruthy();
+    expect(screen.getByLabelText("凭据环境变量 1")).toBeTruthy();
+    expect(screen.getByTestId("tb-input-error")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Agent 版本"), { target: { value: "2.0.30" } });
+    fireEvent.change(screen.getByLabelText("模型档案"), { target: { value: "m3-provider/claude-sonnet-4-5" } });
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "provider" } });
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: "ANTHROPIC_API_KEY" } });
+    // 引用预览按 API 规范形态显示（只显示引用，不显示值）
+    expect(screen.getByTestId("tb-credential-refs").textContent)
+      .toContain("provider → env:ANTHROPIC_API_KEY");
+
+    fireEvent.click(screen.getByRole("button", { name: /预检/ }));
+    await waitFor(() => expect((screen.getByTestId("tb-create-run") as HTMLButtonElement).disabled).toBe(false));
+    expect(clientMocks.getTerminalBenchPreflight).toHaveBeenLastCalledWith(expect.objectContaining({
+      agent_id: "claude-code",
+      agent_version: "2.0.30",
+      model: "m3-provider/claude-sonnet-4-5",
+      credential_refs: "provider=env:ANTHROPIC_API_KEY",
+    }));
+
+    fireEvent.click(screen.getByTestId("tb-create-run"));
+    await waitFor(() => expect(clientMocks.createTerminalBenchRun).toHaveBeenCalledTimes(1));
+    // 逐字断言：字段名与 API 的公共 DTO 一致；凭据只有 {"ref": "env:..."} 形态
+    expect(clientMocks.createTerminalBenchRun.mock.calls[0][0]).toEqual({
+      model: "m3-provider/claude-sonnet-4-5",
+      agent_id: "claude-code",
+      agent_version: "2.0.30",
+      n_trials: 1,
+      dataset_revision: "tb-rev-1",
+      aggregation: "first-trial",
+      credentials: { provider: { ref: "env:ANTHROPIC_API_KEY" } },
+    });
+    const body = clientMocks.createTerminalBenchRun.mock.calls[0][0];
+    for (const entry of Object.values(body.credentials as Record<string, { ref: string }>)) {
+      expect(Object.keys(entry)).toEqual(["ref"]);
+      expect(entry.ref.startsWith("env:")).toBe(true);
+    }
+  });
+
+  it("R2-06：claude-code 缺版本 / 模型 / 凭据引用都在本地拦下，不发任何请求", async () => {
+    render(wrap(<TerminalBenchOperate />));
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
+
+    // 缺显式版本
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("Agent 版本");
+    // latest 不是「显式钉住」（API 的 _PLACEHOLDER_VALUES 之一）
+    fireEvent.change(screen.getByLabelText("Agent 版本"), { target: { value: "latest" } });
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("latest");
+    fireEvent.change(screen.getByLabelText("Agent 版本"), { target: { value: "2.0.30" } });
+    // 缺模型
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("模型档案");
+    fireEvent.change(screen.getByLabelText("模型档案"), { target: { value: "m3-provider/x" } });
+    // 缺凭据引用
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("凭据引用");
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "provider" } });
+    // 有名称没有环境变量名：仍拦下
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("环境变量");
+    // 名称被清空（只填环境变量名）同样拦下
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: "ANTHROPIC_API_KEY" } });
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "" } });
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("名称不能为空");
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "provider" } });
+    // 环境变量名与平台要求的 ANTHROPIC_* 没有交集：等同缺引用
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: "MY_KEY" } });
+    expect(screen.getByTestId("tb-input-error").textContent).toContain("ANTHROPIC_API_KEY");
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: "ANTHROPIC_API_KEY" } });
+    // 三个都齐了才没有本地错误；未预检前创建仍然禁用
+    expect(screen.queryByTestId("tb-input-error")).toBeNull();
+    expect((screen.getByRole("button", { name: /预检/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId("tb-create-run") as HTMLButtonElement).disabled).toBe(true);
+    expect(clientMocks.getTerminalBenchPreflight).not.toHaveBeenCalled();
+    expect(clientMocks.createTerminalBenchRun).not.toHaveBeenCalled();
+  });
+
+  it("R2-06：页面没有凭据值输入口；粘进输入框的凭据值被本地拒绝且不进请求体", async () => {
+    const SYNTHETIC_KEY = "sk-ant-review-sentinel-0123456789abcdef";
+    const { container } = render(wrap(<TerminalBenchOperate />));
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
+    // 没有任何密码框，也没有任何「值」输入
+    expect(container.querySelectorAll('input[type="password"]')).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Agent 版本"), { target: { value: "2.0.30" } });
+    fireEvent.change(screen.getByLabelText("模型档案"), { target: { value: "m3-provider/x" } });
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "provider" } });
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: SYNTHETIC_KEY } });
+    const error = screen.getByTestId("tb-input-error");
+    expect(error.textContent).toContain("环境变量");
+    // 拒绝信息不回显凭据值本身；请求也不发
+    expect(error.textContent).not.toContain(SYNTHETIC_KEY);
+    expect((screen.getByRole("button", { name: /预检/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(clientMocks.getTerminalBenchPreflight).not.toHaveBeenCalled();
+    expect(clientMocks.createTerminalBenchRun).not.toHaveBeenCalled();
+  });
+
+  it("R2-06：请求构建器只生成 env: 引用；凭据值（值字段或名称字段）一律在本地拒绝", () => {
+    const SYNTHETIC_KEY = "sk-ant-review-sentinel-0123456789abcdef";
+    const base = formInputs({
+      profile: AGENT_PROFILES[1],
+      agentVersion: "2.0.30",
+      model: "m3-provider/x",
+      credentials: [{ name: "provider", env: "env:ANTHROPIC_API_KEY" }],
+    });
+
+    const ok = buildTerminalBenchRunRequest(base);
+    expect(ok.error).toBeNull();
+    expect(ok.body?.credentials).toEqual({ provider: { ref: "env:ANTHROPIC_API_KEY" } });
+    expect(JSON.stringify(ok.body)).not.toContain(SYNTHETIC_KEY);
+    // 环境变量字段写裸名也归一成 env: 引用；写别的 scheme 一律拒绝
+    expect(buildTerminalBenchRunRequest({
+      ...base, credentials: [{ name: "provider", env: "ANTHROPIC_AUTH_TOKEN" }],
+    }).body?.credentials).toEqual({ provider: { ref: "env:ANTHROPIC_AUTH_TOKEN" } });
+    expect(buildTerminalBenchRunRequest({
+      ...base, credentials: [{ name: "provider", env: `file:${SYNTHETIC_KEY}` }],
+    }).body).toBeNull();
+
+    const asValue = buildTerminalBenchRunRequest({
+      ...base, credentials: [{ name: "provider", env: SYNTHETIC_KEY }],
+    });
+    expect(asValue.body).toBeNull();
+    expect(asValue.error).toContain("环境变量");
+    expect(asValue.error).not.toContain(SYNTHETIC_KEY);
+    // 带着 env: 前缀的凭据值同样不是「环境变量名」（AWS 形态的 key id 也不行）
+    expect(buildTerminalBenchRunRequest({
+      ...base, credentials: [{ name: "provider", env: "env:AKIAIOSFODNN7EXAMPLE" }],
+    }).body).toBeNull();
+    // 名称字段同样不是凭据值的藏身处（值会被拒绝，且不回显）
+    const asName = buildTerminalBenchRunRequest({
+      ...base, credentials: [{ name: SYNTHETIC_KEY, env: "ANTHROPIC_API_KEY" }],
+    });
+    expect(asName.body).toBeNull();
+    expect(asName.error).not.toContain(SYNTHETIC_KEY);
+    // 只有 env: 引用、没有值字段这一种形态能通过
+    const withValueField = buildTerminalBenchRunRequest({
+      ...base,
+      credentials: [{ name: "provider", env: "ANTHROPIC_API_KEY", value: SYNTHETIC_KEY } as any],
+    });
+    expect(withValueField.body?.credentials).toEqual({ provider: { ref: "env:ANTHROPIC_API_KEY" } });
+    expect(JSON.stringify(withValueField.body)).not.toContain(SYNTHETIC_KEY);
+
+    // oracle 不需要凭据：即使表单里残留了引用行，也不发明 credentials 字段
+    const oracle = buildTerminalBenchRunRequest({
+      ...formInputs({ credentials: [{ name: "provider", env: "ANTHROPIC_API_KEY" }] }),
+    });
+    expect(oracle.error).toBeNull();
+    expect(oracle.body).not.toHaveProperty("credentials");
+    expect(oracle.body?.agent_version).toBe("1.0.0");
+  });
+
+  it("R2-06：多条凭据引用各自成对（名称 → 环境变量），改动使旧预检结论作废", async () => {
+    clientMocks.getTerminalBenchPreflight.mockResolvedValue({
+      ok: true, reasons: [], messages: {}, checks: {},
+      profile_fingerprint: "sha256:profile-r2-06c", platform_custom_profile: false,
+    });
+    render(wrap(<TerminalBenchOperate />));
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
+    fireEvent.change(screen.getByLabelText("Agent 版本"), { target: { value: "2.0.30" } });
+    fireEvent.change(screen.getByLabelText("模型档案"), { target: { value: "m3-provider/x" } });
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "provider" } });
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: "ANTHROPIC_API_KEY" } });
+    fireEvent.click(screen.getByRole("button", { name: /预检/ }));
+    await waitFor(() => expect((screen.getByTestId("tb-create-run") as HTMLButtonElement).disabled).toBe(false));
+
+    // 新增第二条引用后，旧的预检结论立即作废（不能拿旧 Profile 的结论放行）
+    fireEvent.click(screen.getByRole("button", { name: "添加凭据引用" }));
+    expect((screen.getByTestId("tb-create-run") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("凭据名称 2"), { target: { value: "provider_backup" } });
+    fireEvent.change(screen.getByLabelText("凭据环境变量 2"), { target: { value: "env:ANTHROPIC_AUTH_TOKEN" } });
+    expect(screen.getByTestId("tb-credential-refs").textContent).toContain("env:ANTHROPIC_AUTH_TOKEN");
+
+    // 预检与创建带同一组引用（逗号分隔 name=env:VAR，与 API 的解析一致）
+    fireEvent.click(screen.getByRole("button", { name: /预检/ }));
+    await waitFor(() => expect((screen.getByTestId("tb-create-run") as HTMLButtonElement).disabled).toBe(false));
+    expect(clientMocks.getTerminalBenchPreflight).toHaveBeenLastCalledWith(expect.objectContaining({
+      credential_refs: "provider=env:ANTHROPIC_API_KEY,provider_backup=env:ANTHROPIC_AUTH_TOKEN",
+    }));
+    fireEvent.click(screen.getByTestId("tb-create-run"));
+    await waitFor(() => expect(clientMocks.createTerminalBenchRun).toHaveBeenCalledTimes(1));
+    expect(clientMocks.createTerminalBenchRun.mock.calls[0][0].credentials).toEqual({
+      provider: { ref: "env:ANTHROPIC_API_KEY" },
+      provider_backup: { ref: "env:ANTHROPIC_AUTH_TOKEN" },
+    });
+  });
+
+  it("R2-06：凭据分节落在 Agent Profile 卡内，不套第二层卡片、只有引用输入", async () => {
+    const { container } = render(wrap(<TerminalBenchOperate />));
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
+    const profileCard = Array.from(container.querySelectorAll(".operate-card"))
+      .find((card) => card.querySelector('[data-testid="tb-credential-0"]'));
+    expect(profileCard).toBeTruthy();
+    // DESIGN.md：卡内分节用 .embed-title，不套第二层卡片
+    expect(profileCard?.querySelector(".operate-card")).toBeNull();
+    expect(profileCard?.textContent).toContain("凭据引用");
+    expect(profileCard?.querySelectorAll('input[type="password"]')).toHaveLength(0);
+    // 凭据行只有「名称 / 环境变量名」两个文本输入，没有第三个值字段
+    const row = screen.getByTestId("tb-credential-0");
+    expect(row.querySelectorAll("input")).toHaveLength(2);
+    expect(Array.from(row.querySelectorAll("input")).every((input) => input.type === "text")).toBe(true);
+  });
+
+  it("R2-06：API 的 HARBOR_AGENT_CREDENTIAL_REF_MISSING 结构化 422 原样显示", async () => {
+    clientMocks.getTerminalBenchPreflight.mockResolvedValue({
+      ok: true, reasons: [], messages: {}, checks: {},
+      profile_fingerprint: "sha256:profile-r2-06b", platform_custom_profile: false,
+    });
+    clientMocks.createTerminalBenchRun.mockRejectedValue(new ApiRequestError(422, {
+      code: "HARBOR_AGENT_CREDENTIAL_REF_MISSING",
+      message: "agent claude-code needs one of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] "
+        + "as a credential reference, e.g. {'credentials': {'provider': {'ref': 'env:ANTHROPIC_API_KEY'}}}",
+      details: { allowed: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] },
+    }));
+    render(wrap(<TerminalBenchOperate />));
+    await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
+    fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
+    fireEvent.change(screen.getByLabelText("Agent 版本"), { target: { value: "2.0.30" } });
+    fireEvent.change(screen.getByLabelText("模型档案"), { target: { value: "m3-provider/x" } });
+    fireEvent.change(screen.getByLabelText("凭据名称 1"), { target: { value: "provider" } });
+    fireEvent.change(screen.getByLabelText("凭据环境变量 1"), { target: { value: "ANTHROPIC_API_KEY" } });
+    fireEvent.click(screen.getByRole("button", { name: /预检/ }));
+    await waitFor(() => expect((screen.getByTestId("tb-create-run") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId("tb-create-run"));
+
+    await waitFor(() => expect(screen.getByTestId("tb-run-error")).toBeTruthy());
+    const error = screen.getByTestId("tb-run-error");
+    expect(error.textContent).toContain("HARBOR_AGENT_CREDENTIAL_REF_MISSING");
+    expect(error.textContent).toContain("as a credential reference");
+    expect(screen.getByTestId("tb-run-error-allowed").textContent).toContain("ANTHROPIC_AUTH_TOKEN");
   });
 
   it("R16：API 结构化拒绝原样显示错误码、消息与允许字段", async () => {

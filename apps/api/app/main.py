@@ -1918,11 +1918,13 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         return record, None
 
-    #: Terminal-Bench 公共请求 DTO（review R16/R20）：字段名、类型与取值都在这里
-    #: 收口；未知字段与非法类型一律 4xx，绝不能变成 500。
+    #: Terminal-Bench 公共请求 DTO（review R16/R20/R2-06）：字段名、类型与取值都在
+    #: 这里收口；未知字段与非法类型一律 4xx，绝不能变成 500。字段校验（
+    #: ``_tb_run_fields``）不访问任何 repository，必须在数据集/模型查询之前完成
+    #: （review R2-12：``dataset_revision`` 直接进 SQL 参数就是 500）。
     _TB_RUN_KEYS = frozenset({
         "model", "agent_id", "agent_version", "n_trials", "task_keys",
-        "dataset_revision", "aggregation", "timeouts", "resources",
+        "dataset_revision", "aggregation", "timeouts", "resources", "credentials",
     })
     _TB_TIMEOUT_KEYS = (
         "agent_sec", "verifier_sec", "agent_setup_sec", "environment_build_sec", "job_sec",
@@ -1993,8 +1995,84 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             checked[name] = item
         return checked
 
-    def _tb_profile_from_body(body, *, strict_agent=True):
-        """公共请求 → 冻结 Profile（唯一字段名；未知字段/类型不合法即 4xx）。"""
+    def _tb_credentials(value):
+        """凭据只接受 ``{name: {"ref": "env:VAR"}}`` 引用形式（review R2-06）。
+
+        与平台侧 ``credential_refs`` 同一语义，但作为公共入口必须给出可解释的
+        4xx：明文值/``{"value": ...}`` 按秘密处理（``SECRET_VALUE_IN_CREDENTIALS``），
+        其它形状按缺引用处理（``CREDENTIAL_REF_REQUIRED``）。错误信息只报名字，
+        绝不回显传进来的值——拒绝路径同样不能成为泄露点。
+        """
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise _TBRequestError(
+                "REQUEST_FIELD_TYPE_INVALID",
+                "credentials must be an object mapping names to {'ref': 'env:VAR'} references",
+            )
+        refs = {}
+        for name, item in value.items():
+            label = str(name)
+            if not label.strip():
+                raise _TBRequestError(
+                    "REQUEST_FIELD_TYPE_INVALID", "credentials names must not be empty",
+                )
+            candidate = item.get("ref") if isinstance(item, dict) else None
+            if (
+                isinstance(item, dict)
+                and set(item) == {"ref"}
+                and isinstance(candidate, str)
+                and candidate.startswith("env:")
+                and len(candidate) > len("env:")
+            ):
+                # 冻结 Profile 保留平台侧唯一的嵌套引用形状：
+                # ``{name: {"ref": "env:VAR"}}``（``credential_refs`` 的输入）。
+                refs[label] = {"ref": candidate}
+                continue
+            if isinstance(item, str) or (isinstance(item, dict) and "ref" not in item):
+                raise _TBRequestError(
+                    "SECRET_VALUE_IN_CREDENTIALS",
+                    f"{label}: pass credentials by reference ({{'ref': 'env:NAME'}}), "
+                    "never as values",
+                )
+            raise _TBRequestError(
+                "CREDENTIAL_REF_REQUIRED",
+                f"{label}: credential must be exactly {{'ref': 'env:NAME'}} with a "
+                "non-empty env: prefix",
+            )
+        return refs
+
+    def _tb_credentials_from_query(value):
+        """预检查询参数 ``credential_refs``（逗号分隔 name=env:VAR）→ 引用表。
+
+        与创建路径共用 ``_tb_credentials``，因此"预检说可以、创建却拒绝"不会
+        再次出现（review R2-06）。
+        """
+        text = (value or "").strip()
+        if not text:
+            return {}
+        refs = {}
+        for chunk in text.split(","):
+            item = chunk.strip()
+            if not item:
+                continue
+            name, separator, ref = item.partition("=")
+            name, ref = name.strip(), ref.strip()
+            if not separator or not name or not ref or "=" in ref:
+                raise _TBRequestError(
+                    "CREDENTIAL_REF_REQUIRED",
+                    "credential_refs must be comma-separated name=env:VAR pairs",
+                )
+            if not ref.startswith("env:") or len(ref) == len("env:"):
+                raise _TBRequestError(
+                    "SECRET_VALUE_IN_CREDENTIALS",
+                    f"{name}: pass credentials by reference (env:NAME), never as values",
+                )
+            refs[name] = {"ref": ref}
+        return refs
+
+    def _tb_run_fields(body):
+        """完整 DTO 字段校验（类型/取值/凭据形式），零 repository 访问。"""
         unknown = sorted(set(body) - _TB_RUN_KEYS)
         if unknown:
             raise _TBRequestError(
@@ -2002,12 +2080,11 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 f"unknown request field(s): {', '.join(unknown)}",
                 {"allowed": sorted(_TB_RUN_KEYS)},
             )
-        aggregations = ("first-trial", "mean-success")
         aggregation = _tb_str(body, "aggregation", default="first-trial") or "first-trial"
-        if aggregation not in aggregations:
+        if aggregation not in _TB_AGGREGATIONS:
             raise _TBRequestError(
                 "REQUEST_FIELD_OUT_OF_RANGE",
-                f"aggregation must be one of {list(aggregations)}",
+                f"aggregation must be one of {list(_TB_AGGREGATIONS)}",
             )
         task_keys = body.get("task_keys")
         if task_keys is None:
@@ -2018,15 +2095,32 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise _TBRequestError(
                 "REQUEST_FIELD_TYPE_INVALID", "task_keys must be a list of task_key strings",
             )
+        return {
+            "agent_id": _tb_str(body, "agent_id", default="oracle") or "oracle",
+            "agent_version": _tb_str(body, "agent_version", default="1.0.0") or "1.0.0",
+            "n_trials": _tb_int(body, "n_trials", default=1, maximum=32),
+            "aggregation": aggregation,
+            "task_keys": [str(item) for item in task_keys],
+            "timeouts": _tb_number_mapping(body, "timeouts", _TB_TIMEOUT_KEYS),
+            "resources": _tb_number_mapping(body, "resources", _TB_RESOURCE_KEYS),
+            "credentials": _tb_credentials(body.get("credentials")),
+            "model_id": _tb_str(body, "model"),
+            # dataset_revision 必须是字符串或 null，且在任何查询之前校验。
+            "dataset_revision": _tb_str(body, "dataset_revision", default=""),
+        }
+
+    def _tb_profile_from_fields(fields, *, strict_agent=True):
+        """已校验字段 → 冻结 Profile（到这里才访问模型 repository）。"""
         profile = tb.terminal_bench_profile(
-            agent_id=_tb_str(body, "agent_id", default="oracle") or "oracle",
-            agent_version=_tb_str(body, "agent_version", default="1.0.0") or "1.0.0",
-            n_trials=_tb_int(body, "n_trials", default=1, maximum=32),
-            aggregation=aggregation,
-            timeouts=_tb_number_mapping(body, "timeouts", _TB_TIMEOUT_KEYS),
-            resources=_tb_number_mapping(body, "resources", _TB_RESOURCE_KEYS),
+            agent_id=fields["agent_id"],
+            agent_version=fields["agent_version"],
+            n_trials=fields["n_trials"],
+            aggregation=fields["aggregation"],
+            timeouts=fields["timeouts"],
+            resources=fields["resources"],
+            credentials=fields["credentials"],
         )
-        model_id = _tb_str(body, "model")
+        model_id = fields["model_id"]
         if model_id:
             record, error = _tb_model_record(model_id)
             if error is not None:
@@ -2059,6 +2153,16 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 "details": getattr(error, "details", {}) or {},
             }},
         )
+
+    def _tb_display_payload(payload):
+        """公共展示边界兜底：内容字段（含 note/错误文本）脱敏，身份/hash 保留。
+
+        门面已经脱敏一次；这里再走同一函数是为了让"内容字段"的定义只有一处，
+        且上游（SDK）遗漏的内容字段不会自动成为公共泄露点（review R2-07）。
+        """
+        from motte_sdk.terminalbench import redact_display_text
+
+        return redact_display_text(payload)
 
     def _tb_docker_probe():
         """Runner 侧探测摘要：API 进程不执行 docker；没有上报就按不可用处理。"""
@@ -2180,28 +2284,39 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     def terminal_bench_preflight(
         model: str = "", n_trials: int = 1, task_keys: str = "",
         agent_id: str = "oracle", agent_version: str = "1.0.0",
-        dataset_revision: str | None = None,
+        dataset_revision: str | None = None, credential_refs: str = "",
     ):
-        """只读预检：与创建请求使用同一组能力判定（review R20）。"""
-        record, error = _tb_dataset_or_404(dataset_revision)
+        """只读预检：与创建请求使用同一组能力判定与凭据入口（review R20/R2-06）。
+
+        引用以 ``credential_refs=provider=env:ANTHROPIC_API_KEY`` 传入，逗号分隔；
+        与创建路径共用同一解析/校验函数，所以预检不可能对"引用齐全"的真实
+        Agent 给出与创建相反的结论。
+        """
+        try:
+            fields = _tb_run_fields({
+                "model": model, "agent_id": agent_id, "agent_version": agent_version,
+                "n_trials": n_trials, "task_keys": task_keys.split(",") if task_keys else [],
+                "dataset_revision": dataset_revision,
+                "credentials": _tb_credentials_from_query(credential_refs),
+            })
+        except _TBRequestError as request_error:
+            return _tb_request_error(request_error)
+        record, error = _tb_dataset_or_404(fields["dataset_revision"])
         if error is not None:
             return error
         try:
-            profile = _tb_profile_from_body({
-                "model": model, "agent_id": agent_id, "agent_version": agent_version,
-                "n_trials": n_trials, "task_keys": task_keys.split(",") if task_keys else [],
-            }, strict_agent=False)
+            profile = _tb_profile_from_fields(fields, strict_agent=False)
         except _TBRequestError as request_error:
             return _tb_request_error(request_error)
         _model_record, model_error = _tb_model_record(
-            model or None, required=False,
+            fields["model_id"] or None, required=False,
         )
         if model_error is not None:
             return model_error
         try:
             report = tb.preflight_terminal_bench(
                 record=record, profile=profile,
-                task_keys=[item for item in task_keys.split(",") if item] or None,
+                task_keys=fields["task_keys"] or None,
                 docker=_tb_docker_probe(),
             )
         except Exception as error:  # noqa: BLE001 - 任务集/配置问题不是 500
@@ -2214,20 +2329,32 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             "profile_fingerprint": report["profile_fingerprint"],
             "platform_custom_profile": report["platform_custom_profile"],
             "model": model,
+            "credential_refs": sorted(fields["credentials"]),
             "dataset_revision": report.get("dataset_revision"),
             "tasks": report["tasks"],
         }
 
     @application.post("/api/v1/benchmarks/terminal-bench/runs", status_code=202)
     def terminal_bench_run(body: dict):
-        rejected = _reject_secret_fields(body)
+        # credentials 子树由 ``_tb_credentials`` 严格收口（只可能是 {"ref": "env:VAR"}），
+        # 因此不走通用明文键名扫描——否则 ``{"anthropic_api_key": {...}}`` 这类
+        # 合法引用会被键名规则误伤；其余字段仍先过通用扫描。
+        rejected = _reject_secret_fields({
+            key: value for key, value in body.items() if key != "credentials"
+        })
         if rejected is not None:
             return rejected
-        record, error = _tb_dataset_or_404(body.get("dataset_revision"))
+        # 1) 字段类型/取值/凭据形式：零 repository 访问（review R2-12）。
+        try:
+            fields = _tb_run_fields(body)
+        except _TBRequestError as request_error:
+            return _tb_request_error(request_error)
+        record, error = _tb_dataset_or_404(fields["dataset_revision"])
         if error is not None:
             return error
+        # 2) 到这里才查模型与 Agent 能力。
         try:
-            profile = _tb_profile_from_body(body)
+            profile = _tb_profile_from_fields(fields)
         except _TBRequestError as request_error:
             return _tb_request_error(request_error)
         from motte_benchmark.registry import registered_adapter_ids
@@ -2240,7 +2367,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "message": "the Harbor adapter is not registered in this process",
                 }},
             )
-        selected = [str(item) for item in (body.get("task_keys") or [])]
+        selected = list(fields["task_keys"])
         try:
             report = tb.preflight_terminal_bench(
                 record=record, profile=profile, task_keys=selected or None,
@@ -2303,7 +2430,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         run = _tb_run_or_404(run_id)
         if isinstance(run, JSONResponse):
             return run
-        # 展示边界：内容字段脱敏、身份/hash 保留，均在门面里完成（review R08）。
+        # 展示边界：内容字段脱敏、身份/hash 保留（review R08/R2-07）。
         detail = tb.trial_detail(service.store, run_id, trial_id)
         if detail is None:
             return JSONResponse(
@@ -2313,18 +2440,25 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "message": f"trial {trial_id} does not belong to run {run_id}",
                 }},
             )
-        return detail
+        return _tb_display_payload(detail)
 
     @application.get("/api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id:path}/bytes")
     def run_terminal_bench_trial_artifact_bytes(
         run_id: str, trial_id: str, artifact_id: str,
     ):
-        """下载**冻结的原始证据字节**（同一归属与 hash 校验，不做有损解码）。
+        """导出冻结证据字节：默认与普通内容读取遵守**同一秘密保护边界**。
 
-        文本内容请用不带 ``/bytes`` 的路由（脱敏 + 截断）；这里返回 Bucket 里的
-        原始字节，因此响应如实标注：它不是脱敏视图，只对拥有该 Run/Trial 归属
-        的调用者可用（review R19 的"下载"路径）。
+        review R2-07：归属与 hash 校验不等于展示保护，所以
+
+        - 文本工件（UTF-8 可解码）：返回**脱敏后**的字节；冻结证据的原始 hash
+          用 ``X-Motte-Artifact-Source-Sha256`` 标注（身份不被改写），响应头
+          如实标注本次已脱敏；
+        - 无法扫描的二进制：默认拒绝（``ARTIFACT_RAW_EXPORT_DISABLED``），只有
+          操作员显式设置 ``MOTTE_ALLOW_RAW_ARTIFACT_EXPORT=1`` 才导出原始字节，
+          此时响应头标注未脱敏。
         """
+        import os as _os
+
         from fastapi import Response
 
         run = _tb_run_or_404(run_id)
@@ -2355,8 +2489,6 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         expected = str(ref.get("sha256") or "").removeprefix("sha256:")
         if expected:
-            import hashlib
-
             if hashlib.sha256(data).hexdigest() != expected:
                 return JSONResponse(
                     status_code=422,
@@ -2365,19 +2497,46 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                         "message": "frozen artifact bytes do not match the recorded hash",
                     }},
                 )
+        raw_export = str(_os.environ.get("MOTTE_ALLOW_RAW_ARTIFACT_EXPORT", "")).strip().lower()
+        allow_raw = raw_export in ("1", "true", "yes", "on")
+        redacted = False
+        if not allow_raw:
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return JSONResponse(
+                    status_code=422,
+                    content={"error": {
+                        "code": "ARTIFACT_RAW_EXPORT_DISABLED",
+                        "message": (
+                            "this artifact is not UTF-8 text, so it cannot be scanned for "
+                            "secrets; raw export is disabled. An operator can enable "
+                            "controlled export with MOTTE_ALLOW_RAW_ARTIFACT_EXPORT=1, or "
+                            "read the artifact metadata via the non-/bytes content route"
+                        ),
+                    }},
+                )
+            from motte_trace.redaction import redact_secrets
+
+            payload = redact_secrets(text).encode("utf-8")
+            redacted = True
+        else:
+            payload = data
         return Response(
-            content=data,
+            content=payload,
             media_type=str(ref.get("media_type") or "application/octet-stream"),
             headers={
-                "X-Motte-Artifact-Sha256": str(ref.get("sha256") or ""),
-                "X-Motte-Artifact-Redacted": "false",
+                # 冻结证据身份逐字保留；本次响应体另附自己的 hash 以便核对。
+                "X-Motte-Artifact-Source-Sha256": str(ref.get("sha256") or ""),
+                "X-Motte-Artifact-Response-Sha256": hashlib.sha256(payload).hexdigest(),
+                "X-Motte-Artifact-Redacted": "true" if redacted else "false",
                 "Content-Disposition": "attachment",
             },
         )
 
     @application.get("/api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id:path}")
     def run_terminal_bench_trial_artifact(run_id: str, trial_id: str, artifact_id: str):
-        """按 Trial 归属读取冻结证据内容（有界 + 脱敏；见 review R19）。"""
+        """按 Trial 归属读取冻结证据内容（有界 + 脱敏；见 review R19/R2-07）。"""
         run = _tb_run_or_404(run_id)
         if isinstance(run, JSONResponse):
             return run
@@ -2393,7 +2552,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     ),
                 }},
             )
-        return content
+        # 展示边界兜底：``note`` 等也是内容字段（review R2-07），上游错误文本
+        # 不能因为"来自 SDK"就绕过脱敏；身份/hash 字段逐字保留。
+        return _tb_display_payload(content)
 
 
     # ------------------------------------------- 比较/门禁（M6-Lite 公共服务，只读）

@@ -38,6 +38,7 @@ import {
   type TerminalBenchArtifact,
   type TerminalBenchArtifactContent,
   type TerminalBenchCostView,
+  type TerminalBenchCredentialRef,
   type TerminalBenchOverview,
   type TerminalBenchPreflightReport,
   type TerminalBenchResources,
@@ -98,16 +99,98 @@ const COVERAGE_ITEM_LABELS: Record<string, string> = {
   usage: "用量与成本",
 };
 
-/** Harbor Agent Profile：服务端只登记已验证组合，这里不发明新组合。 */
-export const AGENT_PROFILES = [
+/**
+ * Harbor Agent 登记表：与服务端 `AGENT_SPECS` 同一组能力规则，这里不发明新组合。
+ *
+ * - `oracle`：确定性校准 Agent。版本由登记表固定，不调用模型，也不需要凭据。
+ * - `claude-code`：Harbor 0.23.0 原生 installed agent。CLI 版本必须由操作员显式
+ *   钉住（省略等于 latest，平台按「未钉住」拒绝）；真实模型调用需要已发布模型
+ *   与凭据引用（`env:NAME`，平台只冻结引用、从不接收凭据值）。
+ */
+export interface TerminalBenchAgentProfile {
+  agent_id: string;
+  /** 登记表固定版本；真实 Agent 为空串，由「Agent 版本」输入显式钉住。 */
+  agent_version: string;
+  label: string;
+  /** 是否必须有已发布模型（oracle 是唯一的无模型 Agent）。 */
+  model_required: boolean;
+  /** 版本是否必须由操作员显式填写（省略即 latest，平台拒绝）。 */
+  requires_explicit_version: boolean;
+  /** Runner 环境里必须存在的凭据变量名（空 = 该 Agent 不需要凭据引用）。 */
+  credential_envs: readonly string[];
+}
+
+export const AGENT_PROFILES: readonly TerminalBenchAgentProfile[] = [
   {
     agent_id: "oracle",
     agent_version: "1.0.0",
-    label: "oracle@1.0.0（参考解，已登记）",
-    /** oracle 不需要模型档案；真实 Agent（未登记）才强制要求已发布模型。 */
+    label: "oracle（参考解，已登记；不需要模型与凭据）",
     model_required: false,
+    requires_explicit_version: false,
+    credential_envs: [],
   },
-] as const;
+  {
+    agent_id: "claude-code",
+    agent_version: "",
+    label: "claude-code（真实 Agent；需要显式版本、已发布模型与凭据引用）",
+    model_required: true,
+    requires_explicit_version: true,
+    credential_envs: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+  },
+];
+
+/** 未钉住的占位版本（与服务端 `_PLACEHOLDER_VALUES` 同组；留空同样按未钉住拒绝）。 */
+const AGENT_VERSION_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  "", "latest", "tbd", "todo", "placeholder", "unpinned", "unknown", "n/a",
+]);
+
+/** 凭据名称：短标识符（如 provider / my-provider）。 */
+const CREDENTIAL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
+/** 环境变量名：字母或下划线开头，随后字母、数字、下划线（如 ANTHROPIC_API_KEY）。 */
+const CREDENTIAL_ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const CREDENTIAL_ENV_MAX = 64;
+/** 常见凭据值前缀：出现即按「值」处理，本地拒绝且不回显（值永远不进请求体）。 */
+const SECRET_VALUE_PREFIXES = [
+  "sk-", "sk_", "pk-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-",
+  "akia", "asia", "aiza", "eyj", "bearer ", "-----begin",
+];
+
+function looksLikeSecretValue(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  return SECRET_VALUE_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+
+/**
+ * 环境变量名归一：接受 `ANTHROPIC_API_KEY`（自动补 `env:` 前缀）或
+ * `env:ANTHROPIC_API_KEY`；其它 scheme、空值、以及看起来像凭据值的串返回 null。
+ */
+export function normalizeCredentialEnvVar(raw: string): string | null {
+  const text = raw.trim();
+  if (!text || looksLikeSecretValue(text)) return null;
+  const bare = text.startsWith("env:") ? text.slice("env:".length).trim() : text;
+  if (!bare || looksLikeSecretValue(bare)) return null;
+  if (bare.length > CREDENTIAL_ENV_MAX || !CREDENTIAL_ENV_PATTERN.test(bare)) return null;
+  return bare;
+}
+
+/** 预检查询参数 `credential_refs`：`name=env:VAR` 逗号分隔，与创建请求同一组引用。 */
+export function terminalBenchCredentialQuery(
+  credentials: Record<string, TerminalBenchCredentialRef> | undefined,
+): string {
+  if (!credentials) return "";
+  return Object.entries(credentials)
+    .map(([name, ref]) => `${name}=${ref.ref}`)
+    .join(",");
+}
+
+/** 引用预览：只显示名称与 `env:` 引用，绝不显示凭据值（页面也没有值输入口）。 */
+export function credentialRefPreview(
+  credentials: Record<string, TerminalBenchCredentialRef> | undefined,
+): string {
+  return Object.entries(credentials ?? {})
+    .map(([name, ref]) => `${name} → ${ref.ref}`)
+    .join("；");
+}
 
 /** n_trials 的合法区间与 API 一致（review R16：字符串或越界都会被 422 拒绝）。 */
 export const N_TRIALS_MIN = 1;
@@ -118,8 +201,19 @@ const SECONDS_HINT = "须为正整数秒（留空用服务端默认值）";
 const RESOURCE_HINT = "须为正整数（留空用服务端默认值；平台不接受 0）";
 
 /** 表单 → 公共请求 DTO 的输入（全部以字符串保存，空串=不下发该字段）。 */
+export interface TerminalBenchCredentialInput {
+  /** 凭据档案名（API 的 credentials 键，例如 provider）。 */
+  name: string;
+  /** 环境变量名：`ANTHROPIC_API_KEY` 或 `env:ANTHROPIC_API_KEY`。 */
+  env: string;
+}
+
 export interface TerminalBenchFormInputs {
-  profile: { agent_id: string; agent_version: string; model_required: boolean };
+  profile: TerminalBenchAgentProfile;
+  /** 「Agent 版本」输入：只有 requires_explicit_version 的 Agent 使用它。 */
+  agentVersion: string;
+  /** 凭据引用行：只有声明了 credential_envs 的 Agent 才提交（oracle 不发明该字段）。 */
+  credentials: readonly TerminalBenchCredentialInput[];
   model: string;
   nTrials: string;
   taskKeys: string[];
@@ -130,12 +224,12 @@ export interface TerminalBenchFormInputs {
 }
 
 /**
- * 表单 → 创建请求 body：字段名与 API 的公共 DTO 一一对应（review R16）。
+ * 表单 → 创建请求 body：字段名与 API 的公共 DTO 一一对应（review R16/R2-06）。
  *
- * ``timeouts`` / ``resources`` 是唯一来源；不认识的字段（例如 ``timeout_sec``）
- * 会被 API 以 422 REQUEST_FIELD_UNKNOWN 拒绝，因此这里也不生成它们。
- * ``environment_build_sec`` 平台无法强制（422 HARBOR_TIMEOUT_UNSUPPORTED），
- * 表单不提供该输入。
+ * ``timeouts`` / ``resources`` / ``credentials`` 是唯一来源；不认识的字段（例如
+ * ``timeout_sec``）会被 API 以 422 REQUEST_FIELD_UNKNOWN 拒绝，因此这里也不生成它们。
+ * ``environment_build_sec`` 平台无法强制（422 HARBOR_TIMEOUT_UNSUPPORTED），表单不提供。
+ * 凭据只以 ``{name: {"ref": "env:VAR"}}`` 形式下发：没有值字段，也不接受值。
  */
 export function buildTerminalBenchRunRequest(
   input: TerminalBenchFormInputs,
@@ -150,12 +244,76 @@ export function buildTerminalBenchRunRequest(
   ) {
     return { body: null, error: N_TRIALS_HINT };
   }
+
+  const agentId = input.profile.agent_id;
+  // 真实 Agent 的版本必须显式钉住；oracle 用登记表里已验证的版本。
+  const agentVersion = (
+    input.profile.requires_explicit_version ? input.agentVersion : input.profile.agent_version
+  ).trim();
+  if (!agentVersion || AGENT_VERSION_PLACEHOLDERS.has(agentVersion.toLowerCase())) {
+    return {
+      body: null,
+      error: `${agentId} 必须显式钉住 Agent 版本（例如 2.0.30）；留空或 latest 会被平台按「未钉住」拒绝`,
+    };
+  }
+
   const model = input.model.trim();
   if (input.profile.model_required && !model) {
     return {
       body: null,
-      error: `Agent ${input.profile.agent_id} 必须指定已发布的模型档案 id（oracle 才可留空）`,
+      error: `Agent ${agentId} 必须指定已发布的模型档案 id（oracle 才可留空）`,
     };
+  }
+
+  // 凭据引用：名称 → env:变量名。任何值都不会被提交（也没有输入口）。
+  const credentials: Record<string, TerminalBenchCredentialRef> = {};
+  if (input.profile.credential_envs.length > 0) {
+    for (const row of input.credentials) {
+      const name = row.name.trim();
+      const envText = row.env.trim();
+      if (!name && !envText) continue; // 空行 = 未填写
+      if (!name) {
+        return {
+          body: null,
+          error: "凭据名称不能为空（例如 provider）；第二个输入框才是环境变量名",
+        };
+      }
+      if (!CREDENTIAL_NAME_PATTERN.test(name) || looksLikeSecretValue(name)) {
+        return {
+          body: null,
+          error: "凭据名称不合法：只能是字母、数字、下划线、点或连字符（≤32 个字符，例如 provider）；"
+            + "不要把凭据值填在这里",
+        };
+      }
+      if (credentials[name] !== undefined) {
+        return { body: null, error: `凭据名称 ${name} 重复：一个名称只能对应一个环境变量` };
+      }
+      const envName = normalizeCredentialEnvVar(envText);
+      if (envName === null) {
+        return {
+          body: null,
+          error: `凭据 ${name} 的环境变量名只接受字母、数字、下划线`
+            + "（例如 ANTHROPIC_API_KEY，可写 env: 前缀）；不要把凭据值填在这里",
+        };
+      }
+      credentials[name] = { ref: `env:${envName}` };
+    }
+    if (Object.keys(credentials).length === 0) {
+      return {
+        body: null,
+        error: `Agent ${agentId} 需要至少一条凭据引用（名称 → 环境变量名，例如 provider → ANTHROPIC_API_KEY）`
+          + "；平台只保存引用、不保存凭据值（HARBOR_AGENT_CREDENTIAL_REF_MISSING）",
+      };
+    }
+    if (!Object.values(credentials).some(
+      (ref) => input.profile.credential_envs.includes(ref.ref.slice("env:".length)),
+    )) {
+      return {
+        body: null,
+        error: `Agent ${agentId} 的凭据引用必须包含 ${input.profile.credential_envs.join(" 或 ")}`
+          + " 之一（当前没有任何一条匹配）",
+      };
+    }
   }
 
   const timeouts: TerminalBenchTimeouts = {};
@@ -196,14 +354,15 @@ export function buildTerminalBenchRunRequest(
     body: {
       // oracle 可以没有模型：省略该字段，而不是发明一个模型 id。
       ...(model ? { model } : {}),
-      agent_id: input.profile.agent_id,
-      agent_version: input.profile.agent_version,
+      agent_id: agentId,
+      agent_version: agentVersion,
       n_trials: nTrials,
       ...(input.taskKeys.length > 0 ? { task_keys: input.taskKeys } : {}),
       ...(input.datasetRevision ? { dataset_revision: input.datasetRevision } : {}),
       aggregation: input.aggregation,
       ...(Object.keys(timeouts).length > 0 ? { timeouts } : {}),
       ...(Object.keys(resources).length > 0 ? { resources } : {}),
+      ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
     },
     error: null,
   };
@@ -342,7 +501,7 @@ function describeApiFailure(error: unknown): string {
   return info.code ? `${info.code}：${info.message}` : info.message;
 }
 
-/** 服务端结构化拒绝（4xx）：错误码 + 消息 + 允许取值全部照实显示。 */
+/** 服务端结构化拒绝（4xx）：错误码 + 消息 + 服务端登记的允许取值全部照实显示。 */
 function ApiErrorNotice({ error, testId }: { error: unknown; testId: string }) {
   const info = describeApiError(error);
   return (
@@ -353,7 +512,7 @@ function ApiErrorNotice({ error, testId }: { error: unknown; testId: string }) {
       </p>
       {info.allowed.length > 0 && (
         <p className="hint mono" data-testid={`${testId}-allowed`}>
-          允许字段：{info.allowed.join("、")}
+          允许取值：{info.allowed.join("、")}
         </p>
       )}
     </>
@@ -455,7 +614,10 @@ export function TerminalBenchOperate() {
   const [tasks, setTasks] = useState<TerminalBenchTask[]>([]);
   const [loadError, setLoadError] = useState("");
   const [query, setQuery] = useState("");
-  const [profileIndex, setProfileIndex] = useState(0);
+  const [agentId, setAgentId] = useState<string>(AGENT_PROFILES[0].agent_id);
+  const [agentVersion, setAgentVersion] = useState("");
+  // 凭据引用：名称 → 环境变量名。只有引用，没有任何值输入（见 buildTerminalBenchRunRequest）。
+  const [credentials, setCredentials] = useState<TerminalBenchCredentialInput[]>([{ name: "", env: "" }]);
   const [model, setModel] = useState("");
   const [nTrials, setNTrials] = useState("1");
   const [agentTimeoutSec, setAgentTimeoutSec] = useState("");
@@ -491,13 +653,15 @@ export function TerminalBenchOperate() {
     return () => { alive = false; };
   }, []);
 
-  const profile = AGENT_PROFILES[profileIndex];
+  const profile = AGENT_PROFILES.find((item) => item.agent_id === agentId) ?? AGENT_PROFILES[0];
   const filteredTasks = useMemo(() => tasks.filter((task) => matchesTask(task, query)), [tasks, query]);
   const preset = overview?.items[0] ?? null;
   const datasetRevision = preset?.dataset_revision ?? null;
-  // 表单 → 公共 DTO：非法输入在本地拦下（字符串 n_trials 会被 API 422 拒绝）。
+  // 表单 → 公共 DTO：非法输入在本地拦下（字符串 n_trials、未钉住的版本、非引用凭据都会被 API 422 拒绝）。
   const request = useMemo(() => buildTerminalBenchRunRequest({
     profile,
+    agentVersion,
+    credentials,
     model,
     nTrials,
     taskKeys: selectedKeys,
@@ -511,13 +675,20 @@ export function TerminalBenchOperate() {
     },
     resources: { cpus, memory: memoryMb, storage: storageMb, gpus },
   }), [
-    profile, model, nTrials, selectedKeys, datasetRevision, aggregation,
+    profile, agentVersion, credentials, model, nTrials, selectedKeys, datasetRevision, aggregation,
     agentTimeoutSec, verifierTimeoutSec, agentSetupTimeoutSec, jobTimeoutSec,
     cpus, memoryMb, storageMb, gpus,
   ]);
   const inputInvalid = request.error;
   const preflightOk = preflight?.ok === true;
   const createDisabled = submitting || inputInvalid !== null || !preflightOk;
+
+  const updateCredential = (index: number, patch: Partial<TerminalBenchCredentialInput>) => {
+    setCredentials((rows) => rows.map((row, rowIndex) => (
+      rowIndex === index ? { ...row, ...patch } : row
+    )));
+    setPreflight(null);
+  };
 
   const submitPreflight = (event: FormEvent) => {
     event.preventDefault();
@@ -527,13 +698,15 @@ export function TerminalBenchOperate() {
       setPreflightError(new Error(inputInvalid ?? "请求参数不合法"));
       return;
     }
+    // 预检带同一组 Agent 身份与凭据引用：预检说可以、创建却拒绝不能出现（review R20/R2-06）。
     getTerminalBenchPreflight({
       model: model.trim(),
       n_trials: request.body.n_trials,
       task_keys: selectedKeys.length > 0 ? selectedKeys : undefined,
-      agent_id: profile.agent_id,
-      agent_version: profile.agent_version,
+      agent_id: request.body.agent_id,
+      agent_version: request.body.agent_version,
       dataset_revision: datasetRevision ?? undefined,
+      credential_refs: terminalBenchCredentialQuery(request.body.credentials),
     })
       .then(setPreflight)
       .catch((error) => setPreflightError(error));
@@ -628,28 +801,56 @@ export function TerminalBenchOperate() {
         <div className="operate-card">
           <p className="embed-title">Agent Profile</p>
           <label>
-            Profile（Agent 身份）
+            Agent（{AGENT_PROFILES.length} 个已具备实现的形态）
             <select
               className="control"
-              value={profileIndex}
-              onChange={(event) => { setProfileIndex(Number(event.target.value)); setPreflight(null); }}
-              aria-label="Agent Profile"
+              value={profile.agent_id}
+              onChange={(event) => { setAgentId(event.target.value); setPreflight(null); }}
+              aria-label="Agent"
             >
-              {AGENT_PROFILES.map((item, index) => (
-                <option key={`${item.agent_id}@${item.agent_version}`} value={index}>{item.label}</option>
+              {AGENT_PROFILES.map((item) => (
+                <option key={item.agent_id} value={item.agent_id}>{item.label}</option>
               ))}
             </select>
           </label>
+          {profile.requires_explicit_version ? (
+            <>
+              <label>
+                Agent 版本（必须显式钉住，例如 2.0.30）
+                <input
+                  className="control mono"
+                  value={agentVersion}
+                  onChange={(event) => { setAgentVersion(event.target.value); setPreflight(null); }}
+                  placeholder="2.0.30"
+                  aria-label="Agent 版本"
+                />
+              </label>
+              <p className="hint" data-testid="tb-agent-version-rule">
+                省略版本等于 latest，平台按「未钉住」拒绝（AGENT_VERSION_NOT_PINNED）；这里填写 Harbor
+                原生 Agent 的 CLI 版本号。
+              </p>
+            </>
+          ) : (
+            <p className="hint" data-testid="tb-agent-version-pinned">
+              版本由登记表固定为 <span className="mono">{profile.agent_version}</span>
+              （已登记组合，页面不提供修改入口）。
+            </p>
+          )}
           <label>
             模型档案 id
             <input
               className="control"
               value={model}
               onChange={(event) => { setModel(event.target.value); setPreflight(null); }}
-              placeholder="provider/model（oracle 可留空）"
+              placeholder={profile.model_required ? "provider/model（必填）" : "provider/model（oracle 可留空）"}
               aria-label="模型档案"
             />
           </label>
+          <p className="hint" data-testid="tb-model-rule">
+            {profile.model_required
+              ? `${profile.agent_id} 会真实调用模型：必须选择一个已发布的模型档案 id，留空或未发布都会被拒绝。`
+              : "oracle 是确定性校准 Agent：不调用模型，模型档案可留空（不发明模型 id）。"}
+          </p>
           <label>
             重复次数 n_trials
             <input
@@ -660,6 +861,76 @@ export function TerminalBenchOperate() {
               aria-label="重复次数"
             />
           </label>
+
+          {profile.credential_envs.length > 0 && (
+            <>
+              <p className="embed-title">凭据引用（只提交引用，没有值输入口）</p>
+              <p className="hint" data-testid="tb-credential-rule">
+                只提交「名称 → 环境变量名」引用（例如 <span className="mono">provider</span> →{" "}
+                <span className="mono">ANTHROPIC_API_KEY</span>）；平台不接收也不保存凭据值，
+                值始终来自 Runner 自己的环境。
+                {` ${profile.agent_id} 需要 `}
+                <span className="mono">{profile.credential_envs.join(" 或 ")}</span>
+                {" 之一。"}
+              </p>
+              {credentials.map((row, index) => (
+                <div key={index} data-testid={`tb-credential-${index}`}>
+                  <label>
+                    凭据名称（引用名，例如 provider）
+                    <input
+                      className="control mono"
+                      value={row.name}
+                      onChange={(event) => updateCredential(index, { name: event.target.value })}
+                      placeholder="provider"
+                      aria-label={`凭据名称 ${index + 1}`}
+                    />
+                  </label>
+                  <label>
+                    环境变量名（例如 ANTHROPIC_API_KEY）
+                    <input
+                      className="control mono"
+                      value={row.env}
+                      onChange={(event) => updateCredential(index, { env: event.target.value })}
+                      placeholder="ANTHROPIC_API_KEY"
+                      aria-label={`凭据环境变量 ${index + 1}`}
+                    />
+                  </label>
+                  <div className="actions">
+                    {credentials.length > 1 && (
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`删除凭据引用 ${index + 1}`}
+                        onClick={() => {
+                          setCredentials((rows) => rows.filter((_, rowIndex) => rowIndex !== index));
+                          setPreflight(null);
+                        }}
+                      >
+                        删除
+                      </button>
+                    )}
+                    {index === credentials.length - 1 && (
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => {
+                          setCredentials((rows) => [...rows, { name: "", env: "" }]);
+                          setPreflight(null);
+                        }}
+                      >
+                        添加凭据引用
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <p className="hint mono" data-testid="tb-credential-refs">
+                {request.body?.credentials
+                  ? `将提交：${credentialRefPreview(request.body.credentials)}`
+                  : "引用修正后这里显示将提交的引用。"}
+              </p>
+            </>
+          )}
         </div>
 
         <div className="operate-card">

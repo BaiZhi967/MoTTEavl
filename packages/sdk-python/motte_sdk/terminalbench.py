@@ -378,6 +378,58 @@ def build_run_inputs(
     }
 
 
+# ------------------------------------------------------------------ 重新冻结
+
+
+def refreeze_for_run(
+    manifest: Mapping[str, Any], *, run_id: str, job_id: str,
+) -> dict[str, Any]:
+    """把冻结 manifest 的 **Run 作用域身份**重新派生给新 Run（review R2-02）。
+
+    retry 不能照抄父 Run 的 TrialPlan：``trial_id`` 由 ``run_id`` 派生，照抄会
+    让子 Run 的结果导入到父 Trial 名下（父证据被"identical"或冲突），子 Run
+    自己没有 Trial。这里保留任务内容、Profile 与实验条件（它们是 run-independent
+    的），只重新生成 TrialPlan、原生 Job 身份与所有引用它的字段。
+
+    非 Trial 形态的 manifest 原样返回（M2 套件不涉及 Trial 身份）。
+    """
+    external = dict(manifest.get("external_benchmark") or {})
+    runner_config = dict(external.get("runner_config") or {})
+    plan = dict(runner_config.get("plan") or {})
+    tasks = list(plan.get("tasks") or [])
+    profile = dict(external.get("profile") or {})
+    if not tasks or not profile:
+        return dict(manifest)
+
+    agent_hash, environment_hash = agent_and_environment_hashes(profile)
+    plans = plan_trials(
+        run_id=run_id, tasks=tasks, repeats=int(profile.get("n_trials") or 1),
+        agent_config_hash=agent_hash, environment_hash=environment_hash,
+        seed=profile.get("seed") if isinstance(profile.get("seed"), int) else None,
+    )
+    native = build_harbor_config(
+        run_id=run_id, job_id=job_id,
+        # work_root 是冻结配置里的受控相对目录（run-independent）。
+        work_root=str((runner_config.get("harbor") or {}).get("job", {}).get("jobs_dir") or "jobs"),
+        tasks=tasks, plans=plans, profile=profile,
+        dataset_revision=str(external.get("dataset_revision") or ""),
+    )
+    plan_payload = {
+        **plan,
+        "trials": plans,
+        "planned_trial_count": len(plans),
+        "dataset_revision": external.get("dataset_revision"),
+    }
+    runner_config.update({"harbor": native, "plan": plan_payload, "trials": plans})
+    external["runner_config"] = runner_config
+    frozen = dict(manifest)
+    frozen["external_benchmark"] = external
+    task_manifest = dict(frozen.get("task_manifest") or {})
+    task_manifest["trials"] = plans
+    frozen["task_manifest"] = task_manifest
+    return frozen
+
+
 # ------------------------------------------------------------------ 读取视图
 
 
@@ -691,21 +743,50 @@ def read_artifact_text(reader: Any, ref: Mapping[str, Any], *, max_bytes: int = 
     else:
         payload["verified"] = None
     if len(data) > max_bytes:
-        data = data[:max_bytes]
+        # 预算边界可能切在多字节字符中间：先按预算截断，再回退到**完整字符
+        # 边界**（review R2-13）。直接严格 decode 会把一个合法的 UTF-8 长日志
+        # 整体判成"二进制"，那是把预算问题伪装成编码问题。
+        data = _truncate_utf8(data, max_bytes)
         payload["truncated"] = True
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         payload["encoding"] = "binary"
         payload["note"] = payload["note"] or (
-            "content is not UTF-8 text; download the frozen artifact for the raw bytes"
+            "content is not valid UTF-8; the frozen artifact can be exported through "
+            "the controlled raw-export path"
         )
         return payload
     payload["encoding"] = "utf-8"
     from motte_trace.redaction import redact_secrets
 
     payload["text"] = redact_secrets(text)
+    if payload["note"] is not None:
+        # note 是展示字段（可能带路径/上游消息）：与 text 同一脱敏边界。
+        payload["note"] = redact_secrets(str(payload["note"]))
     return payload
+
+
+def _truncate_utf8(data: bytes, max_bytes: int) -> bytes:
+    """按预算截断但保留完整字符边界（增量解码，丢弃结尾的不完整序列）。"""
+    import codecs
+
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    kept = bytearray()
+    for index in range(0, len(data), 4096):
+        chunk = data[index:index + 4096]
+        budget = max_bytes - len(kept)
+        if budget <= 0:
+            break
+        if len(chunk) > budget:
+            chunk = chunk[:budget]
+        try:
+            text = decoder.decode(chunk, final=False)
+        except UnicodeDecodeError:
+            # 真正非法的 UTF-8：原样返回预算内的字节，交给调用方判成 binary。
+            return bytes(data[:max_bytes])
+        kept.extend(text.encode("utf-8"))
+    return bytes(kept)
 
 
 def trial_terminal_text(

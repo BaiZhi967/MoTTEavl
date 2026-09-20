@@ -531,7 +531,11 @@ export interface paths {
         };
         /**
          * Terminal Bench Preflight
-         * @description 只读预检：与创建请求使用同一组能力判定（review R20）。
+         * @description 只读预检：与创建请求使用同一组能力判定与凭据入口（review R20/R2-06）。
+         *
+         *     引用以 ``credential_refs=provider=env:ANTHROPIC_API_KEY`` 传入，逗号分隔；
+         *     与创建路径共用同一解析/校验函数，所以预检不可能对"引用齐全"的真实
+         *     Agent 给出与创建相反的结论。
          */
         get: operations["terminal_bench_preflight_api_v1_benchmarks_terminal_bench_preflight_get"];
         put?: never;
@@ -1272,7 +1276,7 @@ export interface paths {
         };
         /**
          * Run Terminal Bench Trial Artifact
-         * @description 按 Trial 归属读取冻结证据内容（有界 + 脱敏；见 review R19）。
+         * @description 按 Trial 归属读取冻结证据内容（有界 + 脱敏；见 review R19/R2-07）。
          */
         get: operations["run_terminal_bench_trial_artifact_api_v1_runs__run_id__trials__trial_id__artifacts__artifact_id__get"];
         put?: never;
@@ -1292,11 +1296,16 @@ export interface paths {
         };
         /**
          * Run Terminal Bench Trial Artifact Bytes
-         * @description 下载**冻结的原始证据字节**（同一归属与 hash 校验，不做有损解码）。
+         * @description 导出冻结证据字节：默认与普通内容读取遵守**同一秘密保护边界**。
          *
-         *     文本内容请用不带 ``/bytes`` 的路由（脱敏 + 截断）；这里返回 Bucket 里的
-         *     原始字节，因此响应如实标注：它不是脱敏视图，只对拥有该 Run/Trial 归属
-         *     的调用者可用（review R19 的"下载"路径）。
+         *     review R2-07：归属与 hash 校验不等于展示保护，所以
+         *
+         *     - 文本工件（UTF-8 可解码）：返回**脱敏后**的字节；冻结证据的原始 hash
+         *       用 ``X-Motte-Artifact-Source-Sha256`` 标注（身份不被改写），响应头
+         *       如实标注本次已脱敏；
+         *     - 无法扫描的二进制：默认拒绝（``ARTIFACT_RAW_EXPORT_DISABLED``），只有
+         *       操作员显式设置 ``MOTTE_ALLOW_RAW_ARTIFACT_EXPORT=1`` 才导出原始字节，
+         *       此时响应头标注未脱敏。
          */
         get: operations["run_terminal_bench_trial_artifact_bytes_api_v1_runs__run_id__trials__trial_id__artifacts__artifact_id__bytes_get"];
         put?: never;
@@ -3201,6 +3210,7 @@ export interface operations {
                 agent_id?: string;
                 agent_version?: string;
                 dataset_revision?: string | null;
+                credential_refs?: string;
             };
             header?: never;
             path?: never;

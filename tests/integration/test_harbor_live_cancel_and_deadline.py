@@ -24,6 +24,7 @@ import pytest
 
 from motte_benchmark.harbor.adapter import ADAPTER_ID, HarborJobAdapter
 from motte_benchmark.harbor.parser import PARSER_VERSION
+from motte_benchmark.protocol import BenchmarkRuntimeError
 from motte_contracts.external_job import ExternalJobHandle, ExternalJobSpec
 from motte_sdk import terminalbench as tb
 from motte_sdk.external_jobs import DurableExternalJobRunner, ExternalJobSupervisor
@@ -36,6 +37,9 @@ SLOW_TASKS_ROOT = (
 )
 TEST_IMAGE = "alpine:3.20"
 RUNNER_PYTHON = os.environ.get("MOTTE_HARBOR_RUNNER_PYTHON")
+#: 合成宿主秘密（review R2-05 的真实层核验）：名字像凭据、值不是任何真实凭据。
+HOST_SECRET_NAME = "MOTTE_TEST_HOST_TOKEN"
+HOST_SECRET_VALUE = "synthetic-live-host-token-value"
 
 pytestmark = pytest.mark.skipif(
     not RUNNER_PYTHON,
@@ -91,6 +95,36 @@ def _runner(adapter: HarborJobAdapter, tmp_path: Path, *, poll: float = 1.0):
     )
 
 
+def _remove_job_networks(adapter: HarborJobAdapter, handle: ExternalJobHandle) -> list[str]:
+    """删除本 Job 记录的 compose 网络（``delete=False`` 时 Harbor 不会删）。
+
+    Docker 默认地址池是有限的：反复跑 live 测试若留下 ``*_default`` 网络，
+    daemon 会报 "all predefined address pools have been fully subnetted"，后续
+    Job 的 compose 直接起不来（会伪装成 Job 失败）。这里只删本 Job 记录在案的
+    project 对应网络，绝不做全局 prune。
+    """
+    try:
+        projects = set(adapter.ownership(handle).projects)
+    except BenchmarkRuntimeError:
+        return []
+    removed: list[str] = []
+    if not projects:
+        return removed
+    try:
+        import docker  # noqa: PLC0415 - 仅真实 Docker 场景
+    except ImportError:  # pragma: no cover - 平台侧依赖
+        return removed
+    client = docker.from_env()
+    for project in sorted(projects):
+        for name in (f"{project}_default", project):
+            try:
+                client.networks.get(name).remove()
+                removed.append(name)
+            except Exception:  # noqa: BLE001 - 不存在/仍被占用都忽略（尽力清理）
+                continue
+    return removed
+
+
 def _spec(inputs: dict[str, Any], tmp_path: Path) -> ExternalJobSpec:
     external = inputs["manifest"]["external_benchmark"]
     return ExternalJobSpec(
@@ -104,11 +138,20 @@ def _spec(inputs: dict[str, Any], tmp_path: Path) -> ExternalJobSpec:
 
 
 @pytest.mark.skipif(not _docker_available(), reason="real Docker daemon required")
-def test_real_in_flight_cancel_stops_containers_and_keeps_decoy(tmp_path: Path) -> None:
-    """真实运行中取消：本 Job 容器被停止、诱饵保留、部分证据可采集（R04/R05）。"""
+def test_real_in_flight_cancel_stops_containers_and_keeps_decoy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实运行中取消：本 Job 容器被停止、诱饵保留、部分证据可采集（R04/R05）。
+
+    顺带做 M3-R2-05 的真实层核验：宿主环境里的合成秘密既不下发给 Runner，也不
+    出现在真实任务容器的环境里（docker inspect 实际配置，不是文本匹配）。
+    """
     import docker
 
     assert RUNNER_PYTHON
+    # 合成秘密只放在平台进程环境里：它必须被边界挡下（既不应进 Runner，也不应
+    # 进 compose/任务容器）。值本身不是任何真实凭据。
+    monkeypatch.setenv(HOST_SECRET_NAME, HOST_SECRET_VALUE)
     inputs = _run_inputs(tmp_path, job_sec=None, delete=False)
     spec = _spec(inputs, tmp_path)
     adapter = _adapter()
@@ -119,6 +162,10 @@ def test_real_in_flight_cancel_stops_containers_and_keeps_decoy(tmp_path: Path) 
     )
     handle = adapter.prepare(spec)
     started = adapter.start(spec, handle)
+    # 平台侧边界记录：合成秘密被登记为丢弃，不在下发名单里。
+    platform_boundary = adapter.start_calls[-1]["env_boundary"]
+    assert HOST_SECRET_NAME in platform_boundary["dropped_credentials"], platform_boundary
+    assert HOST_SECRET_NAME not in platform_boundary["forwarded"]
     try:
         # 等真实容器出现（Harbor 用 compose 起 main 服务，标签由平台 overlay 注入）。
         deadline = time.monotonic() + 180
@@ -134,6 +181,19 @@ def test_real_in_flight_cancel_stops_containers_and_keeps_decoy(tmp_path: Path) 
             time.sleep(2.0)
         assert owned, "本 Job 的容器必须带 motte.job 标签（overlay 注入生效）"
         assert owned[0]["labels"].get("motte.owner"), owned[0]
+
+        # 真实容器的环境：合成秘密不在其中（实际交付配置，不是文本匹配）。
+        container = client.containers.get(owned[0]["id"])
+        container_env = list((container.attrs.get("Config") or {}).get("Env") or [])
+        assert all(HOST_SECRET_VALUE not in item for item in container_env), container_env
+        assert all(not item.startswith(f"{HOST_SECRET_NAME}=") for item in container_env)
+        # Runner 侧观察记录：compose 能看到的变量名里也没有它。
+        runner_boundary = json.loads(
+            (Path(started.work_dir) / "harbor" / "env-boundary.json").read_text("utf-8"),
+        )
+        assert runner_boundary["boundary"] == "runner-to-compose"
+        assert HOST_SECRET_NAME not in runner_boundary["runner_env_names"]
+        assert "PATH" in runner_boundary["runner_env_names"]
 
         # 平台取消路径：中断进程组 + 定向停止本 Job 容器 + 尽力采集部分证据。
         supervisor = ExternalJobSupervisor(adapter, poll_interval_seconds=0.5)
@@ -170,6 +230,9 @@ def test_real_in_flight_cancel_stops_containers_and_keeps_decoy(tmp_path: Path) 
         except Exception:  # noqa: BLE001 - 清理失败不影响断言结论
             pass
         adapter.cleanup(started)
+        # delete=False 的场景下 Harbor 不删 compose 网络；这里定向清理本 Job 的，
+        # 避免反复运行把 Docker 默认地址池耗尽（那样后续 Job 会直接起不来）。
+        _remove_job_networks(adapter, started)
 
 
 @pytest.mark.skipif(not _docker_available(), reason="real Docker daemon required")
@@ -236,6 +299,9 @@ def test_real_wrapper_crash_leaves_locatable_residue(tmp_path: Path) -> None:
         except Exception:  # noqa: BLE001 - 清理失败不影响断言结论
             pass
         adapter.cleanup(started)
+        # delete=False 的场景下 Harbor 不删 compose 网络；这里定向清理本 Job 的，
+        # 避免反复运行把 Docker 默认地址池耗尽（那样后续 Job 会直接起不来）。
+        _remove_job_networks(adapter, started)
 
 
 @pytest.mark.skipif(not _docker_available(), reason="real Docker daemon required")
@@ -261,6 +327,7 @@ def test_real_job_deadline_cancels_and_keeps_evidence(tmp_path: Path) -> None:
     cleanup = adapter.cleanup(handle)
     assert cleanup["state"] in ("clean", "residual", "unknown")
     assert cleanup["container_state"] in ("clean", "residual", "unknown")
+    _remove_job_networks(adapter, handle)
     for item in cleanup["leftovers"]:
         assert isinstance(item, dict) and item.get("kind")
     # 冻结任务副本与定位文件都在（R03/R05 的真实层证据）。

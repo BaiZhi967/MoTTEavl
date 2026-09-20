@@ -778,6 +778,14 @@ export interface TerminalBenchResources {
   gpus?: number;
 }
 
+/**
+ * 凭据引用（review R2-06）：只有 `env:NAME` 形态，平台从不接收凭据值。
+ * 元素形状就是 API 收口的 `{"ref": "env:VAR"}`，没有第二个字段。
+ */
+export interface TerminalBenchCredentialRef {
+  ref: string;
+}
+
 export interface TerminalBenchRunRequest {
   /** 已发布的 ModelProfile id；oracle 可省略（真实 Agent 必填）。 */
   model?: string;
@@ -789,6 +797,8 @@ export interface TerminalBenchRunRequest {
   aggregation?: "first-trial" | "mean-success";
   timeouts?: TerminalBenchTimeouts;
   resources?: TerminalBenchResources;
+  /** 凭据引用：名称 → `{"ref": "env:VAR"}`；没有引用时整个字段省略（不下发明文字段）。 */
+  credentials?: Record<string, TerminalBenchCredentialRef>;
 }
 
 /** Run 级成本视图（review R15）：per_success_usd 只在成本完整时有值。 */
@@ -911,6 +921,8 @@ export const getTerminalBenchPreflight = (params: {
   agent_id?: string;
   agent_version?: string;
   dataset_revision?: string;
+  /** 凭据引用（`name=env:VAR`，逗号分隔）：与创建请求必须同一组，否则预检结论不作数。 */
+  credential_refs?: string;
 }) => {
   const query = new URLSearchParams();
   if (params.model !== undefined) query.set("model", params.model);
@@ -919,6 +931,7 @@ export const getTerminalBenchPreflight = (params: {
   if (params.agent_id !== undefined) query.set("agent_id", params.agent_id);
   if (params.agent_version !== undefined) query.set("agent_version", params.agent_version);
   if (params.dataset_revision) query.set("dataset_revision", params.dataset_revision);
+  if (params.credential_refs) query.set("credential_refs", params.credential_refs);
   return request<TerminalBenchPreflightReport>(
     `/api/v1/benchmarks/terminal-bench/preflight?${query.toString()}`,
   );

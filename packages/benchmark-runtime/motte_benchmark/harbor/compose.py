@@ -11,8 +11,22 @@
 
 - 危险执行模式：``privileged``、host network、pid/ipc/userns host namespace、
   危险 capability、device 暴露、seccomp/apparmor/label 被关闭；
+- **有效配置的资源源解析**（review R2-04）：服务 volume 是命名卷时展开顶层
+  ``volumes:`` 定义，``driver_opts`` 的 ``type=none/o=bind/device`` 与
+  ``device`` 本身都是"命名卷形态的宿主 bind"，走与直接 bind 相同的禁用路径
+  检查；顶层 ``secrets:``/``configs:`` 的 ``file:`` 源同样按宿主路径检查；
+  ``external: true``、未定义的命名卷/secrets/configs 引用、非 local 卷驱动、
+  ``volumes_from`` 一律拒绝（无法证明安全）；
 - 越过任务目录的引用：宿主 bind mount 源、build context、env_file，
   以及 ``include``/``extends`` 指向外部文件（无法证明安全就拒绝）；
+- **Compose 插值按可确定的最坏情形解析**（review R2-04）：``${VAR:-default}``
+  用默认值参与路径判定（Runner 侧已把 compose 环境裁剪成白名单，未声明变量
+  在运行时确实不存在），``${VAR}`` / ``$VAR`` 无法求值时拒绝，而不是当作安全；
+- 凭据透传（review R2-05）：``environment`` 的列表项 ``KEY``（无 ``=``）与
+  mapping 的 ``KEY: null`` 语义都是"把 compose 进程的宿主同名变量传进容器"
+  （``KEY: ""`` 在当前 compose 里是空值，但版本间语义不一致，同样按透传判定），
+  ``secrets.<name>.environment`` 同理；命中凭据名即拒绝，并同时给出
+  ``TASK_CONTAINER_HOST_ENV_EXPOSED`` 语义；
 - 凭据插值：``${SOMETHING_SECRET}`` 之类会被宿主环境展开的变量名；
 - 命中既有 ``FORBIDDEN_HOST_PATHS``/docker.sock 时复用
   ``TASK_HOST_PATH_EXPOSED``/``TASK_DOCKER_SOCKET_EXPOSED``；
@@ -20,7 +34,9 @@
   一律 ``TASK_COMPOSE_UNINSPECTABLE``——绝不"读不到就放行"。
 
 检查过程零执行：不 docker build、不启动容器、不调用模型；读取走
-``TrustedDir``（拒 symlink、fd 锚定、大小限额）。
+``TrustedDir``（拒 symlink、fd 锚定、大小限额）。任务目录里的 symlink 在冻结
+副本阶段就被拒绝（``verify_frozen_tasks``/``TrustedDir``），因此这里的路径
+判定不会被"任务内链接指向宿主"绕过。
 """
 from __future__ import annotations
 
@@ -92,10 +108,19 @@ _DISABLING_SECURITY_OPTS: frozenset[str] = frozenset({
 })
 #: 共享宿主/其他容器命名空间的键（值非 host/container 不拒绝）。
 _HOST_NAMESPACE_KEYS: tuple[str, ...] = ("pid", "ipc", "userns_mode", "uts", "cgroup")
-#: compose 变量插值：``${NAME}`` / ``${NAME:-default}`` / ``$NAME``。
+#: compose 变量插值：``${NAME}`` / ``${NAME:-default}`` / ``${NAME?err}`` / ``$NAME``。
+#: ``operator``/``argument`` 让"可确定的最坏情形"能取到默认值（review R2-04）。
 _INTERPOLATION = re.compile(
-    r"\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)(?::?[-?][^}]*)?\}|\$(?P<bare>[A-Za-z_][A-Za-z0-9_]*)",
+    r"\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)(?:(?P<operator>:?[-?])(?P<argument>[^}]*))?\}"
+    r"|\$(?P<bare>[A-Za-z_][A-Za-z0-9_]*)",
 )
+#: 无法求值的插值的占位标记：会穿过 ``:`` 分段，让短语法也能识别（见 _expand_worst_case）。
+_UNRESOLVED_MARK = "\x00"
+_UNRESOLVED_NAME = re.compile(r"\x00([A-Za-z_][A-Za-z0-9_]*)\x00")
+#: 顶层资源段：命名卷、secrets、configs（引用必须能解析到定义）。
+_RESOURCE_SECTIONS: tuple[str, ...] = ("volumes", "secrets", "configs")
+#: 命名卷允许的驱动：只有 docker 自己管理的 local 卷不引入平台无法核验的存储。
+_ALLOWED_VOLUME_DRIVERS: frozenset[str] = frozenset({"local"})
 
 
 def looks_like_credential(name: str) -> bool:
@@ -161,52 +186,284 @@ def _inside(compose_dir: Path, source: str) -> bool:
     return resolved == compose_dir or compose_dir in resolved.parents
 
 
-def _volume_source(entry: Any) -> tuple[str | None, bool]:
-    """卷条目的 ``(source, is_bind)``。
+def _expand_worst_case(text: str) -> tuple[str, tuple[str, ...]]:
+    """按"可确定的最坏情形"展开 compose 插值。
 
-    按 compose 语义：源以 ``/``、``.``、``~`` 开头才是 bind mount，否则是
-    命名卷（命名卷不暴露宿主路径）；单段条目是容器内路径（匿名卷）。
+    ``${VAR:-default}`` / ``${VAR-default}`` 用默认值参与判定：Runner 侧在
+    调用 Harbor 之前已经把 compose 环境裁剪成显式白名单（``env_boundary``），
+    未声明的变量在运行时确实不存在于 compose 环境里，默认值就是实际值。
+    ``${VAR}`` / ``$VAR`` / ``${VAR?err}`` 的值无法确定：替换成占位标记
+    （``\\x00NAME\\x00``）并回报变量名，由调用方按 fail closed 拒绝，
+    而不是假设它安全——占位标记会穿过 ``:`` 分段，因此短语法也能识别。
+    """
+    unresolved: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.group("operator") in ("-", ":-"):
+            return match.group("argument") or ""
+        name = match.group("braced") or match.group("bare") or ""
+        if not name:  # pragma: no cover - 正则保证非空
+            return ""
+        unresolved.append(name)
+        return f"{_UNRESOLVED_MARK}{name}{_UNRESOLVED_MARK}"
+
+    return (_INTERPOLATION.sub(_replace, text), tuple(sorted(set(unresolved))))
+
+
+def _unresolved_names(*texts: str) -> tuple[str, ...]:
+    """文本里残留的未求值插值变量名（含占位标记，去重排序）。"""
+    names: set[str] = set()
+    for text in texts:
+        names.update(_UNRESOLVED_NAME.findall(text))
+    return tuple(sorted(names))
+
+
+def _volume_entry(entry: Any) -> tuple[str | None, str]:
+    """卷条目的 ``(source, kind)``；``kind`` ∈ ``bind``/``named``/``anonymous``。
+
+    按 compose 语义：短语法源以 ``/``、``.``、``~`` 开头才是 bind mount，否则是
+    命名卷（其定义要展开）；单段条目是容器内路径（匿名卷）。长语法的 ``type``
+    优先，缺省时同样按源的形状判断。短语法先展开插值再按 ``:`` 分段——否则
+    ``${HOST_ROOT:-/}:/host`` 里的冒号会把条目切错。
     """
     if isinstance(entry, str):
-        parts = entry.split(":")
+        expanded, _unresolved = _expand_worst_case(entry)
+        parts = expanded.split(":")
         if len(parts) == 1:
-            return (None, False)
+            return (None, "anonymous")
         source = parts[0]
-        return (source, source.startswith(("/", ".", "~")))
+        return (source, "bind" if source.startswith(("/", ".", "~")) else "named")
     if isinstance(entry, Mapping):
         source = entry.get("source")
-        if not isinstance(source, str):
-            return (None, False)
+        if not isinstance(source, str) or not source:
+            return (None, "anonymous")
         kind = entry.get("type")
-        is_bind = str(kind) == "bind" or (
-            kind is None and source.startswith(("/", ".", "~"))
-        )
-        return (source, is_bind)
-    return (None, False)
+        if kind is None:
+            kind = "bind" if source.startswith(("/", ".", "~")) else "named"
+        return (source, str(kind))
+    return (None, "anonymous")
 
 
-def _check_volume(
-    compose_dir: Path, entry: Any, *, file: str, service: str,
-    violations: list[dict[str, Any]],
+def _resource_reference_names(entries: Any) -> list[str]:
+    """服务 ``secrets``/``configs`` 段引用的资源名（``name`` 或 ``{source: name}``）。"""
+    names: list[str] = []
+    items = entries if isinstance(entries, Sequence) and not isinstance(entries, str) else [entries]
+    for item in items:
+        if isinstance(item, Mapping):
+            name = item.get("source")
+        else:
+            name = item
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+# ------------------------------------------------------------------ 宿主路径
+
+
+def _check_host_source(
+    compose_dir: Path, source: str, *, file: str, service: str | None,
+    violations: list[dict[str, Any]], origin: str,
 ) -> None:
-    source, is_bind = _volume_source(entry)
-    if not source or not is_bind:
+    """宿主路径来源的统一检查（直接 bind 与命名卷 driver_opts 等价对待）。"""
+    if not source:
         return
     if "docker.sock" in source:
         violations.append(_violation(
             "TASK_DOCKER_SOCKET_EXPOSED", file=file, service=service,
-            detail=f"任务 compose 把 Docker socket 挂进任务容器: {source}",
+            detail=f"{origin}把 Docker socket 暴露给任务容器: {source}",
         ))
     hits = _forbidden_hits(source)
     if hits:
         violations.append(_violation(
             "TASK_HOST_PATH_EXPOSED", file=file, service=service,
-            detail=f"任务 compose 挂载了宿主敏感路径 {source}（命中 {hits}）",
+            detail=f"{origin}指向宿主敏感路径 {source}（命中 {hits}）",
         ))
     if not _inside(compose_dir, source):
         violations.append(_violation(
             "TASK_COMPOSE_EXTERNAL_BIND", file=file, service=service,
-            detail=f"bind mount 源不在该任务自己的 environment 目录内: {source}",
+            detail=f"{origin}不在该任务自己的 environment 目录内: {source}",
+        ))
+
+
+def _check_interpolated_source(
+    source: str, *, file: str, service: str | None,
+    violations: list[dict[str, Any]], origin: str,
+) -> str | None:
+    """展开插值后的路径源；无法求值时具名拒绝并返回 ``None``。"""
+    expanded, unresolved = _expand_worst_case(source)
+    names = tuple(sorted(set(unresolved) | set(_unresolved_names(expanded))))
+    if names:
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_INTERPOLATION", file=file, service=service,
+            detail=(
+                f"{origin}含有无法求值的插值变量 {list(names)}"
+                "（没有默认值就无法证明它指向任务目录内），必须写成字面路径或带默认值"
+            ),
+        ))
+        return None
+    return expanded
+
+
+def _check_volume(
+    compose_dir: Path, entry: Any, *, file: str, service: str,
+    declared_volumes: Mapping[str, Any], violations: list[dict[str, Any]],
+) -> None:
+    source, kind = _volume_entry(entry)
+    if not source:
+        return
+    expanded = _check_interpolated_source(
+        source, file=file, service=service, violations=violations, origin="卷源",
+    )
+    if expanded is None:
+        return
+    if kind == "bind":
+        # 直接 bind：源就是宿主路径。
+        _check_host_source(
+            compose_dir, expanded, file=file, service=service,
+            violations=violations, origin="bind mount 源",
+        )
+        return
+    if kind == "named" and expanded not in declared_volumes:
+        # 命名卷的定义必须可解析：没有顶层定义就无法证明它不是宿主 bind
+        # （docker 会用默认本地卷，但那属于"推断"，不是可核验的证据）。
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file, service=service,
+            detail=f"服务引用了没有顶层定义的命名卷 {expanded!r}，无法核验其宿主暴露",
+        ))
+
+
+def _check_volume_definition(
+    compose_dir: Path, name: str, definition: Any, *,
+    file: str, violations: list[dict[str, Any]],
+) -> None:
+    """顶层命名卷定义：只有 docker 管理的 local 卷不暴露宿主路径（review R2-04）。"""
+    if definition is None:
+        # ``volumes: {data:}``：默认 local 驱动、docker 自管卷，无宿主路径。
+        return
+    if definition is True:
+        violations.append(_violation(
+            "TASK_COMPOSE_EXTERNAL_RESOURCE", file=file,
+            detail=f"命名卷 {name!r} 声明为 external，无法核验它由谁创建、是否宿主路径",
+        ))
+        return
+    if not isinstance(definition, Mapping):
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file,
+            detail=f"命名卷 {name!r} 的定义不是对象，无法核验",
+        ))
+        return
+    if definition.get("external"):
+        violations.append(_violation(
+            "TASK_COMPOSE_EXTERNAL_RESOURCE", file=file,
+            detail=f"命名卷 {name!r} 声明为 external，无法核验它由谁创建、是否宿主路径",
+        ))
+        return
+    driver = definition.get("driver")
+    if driver is not None and str(driver) not in _ALLOWED_VOLUME_DRIVERS:
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file,
+            detail=(
+                f"命名卷 {name!r} 使用非 local 驱动 {driver!r}，其 driver_opts 语义与"
+                "宿主暴露无法在本平台核验"
+            ),
+        ))
+    options = definition.get("driver_opts")
+    if options is None:
+        return
+    if not isinstance(options, Mapping):
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file,
+            detail=f"命名卷 {name!r} 的 driver_opts 不是对象，无法核验",
+        ))
+        return
+    device = options.get("device")
+    if device is None:
+        return
+    if not isinstance(device, str) or not device:
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file,
+            detail=f"命名卷 {name!r} 的 driver_opts.device 非法，无法核验",
+        ))
+        return
+    origin = f"命名卷 {name!r} 的 driver_opts.device"
+    expanded = _check_interpolated_source(
+        device, file=file, service=None, violations=violations, origin=origin,
+    )
+    if expanded is None:
+        return
+    # ``type=none/o=bind/device=<宿主路径>`` 就是命名卷形态的宿主 bind：与直接
+    # bind 走同一组禁用路径检查（FORBIDDEN_HOST_PATHS、越界、docker.sock）。
+    _check_host_source(
+        compose_dir, expanded, file=file, service=None,
+        violations=violations, origin=origin,
+    )
+
+
+def _check_secret_definition(
+    compose_dir: Path, section: str, name: str, definition: Any, *,
+    file: str, violations: list[dict[str, Any]],
+) -> None:
+    """顶层 ``secrets``/``configs`` 定义：文件源是宿主路径，透传源是宿主环境（R2-04/R2-05）。"""
+    label = f"{section}.{name}"
+    if definition is None:
+        return
+    if definition is True:
+        violations.append(_violation(
+            "TASK_COMPOSE_EXTERNAL_RESOURCE", file=file,
+            detail=f"{label} 声明为 external，无法核验其内容来源",
+        ))
+        return
+    if not isinstance(definition, Mapping):
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file,
+            detail=f"{label} 的定义不是对象，无法核验其内容来源",
+        ))
+        return
+    if definition.get("external"):
+        violations.append(_violation(
+            "TASK_COMPOSE_EXTERNAL_RESOURCE", file=file,
+            detail=f"{label} 声明为 external，无法核验其内容来源",
+        ))
+        return
+    environment = definition.get("environment")
+    if isinstance(environment, str) and environment:
+        # secrets 的 environment 源同样取 compose 进程环境里的同名宿主变量。
+        if looks_like_credential(environment):
+            violations.append(_violation(
+                "TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", file=file,
+                detail=(
+                    f"{label}.environment 从 Runner 进程环境透传凭据类变量 "
+                    f"{environment}，会把宿主凭据写进任务容器，必须移除"
+                ),
+            ))
+            violations.append(_violation(
+                "TASK_CONTAINER_HOST_ENV_EXPOSED", file=file,
+                detail=f"{label}.environment 把宿主环境变量 {environment} 带进任务容器",
+            ))
+    source = definition.get("file")
+    if not isinstance(source, str) or not source:
+        return
+    expanded = _check_interpolated_source(
+        source, file=file, service=None, violations=violations, origin=f"{label}.file",
+    )
+    if expanded is None:
+        return
+    if "docker.sock" in expanded:
+        violations.append(_violation(
+            "TASK_DOCKER_SOCKET_EXPOSED", file=file,
+            detail=f"{label}.file 指向 Docker socket: {expanded}",
+        ))
+    hits = _forbidden_hits(expanded)
+    if hits:
+        violations.append(_violation(
+            "TASK_HOST_PATH_EXPOSED", file=file,
+            detail=f"{label}.file 指向宿主敏感路径 {expanded}（命中 {hits}）",
+        ))
+    if not _inside(compose_dir, expanded):
+        violations.append(_violation(
+            "TASK_COMPOSE_EXTERNAL_SECRET_FILE", file=file,
+            detail=f"{label}.file 不在该任务自己的 environment 目录内: {expanded}",
         ))
 
 
@@ -231,11 +488,16 @@ def _check_build(
             ))
     else:
         return
-    if isinstance(context, str) and context and not _inside(compose_dir, context):
-        violations.append(_violation(
-            "TASK_COMPOSE_EXTERNAL_BUILD_CONTEXT", file=file, service=service,
-            detail=f"build context 不在任务目录内: {context}",
-        ))
+    if isinstance(context, str) and context:
+        expanded = _check_interpolated_source(
+            context, file=file, service=service, violations=violations,
+            origin="build context",
+        )
+        if expanded is not None and not _inside(compose_dir, expanded):
+            violations.append(_violation(
+                "TASK_COMPOSE_EXTERNAL_BUILD_CONTEXT", file=file, service=service,
+                detail=f"build context 不在任务目录内: {expanded}",
+            ))
 
 
 def _check_env_file(
@@ -252,35 +514,82 @@ def _check_env_file(
             item = item.get("path")
         if not isinstance(item, str) or not item:
             continue
-        if not _inside(compose_dir, item):
+        expanded = _check_interpolated_source(
+            item, file=file, service=service, violations=violations, origin="env_file",
+        )
+        if expanded is not None and not _inside(compose_dir, expanded):
             violations.append(_violation(
                 "TASK_COMPOSE_EXTERNAL_ENV_FILE", file=file, service=service,
-                detail=f"env_file 不在任务目录内: {item}",
+                detail=f"env_file 不在任务目录内: {expanded}",
             ))
+
+
+def _environment_entries(environment: Any) -> list[tuple[str, str | None]]:
+    """compose ``environment`` 的三种形态 → ``(变量名, 值或 None)``。
+
+    列表项 ``KEY``（没有 ``=``）与 mapping 的 ``KEY: null`` 的语义都是"从 compose
+    进程环境取同名变量"，值就是 Runner 进程的宿主变量（实测 ``docker compose
+    config`` 会把宿主值解析进来）；只有 ``KEY=value`` 才是任务自己给的字面值。
+    ``KEY: ""`` 在当前 compose 里是空值，但该形态在版本之间语义不一致，因此
+    同样按透传 fail-closed 判定（review R2-05）。
+    """
+    entries: list[tuple[str, str | None]] = []
+    if isinstance(environment, Mapping):
+        for key, value in environment.items():
+            name = str(key)
+            if value is None or (isinstance(value, str) and not value):
+                entries.append((name, None))
+            else:
+                entries.append((name, str(value)))
+        return entries
+    if isinstance(environment, Sequence) and not isinstance(environment, str):
+        for item in environment:
+            text = str(item)
+            if "=" in text:
+                name, value = text.split("=", 1)
+                entries.append((name, value))
+            else:
+                entries.append((text, None))
+    return entries
 
 
 def _check_credentials(
     environment: Any, *, file: str, service: str, violations: list[dict[str, Any]],
 ) -> None:
-    """``${SOMETHING_SECRET}`` 之类插值会把宿主环境里的凭据塞进任务容器。"""
-    values: list[str] = []
-    if isinstance(environment, Mapping):
-        values = [str(value) for value in environment.values()]
-    elif isinstance(environment, Sequence) and not isinstance(environment, str):
-        values = [str(item) for item in environment]
-    for value in values:
+    """凭据透传（``KEY`` / ``KEY: null``）与插值（``${SOMETHING_SECRET}``）。
+
+    两者都会把 Runner 进程环境里的凭据塞进任务容器：透传由变量名决定（没有
+    ``$``，只匹配插值文本会漏掉），插值由变量名决定（值来自宿主环境）。命中
+    凭据名一律具名拒绝，并同时给出 ``TASK_CONTAINER_HOST_ENV_EXPOSED`` 语义。
+    """
+    for name, value in _environment_entries(environment):
+        if value is None:
+            if looks_like_credential(name):
+                violations.append(_violation(
+                    "TASK_COMPOSE_CREDENTIAL_PASSTHROUGH", file=file, service=service,
+                    detail=(
+                        f"任务 compose 透传了宿主环境变量 {name}（列表项/空值语义），"
+                        "会把 Runner 进程里的凭据带进任务容器，必须移除"
+                    ),
+                ))
+                violations.append(_violation(
+                    "TASK_CONTAINER_HOST_ENV_EXPOSED", file=file, service=service,
+                    detail=f"任务容器会继承宿主凭据环境变量 {name}（compose 透传语义）",
+                ))
+            continue
         for match in _INTERPOLATION.finditer(value):
-            name = match.group("braced") or match.group("bare") or ""
-            if name and looks_like_credential(name):
+            interpolated = match.group("braced") or match.group("bare") or ""
+            if interpolated and looks_like_credential(interpolated):
                 violations.append(_violation(
                     "TASK_COMPOSE_CREDENTIAL_FORWARD", file=file, service=service,
-                    detail=f"任务 compose 插值了凭据类变量 ${{{name}}}",
+                    detail=f"任务 compose 插值了凭据类变量 ${{{interpolated}}}",
                 ))
                 break
 
 
 def _check_service(
     compose_dir: Path, name: str, service: Any, *, file: str,
+    declared: Mapping[str, Mapping[str, Any]],
     violations: list[dict[str, Any]],
 ) -> None:
     if not isinstance(service, Mapping):
@@ -342,7 +651,26 @@ def _check_service(
     volumes = service.get("volumes") or []
     if isinstance(volumes, Sequence) and not isinstance(volumes, str):
         for entry in volumes:
-            _check_volume(compose_dir, entry, file=file, service=name, violations=violations)
+            _check_volume(
+                compose_dir, entry, file=file, service=name,
+                declared_volumes=declared["volumes"], violations=violations,
+            )
+    if service.get("volumes_from"):
+        # 别的容器/服务的卷（可能含宿主 bind）会被整体继承，无法核验。
+        violations.append(_violation(
+            "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file, service=name,
+            detail=f"volumes_from 继承了其他容器的卷，无法核验: {service['volumes_from']}",
+        ))
+    for section in ("secrets", "configs"):
+        for referenced in _resource_reference_names(service.get(section)):
+            if referenced not in declared[section]:
+                violations.append(_violation(
+                    "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file, service=name,
+                    detail=(
+                        f"服务引用了没有顶层定义的 {section}.{referenced}，"
+                        "无法核验其内容来源"
+                    ),
+                ))
     if service.get("build") is not None:
         _check_build(compose_dir, service["build"], file=file, service=name, violations=violations)
     if service.get("env_file") is not None:
@@ -356,6 +684,26 @@ def _check_service(
             "TASK_COMPOSE_INCLUDE_UNSUPPORTED", file=file, service=name,
             detail=f"extends.file 引用外部文件 {extends['file']}，无法证明其内容安全",
         ))
+
+
+def _collect_resources(
+    document: Mapping[str, Any], *, file: str, violations: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """顶层 ``volumes``/``secrets``/``configs`` 的 ``{名字: 定义}``。"""
+    declared: dict[str, dict[str, Any]] = {section: {} for section in _RESOURCE_SECTIONS}
+    for section in _RESOURCE_SECTIONS:
+        raw = document.get(section)
+        if raw is None:
+            continue
+        if not isinstance(raw, Mapping):
+            violations.append(_violation(
+                "TASK_COMPOSE_UNRESOLVED_RESOURCE", file=file,
+                detail=f"顶层 {section} 段不是对象，无法核验其中定义",
+            ))
+            continue
+        for name, definition in raw.items():
+            declared[section][str(name)] = definition
+    return declared
 
 
 def _parse_compose(data: bytes) -> tuple[Mapping[str, Any] | None, str | None]:
@@ -394,12 +742,20 @@ def has_task_compose(file_hashes: Mapping[str, str]) -> bool:
     return f"{TASK_ENVIRONMENT_DIR}/{COMPOSE_FILE_NAME}" in file_hashes
 
 
-def _policy(files: list[dict[str, Any]], services: list[str], violations: list[dict[str, Any]]) -> dict[str, Any]:
+def _policy(
+    files: list[dict[str, Any]], services: list[str], violations: list[dict[str, Any]],
+    resources: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     policy = {
         "schema": POLICY_SCHEMA,
         "harbor_compose_file_name": COMPOSE_FILE_NAME,
         "files": sorted(files, key=lambda item: item["relative_path"]),
         "services": sorted(set(services)),
+        # 顶层资源定义名（命名卷/secrets/configs）：检查过哪些可解析来源。
+        "resources": {
+            section: sorted((resources or {}).get(section, {}))
+            for section in _RESOURCE_SECTIONS
+        },
         "violations": violations,
     }
     return {**policy, "policy_hash": canonical_hash(policy)}
@@ -443,6 +799,7 @@ def inspect_task_compose(
     violations: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
     services: list[str] = []
+    resources: dict[str, dict[str, Any]] = {section: {} for section in _RESOURCE_SECTIONS}
     if candidates and not present:
         # 冻结清单/目录声明了 compose，但受控读取拿不到：不可检查，拒绝。
         return uninspectable_fact(
@@ -490,10 +847,27 @@ def inspect_task_compose(
                 "TASK_COMPOSE_UNINSPECTABLE", file=rel, detail="services 段必须是对象",
             ))
             continue
+        # 顶层资源定义先解析：服务引用必须能落到定义上，命名卷的 driver_opts
+        # 才可能被展开成宿主 bind（review R2-04）。
+        declared = _collect_resources(document, file=rel, violations=violations)
+        for section in _RESOURCE_SECTIONS:
+            resources[section].update(declared[section])
+        for volume_name in sorted(declared["volumes"]):
+            _check_volume_definition(
+                compose_dir, volume_name, declared["volumes"][volume_name],
+                file=rel, violations=violations,
+            )
+        for section in ("secrets", "configs"):
+            for name in sorted(declared[section]):
+                _check_secret_definition(
+                    compose_dir, section, name, declared[section][name],
+                    file=rel, violations=violations,
+                )
         services.extend(str(name) for name in declared_services)
         for name in sorted(declared_services, key=str):
             _check_service(
-                compose_dir, str(name), declared_services[name], file=rel, violations=violations,
+                compose_dir, str(name), declared_services[name], file=rel,
+                declared=declared, violations=violations,
             )
         networks = document.get("networks")
         if isinstance(networks, Mapping) and "host" in {str(key) for key in networks}:
@@ -501,7 +875,7 @@ def inspect_task_compose(
                 "TASK_COMPOSE_HOST_NETWORK", file=rel,
                 detail="compose 声明了 host network（external host network）",
             ))
-    return _policy(files, services, violations)
+    return _policy(files, services, violations, resources)
 
 
 def compose_violation_codes(facts: Mapping[str, Any] | None) -> list[str]:

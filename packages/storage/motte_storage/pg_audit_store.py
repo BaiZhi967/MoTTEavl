@@ -1094,7 +1094,8 @@ class PgTrials:
         source_hash: str, parser_version: str,
     ) -> dict[str, Any]:
         from .trials import (
-            _canonical, _check_result_identity, _now_iso, _result_conflict, validate_result,
+            _apply_result, _canonical, _check_result_identity, _placeholder_replacement,
+            _result_conflict, validate_result,
         )
 
         stored = validate_result(result)
@@ -1118,18 +1119,15 @@ class PgTrials:
                             "status": "identical", "trial_id": trial_id,
                             "result": _as_payload(row[1]),
                         }
-                    return _result_conflict(
-                        current, stored, source_hash=source_hash,
-                        parser_version=parser_version,
-                    )
-                current.update({
-                    "result": stored,
-                    "result_hash": result_hash,
-                    "source_hash": source_hash,
-                    "parser_version": parser_version,
-                    "status": str(stored.get("disposition") or "unknown"),
-                    "finished_at": _now_iso(),
-                })
+                    if _placeholder_replacement(current, stored) is None:
+                        return _result_conflict(
+                            current, stored, source_hash=source_hash,
+                            parser_version=parser_version,
+                        )
+                outcome = _apply_result(
+                    current, stored, source_hash=source_hash,
+                    parser_version=parser_version, result_hash=result_hash,
+                )
                 cursor.execute(
                     "UPDATE trials SET status = %s, payload = %s, result_payload = %s, finished_at = %s WHERE trial_id = %s",  # noqa: E501
                     (
@@ -1137,4 +1135,4 @@ class PgTrials:
                         current["finished_at"], trial_id,
                     ),
                 )
-        return {"status": "stored", "trial_id": trial_id, "result": deepcopy(stored)}
+        return outcome

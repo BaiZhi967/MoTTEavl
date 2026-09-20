@@ -49,10 +49,45 @@ FROZEN_DIR_NAME = "frozen-tasks"
 MAX_RESULT_BYTES = 10 * 1024 * 1024
 #: 外层 Harbor 配置文件的读取上限（review R12：与内层 Trial 同等限额）。
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
+#: Runner 上报的环境边界观察记录（review R2-05）：compose 能看到的变量名。
+ENV_BOUNDARY_NAME = "harbor/env-boundary.json"
 
 
 def _encode(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+
+
+def _verify_env_boundary(payload: str | None) -> dict[str, Any]:
+    """核验 Runner 上报的"compose 可见变量名"是否仍在平台边界内（R2-05）。
+
+    观察记录缺失（旧 Runner/未走到该步骤）时如实记 ``observed=False``；
+    无法解析时记 ``parse_error``——都不当作"已核验通过"。
+    """
+    from motte_benchmark.env_boundary import runner_env_observation_violations
+
+    if payload is None:
+        return {"observed": False, "violations": [], "reason": "env-boundary.json missing"}
+    try:
+        record = json.loads(payload)
+    except json.JSONDecodeError as error:
+        return {
+            "observed": False, "violations": [],
+            "reason": f"env-boundary.json is not valid JSON: {error}",
+        }
+    if not isinstance(record, dict):
+        return {
+            "observed": False, "violations": [],
+            "reason": "env-boundary.json must contain an object",
+        }
+    violations = runner_env_observation_violations(record)
+    return {
+        "observed": True,
+        "boundary": record.get("boundary"),
+        "runner_env_name_count": len(record.get("runner_env_names") or []),
+        "declared_credentials": list(record.get("declared_credentials") or []),
+        "compose_env_inherits_os_env": bool(record.get("compose_env_inherits_os_env")),
+        "violations": violations,
+    }
 
 
 class HarborJobAdapter:
@@ -204,6 +239,9 @@ class HarborJobAdapter:
             "container_label": f"motte.job={started.job_id}",
             # 平台自己注入的标签值：容器元数据里只有摘要，原始 token 留在受控记录。
             "container_owner_label": owner_label_value(started.launch_token),
+            # 环境边界记录（review R2-05）：Runner 进程环境里有哪些名字下发、
+            # 各自来源，以及哪些宿主秘密被挡下。只含名字与来源，绝不含值。
+            "env_boundary": dict(self._process.last_env_boundary or {}),
         })
         resources = list(owned.get("resources") or [])
         resources.append({
@@ -403,6 +441,8 @@ class HarborJobAdapter:
             CONFIG_NAME, "harbor/lock.json", "harbor/result.json", PLAN_NAME,
             LOCATION_NAME, FROZEN_RECORD_NAME, "harbor/launch-identity.json",
             "harbor/run-summary.json", "harbor/run-error.json", "harbor/signal.json",
+            # 环境边界观察（review R2-05）：Runner 交给 compose 的变量名与声明凭据。
+            "harbor/env-boundary.json",
             # 冻结副本清单：task_key ↔ 执行目录名（Harbor 的 trial 名与 task_id.path
             # 都以副本目录为准，Parser 据此归属；review R03/R13）。
             f"{FROZEN_DIR_NAME}/manifest.json",
@@ -660,6 +700,9 @@ class HarborJobAdapter:
             "binaries_frozen": all(
                 item.get("artifact_id") for item in observed_binaries
             ),
+            # 环境边界核验（review R2-05）：Runner 上报的"compose 可见变量名"必须
+            # 仍在平台下发边界内，否则明确登记违规（不静默通过）。
+            "env_boundary": _verify_env_boundary(files.get(ENV_BOUNDARY_NAME)),
         })
         return results, cursor
 

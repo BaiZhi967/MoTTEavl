@@ -171,6 +171,57 @@ def _plan_record(plan: dict[str, Any]) -> dict[str, Any]:
     return stored
 
 
+def is_synthetic_result(result: Any) -> bool:
+    """结果是否只是**平台补出的处置占位**（不是来自 Runner 的证据）。
+
+    取消/超时终态化时，平台会给"还没有结果"的计划单元补一个 disposition
+    （``synthesized_by`` 标记），让覆盖分母不因缺行而虚高。占位不是证据，
+    因此它可以被随后到达的真实冻结结果替换（review R2-01）；真实证据之间
+    仍然严格冲突、永不覆盖。
+    """
+    return isinstance(result, dict) and bool(result.get("synthesized_by"))
+
+
+def _placeholder_replacement(
+    existing: dict[str, Any], incoming: dict[str, Any],
+) -> dict[str, Any] | None:
+    """真实证据替换平台占位时返回替换审计摘要（不是证据冲突）。"""
+    if not is_synthetic_result(existing.get("result")) or is_synthetic_result(incoming):
+        return None
+    previous = existing.get("result") or {}
+    return {
+        "previous": {
+            "disposition": previous.get("disposition"),
+            "synthesized_by": previous.get("synthesized_by"),
+            "result_hash": existing.get("result_hash"),
+        },
+    }
+
+
+def _apply_result(
+    row: dict[str, Any], stored: dict[str, Any], *,
+    source_hash: str, parser_version: str, result_hash: str,
+) -> dict[str, Any]:
+    """写入结果（含"占位可被真实证据替换"规则）；返回平台侧结论。"""
+    replacement = _placeholder_replacement(row, stored)
+    row.update({
+        "result": stored,
+        "result_hash": result_hash,
+        "source_hash": source_hash,
+        "parser_version": parser_version,
+        "status": str(stored.get("disposition") or "unknown"),
+        "finished_at": _now_iso(),
+    })
+    if replacement is not None:
+        return {
+            "status": "replaced_placeholder",
+            "trial_id": stored["trial_id"],
+            "previous": replacement["previous"],
+            "result": deepcopy(stored),
+        }
+    return {"status": "stored", "trial_id": stored["trial_id"], "result": deepcopy(stored)}
+
+
 def _apply_plan(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """同 trial_id 同计划：idempotent no-op；异计划保留先写入者并报冲突。"""
     if existing.get("plan_hash") == incoming.get("plan_hash"):
@@ -237,18 +288,14 @@ class MemoryTrials:
                         "status": "identical", "trial_id": trial_id,
                         "result": deepcopy(row["result"]),
                     }
-                return _result_conflict(
-                    row, stored, source_hash=source_hash, parser_version=parser_version,
-                )
-            row.update({
-                "result": stored,
-                "result_hash": result_hash,
-                "source_hash": source_hash,
-                "parser_version": parser_version,
-                "status": str(stored.get("disposition") or "unknown"),
-                "finished_at": _now_iso(),
-            })
-            return {"status": "stored", "trial_id": trial_id, "result": deepcopy(stored)}
+                if _placeholder_replacement(row, stored) is None:
+                    return _result_conflict(
+                        row, stored, source_hash=source_hash, parser_version=parser_version,
+                    )
+            return _apply_result(
+                row, stored, source_hash=source_hash,
+                parser_version=parser_version, result_hash=result_hash,
+            )
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:
@@ -347,14 +394,11 @@ class SQLiteTrials:
             if row[1] is not None:
                 if current.get("source_hash") == source_hash and current.get("result_hash") == result_hash:
                     return {"status": "identical", "trial_id": trial_id, "result": json.loads(row[1])}
-                return _result_conflict(current, stored, source_hash=source_hash, parser_version=parser_version)
-            current.update({
-                "result": stored,
-                "result_hash": result_hash,
-                "source_hash": source_hash,
-                "parser_version": parser_version,
-                "status": str(stored.get("disposition") or "unknown"),
-                "finished_at": _now_iso(),
-            })
+                if _placeholder_replacement(current, stored) is None:
+                    return _result_conflict(current, stored, source_hash=source_hash, parser_version=parser_version)
+            outcome = _apply_result(
+                current, stored, source_hash=source_hash,
+                parser_version=parser_version, result_hash=result_hash,
+            )
             connection.execute("UPDATE trials SET status = :status, payload = :payload, result_payload = :result_payload, finished_at = :finished_at WHERE trial_id = :trial_id", self._row(current))
-            return {"status": "stored", "trial_id": trial_id, "result": deepcopy(stored)}
+            return outcome

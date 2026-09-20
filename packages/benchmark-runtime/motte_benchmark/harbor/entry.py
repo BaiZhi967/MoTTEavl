@@ -49,6 +49,14 @@ AGENT_IMPORT_PATHS: dict[str, tuple[str, str, str]] = {
 }
 FROZEN_NAME = "harbor/frozen-tasks.json"
 OVERLAY_NAME = "harbor/ownership-overlay.yaml"
+#: 环境边界观察记录（review R2-05）：Runner 交给 compose 的变量名与来源。
+ENV_BOUNDARY_NAME = "harbor/env-boundary.json"
+BOUNDARY_SCHEMA = "motte-runner-env-boundary@1"
+#: 平台注入的桥接变量名（身份与受控路径）：这些名字由平台本次启动生成。
+BRIDGE_ENV_NAMES: tuple[str, ...] = (
+    "MOTTE_WORK_DIR", "MOTTE_JOB_ID", "MOTTE_RUN_ID", "MOTTE_LAUNCH_TOKEN",
+    "MOTTE_TASK_ROOT", "MOTTE_RUNNER_PYTHON", "MOTTE_RUNNER_ROOT",
+)
 COMPLETION_MARKER = ".motte-job-complete"
 #: 冻结任务副本的目录名与清单（平台侧 ``frozen.py`` 用同一份 schema）。
 FROZEN_TASKS_DIR = "frozen-tasks"
@@ -549,9 +557,13 @@ def validate_agent_config(job_config: Any, work_dir: Path) -> dict[str, Any]:
     task_dir/trial_paths，构造失败会把一个本来合法的校准 Run 判成配置错误
     （真实链路回归）。校验只做两件事：Agent 名可解析 + kwargs 通过 options 模型。
     """
+    from harbor.agents.options import (  # noqa: PLC0415 - Runner 侧依赖
+        compile_cli_from_options,
+        compile_env_from_options,
+    )
     from harbor.models.agent.name import AgentName  # noqa: PLC0415 - Runner 侧依赖
 
-    summary: dict[str, Any] = {"agents": []}
+    summary: dict[str, Any] = {"agents": [], "options": {}}
     for agent_config in job_config.agents:
         name = str(agent_config.name or "")
         try:
@@ -567,14 +579,23 @@ def validate_agent_config(job_config: Any, work_dir: Path) -> dict[str, Any]:
         # ``parse_options`` 就是 Harbor 解析 AgentConfig.kwargs 的同一入口
         # （第二个参数是 env 映射）：未知字段/类型错误在这里失败，而不是在
         # 容器里安装到一半才失败。
-        agent_class.parse_options(kwargs, os.environ)
+        options = agent_class.parse_options(kwargs, os.environ)
         summary["agents"].append({
             "name": name,
             "model_name": agent_config.model_name,
             "agent_class": class_name,
             "cli_version": kwargs.get("version"),
             "options_validated": True,
+            # 实际生效的 Agent 执行参数（review R2-11）：逐字段核对"配置 → 下发参数"，
+            # 而不是只断言冻结 Profile 里有这些字段。这些选项都是模型/工具/预算旋钮，
+            # 不含任何秘密。
+            "applied_options": options.model_dump(exclude_none=True) if options else None,
+            "applied_env": compile_env_from_options(options) if options else None,
+            "applied_cli": compile_cli_from_options(options) if options else None,
+            "agent_env": dict(agent_config.env or {}),
         })
+        if options is not None:
+            summary["options"].update(options.model_dump(exclude_none=True))
     if not summary["agents"]:
         raise RunnerBridgeError("job config has no agent to validate")
     return summary
@@ -599,6 +620,43 @@ def credential_requirement(plan: Mapping[str, Any], config: Mapping[str, Any]) -
         "missing": missing,
         "resolved": not missing,
     }
+
+
+def record_env_boundary(work_dir: Path, config: Mapping[str, Any]) -> dict[str, Any]:
+    """记录"compose 能看到的变量名"（review R2-05，只记名字不记值）。
+
+    Harbor 0.23.0 的 ``_run_docker_compose_command`` 用
+    ``_compose_env_vars(include_os_env=True)``：``docker compose`` 子进程拿到的
+    就是本进程的 ``os.environ``，因此任务 compose 的插值/透传能看到的变量名
+    就是这个集合。平台在**下发前**已经裁剪过一次（``env_boundary`` 的
+    platform-to-runner 边界：白名单 + 声明的 ``env:NAME`` 引用 + 平台注入项），
+    这里把实际可见的名字与冻结配置里声明的凭据名如实落盘，供平台当证据冻结并
+    核验（判定留给平台：Runner 侧刻意不复制凭据名判定逻辑）。
+    """
+    refs = config.get("credentials")
+    refs = refs if isinstance(refs, Mapping) else {}
+    declared = sorted(
+        str(ref).removeprefix("env:") for ref in refs.values()
+        if isinstance(ref, str) and str(ref).startswith("env:")
+    )
+    payload = {
+        "schema": BOUNDARY_SCHEMA,
+        "boundary": "runner-to-compose",
+        "recorded_at": now_iso(),
+        # compose 子进程环境 = 本进程 os.environ（含 Harbor 自己注入的 infra 变量，
+        # 那些由 Harbor 写入 compose 环境，不是宿主秘密）。
+        "compose_env_inherits_os_env": True,
+        "runner_env_names": sorted(os.environ),
+        "declared_credentials": declared,
+        "missing_declared_credentials": sorted(
+            name for name in declared if not os.environ.get(name)
+        ),
+        "bridge_env_names": sorted(
+            name for name in BRIDGE_ENV_NAMES if os.environ.get(name) is not None
+        ),
+    }
+    write_json(safe_join(work_dir, ENV_BOUNDARY_NAME), payload)
+    return payload
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -655,6 +713,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         job_config = build_job_config(config, data_root, work_dir, plan, overlay)
         credentials = credential_requirement(plan, config)
+        # 启动 Harbor 之前先落盘环境边界观察（review R2-05）：只校验不执行时也写，
+        # 让平台能核验"compose 究竟能看到哪些变量名"。
+        env_boundary = record_env_boundary(work_dir, config)
         agent_summary = validate_agent_config(job_config, work_dir)
     except Exception as error:  # noqa: BLE001 - 原生校验失败必须显式落库
         clear_stale_validation(work_dir)
@@ -684,6 +745,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             "frozen_files_verified": frozen.get("files_verified"),
             "agents": agent_summary["agents"],
             "credentials": credentials,
+            # 实际下发的 Agent 执行参数（来自真实 options 模型，零模型调用）。
+            "agent_options": agent_summary.get("options"),
+            "env_boundary": {
+                "runner_env_names": env_boundary["runner_env_names"],
+                "declared_credentials": env_boundary["declared_credentials"],
+                "bridge_env_names": env_boundary["bridge_env_names"],
+            },
             "job_name": job_name,
             "jobs_dir": str(jobs_dir),
             "planned_trials": plan.get("planned_trial_count"),

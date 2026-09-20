@@ -145,13 +145,29 @@ Trial 导入按冻结 manifest 的计划先建计划、再逐条幂等落结果�
 - Runner 的每一行是**一个计划 Trial**，导入以 `trial_id` 为键：同一 Task 的多个
   重复各自落库，**不按 `task_key` 建字典**（那会让第二个重复覆盖第一个，Run
   完成时仍丢结果）。
+- **计划在执行前落库**（`_ensure_trial_plans`，幂等）：取消/超时终态化时才有计划
+  单元可补处置，覆盖分母不会因为"计划还不存在"而消失。
 - 失败/取消/未尝试的行也要有完整处置：行里没有 payload 时按冻结计划补出身份与
   disposition（`not_attempted` / `indeterminate`），错误进审计；"没有证据"与
   "没有记录"是两件事。
+- **平台占位 vs 真实证据**：终态化补出的处置带 `synthesized_by` 标记，是占位不是
+  证据；占位可以被随后到达的真实冻结结果**替换**（返回 `replaced_placeholder`
+  并留替换审计），真实证据之间仍然严格冲突、永不覆盖。
+- **当前 Run 边界**：目标 Trial 必须属于本 Run 的冻结计划；指向别的 Run 的
+  Trial（`EXTERNAL_TRIAL_FOREIGN`）、不存在的身份、payload 与冻结计划不一致
+  （`EXTERNAL_TRIAL_IDENTITY_MISMATCH`）都被隔离/拒绝，绝不写到别的 Run 名下，
+  也不静默忽略后假完成。
+- **逐条隔离**：单条非法 payload 只影响它自己，合法兄弟结果继续落库；被拒绝的
+  计划单元补 `indeterminate` 占位；返回完整 `accepted`/`invalid` 清单，派生视图
+  只消费已接受的记录；Run 保持 `failed`，部分成功不掩盖拒绝。
 - 任务级 `case_runs` 行是**派生聚合**（一行一个逻辑 Task，`result.aggregate_only`
   标记，不承载 Trial 身份）；质量评分只消费 Trial 层结果，覆盖分母来自计划。
 - 取消/超时/unsupported 终态会给尚未产出结果计划单元补终态处置
-  （`_ensure_trial_dispositions`），已落盘的结果绝不覆盖。
+  （`_ensure_trial_dispositions`），已落盘的结果绝不覆盖；取消若在导入**之后**
+  才被消费，执行者先导入冻结结果再终态化（终态不复活、不自动重跑）。
+- **retry 重新派生 Run 作用域身份**：子 Run 的 TrialPlan / 原生 Job 身份由子
+  `run_id` 重新生成（`refreeze_for_run`），父子 Trial ID 集合不相交，父证据不被
+  改写；任务内容、Profile 与实验条件保持不变，`parent_run_id` 保留。
 - 旧语义（非 Trial 形态的 M2 外部套件）逐字保持：一行一 Case、`call_failed` /
   `not_attempted` 的既有形状不变。
 

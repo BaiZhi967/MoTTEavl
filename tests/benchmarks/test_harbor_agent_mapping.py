@@ -139,3 +139,115 @@ def test_agent_spec_table_pins_the_first_real_agent():
     with pytest.raises(HarborConfigError) as error:
         resolve_agent_profile({"agent_id": "codex", "agent_version": "1.0.0"})
     assert error.value.code == "HARBOR_AGENT_UNSUPPORTED"
+
+
+def _rich_profile(**overrides) -> dict:
+    """带推理档位、模型参数、工具策略与预算的 Profile（review R2-11 复现形态）。"""
+    profile = _agent_profile()
+    profile["model"] = {
+        "provider": "anthropic", "model": "claude-sonnet-4-5",
+        "reasoning_level": "high",
+        "parameters": {"max_thinking_tokens": 4096},
+    }
+    profile["tools"] = {"allowed_tools": ["Read", "Bash"], "denied": ["WebFetch"]}
+    profile["limits"] = {"max_turns": 12, "max_budget_usd": "2.50"}
+    profile.update(overrides)
+    return profile
+
+
+def test_profile_execution_options_reach_the_native_agent_config():
+    """M3-R2-11 反例：接受并进指纹的配置必须真的下发到原生执行参数。
+
+    review 复现：带 reasoning_level/model.parameters/tools/limits 的 Profile 与
+    去掉它们的 Profile 生成的原生 job 完全一样（kwargs 只下发 version）。这里
+    断言"配置不同 → 下发参数不同"，且每个字段都落到固定 Harbor Agent 真实支持的
+    `ClaudeCodeOptions` 字段上（CLI/env 形态由真实 options 模型再验一次）。
+    """
+    plain = _config(_agent_profile())
+    rich = _config(_rich_profile())
+    assert plain["job"]["agents"][0]["kwargs"] == {"version": "2.0.30"}
+    kwargs = rich["job"]["agents"][0]["kwargs"]
+    assert kwargs["version"] == "2.0.30"
+    # 推理档位 → ClaudeCodeOptions.reasoning_effort（CLI --effort）。
+    assert kwargs["reasoning_effort"] == "high"
+    # model.parameters 与 limits 的预算/轮数 → 同名原生选项。
+    assert kwargs["max_thinking_tokens"] == 4096
+    assert kwargs["max_turns"] == 12
+    assert kwargs["max_budget_usd"] == "2.50"
+    # 工具策略 → ClaudeCodeOptions.allowed_tools / disallowed_tools（CLI 字符串）。
+    assert kwargs["allowed_tools"] == "Read,Bash"
+    assert kwargs["disallowed_tools"] == "WebFetch"
+    # 冻结配置记录"哪些字段映射到哪个原生选项"，且配置指纹随之改变。
+    assert rich["execution_options"]["mapped"] == {
+        "model.reasoning_level": "kwargs.reasoning_effort",
+        "model.parameters.max_thinking_tokens": "kwargs.max_thinking_tokens",
+        "limits.max_turns": "kwargs.max_turns",
+        "limits.max_budget_usd": "kwargs.max_budget_usd",
+        "tools.allowed_tools": "kwargs.allowed_tools",
+        "tools.denied": "kwargs.disallowed_tools",
+    }
+    assert rich["config_hash"] != plain["config_hash"]
+    assert rich["limits"] == {"max_turns": 12, "max_budget_usd": "2.50"}
+
+
+def test_agent_config_hash_covers_limits_and_execution_options():
+    """limits/执行参数变化必须改变计划里的 agent_config_hash（不能只落旁路字段）。"""
+    from motte_benchmark.harbor.config import agent_and_environment_hashes
+
+    plain = agent_and_environment_hashes(_agent_profile())[0]
+    rich = agent_and_environment_hashes(_rich_profile())[0]
+    turns = agent_and_environment_hashes(
+        _rich_profile(limits={"max_turns": 13, "max_budget_usd": "2.50"}),
+    )[0]
+    assert plain != rich
+    assert rich != turns, "仅 limits 变化也必须改变 agent 身份"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"tools": {"allowed_tools": ["Read"], "sandbox": "strict"}}, "tools.sandbox"),
+        ({"limits": {"max_tokens": 1000}}, "limits.max_tokens"),
+        ({"model": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                    "parameters": {"temperature": 0.2}}},
+         "model.parameters.temperature"),
+        ({"model": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                    "reasoning_level": "very-high"}},
+         "model.reasoning_level"),
+    ],
+)
+def test_unsupported_nonempty_execution_fields_are_refused(overrides, field):
+    """不支持的模型/工具/预算配置在创建前具名拒绝，而不是"接受、保存、不生效"。"""
+    with pytest.raises(HarborConfigError) as error:
+        _config(_rich_profile(**overrides))
+    assert error.value.code == "HARBOR_PROFILE_UNSUPPORTED_FIELD", error.value
+    assert field in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tools": {"allowed_tools": ["Read"], "sandbox": "strict"}},
+        {"limits": {"max_tokens": 1000}},
+        {"model": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                   "parameters": {"temperature": 0.2}}},
+        {"model": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                   "reasoning_level": "very-high"}},
+    ],
+)
+def test_preflight_refuses_unsupported_execution_fields(overrides):
+    """预检与创建同一判定：不支持字段在预检就有具名原因码与中文说明。"""
+    reasons = _reasons(_rich_profile(**overrides))
+    assert "HARBOR_PROFILE_UNSUPPORTED_FIELD" in reasons, reasons
+    assert "未登记" not in reason_messages(reasons)["HARBOR_PROFILE_UNSUPPORTED_FIELD"]
+
+
+def test_oracle_has_no_execution_knobs_to_map():
+    """oracle 是确定性校准 Agent：任何非空执行参数都必须拒绝（没有可下发的原生字段）。"""
+    from motte_sdk.terminalbench import terminal_bench_profile
+
+    profile = terminal_bench_profile(tools={"allowed_tools": ["Read"]})
+    with pytest.raises(HarborConfigError) as error:
+        _config(profile)
+    assert error.value.code == "HARBOR_PROFILE_UNSUPPORTED_FIELD"
+    assert "tools.allowed_tools" in str(error.value)

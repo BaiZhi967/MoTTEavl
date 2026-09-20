@@ -7,7 +7,7 @@ prompt 版本），不按渲染后的 prompt。模型是合法变量时可比；
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from motte_contracts.comparison import ComparisonPolicy, RunReportRef
 
@@ -80,6 +80,22 @@ def _invariant_value(
     return None
 
 
+def _model_identity(manifest: dict[str, Any]) -> Any:
+    """按**套件实际冻结的模型身份**取值（review R2-10）。
+
+    旧套件（GSM8K 等）把模型放在 manifest 顶层；M3 的 Terminal-Bench 放在
+    ``external_benchmark.profile.model``。只看顶层会让"政策不允许换模型"的
+    TB 比较悄悄放行模型差异。
+    """
+    profile_model = _profile(manifest).get("model")
+    if isinstance(profile_model, Mapping) and profile_model.get("model"):
+        return {
+            "provider": profile_model.get("provider"),
+            "model": profile_model.get("model"),
+        }
+    return manifest.get("model")
+
+
 def _compare_invariants(
     baseline_manifest: dict[str, Any],
     candidate_manifest: dict[str, Any],
@@ -93,12 +109,15 @@ def _compare_invariants(
     reasons: list[str] = []
     allowed: list[str] = []
     allowed_factors = set(policy.allowed_factors)
-    if baseline_manifest.get("model") != candidate_manifest.get("model"):
+    base_model = _model_identity(baseline_manifest)
+    cand_model = _model_identity(candidate_manifest)
+    if base_model != cand_model:
         if "model" not in allowed_factors:
             reasons.append(
-                f"FACTOR_NOT_ALLOWED:model: {baseline_manifest.get('model')!r} -> "
-                f"{candidate_manifest.get('model')!r}",
+                f"FACTOR_NOT_ALLOWED:model: {base_model!r} -> {cand_model!r}",
             )
+        else:
+            allowed.append(f"ALLOWED_FACTOR:model: {base_model!r} -> {cand_model!r}")
     base_external = _external(baseline_manifest)
     cand_external = _external(candidate_manifest)
     base_profile = _profile(baseline_manifest)

@@ -317,6 +317,14 @@ def reason_messages(codes: Iterable[str]) -> dict[str, str]:
         "AGENT_VERSION_UNSUPPORTED": "该 Agent 版本未在本平台验证。",
         "AGENT_MODEL_REQUIRED": "该 Agent 会真实调用模型，必须显式指定已发布模型。",
         "AGENT_CREDENTIAL_REF_MISSING": "该 Agent 需要凭据引用（env:NAME），未提供。",
+        "HARBOR_PROFILE_UNSUPPORTED_FIELD": (
+            "Profile 里的模型/工具/预算配置无法映射到固定 Harbor Agent 的真实执行参数，"
+            "已按 fail-closed 拒绝（不会接受后静默不生效）。"
+        ),
+        "HARBOR_PROFILE_INVALID_FIELD_VALUE": (
+            "Profile 里的执行参数取值非法或彼此冲突（如 limits 与 model.parameters 给同一选项"
+            "不同值），必须改正后重新提交。"
+        ),
         "CREDENTIAL_REF_REQUIRED": "凭据只能以引用形式提供，不接受明文值。",
         "AGENT_DEPENDENCY_MISSING": "Agent 依赖在 Runner 环境中缺失。",
         "RUNNER_ENV_CREDENTIALS_INLINE": "Runner 环境里出现了明文凭据，必须改为引用。",
@@ -363,6 +371,25 @@ def reason_messages(codes: Iterable[str]) -> dict[str, str]:
         ),
         "TASK_COMPOSE_CREDENTIAL_FORWARD": (
             "任务 compose 插值了凭据类环境变量（如 ${SOME_TOKEN}），会把宿主凭据注入任务容器，必须移除。"
+        ),
+        # review R2-04：间接资源与插值必须按"实际有效配置"解析后再判定。
+        "TASK_COMPOSE_CREDENTIAL_PASSTHROUGH": (
+            "任务 compose 透传了宿主环境里的凭据类变量（列表项 KEY、mapping 空值或 "
+            "secrets 的 environment 源），会把 Runner 进程的凭据带进任务容器，必须改为显式字面值或移除。"
+        ),
+        "TASK_COMPOSE_UNRESOLVED_INTERPOLATION": (
+            "任务 compose 的宿主路径位置含无法求值的 ${VAR}/$VAR 插值（没有默认值），"
+            "无法证明它指向任务目录内，必须写成字面路径或 ${VAR:-default}。"
+        ),
+        "TASK_COMPOSE_UNRESOLVED_RESOURCE": (
+            "任务 compose 引用了未定义的命名卷/secrets/configs、使用了非 local 卷驱动或 "
+            "volumes_from，无法证明它不暴露宿主路径，必须先显式定义后再准备。"
+        ),
+        "TASK_COMPOSE_EXTERNAL_RESOURCE": (
+            "任务 compose 把命名卷/secrets/configs 声明为 external，其创建者与内容来源无法核验，必须移除。"
+        ),
+        "TASK_COMPOSE_EXTERNAL_SECRET_FILE": (
+            "任务 compose 的 secrets/configs 文件源不在该任务自己的目录内，可能读取宿主文件，必须改为任务内路径。"
         ),
         "TASK_COMPOSE_INCLUDE_UNSUPPORTED": (
             "任务 compose 用 include/extends 引用外部文件，无法证明其内容安全，必须内联后再准备。"

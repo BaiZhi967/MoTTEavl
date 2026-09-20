@@ -13,6 +13,10 @@
   truncated。
 - ``collect`` 经 CaseWorkspace 读 ``results.json``：拒绝 symlink 逃逸、
   超大文件与半写 JSON，不伪造记录。
+- **子进程环境是显式边界**（review R2-05）：只下发白名单里的非秘密运行时
+  变量、冻结配置声明的 ``env:NAME`` 凭据引用、以及平台受控注入项；宿主里
+  其余变量（平台 DSN、其它厂商 key、任意宿主秘密）一律不下发。边界记录
+  （``env_boundary``）逐项给出"名字 + 来源"，未声明凭据在启动前具名拒绝。
 
 进程执行使用 asyncio 子进程 API（专用事件循环线程承载），不经过 shell。
 """
@@ -32,6 +36,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from motte_benchmark.env_boundary import (
+    declared_env_refs,
+    plan_process_env,
+    verify_process_env_boundary,
+)
 from motte_contracts.external_job import (
     CaseResultStatus,
     ExternalJobHandle,
@@ -111,6 +120,8 @@ class ProcessJobAdapter:
         self.default_limits: dict[str, Any] = {**DEFAULT_JOB_LIMITS, **(default_limits or {})}
         # 测试/审计观测：每次 start 一条记录（start 计数 = 列表长度）。
         self.start_calls: list[dict[str, Any]] = []
+        #: 最近一次 start 计算出的子进程环境边界记录（名字+来源，绝不含值）。
+        self.last_env_boundary: dict[str, Any] | None = None
         self.events: list[dict[str, Any]] = []
         self._loop_runner = _LoopRunner()
         self._procs: dict[int, Any] = {}
@@ -174,14 +185,10 @@ class ProcessJobAdapter:
             "launch_token": handle.launch_token,
         }
         argv = [part.format(**replacements) for part in self._base_argv()]
-        child_env = {
-            **os.environ,
-            **self._extra_env,
-            TOKEN_ENV: handle.launch_token,
-            "MOTTE_JOB_ID": handle.job_id,
-            "MOTTE_RUN_ID": spec.run_id,
-            "MOTTE_WORK_DIR": work_dir,
-        }
+        child_env, env_boundary = self._plan_child_env(spec, handle, work_dir)
+        # 边界不合法（未声明的凭据类变量）→ 启动前拒绝，不产生执行副作用。
+        verify_process_env_boundary(env_boundary)
+        self.last_env_boundary = env_boundary
 
         def _spawn() -> Any:
             async def go() -> Any:
@@ -220,6 +227,7 @@ class ProcessJobAdapter:
             "launch_token": handle.launch_token,
             "pid": pid,
             "argv": list(argv),
+            "env_boundary": env_boundary,
         })
         return handle.model_copy(update={
             "status": ExternalJobStatus.active,
@@ -241,6 +249,30 @@ class ProcessJobAdapter:
             self._argv
             if self._argv is not None
             else [sys.executable, "-m", str(self._module)]
+        )
+
+    def _plan_child_env(
+        self, spec: ExternalJobSpec, handle: ExternalJobHandle, work_dir: str,
+    ) -> tuple[dict[str, str], dict[str, Any]]:
+        """Runner 子进程环境的显式边界（review R2-05）。
+
+        可下发的只有三类：白名单里的非秘密运行时变量、冻结配置声明的
+        ``env:NAME`` 凭据引用（真实 Agent 需要它）、平台受控注入项（``extra_env``
+        与每次启动换发的桥接身份）。宿主里其余变量——包括平台数据库 DSN 与
+        其它厂商 key——一律不下发：Runner 的 ``os.environ`` 就是 Harbor 交给
+        ``docker compose`` 的那一份，少一个变量就少一条进任务容器的路径。
+        """
+        declared = declared_env_refs(
+            {"profile": spec.profile, "runner_config": dict(spec.runner_config or {})},
+        )
+        identity = {
+            TOKEN_ENV: handle.launch_token,
+            "MOTTE_JOB_ID": handle.job_id,
+            "MOTTE_RUN_ID": spec.run_id,
+            "MOTTE_WORK_DIR": work_dir,
+        }
+        return plan_process_env(
+            os.environ, declared=declared, injected=self._extra_env, identity=identity,
         )
 
     def set_extra_env(self, name: str, value: str) -> None:

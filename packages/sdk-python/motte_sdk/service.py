@@ -302,6 +302,9 @@ class RunService:
         边界、结局→Run 状态映射，并保证每个 selected case 都有处置状态
         （M2-G11：未尝试的 case 不消失）。
         """
+        # 计划先落库（review R2-01）：取消/超时终态化时要有计划单元可补处置，
+        # 否则"跑过一半被取消"看起来像"什么都没跑"，覆盖分母也会消失。
+        self._ensure_trial_plans(run)
         if run["status"] == "queued":
             self._transition(run_id, "preparing")
         if self._load(run_id)["status"] != "running":
@@ -316,38 +319,41 @@ class RunService:
             return self._fail_or_quarantine(run_id, error)
         finally:
             self._external_interrupters.pop(run_id, None)
-        cancelled = self._honor_cancellation(run_id)
-        if cancelled is not None:
-            return cancelled
         if not isinstance(outcome, dict):
             return self._fail(run_id, ValueError(
                 "external job entry must return an outcome object"
             ))
-        self._transition(run_id, "collecting")
-        cancelled = self._honor_cancellation(run_id)
-        if cancelled is not None:
-            return cancelled
-        self._transition(run_id, "scoring")
-        cancelled = self._honor_cancellation(run_id)
-        if cancelled is not None:
-            return cancelled
+        # 取消可能已经由另一实例（或同进程的 cancel 调用）终态化：此时仍然要
+        # 冻结并导入**已确定的结果**，不能让已完成 Trial 随取消一起丢失
+        # （review R2-01/R05）。终态本身不复活，也不自动重跑。
+        already_terminal = self._load(run_id)["status"] in self.TERMINAL
+        if not already_terminal:
+            self._transition(run_id, "collecting")
+            self._transition(run_id, "scoring")
         trial_records, task_rows, unmapped = self._external_job_records(run_id, run, outcome)
         # 先按 trial_id 完整导入全部 Trial 结果（含失败/取消/未尝试的处置）：
         # 任务级 Case 聚合不能替代 Trial 原始结果存储（review R01，P0）。
-        try:
-            trial_import = self._import_trials(run, trial_records)
-        except Exception as error:  # noqa: BLE001 - 身份错配必须显式失败
-            trial_import = {
-                "conflicts": [],
-                "invalid": [{
-                    "error_type": type(error).__name__,
-                    "message": str(error),
-                }],
-            }
+        trial_import = self._import_trials(run, trial_records)
+        accepted = set(trial_import.get("accepted") or [])
+        if trial_import.get("skipped"):
+            accepted = {record["trial_id"] for record in trial_records}
+        invalid_import = list(trial_import.get("invalid") or [])
+        # 被拒绝的计划单元也要有明确处置（不能从覆盖分母里消失），但绝不把
+        # 被拒 payload 写成证据：只写平台补出的 indeterminate 占位。
+        self._dispose_rejected_trials(run, trial_records, accepted, invalid_import)
+        # 任务级 Case 行由**已导入的 Trial 结果**拼装：它们是派生聚合视图，
+        # 不承载 Trial 身份，因此一个 Task 的多个 repeat 不再互相覆盖。
+        # 非 Trial 形态保持既有的一行一 Case 映射（M2 语义不变）。
+        if self._trial_shaped(run):
+            task_rows = self._task_case_rows(
+                run_id, [str(item) for item in run.get("case_ids") or []],
+                [record for record in trial_records if record["trial_id"] in accepted],
+            )
+        if not already_terminal:
+            for case_id in list(run.get("case_ids") or []):
+                self.store.case_runs.upsert(task_rows[case_id])
         if trial_import.get("conflicts"):
             # 同一 Trial 的原始证据变化（hash 冲突）必须阻断最终化，而不是覆盖。
-            for conflict in trial_import["conflicts"]:
-                outcome.setdefault("import", {})
             outcome.setdefault("error", None)
             outcome["error"] = outcome.get("error") or {
                 "code": "EXTERNAL_IMPORT_CONFLICT",
@@ -357,11 +363,19 @@ class RunService:
             errors_from_trials = True
         else:
             errors_from_trials = False
-        invalid_import = list(trial_import.get("invalid") or [])
-        # 任务级 Case 行由**已导入的 Trial 结果**拼装：它们是派生聚合视图，
-        # 不承载 Trial 身份，因此一个 Task 的多个 repeat 不再互相覆盖。
-        for case_id in list(run.get("case_ids") or []):
-            self.store.case_runs.upsert(task_rows[case_id])
+        if trial_import.get("replaced_placeholders"):
+            # 占位被真实证据替换：留审计事件，说明"取消时的占位"已被覆盖。
+            self.emit_run_event(run_id, "trial_placeholders_replaced", {
+                "count": len(trial_import["replaced_placeholders"]),
+                "replaced": trial_import["replaced_placeholders"][:20],
+            })
+        if already_terminal:
+            return self._finish_after_terminal_import(
+                run_id, trial_import, invalid_import, unmapped,
+            )
+        cancelled = self._honor_cancellation(run_id)
+        if cancelled is not None:
+            return cancelled
         rows = self.store.case_runs.list_for_run(run_id)
         job_status = str(outcome.get("job_status") or "indeterminate")
         if outcome.get("import", {}).get("conflicts"):
@@ -566,6 +580,41 @@ class RunService:
             if trial_id:
                 candidate = plan_index.get(trial_id)
                 plan = candidate if isinstance(candidate, dict) else None
+                if plan is None:
+                    # 不属于**本 Run 冻结计划**的 Trial 身份：显式隔离（review R2-03）。
+                    # 直接放行会让结果落到别的 Run 的 Trial 名下；静默忽略又会
+                    # 让本 Run 假完成。两者都不可接受。
+                    unmapped.append({
+                        "case_id": task_key or item.get("case_id"),
+                        "stable_case_key": item.get("stable_case_key"),
+                        "error": {
+                            "code": "EXTERNAL_TRIAL_FOREIGN",
+                            "message": (
+                                f"trial {trial_id} does not belong to this run's frozen "
+                                "plan; the row is quarantined and never attributed"
+                            ),
+                        },
+                    })
+                    continue
+                # 冻结计划身份是权威：payload 自称的 task_key/repeat_index 必须一致。
+                mismatch = [
+                    field for field in ("task_key", "repeat_index")
+                    if payload is not None and field in payload
+                    and payload[field] != plan.get(field)
+                ]
+                if mismatch:
+                    unmapped.append({
+                        "case_id": task_key or item.get("case_id"),
+                        "stable_case_key": item.get("stable_case_key"),
+                        "error": {
+                            "code": "EXTERNAL_TRIAL_IDENTITY_MISMATCH",
+                            "message": (
+                                f"trial {trial_id} payload disagrees with the frozen plan "
+                                f"on {mismatch}"
+                            ),
+                        },
+                    })
+                    continue
             else:
                 # 没有 payload 的行只能靠冻结计划归属；无法归属即隔离（不猜）。
                 for key in (item.get("stable_case_key"), item.get("case_id")):
@@ -900,6 +949,13 @@ class RunService:
             refreshed_manifest if refreshed_manifest is not None else parent.get("manifest", {})
         )
         selected = list(case_ids) if case_ids is not None else list(parent.get("case_ids") or [])
+        # Trial 身份是 Run 作用域的：子 Run 必须重新派生 TrialPlan / 原生 Job 身份，
+        # 否则结果会导入到父 Trial 名下（父证据被判 identical 或冲突），子 Run
+        # 自己没有 Trial（review R2-02）。任务内容与实验条件保持不变。
+        child_run_id = f"run-{uuid4().hex}"
+        manifest = self._refreeze_trial_identity(
+            manifest, run_id=child_run_id, job_id=f"job-{uuid4().hex}",
+        )
         return self.create_run(
             parent["scenario_version"],
             manifest,
@@ -910,7 +966,29 @@ class RunService:
                 else parent.get("manifest") or {}
             ),
             parent_run_id=run_id,
+            run_id=child_run_id,
         )
+
+    def _refreeze_trial_identity(
+        self, manifest: dict[str, Any], *, run_id: str, job_id: str,
+    ) -> dict[str, Any]:
+        """把 manifest 里 Run 作用域的 Trial/Job 身份重新派生给新 Run。
+
+        非 Trial 形态（M2 套件）原样返回；Trial 形态交给套件自己的重新冻结
+        实现（``motte_sdk.terminalbench.refreeze_for_run``），未知套件显式失败
+        而不是照抄父身份。
+        """
+        from motte_sdk.benchmark_plugins import suite_for_run
+
+        run = {"id": run_id, "manifest": manifest}
+        suite = suite_for_run(run)
+        if suite is None:
+            return manifest
+        if suite[0] != "terminal-bench-harbor":
+            return manifest
+        from motte_sdk.terminalbench import refreeze_for_run
+
+        return refreeze_for_run(manifest, run_id=run_id, job_id=job_id)
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
         return self.store.events.list_for_run(run_id)
@@ -1186,7 +1264,19 @@ class RunService:
             for record in trial_records
             if isinstance(record.get("payload"), dict)
         ]
-        return import_terminal_bench_trials(self.store, run, results)
+        try:
+            return import_terminal_bench_trials(self.store, run, results)
+        except Exception as error:  # noqa: BLE001 - 批次级失败也要结构化
+            return {
+                "conflicts": [],
+                "accepted": [],
+                "invalid": [{
+                    "trial_id": None,
+                    "code": "TRIAL_IMPORT_FAILED",
+                    "error_type": type(error).__name__,
+                    "message": str(error),
+                }],
+            }
 
     def _managed_scoring_rows(
         self, run: dict[str, Any], results: list[dict[str, Any]],
@@ -1338,6 +1428,133 @@ class RunService:
             if isinstance(payload, dict):
                 payloads.append(deepcopy(payload))
         return payloads
+
+    def _ensure_trial_plans(self, run: dict[str, Any]) -> dict[str, Any]:
+        """执行前先把冻结计划落库（review R2-01）。
+
+        幂等：重复调用只会得到 ``identical``。计划先落库之后，取消/超时终态化
+        才有计划单元可补处置，跨进程取消请求也不会因为"计划还不存在"而让
+        覆盖分母消失。
+        """
+        from motte_sdk.benchmark_plugins import import_terminal_bench_trials, suite_for_run
+
+        suite = suite_for_run(run)
+        if suite is None or suite[0] != "terminal-bench-harbor":
+            return {"skipped": True}
+        trials = getattr(self.store, "trials", None)
+        if trials is None:
+            return {"skipped": True}
+        external = (run.get("manifest") or {}).get("external_benchmark") or {}
+        plan = ((external.get("runner_config") or {}).get("plan") or {}).get("trials") or []
+        if not plan:
+            return {"skipped": True}
+        created = trials.create_plans([dict(item) for item in plan])
+        statuses: dict[str, int] = {}
+        for item in created:
+            statuses[str(item["status"])] = statuses.get(str(item["status"]), 0) + 1
+        conflicts = [item for item in created if item["status"] == "conflict"]
+        if conflicts:
+            # 计划冲突（同 trial_id 异内容）在启动前就要显式失败，不能带着
+            # "身份已经漂移"的计划去跑。
+            raise RunConflictError(
+                f"frozen trial plan conflicts with stored plans: "
+                f"{[item['trial_id'] for item in conflicts][:5]}"
+            )
+        del import_terminal_bench_trials  # 只在类型/套件判定时引用
+        return {"planned": len(plan), "statuses": statuses}
+
+    def _dispose_rejected_trials(
+        self, run: dict[str, Any], trial_records: list[dict[str, Any]],
+        accepted: set[str], invalid: list[dict[str, Any]],
+    ) -> list[str]:
+        """被拒绝的计划单元补 indeterminate 占位（不是证据，但必须有处置）。"""
+        rejected = {
+            str(item.get("trial_id")) for item in invalid if item.get("trial_id")
+        }
+        rejected -= accepted
+        if not rejected:
+            return []
+        plan_index = self._frozen_plan_index(run)
+        pending = [
+            record for record in trial_records
+            if record["trial_id"] in rejected
+            and record["trial_id"] in plan_index
+            and self.store.trials is not None
+            and (self.store.trials.get(record["trial_id"]) or {}).get("result") is None
+        ]
+        if not pending:
+            return []
+        from motte_sdk.benchmark_plugins import import_terminal_bench_trials
+
+        results = [
+            {
+                "case_id": record["task_key"],
+                "trial_id": record["trial_id"],
+                "result": {
+                    "trial_id": record["trial_id"],
+                    "task_key": record["task_key"],
+                    "repeat_index": record.get("repeat_index"),
+                    "disposition": "indeterminate",
+                    "verifier_observation": {"status": "missing_verifier_evidence"},
+                    "coverage": {
+                        "items": {
+                            "cost_usd": "unavailable",
+                            "model_identity": "unavailable",
+                            "trajectory": "unavailable",
+                        },
+                        "reason": "the runner payload for this trial was rejected",
+                    },
+                    "synthesized_by": "run-service:rejected-payload",
+                },
+            }
+            for record in pending
+        ]
+        import_terminal_bench_trials(self.store, run, results)
+        return [item["trial_id"] for item in results]
+
+    def _finish_after_terminal_import(
+        self, run_id: str, trial_import: dict[str, Any],
+        invalid: list[dict[str, Any]], unmapped: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Run 已被（并发）取消/终态化，但仍要保存已冻结证据的结论。
+
+        终态不复活、任务级快照不改写；这里只为**本次执行**已导入的 Trial 证据
+        补一个可审计的评分结论（新 pass，不改变 Run 状态），让"取消前已完成的
+        Trial"在报告里可见，并留下事件说明结果是在终态之后落库的。
+        """
+        run = self._load(run_id)
+        stored = self._stored_trial_payloads(run_id)
+        scores: list[dict[str, Any]] = []
+        error: Exception | None = None
+        try:
+            scores = self._score_results(run_id, [], False)
+        except Exception as scoring_error:  # noqa: BLE001 - 终态后导入不能反噬
+            error = scoring_error
+        self.emit_run_event(run_id, "external_job_results_after_terminal", {
+            "run_status": run["status"],
+            "accepted": len(trial_import.get("accepted") or []),
+            "invalid": len(invalid),
+            "unmapped": len(unmapped),
+            "trials_with_evidence": len(stored),
+            "scores": len(scores),
+            **({"scoring_error": type(error).__name__} if error else {}),
+        })
+        if scores:
+            try:
+                self._append_scoring_pass(
+                    run_id, scores, source="terminal-import",
+                    extra_summary={"terminal_import": {
+                        "accepted": len(trial_import.get("accepted") or []),
+                        "invalid": len(invalid),
+                        "unmapped": len(unmapped),
+                    }},
+                )
+            except Exception as append_error:  # noqa: BLE001 - 结论失败不改终态
+                self.emit_run_event(run_id, "terminal_import_scoring_failed", {
+                    "error_type": type(append_error).__name__,
+                    "message": str(append_error),
+                })
+        return self._view(run_id)
 
     def _ensure_trial_dispositions(
         self, run: dict[str, Any], *, disposition: str,

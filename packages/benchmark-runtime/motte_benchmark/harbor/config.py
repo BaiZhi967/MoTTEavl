@@ -94,6 +94,43 @@ AGENT_SPECS: Mapping[str, Mapping[str, Any]] = {
 #: 已具备实现、可在明确授权后做真实调用的 Agent（oracle 之外的首个真实 Agent）。
 SUPPORTED_AGENTS: Mapping[str, str] = {"oracle": "1.0.0"}
 
+#: 固定 Harbor 0.23.0 里 Claude Code Agent 真实支持的执行参数
+#: （``harbor.agents.installed.claude_code.ClaudeCodeOptions``，``extra='forbid'``：
+#: 字段名写错就是启动失败）。review R2-11：Profile 里被接受、保存并进指纹的配置
+#: 必须**逐字段**落到这些原生选项上；落不下去的非空配置在创建前拒绝，绝不
+#: "接受、保存、进指纹但不生效"。
+CLAUDE_CODE_REASONING_LEVELS: frozenset[str] = frozenset(
+    {"low", "medium", "high", "xhigh", "max"},
+)
+#: ``ClaudeCodeOptions.permission_mode`` 的合法取值（原生 Literal）。
+CLAUDE_CODE_PERMISSION_MODES: frozenset[str] = frozenset(
+    {"default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"},
+)
+#: ``profile.model.parameters`` → 原生 kwargs（模型/思考旋钮）。
+_MODEL_PARAMETER_OPTIONS: Mapping[str, str] = {
+    "max_thinking_tokens": "max_thinking_tokens",  # Env MAX_THINKING_TOKENS
+    "fallback_model": "fallback_model",            # Cli --fallback-model
+    "max_turns": "max_turns",                      # Cli --max-turns
+    "max_budget_usd": "max_budget_usd",            # Cli --max-budget-usd
+}
+#: ``profile.tools`` → 原生 kwargs（工具/权限策略）。
+_TOOL_OPTIONS: Mapping[str, str] = {
+    "allowed": "allowed_tools",
+    "allowed_tools": "allowed_tools",
+    "denied": "disallowed_tools",
+    "disallowed_tools": "disallowed_tools",
+    "permission_mode": "permission_mode",
+}
+#: ``profile.limits`` → 原生 kwargs（执行预算；``max_tokens`` 之类不是 Claude Code
+#: CLI 的概念，会作为不支持字段拒绝）。
+_LIMIT_OPTIONS: Mapping[str, str] = {
+    "max_turns": "max_turns",
+    "max_budget_usd": "max_budget_usd",
+    "max_thinking_tokens": "max_thinking_tokens",
+}
+#: 整数型原生选项（其余按字符串下发）。
+_INTEGER_OPTIONS: frozenset[str] = frozenset({"max_turns", "max_thinking_tokens"})
+
 
 def credential_env_names(refs: Mapping[str, str]) -> tuple[str, ...]:
     """凭据引用 → 环境变量名（``env:NAME``；其他形式在冻结时已被拒绝）。"""
@@ -138,6 +175,17 @@ def agent_capability_reasons(profile: Mapping[str, Any]) -> list[str]:
             reasons.append("CREDENTIAL_REF_REQUIRED")
         if not names & set(required):
             reasons.append("AGENT_CREDENTIAL_REF_MISSING")
+    # 执行参数的可映射性（review R2-11）：预检与创建共用同一判定，不能预检说
+    # "可以创建"、创建却因为无法映射的 model/tools/limits 失败。
+    _native, _mapped, issues = execution_option_plan(
+        str(agent_id).strip(),
+        model=profile.get("model"),
+        tools=profile.get("tools"),
+        limits=profile.get("limits"),
+    )
+    for issue in issues:
+        if issue["code"] not in reasons:
+            reasons.append(issue["code"])
     return reasons
 
 #: 允许出现的三层期限键（Agent / Verifier / 环境构建与 Job 总期限分开）。
@@ -193,6 +241,221 @@ def _positive_number(value: Any, label: str, *, allow_zero: bool = False) -> flo
             f"{label} must be {'>= 0' if allow_zero else '> 0'}, got {value}",
         )
     return float(value)
+
+
+def _option_issue(code: str, field: str, detail: str) -> dict[str, str]:
+    return {"code": code, "field": field, "detail": detail}
+
+
+def _coerce_option(value: Any, native: str, field: str, issues: list[dict[str, str]]) -> Any:
+    """按原生选项的类型校验并规范化取值（类型不符即具名拒绝）。"""
+    if native == "allowed_tools" or native == "disallowed_tools":
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, Sequence) and not isinstance(value, str):
+            names = [str(item).strip() for item in value if str(item).strip()]
+            if names:
+                return ",".join(names)
+        issues.append(_option_issue(
+            "HARBOR_PROFILE_UNSUPPORTED_FIELD", field,
+            f"{field} must be a tool name or a nonempty list of tool names",
+        ))
+        return None
+    if native in _INTEGER_OPTIONS:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_INVALID_FIELD_VALUE", field,
+                f"{field} must be a positive integer (native {native})",
+            ))
+            return None
+        return int(value)
+    if native == "max_budget_usd":
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_INVALID_FIELD_VALUE", field,
+                f"{field} must be a decimal amount (native {native})",
+            ))
+            return None
+        text = str(value).strip()
+        try:
+            amount = float(text)
+        except ValueError:
+            amount = -1.0
+        if amount < 0 or not math.isfinite(amount):
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_INVALID_FIELD_VALUE", field,
+                f"{field} must be a non-negative finite amount, got {value!r}",
+            ))
+            return None
+        return text
+    if native == "permission_mode":
+        if str(value) not in CLAUDE_CODE_PERMISSION_MODES:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_INVALID_FIELD_VALUE", field,
+                f"{field} must be one of {sorted(CLAUDE_CODE_PERMISSION_MODES)}",
+            ))
+            return None
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    issues.append(_option_issue(
+        "HARBOR_PROFILE_UNSUPPORTED_FIELD", field,
+        f"{field} must be a nonempty string (native {native})",
+    ))
+    return None
+
+
+def execution_option_plan(
+    agent_id: str,
+    *,
+    model: Any = None,
+    tools: Any = None,
+    limits: Any = None,
+) -> tuple[dict[str, Any], dict[str, str], list[dict[str, str]]]:
+    """Profile 的执行配置 → 固定 Harbor Agent 的原生选项（review R2-11）。
+
+    返回 ``(native_kwargs, mapped, issues)``：
+
+    - ``native_kwargs``：真正下发给 Harbor Agent 的 kwargs（字段名取自固定版本
+      的 ``ClaudeCodeOptions``，CLI 标志 / 环境变量由 Harbor 自己编译）；
+    - ``mapped``：``{profile 字段: 原生字段}``，让"配置 → 执行参数"可核验；
+    - ``issues``：无法忠实映射的非空配置（未知字段、非法取值、冲突取值、
+      Agent 没有可映射的执行参数）——预检与创建共用这一处判定，创建时具名拒绝。
+
+    ``oracle`` 是确定性校准 Agent：没有任何原生执行参数，因此任何非空配置都
+    是 issue，而不是"收下但不用"。
+    """
+    native: dict[str, Any] = {}
+    mapped: dict[str, str] = {}
+    issues: list[dict[str, str]] = []
+
+    def _reject_nonempty(section: str, payload: Any) -> bool:
+        """非空即不支持（用于没有映射的 Agent 段）；逐具体字段列出。"""
+        if payload in (None, {}, [], (), ""):
+            return False
+        keys = (
+            [str(key) for key in payload if payload[key] not in (None, {}, [], "")]
+            if isinstance(payload, Mapping) else [None]
+        )
+        for key in keys or [None]:
+            field = f"{section}.{key}" if key is not None else section
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_UNSUPPORTED_FIELD", field,
+                (
+                    f"agent {agent_id} has no native execution option for {field}; "
+                    "remove it or extend the mapping with a real pinned-harbor field"
+                ),
+            ))
+        return True
+
+    model_mode = model if isinstance(model, Mapping) else {}
+    parameters = model_mode.get("parameters")
+    if parameters is not None and not isinstance(parameters, Mapping):
+        issues.append(_option_issue(
+            "HARBOR_CONFIG_INVALID", "model.parameters", "model.parameters must be an object",
+        ))
+        parameters = {}
+    parameters = dict(parameters or {})
+    if not isinstance(tools, Mapping) and tools not in (None, {}):
+        issues.append(_option_issue(
+            "HARBOR_CONFIG_INVALID", "tools", "profile.tools must be an object",
+        ))
+        tools = {}
+    tool_map = dict(tools or {})
+    if not isinstance(limits, Mapping) and limits not in (None, {}):
+        issues.append(_option_issue(
+            "HARBOR_CONFIG_INVALID", "limits", "profile.limits must be an object",
+        ))
+        limits = {}
+    limit_map = dict(limits or {})
+
+    if agent_id != "claude-code":
+        # 没有可映射的执行参数（oracle）：非空即拒绝。
+        _reject_nonempty("model.reasoning_level", model_mode.get("reasoning_level"))
+        _reject_nonempty("model.parameters", parameters)
+        _reject_nonempty("tools", tool_map)
+        _reject_nonempty("limits", limit_map)
+        return (native, mapped, issues)
+
+    level = model_mode.get("reasoning_level")
+    if level not in (None, ""):
+        if str(level) not in CLAUDE_CODE_REASONING_LEVELS:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_UNSUPPORTED_FIELD", "model.reasoning_level",
+                (
+                    f"model.reasoning_level {level!r} is not expressible by harbor "
+                    f"{HARBOR_VERSION} ClaudeCodeOptions.reasoning_effort "
+                    f"(supported: {sorted(CLAUDE_CODE_REASONING_LEVELS)})"
+                ),
+            ))
+        else:
+            native["reasoning_effort"] = str(level)
+            mapped["model.reasoning_level"] = "kwargs.reasoning_effort"
+
+    for key, value in sorted(parameters.items()):
+        field = f"model.parameters.{key}"
+        target = _MODEL_PARAMETER_OPTIONS.get(str(key))
+        if target is None:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_UNSUPPORTED_FIELD", field,
+                (
+                    f"{field} has no field in pinned harbor {HARBOR_VERSION} "
+                    f"ClaudeCodeOptions (supported: {sorted(_MODEL_PARAMETER_OPTIONS)})"
+                ),
+            ))
+            continue
+        coerced = _coerce_option(value, target, field, issues)
+        if coerced is not None:
+            native[target] = coerced
+            mapped[field] = f"kwargs.{target}"
+
+    for key, value in sorted(tool_map.items()):
+        field = f"tools.{key}"
+        target = _TOOL_OPTIONS.get(str(key))
+        if target is None:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_UNSUPPORTED_FIELD", field,
+                (
+                    f"{field} has no field in pinned harbor {HARBOR_VERSION} "
+                    f"ClaudeCodeOptions (supported: {sorted(_TOOL_OPTIONS)})"
+                ),
+            ))
+            continue
+        if value in (None, [], {}):
+            continue
+        coerced = _coerce_option(value, target, field, issues)
+        if coerced is not None:
+            native[target] = coerced
+            mapped[field] = f"kwargs.{target}"
+
+    for key, value in sorted(limit_map.items()):
+        field = f"limits.{key}"
+        target = _LIMIT_OPTIONS.get(str(key))
+        if target is None:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_UNSUPPORTED_FIELD", field,
+                (
+                    f"{field} has no field in pinned harbor {HARBOR_VERSION} "
+                    f"ClaudeCodeOptions (supported: {sorted(_LIMIT_OPTIONS)})"
+                ),
+            ))
+            continue
+        coerced = _coerce_option(value, target, field, issues)
+        if coerced is None:
+            continue
+        if target in native and native[target] != coerced:
+            issues.append(_option_issue(
+                "HARBOR_PROFILE_INVALID_FIELD_VALUE", field,
+                (
+                    f"{field}={value!r} conflicts with the value already mapped to "
+                    f"native {target} ({native[target]!r}); declare it once"
+                ),
+            ))
+            continue
+        native[target] = coerced
+        mapped[field] = f"kwargs.{target}"
+
+    return (native, dict(sorted(mapped.items())), issues)
 
 
 def credential_refs(credentials: Mapping[str, Any] | None) -> dict[str, str]:
@@ -297,6 +560,22 @@ def resolve_agent_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
             f"environment type {env_type!r} is not verified for this deployment "
             f"(supported: ['docker'])",
         )
+    # 执行配置必须能逐字段落到固定 Harbor Agent 的原生选项（review R2-11）：
+    # 落不下去就具名拒绝，而不是"接受、保存、进指纹但不生效"。
+    native_options, mapped_options, option_issues = execution_option_plan(
+        agent_id,
+        model=model,
+        tools=profile.get("tools"),
+        limits=profile.get("limits"),
+    )
+    if option_issues:
+        first = option_issues[0]
+        raise HarborConfigError(
+            first["code"],
+            "; ".join(
+                f"{issue['field']}: {issue['detail']}" for issue in option_issues
+            ),
+        )
     return {
         "agent_id": agent_id,
         "agent_version": agent_version,
@@ -313,6 +592,16 @@ def resolve_agent_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         "credentials": credential_refs(profile.get("credentials")),
         "aggregation": str(profile.get("aggregation") or "first-trial"),
         "limits": dict(profile.get("limits") or {}),
+        "execution_options": {
+            "agent_id": agent_id,
+            "native_kwargs": native_options,
+            "mapped": mapped_options,
+            "enforced_by": "harbor-agent-options",
+            "schema": (
+                f"字段名/取值来自固定 harbor {HARBOR_VERSION} 的 "
+                "ClaudeCodeOptions（extra='forbid'，CLI/env 由 Harbor 编译）"
+            ),
+        },
     }
 
 
@@ -347,6 +636,12 @@ def _agent_section(
         )
     if spec.get("requires_pinned_version") and str(frozen["agent_id"]) != "oracle":
         agent["kwargs"] = {"version": str(frozen["agent_version"])}
+    # 逐字段映射的执行参数（review R2-11）：推理档位、模型参数、工具策略、预算。
+    # 它们来自 ``execution_option_plan``（只含固定 Harbor Agent 真实支持的字段），
+    # 与 ``execution_options.native_kwargs`` 是同一份内容。
+    native_options = dict((frozen.get("execution_options") or {}).get("native_kwargs") or {})
+    if native_options:
+        agent["kwargs"] = {**dict(agent.get("kwargs") or {}), **native_options}
     if timeout_sec is not None:
         # Harbor 0.23.0：agent 期限 = override_timeout_sec（否则任务自带值）
         # 再乘 agent_timeout_multiplier（平台固定 1.0）。
@@ -573,6 +868,9 @@ def build_harbor_config(
         "model": deepcopy(dict(frozen["model"])),
         "tools": deepcopy(dict(frozen["tools"])),
         "limits": deepcopy(dict(frozen["limits"])),
+        # 执行参数映射（review R2-11）：哪些 Profile 字段落到哪个原生选项、
+        # 实际下发的 kwargs 是什么。旁路记录与原生配置必须同源。
+        "execution_options": deepcopy(dict(frozen["execution_options"])),
         "observation_boundary": {
             # 没有保真 Provider 扩展点时如实声明：模型身份与用量由 Runner 观测。
             "transport": "runner-native",
@@ -700,6 +998,10 @@ def agent_and_environment_hashes(profile: Mapping[str, Any]) -> tuple[str, str]:
         "agent_version": frozen["agent_version"],
         "model": frozen["model"],
         "tools": frozen["tools"],
+        # 执行参数与预算同样改变 Agent 身份（review R2-11）：只把 limits 记进
+        # 旁路字段会让"预算变了但 trial_id 不变"的两次 Run 无法区分。
+        "limits": frozen["limits"],
+        "execution_options": frozen["execution_options"]["native_kwargs"],
         "timeouts": frozen["timeouts"],
     })
     environment_hash = canonical_hash({

@@ -188,10 +188,11 @@ uv run python -m apps.worker.motte_worker --once
 | `GET /api/v1/runs/{run_id}/tasks/{task_key}/trials` | 某 Task 的全部计划 Trial（含 pending） |
 | `GET /api/v1/runs/{run_id}/trials/{trial_id}` | 单 Trial 详情（终止、Verifier、证据引用与完整度、可读 `terminal` 文本；严格校验 run 归属，否则 404）。内容字段在展示边界脱敏，身份/hash 逐字保留 |
 | `GET /api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}` | 读取某个证据引用的**内容**（有界 + 脱敏 + hash 校验）；不可读时给出原因而非伪造内容 |
-| `GET /api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}/bytes` | 下载**冻结的原始字节**（同一归属与 hash 校验；响应头 `X-Motte-Artifact-Redacted: false`，不做有损解码） |
+| `GET /api/v1/runs/{run_id}/trials/{trial_id}/artifacts/{artifact_id}/bytes` | 下载证据内容：**文本工件返回脱敏后的字节**（`X-Motte-Artifact-Source-Sha256` 保留冻结身份、`X-Motte-Artifact-Redacted: true`）；二进制工件默认拒绝（422 `ARTIFACT_RAW_EXPORT_DISABLED`），只有操作员显式设置 `MOTTE_ALLOW_RAW_ARTIFACT_EXPORT=1` 才返回原始字节（响应头如实标 `false`） |
 
-超过 64 KiB 的文本只返回前 64 KiB 并标 `truncated: true`；二进制内容返回
-`encoding: "binary"` 与提示，正文走 `/bytes` 下载路径。
+超过 64 KiB 的文本只返回前 64 KiB 并标 `truncated: true`（截断保留完整字符
+边界：多字节字符被预算切开时整字丢弃，不产生替换字符、也不判成二进制）；
+二进制内容返回 `encoding: "binary"` 与原因，正文只能走受控导出。
 
 Web：`/terminal-bench` 五页（操作/任务/监控/结果/比较），数据全部来自上述端点。
 
@@ -235,11 +236,27 @@ API/CLI 进程**不执行 docker**：Runner 侧探测结果写入 JSON，路径�
   `SECRET_VALUE_IN_CREDENTIALS` 拒绝。Runner 在启动前检查引用指向的环境变量
   是否存在（缺失即退出码 5），**从不**把值写进配置文件、日志或 Artifact。
   公共展示（API/CLI/Web）对错误与日志内容复用 `motte_trace.redaction` 脱敏，
-  身份与 hash 逐字保留。
+  身份与 hash 逐字保留；`/bytes` 下载对文本同样返回脱敏内容（见第 6 节）。
+- **Runner 环境是显式白名单**（`motte_benchmark.env_boundary`）：子进程只拿到
+  运行时非敏感变量 + 冻结 Profile 里声明的 `env:NAME` 引用 + 平台注入的身份
+  变量；任何"形状像凭据但没有声明来源"的变量会让启动失败
+  （`RUNNER_ENV_BOUNDARY_VIOLATION`）。Runner 在启动前把实际会传给
+  `docker compose` 的变量名写成 `harbor/env-boundary.json`（只记名字，不记值），
+  平台把它冻结为证据。
+- 任务自带 Compose 不能"拉"宿主变量进容器：`environment: [VAR]`（列表透传）、
+  `{VAR: null}`（空值透传）、`secrets.<name>.environment` 与 `${VAR}` 插值都按
+  `looks_like_credential` 判定，命中即 `TASK_COMPOSE_CREDENTIAL_PASSTHROUGH` /
+  `TASK_CONTAINER_HOST_ENV_EXPOSED` 拒绝；间接资源（命名 volume 的
+  `driver_opts` bind、顶层 `secrets`/`configs` 的 `file:`、`external: true`、
+  无法求值的插值）同样 fail-closed。**Agent 凭据是例外**：它必须留在 Runner
+  环境里供容器内的 Agent 使用（Harbor 的 Agent 从进程环境读取），因此策略是
+  "任务不能命名/透传它"，而不是把它从 Runner 删掉。
 - 任务容器归属：Runner 通过 `EnvironmentConfig.extra_docker_compose` 注入平台
   overlay，给 Harbor 的 `main` 服务打上 `motte.job` / `motte.run` / `motte.owner`
   标签；Runner 把每个 Trial 的 compose project 名也写进定位文件。平台清理只
-  按这两类身份定位本 Job 的容器，绝不做全局 prune（见
+  按这两类身份定位本 Job 的容器，**操作前核对完整所有权证据**（job/run/owner
+  三者一致或只有 project 匹配）；证据冲突时拒绝清理并报 `unknown`，绝不用
+  project fallback 覆盖明确的 owner 不一致，也绝不做全局 prune（见
   [取消/清理 runbook](harbor-cleanup.md)）。
 - 网络策略与 Verifier 可见性**记入 profile fingerprint**（`profile_fingerprint`）。
   任一项与上游不同（挂载、网络策略非 `allowed`、Verifier 可见性非
