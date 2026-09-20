@@ -546,6 +546,13 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true")
     doctor.add_argument("--jsonl", action="store_true")
 
+    inspect_import = sub.add_parser(
+        "inspect-import", help="Inspect eval-log 只读导入（不执行日志内容）",
+    )
+    inspect_import.add_argument("file", help="Inspect .eval 日志文件路径（JSONL）")
+    inspect_import.add_argument("--name", help="导入名称（审计用）")
+    inspect_import.add_argument("--json", action="store_true")
+
     runtime = sub.add_parser("runtime", help="M4 外部 runtime：目录 / 分层就绪 / 发布规范版本")
     runtime_sub = runtime.add_subparsers(dest="runtime_command")
     runtime_sub.add_parser("list", help="列出 runtime 目录与分层就绪（零模型调用）")
@@ -1414,6 +1421,26 @@ def main(argv=None):
 
     if args.command == "runtime":
         return _cmd_runtime(args)
+
+    if args.command == "inspect-import":
+        from pathlib import Path as _Path
+
+        from motte_harness.inspect import InspectLogError, import_inspect_log
+
+        content = _Path(args.file).read_text(encoding="utf-8")
+        try:
+            report = import_inspect_log(content, name=args.name)
+        except InspectLogError as error:
+            print(f"inspect-import: {error.code}: {error}")
+            return 2
+        if getattr(args, "json", False):
+            print(json.dumps(report, ensure_ascii=False))
+        else:
+            print(
+                f"inspect-import: {report['import_id']} samples={report['sample_count']} "
+                f"schema={report['schema']} idempotent={report['idempotent']}"
+            )
+        return 0
 
     if args.command == "run":
         from motte_sdk.resolve import ManifestResolutionError, prepare_run

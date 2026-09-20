@@ -2066,6 +2066,28 @@
             ],
             "title": "Acknowledged At"
           },
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case Id"
+          },
           "content": {
             "anyOf": [
               {
@@ -2088,6 +2110,17 @@
               }
             ],
             "title": "Created At"
+          },
+          "dedupe_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dedupe Key"
           },
           "delivered_at": {
             "anyOf": [
@@ -2122,6 +2155,42 @@
             ],
             "title": "Execution Token"
           },
+          "expected_session_revision": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Session Revision"
+          },
+          "expired_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expired At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "failed_at": {
             "anyOf": [
               {
@@ -2138,10 +2207,38 @@
             "title": "Id",
             "type": "string"
           },
+          "intervention": {
+            "default": false,
+            "title": "Intervention",
+            "type": "boolean"
+          },
           "payload": {
             "additionalProperties": true,
             "title": "Payload",
             "type": "object"
+          },
+          "rejected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejected At"
+          },
+          "request_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Hash"
           },
           "revision": {
             "default": 1,
@@ -2152,6 +2249,17 @@
           "run_id": {
             "title": "Run Id",
             "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
           },
           "status": {
             "$ref": "#/components/schemas/RunCommandStatus",
@@ -2198,7 +2306,10 @@
           "queued",
           "delivered",
           "acknowledged",
-          "failed"
+          "failed",
+          "rejected",
+          "expired",
+          "delivery_unknown"
         ],
         "title": "RunCommandStatus",
         "type": "string"
@@ -2233,6 +2344,39 @@
             "minLength": 1,
             "title": "Content",
             "type": "string"
+          },
+          "dedupe_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dedupe Key"
+          },
+          "kind": {
+            "default": "user_message",
+            "pattern": "^(user_message|approve|reject|interrupt)$",
+            "title": "Kind",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
           }
         },
         "required": [
@@ -5148,6 +5292,38 @@
         "summary": "List Harnesses"
       }
     },
+    "/api/v1/inspect/import": {
+      "post": {
+        "description": "M4-T11：Inspect eval-log 只读导入（受控上传文本；不执行日志内容）。",
+        "operationId": "import_inspect_api_v1_inspect_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Imported (idempotent on identical content)"
+          },
+          "422": {
+            "description": "Log rejected (unknown schema / limits / aggregate-only)"
+          }
+        },
+        "summary": "Import Inspect"
+      }
+    },
     "/api/v1/models": {
       "get": {
         "operationId": "list_items_api_v1_models_get",
@@ -6246,29 +6422,22 @@
           "required": true
         },
         "responses": {
-          "404": {
-            "description": "Run not found"
-          },
-          "409": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {}
               }
             },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "Run not found"
+          },
+          "409": {
             "description": "Command unsupported for this run"
           },
           "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          },
-          "501": {
-            "description": "No command consumer is registered"
+            "description": "Invalid command payload"
           }
         },
         "summary": "Send Run Message"

@@ -1314,6 +1314,33 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return state
 
+    @application.post(
+        "/api/v1/inspect/import",
+        responses={
+            200: {"description": "Imported (idempotent on identical content)"},
+            422: {"description": "Log rejected (unknown schema / limits / aggregate-only)"},
+        },
+    )
+    def import_inspect(body: dict):
+        """M4-T11：Inspect eval-log 只读导入（受控上传文本；不执行日志内容）。"""
+        from motte_harness.inspect import InspectLogError, import_inspect_log
+
+        content = body.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "EMPTY_LOG", "message": "content is required"}},
+            )
+        name = body.get("name") if isinstance(body.get("name"), str) else None
+        try:
+            report = import_inspect_log(content, name=name)
+        except InspectLogError as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": error.code, "message": str(error)}},
+            )
+        return report
+
     @application.get("/api/v1/skills")
     def list_skills():
         registry = getattr(application.state, "skill_registry", None) or {}
