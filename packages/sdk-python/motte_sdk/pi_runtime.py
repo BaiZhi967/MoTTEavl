@@ -2,9 +2,22 @@
 
 每个 CaseAttempt 独立 session/workspace：bridge 进程按 Case 生命周期创建与
 销毁，session_id 每次全新（显式续跑才允许绑定旧 session——当前版本不提供
-续跑，续跑诉求走 retry 子 Run）。事件经 RunService 持久 trace；模型/工具
-调用经 InvocationRecord；产物经 ArtifactStore；Observation 沿用 M1 冻结
-契约（usage 对 scripted model 诚实保持未上报）。
+续跑，续跑诉求走 retry 子 Run）。事件经 RunService 持久 trace（带
+source_seq/parser_version 对账）；模型/工具调用经 InvocationRecord；产物经
+ArtifactStore；Observation 沿用 M1 冻结契约（usage 只在真实传输原生回报
+时上报，scripted 保持未上报）。
+
+M4 review 落实（R01/R07/R09/R14/R18）：
+
+- 模型传输显式二分：``native_settings.script`` → scripted（离线）；
+  ``native_settings.provider`` → http（真实模型，key 经环境名下发）。
+- 预检具名拒绝：profile 声明了平台无法兑现的约束（credential_refs、
+  空 tools 交集、pinned workspace 不可用）在 spawn 前失败，不静默忽略。
+- 预算是有效配置：max_steps / max_tool_calls / total_timeout 编译进
+  bridge session；预算终止进入 Observation.termination（不冒充 final）。
+- 启动前版本门：bridge 报告的 SDK 版本与快照 pinned upstream 不符即
+  fail closed（RUNTIME_VERSION_DRIFT）。
+- 异常路径也尽量采集证据：断连/协议失败保留 workspace 快照与产物。
 """
 from __future__ import annotations
 
@@ -19,7 +32,6 @@ from typing import Any
 from uuid import uuid4
 
 from motte_contracts.evaluation import (
-    ArtifactEntry,
     EvidenceRef,
     observation_evidence_hash,
 )
@@ -37,6 +49,18 @@ _TERMINATION_REASONS = {
     "error": "error",
     "timeout": "wall_time",
 }
+# 预算终止是独立词表：预算耗尽不冒充 final_answer，也不是取消
+_BUDGET_TERMINATION_REASONS = {
+    "max_steps": "max_steps",
+    "max_tool_calls": "max_tool_calls",
+}
+
+# 真实模型 provider 配置允许的字段（名称，不是秘密原文）
+_PROVIDER_FIELDS = ("api", "provider", "base_url", "api_key_env")
+_PROVIDER_APIS = (
+    "openai-completions", "openai-responses", "anthropic-messages",
+    "google-generative-ai", "mistral-conversations",
+)
 
 
 def _workspace_anchor() -> Path:
@@ -62,8 +86,8 @@ class RuntimeCaseWorkspace:
     沙箱见 motte_sandbox，Windows 限制已在验证记录单列）。
     """
 
-    def __init__(self, run_id: str, case_id: str) -> None:
-        self.anchor = _workspace_anchor()
+    def __init__(self, run_id: str, case_id: str, *, anchor: str | Path | None = None) -> None:
+        self.anchor = Path(anchor) if anchor is not None else _workspace_anchor()
         self.root = self.anchor / _safe_component(run_id, "run_id") \
             / _safe_component(case_id, "case_id")
         self.root.mkdir(parents=True, exist_ok=True)
@@ -144,11 +168,14 @@ class PiRuntimeCaseExecutor:
         self.run = run
         self.manifest = run.get("manifest") or {}
         self.profile = self.manifest.get("runtime_profile") or {}
+        self.snapshot = self.manifest.get("runtime_snapshot") or {}
         settings = self.profile.get("native_settings") or {}
+        self.settings = settings
         self.script = settings.get("script")
+        provider = settings.get("provider")
+        self.provider_config = provider if isinstance(provider, dict) else None
         self.model_id = settings.get("model") or "scripted-1"
         self.system_prompt = settings.get("system_prompt") or ""
-        self.max_steps = int(settings.get("max_steps") or 16)
         self._service = service
         self._bridge_path = bridge_path
         self._node = node_binary
@@ -156,24 +183,120 @@ class PiRuntimeCaseExecutor:
     def bind_service(self, service: Any) -> None:
         self._service = service
 
+    def run_build_gate(self) -> None:
+        """dispatcher build 阶段的公共预检（每 Run 一次，具名失败）。"""
+        self._preflight()
+
+    # ------------------------------------------------------------ 预检（R07/R18）
+
+    def _preflight(self) -> dict[str, Any]:
+        """把声明编译为有效配置；无法兑现的约束具名拒绝（不静默忽略）。"""
+        from .execution_backends import ExecutionBackendError
+
+        budgets = dict(self.profile.get("budgets") or {})
+
+        if self.profile.get("credential_refs"):
+            # Pi bridge 当前没有向子进程注入凭据的受控通道；声明了凭据
+            # 却不落实等于静默降级认证——具名拒绝（M4 review R07/A13）。
+            raise ExecutionBackendError(
+                "RUNTIME_CREDENTIALS_UNRESOLVED",
+                "pi runtime has no credential channel to the bridge process; "
+                "credential_refs cannot be honored and are rejected at preflight",
+            )
+
+        declared = self.snapshot.get("tools")
+        declared_tools = declared if isinstance(declared, list) else list(PI_TOOLS)
+        allowed_tools = [tool for tool in PI_TOOLS if tool in declared_tools]
+        if not allowed_tools:
+            raise ExecutionBackendError(
+                "RUNTIME_TOOLS_EMPTY",
+                "runtime snapshot declares no tools intersecting the pi bridge sandbox",
+            )
+
+        if self.provider_config is not None:
+            if self.script is not None:
+                raise ExecutionBackendError(
+                    "RUNTIME_MODEL_CONFIG_REQUIRED",
+                    "native_settings cannot carry both script (scripted transport) "
+                    "and provider (http transport)",
+                )
+            unknown = sorted(set(self.provider_config) - set(_PROVIDER_FIELDS))
+            if unknown:
+                raise ExecutionBackendError(
+                    "RUNTIME_MODEL_CONFIG_REQUIRED",
+                    f"provider config has unknown fields: {unknown}",
+                )
+            if self.provider_config.get("api") not in _PROVIDER_APIS:
+                raise ExecutionBackendError(
+                    "RUNTIME_MODEL_CONFIG_REQUIRED",
+                    f"provider api must be one of {sorted(_PROVIDER_APIS)}",
+                )
+        elif not isinstance(self.script, list) or not self.script:
+            raise ExecutionBackendError(
+                "RUNTIME_MODEL_CONFIG_REQUIRED",
+                "pi runtime requires runtime_profile.native_settings.script "
+                "(scripted steps) or provider (http transport)",
+            )
+
+        try:
+            total_timeout = float(
+                budgets.get("total_timeout")
+                or os.environ.get("MOTTE_PI_TOTAL_TIMEOUT")
+                or "900"
+            )
+        except (TypeError, ValueError) as error:
+            raise ExecutionBackendError(
+                "RUNTIME_BUDGET_INVALID", "budgets.total_timeout must be a number"
+            ) from error
+
+        pinned = self.snapshot.get("upstream_version") or ""
+        # upstream_version 形如 "@mariozechner/pi-agent-core@0.73.1"
+        expected_sdk = pinned.rpartition("@")[2] if "@" in pinned else ""
+
+        return {
+            "tools": allowed_tools,
+            "max_steps": int(
+                budgets.get("max_steps")
+                or self.settings.get("max_steps")
+                or 16
+            ),
+            "max_tool_calls": (
+                int(budgets["max_tool_calls"])
+                if budgets.get("max_tool_calls") is not None else None
+            ),
+            "total_timeout": total_timeout,
+            "workspace": dict(self.profile.get("workspace") or {}),
+            "expected_sdk": expected_sdk,
+        }
+
+    def _workspace_for(self, case_id: str, workspace_decl: dict[str, Any]):
+        if workspace_decl.get("source") == "pinned-path":
+            root = workspace_decl.get("root")
+            if not isinstance(root, str) or not root.strip():
+                raise ValueError("pinned-path workspace requires a non-empty root")
+            anchor = Path(root)
+            try:
+                anchor.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise ValueError(f"pinned workspace root is not usable: {error}") from error
+            return RuntimeCaseWorkspace(self.run["id"], case_id, anchor=anchor)
+        return RuntimeCaseWorkspace(self.run["id"], case_id)
+
     # ------------------------------------------------------------ 公共入口
 
     def invoke(self, case_id: str) -> dict[str, Any]:
         from motte_sdk.agent_tasks import selected_agent_cases_from_snapshot
 
-        if not isinstance(self.script, list) or not self.script:
-            raise ValueError(
-                "pi runtime requires runtime_profile.native_settings.script "
-                "(scripted model steps) for offline execution"
-            )
+        effective = self._preflight()
+
         cases = selected_agent_cases_from_snapshot(self.run)
         case = next((item for item in cases if item["case_id"] == case_id), None)
         if case is None:
             raise KeyError(case_id)
 
-        from motte_agent.pi import PiBridgeSession
+        from motte_agent.pi import PiBridgeError, PiBridgeSession
 
-        workspace = RuntimeCaseWorkspace(self.run["id"], case_id)
+        workspace = self._workspace_for(case_id, effective["workspace"])
         workspace.materialize_fixture(case.get("fixture") or {})
         before = workspace.snapshot()
 
@@ -208,28 +331,38 @@ class PiRuntimeCaseExecutor:
                     }))
                     stored = service.emit_run_event(
                         self.run["id"], f"pi_{kind}",
-                        {"case_id": case_id, "session_id": session_id, **payload},
+                        {
+                            "case_id": case_id, "session_id": session_id,
+                            # 事件对账字段：bridge 原生 seq + parser 版本（R14）。
+                            "source_seq": event.get("seq"),
+                            "parser_version": PI_PARSER_VERSION,
+                            **payload,
+                        },
                     )
                     if stored is not None and isinstance(stored.get("seq"), int):
                         event_refs.append(EvidenceRef(
                             kind="event", run_id=self.run["id"], locator=str(stored["seq"]),
                         ))
 
+        budgets = {"max_steps": effective["max_steps"]}
+        if effective["max_tool_calls"] is not None:
+            budgets["max_tool_calls"] = effective["max_tool_calls"]
         session = PiBridgeSession(
             run_id=self.run["id"],
             case_id=case_id,
             session_id=session_id,
             operation_id=operation_id,
             workspace=workspace.root,
-            model_config={"id": self.model_id, "name": f"scripted:{self.model_id}"},
+            model_config={"id": self.model_id, "name": self.model_id},
             responses=self.script,
-            tools=list(PI_TOOLS),
+            provider_config=self.provider_config,
+            tools=effective["tools"],
             system_prompt=self.system_prompt,
-            budgets={"max_steps": self.max_steps},
+            budgets=budgets,
             bridge_path=self._bridge_path,
             node_binary=self._node,
             idle_timeout=float(os.environ.get("MOTTE_PI_IDLE_TIMEOUT", "120")),
-            total_timeout=float(os.environ.get("MOTTE_PI_TOTAL_TIMEOUT", "900")),
+            total_timeout=effective["total_timeout"],
             event_callback=on_event,
         )
 
@@ -252,25 +385,36 @@ class PiRuntimeCaseExecutor:
         started = monotonic()
         outcome: dict[str, Any]
         cleanup: dict[str, Any] | None = None
-        capture_errors: list[str] = []
         pending_error: BaseException | None = None
         try:
             session.start()
+            self._enforce_sdk_version(session, effective["expected_sdk"])
             watcher.start()
             try:
                 outcome = session.run(case["input"])
             finally:
                 stop_watch.set()
-                session.close()
             self._log_invocations(case_id, session_id, outcome)
             observation = self._capture(workspace, case, outcome, before, event_refs, tool_records)
         except BaseException as error:  # noqa: BLE001 - 异常路径也要采集与清理
             pending_error = error
-            observation = {}
-            outcome = {
-                "status": "error", "final_output": None, "steps": 0, "tool_calls": 0,
-                "usage": {"reported": False, "source": "scripted-model"},
-            }
+            if isinstance(error, PiBridgeError) and error.code == "PI_BRIDGE_TIMEOUT":
+                # 总时限到期：终止已下发，证据照常冻结（M4 review R09）。
+                outcome = {
+                    "status": "timeout", "final_output": None,
+                    "steps": 0, "tool_calls": len(tool_records),
+                    "usage": {"reported": False, "source": "bridge-timeout"},
+                    "failure": "total timeout exceeded",
+                }
+            else:
+                outcome = {
+                    "status": "error", "final_output": None, "steps": 0,
+                    "tool_calls": len(tool_records),
+                    "usage": {"reported": False, "source": "bridge-error"},
+                }
+            observation = self._capture(
+                workspace, case, outcome, before, event_refs, tool_records,
+            )
         finally:
             stop_watch.set()
             try:
@@ -283,14 +427,15 @@ class PiRuntimeCaseExecutor:
                 cleanup = {"status": "failed", "residual": [], "error": str(error)}
 
         duration_ms = round((monotonic() - started) * 1000, 3)
+        termination_reason = self._termination_reason(outcome)
         envelope = {
             "agent": {
                 "final_output": outcome.get("final_output"),
-                "termination_reason": (
-                    "cancelled" if outcome.get("interrupted")
-                    else outcome.get("status") or "error"
+                "termination_reason": termination_reason,
+                "termination_detail": (
+                    outcome.get("budget_stop_reason")
+                    or outcome.get("failure")
                 ),
-                "termination_detail": outcome.get("failure"),
                 "steps": outcome.get("steps", 0),
                 "tool_calls": outcome.get("tool_calls", 0),
                 "duration_ms": duration_ms,
@@ -300,6 +445,9 @@ class PiRuntimeCaseExecutor:
                     "operation_id": operation_id,
                     "parser_version": PI_PARSER_VERSION,
                     "model_control": "runner-configured",
+                    "transport": outcome.get("transport") or (
+                        "http" if self.provider_config else "scripted"
+                    ),
                     "usage_source": (outcome.get("usage") or {}).get("source"),
                     "config_hash": self.profile.get("config_hash"),
                 },
@@ -307,7 +455,9 @@ class PiRuntimeCaseExecutor:
             "observation": observation,
             "events": [],
             "artifacts_captured": len(observation.get("artifact_refs") or []),
-            "capture_errors": capture_errors,
+            "capture_errors": list(
+                (observation.get("coverage") or {}).get("missing") or []
+            ),
             "cleanup": cleanup,
         }
         if pending_error is not None:
@@ -318,6 +468,35 @@ class PiRuntimeCaseExecutor:
                 }}
             raise pending_error
         return envelope
+
+    # ------------------------------------------------------------ 版本门（R18）
+
+    def _enforce_sdk_version(self, session: Any, expected: str) -> None:
+        """bridge 报告的 SDK 版本与快照 pinned upstream 不符即 fail closed。"""
+        if not expected:
+            return
+        observed = getattr(session, "sdk_version", None)
+        if observed != expected:
+            from .execution_backends import ExecutionBackendError
+
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise ExecutionBackendError(
+                "RUNTIME_VERSION_DRIFT",
+                f"pi sdk version drift: bridge reported {observed!r}, "
+                f"pinned {expected!r} (fail closed; no matrix relaxation)",
+            )
+
+    @staticmethod
+    def _termination_reason(outcome: dict[str, Any]) -> str:
+        budget_reason = outcome.get("budget_stop_reason")
+        if budget_reason in _BUDGET_TERMINATION_REASONS:
+            return _BUDGET_TERMINATION_REASONS[budget_reason]
+        if outcome.get("interrupted"):
+            return "cancelled"
+        return _TERMINATION_REASONS.get(outcome.get("status"), "error")
 
     # ------------------------------------------------------------ 调用日志
 
@@ -342,6 +521,7 @@ class PiRuntimeCaseExecutor:
                     "runtime": f"{PI_BACKEND_ID}@{PI_BACKEND_VERSION}",
                     "session_id": session_id,
                     "model_control": "runner-configured",
+                    "transport": outcome.get("transport") or "scripted",
                     "metering_source": (outcome.get("usage") or {}).get("source"),
                 }),
                 "prepared_at": datetime.now(UTC).isoformat(),
@@ -404,11 +584,8 @@ class PiRuntimeCaseExecutor:
             "attempt_id": None,
             "final_output": outcome.get("final_output"),
             "termination": {
-                "reason": _TERMINATION_REASONS.get(
-                    "cancelled" if outcome.get("interrupted") else outcome.get("status"),
-                    "error",
-                ),
-                "detail": outcome.get("failure"),
+                "reason": self._termination_reason(outcome),
+                "detail": outcome.get("budget_stop_reason") or outcome.get("failure"),
             },
             "event_refs": [ref.model_dump() for ref in event_refs],
             "artifact_refs": artifacts,

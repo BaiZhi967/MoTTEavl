@@ -52,6 +52,15 @@ def _setup(tmp_path, monkeypatch, name):
 
 def _fake_cli(tmp_path: Path, backend: str) -> Path:
     script = tmp_path / f"fake-{backend}.py"
+    # spawn 前版本门（M4 review R18）：fake binary 也要应答 --version 且
+    # 报告 pinned 版本，否则 dispatch 在启动前 fail closed。
+    pinned = {"claude-cli": "2.1.278", "codex-cli": "0.155.1"}[backend]
+    guard = (
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        f"    print('{pinned} (fake)')\n"
+        "    sys.exit(0)\n"
+    )
     if backend == "claude-cli":
         payload = {
             "type": "result", "subtype": "success", "is_error": False,
@@ -59,23 +68,29 @@ def _fake_cli(tmp_path: Path, backend: str) -> Path:
             "usage": {"input_tokens": 3, "output_tokens": 2},
         }
         script.write_text(
-            "import json\nimport pathlib\nimport sys\n\n"
-            f"payload = {payload!r}\n\n"
-            "pathlib.Path('answer.txt').write_text('claude-was-here', encoding='utf-8')\n"
-            "print(json.dumps(payload))\n",
+            guard
+            + "import json\nimport pathlib\nimport sys\n\n"
+            + f"payload = {payload!r}\n\n"
+            + "pathlib.Path('answer.txt').write_text('claude-was-here', encoding='utf-8')\n"
+            + "print(json.dumps(payload))\n",
             encoding="utf-8",
         )
         return script
+    # codex exec --json 官方顶层 type 事件（R02）
     events = [
-        {"id": "e1", "msg": {"type": "thread.started", "thread_id": "t1"}},
-        {"id": "e2", "msg": {"type": "turn.completed", "usage": {"input_tokens": 2, "output_tokens": 1}}},
-        {"id": "e3", "msg": {"type": "thread.completed"}},
+        {"timestamp": "2026-09-20T00:00:00Z", "type": "thread.started", "thread_id": "t1"},
+        {"timestamp": "2026-09-20T00:00:01Z", "type": "turn.started"},
+        {"timestamp": "2026-09-20T00:00:02Z", "type": "item.completed", "item": {
+            "id": "i1", "type": "agent_message", "text": "done"}},
+        {"timestamp": "2026-09-20T00:00:03Z", "type": "turn.completed", "usage": {
+            "input_tokens": 2, "output_tokens": 1}},
     ]
     script.write_text(
-        "import json\nimport pathlib\nimport sys\n\n"
-        f"events = {events!r}\n\n"
-        "pathlib.Path('answer.txt').write_text('codex-was-here', encoding='utf-8')\n"
-        "for event in events:\n    print(json.dumps(event), flush=True)\n",
+        guard
+        + "import json\nimport pathlib\nimport sys\n\n"
+        + f"events = {events!r}\n\n"
+        + "pathlib.Path('answer.txt').write_text('codex-was-here', encoding='utf-8')\n"
+        + "for event in events:\n    print(json.dumps(event), flush=True)\n",
         encoding="utf-8",
     )
     return script
@@ -234,13 +249,12 @@ def test_runtime_run_cancel_and_error_paths(tmp_path, monkeypatch):
     assert cancelled["status"] == "cancelled"
     assert service.store.case_runs.list_for_run(run["id"])
 
-    # 失败：损坏 binary → Run failed，错误入证据
+    # 失败：损坏 binary（无法应答 --version）→ spawn 前版本门具名拒绝（R18）
     broken = tmp_path / "broken.py"
     broken.write_text("import sys\nsys.exit(9)\n", encoding="utf-8")
     service2, finished2 = _dispatch(
         tmp_path / "err", monkeypatch, "claude-cli",
         _cli_manifest("claude-cli", broken), "claude-err",
     )
-    assert finished2["status"] == "completed"
-    answer = [s for s in finished2["scores"] if s["metric_id"] == "file-content:answer.txt"]
-    assert answer and all(not s["passed"] for s in answer)
+    assert finished2["status"] == "unsupported"
+    assert finished2.get("error", {}).get("code") == "RUNTIME_BINARY_VERSION_UNKNOWN"

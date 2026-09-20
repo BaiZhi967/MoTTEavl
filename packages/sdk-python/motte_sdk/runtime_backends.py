@@ -194,6 +194,9 @@ def _build_pi(run: dict[str, Any]) -> Any:
     from .pi_runtime import PiRuntimeCaseExecutor
 
     executor = PiRuntimeCaseExecutor(run)
+    # build 阶段公共预检（R07）：无法兑现的声明（credential_refs 等）在
+    # 这里具名失败；SDK 版本门在每个 bridge session 启动后核验（R18）。
+    executor.run_build_gate()
 
     def attach(service: Any, run_id: str) -> None:
         executor.bind_service(service)
@@ -220,6 +223,9 @@ def _build_cli(backend_id: str):
         from .cli_runtime import CliRuntimeCaseExecutor
 
         executor = CliRuntimeCaseExecutor(run, backend=backend_id)
+        # build 阶段公共预检（R07）+ spawn 前版本门（R18）：具名失败进入
+        # unsupported，不进入逐题执行。
+        executor.run_build_gate()
 
         def attach(service: Any, run_id: str) -> None:
             executor.bind_service(service)
@@ -252,11 +258,14 @@ def install_runtime_backends() -> None:
     """安装 M4 runtime backend 注册（幂等；供 API/Worker 启动调用）。
 
     validate 共享本模块规则；build 来自 _RUNTIME_BUILDS——未接线的 backend
-    保持显式 RUNTIME_EXECUTION_NOT_IMPLEMENTED 拒绝。
+    保持显式 RUNTIME_EXECUTION_NOT_IMPLEMENTED 拒绝。注册能力必须反映
+    **真实接线**而非目标形态（M4 review R17）：app-server 的持久命令消费
+    者尚未接进 Worker，交互能力保持 False——API 据此给出 501，而不是
+    接收 202 后让命令永久 queued。
     """
     for backend_id in RUNTIME_BACKEND_IDS:
         capabilities = {
-            "interactive": backend_id == "codex-app-server",
+            "interactive": False,  # 无消费者不开放交互（G17）；接线后才为真
             "safe_to_repeat": False,
             "runtime": True,
         }
@@ -289,6 +298,7 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "model": {"type": "string"},
                     "script": {"type": "array"},
+                    "provider": {"type": "object"},
                     "system_prompt": {"type": "string"},
                     "max_steps": {"type": "integer"},
                 },
@@ -323,6 +333,7 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "model": {"type": "string"},
                     "max_turns": {"type": "integer"},
+                    "permission_mode": {"type": "string"},
                     "binary": {"type": "string"},
                 },
                 "required": ["model"],
@@ -351,10 +362,12 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
             "transport": "cli-exec-jsonl",
             "upstream_version": "@openai/codex@0.155.1",
             "adapter_version": "codex-batch@1",
-            "parser_version": "codex-jsonl-v1",
+            "parser_version": "codex-jsonl-v2",
             "config_schema": {
                 "properties": {
                     "model": {"type": "string"},
+                    "sandbox": {"type": "string"},
+                    "codex_config": {"type": "object"},
                     "binary": {"type": "string"},
                 },
                 "required": ["model"],
@@ -409,12 +422,28 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
 
 
 def publish_canonical_runtime_versions(resources: Any) -> dict[str, Any]:
-    """把规范 runtime 版本发布进资源仓库（幂等；不可变版本资源）。"""
-    from datetime import UTC, datetime
+    """把规范 runtime 版本发布进资源仓库（幂等；不可变版本资源）。
 
-    published_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    幂等语义（M4 review R23）：同 name@version 已发布且 definition 内容
+    相同 → 复用既有记录（保留原始 published_at），重复发布不产生冲突；
+    definition 内容变化才构成 RESOURCE_CONFLICT（走新版本号）。
+    """
     published: dict[str, Any] = {}
     for name, payload in CANONICAL_RUNTIME_VERSIONS.items():
+        version = str(payload.get("version") or "1")
+        existing = None
+        get = getattr(resources.runtimes, "get", None)
+        if get is not None:
+            try:
+                existing = get(name, version)
+            except Exception:  # noqa: BLE001 - 读取失败按未发布处理
+                existing = None
+        if existing is not None and existing.get("definition") == payload.get("definition"):
+            published[name] = existing
+            continue
+        from datetime import UTC, datetime
+
+        published_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         record = {**payload, "lifecycle": "published", "published_at": published_at}
         published[name] = resources.runtimes.put(record)
     return published

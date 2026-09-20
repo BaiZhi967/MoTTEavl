@@ -26,6 +26,10 @@ var/datasets/
 # 外部 Job 运行时状态（job-profile / runner-config / 完成标记）
 var/external-jobs/
 
+# runtime 执行侧状态（workspace / session 记录 / 产物）
+var/pi-workspaces/
+var/runtime-sessions/
+
 # 脑暴视觉伴侣会话产物
 .superpowers/
 

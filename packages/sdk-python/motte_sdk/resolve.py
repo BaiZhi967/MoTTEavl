@@ -188,6 +188,10 @@ def _resolve_runtime_reference(
         "kind": definition.get("kind"),
         "transport": definition.get("transport"),
         "tool_enforcement": (definition.get("tool_control") or {}).get("enforcement"),
+        # 执行侧落实权限交集与启动前版本门需要这两个字段（M4 review R07/R18）：
+        # 声明的工具清单与 pinned 上游版本随快照冻结。
+        "tools": list((definition.get("tool_control") or {}).get("tools") or []),
+        "upstream_version": definition.get("upstream_version"),
         "interactive": bool(definition.get("interactive")),
         "config_schema": deepcopy(definition.get("config_schema") or {}),
     }

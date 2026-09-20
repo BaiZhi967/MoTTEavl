@@ -86,15 +86,29 @@ class ClaudeHarness:
         argv: list[str] | None = None,
         limits: SupervisedLimits | None = None,
         on_event=None,
+        cancel_check=None,
+        on_spawned=None,
     ) -> dict[str, Any]:
-        """受控 batch 执行：SupervisedProcess + 原生 parser。"""
+        """受控 batch 执行：SupervisedProcess + 原生 parser。
+
+        ``cancel_check``：运行期间轮询的取消探测（返回原因字符串即打断）；
+        ``on_spawned``：spawn 成功后立即回调（持久 session 身份用）；
+        原始 stdout/stderr 随结果返回（字节量已被监督上限约束），供上层
+        冻结为证据（M4 review R04/R14/R15）。
+        """
         effective_argv = argv if argv is not None else self.batch_argv(prompt)
         process = SupervisedProcess(
             effective_argv, cwd=str(cwd), env=env,
             limits=limits or SupervisedLimits(total_timeout=300.0),
             on_stderr=on_event, name=self.name,
+            cancel_check=cancel_check,
         )
         process.start()
+        if on_spawned is not None:
+            try:
+                on_spawned(process)
+            except Exception:  # noqa: BLE001 - 记录钩子失败不中断执行
+                pass
         outcome = process.wait()
         parsed = None
         if outcome.stdout:
@@ -111,7 +125,10 @@ class ClaudeHarness:
                 "truncated": outcome.truncated,
                 "residual_pids": outcome.residual_pids,
                 "duration_ms": outcome.duration_ms,
+                "detail": outcome.detail,
             },
             "parsed": parsed,
             "argv": list(effective_argv),
+            "stdout": outcome.stdout,
+            "stderr": outcome.stderr,
         }

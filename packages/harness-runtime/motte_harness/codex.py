@@ -84,14 +84,23 @@ class CodexHarness:
         argv: list[str] | None = None,
         limits: SupervisedLimits | None = None,
         on_event=None,
+        cancel_check=None,
+        on_spawned=None,
     ) -> dict[str, Any]:
+        """受控 batch 执行：SupervisedProcess + 原生 parser（参数语义同 claude.run_batch）。"""
         effective_argv = argv if argv is not None else self.batch_argv(prompt)
         process = SupervisedProcess(
             effective_argv, cwd=str(cwd), env=env,
             limits=limits or SupervisedLimits(total_timeout=300.0),
             on_stderr=on_event, name=self.name,
+            cancel_check=cancel_check,
         )
         process.start()
+        if on_spawned is not None:
+            try:
+                on_spawned(process)
+            except Exception:  # noqa: BLE001 - 记录钩子失败不中断执行
+                pass
         outcome = process.wait()
         parsed = None
         if outcome.stdout:
@@ -108,7 +117,10 @@ class CodexHarness:
                 "truncated": outcome.truncated,
                 "residual_pids": outcome.residual_pids,
                 "duration_ms": outcome.duration_ms,
+                "detail": outcome.detail,
             },
             "parsed": parsed,
             "argv": list(effective_argv),
+            "stdout": outcome.stdout,
+            "stderr": outcome.stderr,
         }

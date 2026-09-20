@@ -44,43 +44,60 @@ class Workspace {
     this.root = path.resolve(root);
     this.quotas = { ...DEFAULT_QUOTAS, ...quotas };
     this.totalBytes = 0;
-    this.files = new Set();
+    this.fileBytes = new Map();
   }
 
-  /** Resolve and verify every component against symlink substitution. */
+  /**
+   * Resolve the FULL target path, verifying every existing component against
+   * symlink substitution and directory shape. Missing components are only
+   * permitted with create=true (they will be created); the returned path is
+   * always the complete joined target, never a partial prefix (M4 review R10).
+   */
   async resolveTarget(relative, { mustExist = false, create = false } = {}) {
     const relativePath = safeRelative(relative);
     let current = this.root;
     const parts = relativePath.split(path.sep);
     for (let index = 0; index < parts.length; index += 1) {
-      current = path.join(current, parts[index]);
+      const next = path.join(current, parts[index]);
       let stat;
       try {
-        stat = await lstat(current);
+        stat = await lstat(next);
       } catch (error) {
         if (error.code === "ENOENT") {
-          if (create && index === parts.length - 1) {
-            return current;
-          }
           if (mustExist) {
             throw new WorkspacePolicyError("PATH_MISSING", `path does not exist: ${relative}`);
           }
-          return current;
+          if (!create && index < parts.length - 1) {
+            // 中间目录缺失且调用方不要求创建：同样返回完整目标，
+            // 由调用方（read/list）在访问时得到确定的失败。
+            current = next;
+            continue;
+          }
+          current = next;
+          continue;
         }
         throw error;
       }
       if (stat.isSymbolicLink()) {
         throw new WorkspacePolicyError("PATH_SYMLINK", `symlink in workspace path: ${relative}`);
       }
+      if (index < parts.length - 1 && !stat.isDirectory()) {
+        throw new WorkspacePolicyError(
+          "PATH_NOT_DIRECTORY",
+          `path component is not a directory: ${relative}`,
+        );
+      }
+      current = next;
     }
     return current;
   }
 
-  async enforceWriteQuota(relative, bytes) {
+  async enforceWriteQuota(relative, bytes, replacesBytes) {
     if (bytes > this.quotas.maxFileBytes) {
       throw new WorkspacePolicyError("QUOTA_FILE", `file exceeds per-file quota: ${relative}`);
     }
-    if (this.totalBytes + bytes > this.quotas.maxTotalBytes) {
+    const replaced = Number.isFinite(replacesBytes) ? replacesBytes : 0;
+    if (this.totalBytes - replaced + bytes > this.quotas.maxTotalBytes) {
       throw new WorkspacePolicyError("QUOTA_TOTAL", "workspace total byte quota exceeded");
     }
   }
@@ -91,14 +108,24 @@ class Workspace {
     }
     const target = await this.resolveTarget(relative, { create: true });
     const bytes = Buffer.byteLength(content, "utf8");
-    await this.enforceWriteQuota(relative, bytes);
+    // 全部限制在写盘之前检查（M4 review R11）：拒绝不能留下已写文件，
+    // 也不能绕过计量。
+    const previous = this.fileBytes.get(relative);
+    if (previous === undefined && this.fileBytes.size >= this.quotas.maxFiles) {
+      throw new WorkspacePolicyError("QUOTA_FILES", "workspace file count quota exceeded");
+    }
+    await this.enforceWriteQuota(relative, bytes, previous);
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, content, { encoding: "utf8", flag: "w" });
-    if (!this.files.has(relative)) {
-      if (this.files.size >= this.quotas.maxFiles) {
-        throw new WorkspacePolicyError("QUOTA_FILES", "workspace file count quota exceeded");
-      }
-      this.files.add(relative);
+    const written = await lstat(target);
+    if (!written.isFile()) {
+      throw new WorkspacePolicyError("WRITE_TARGET_INVALID", `target did not become a file: ${relative}`);
+    }
+    if (previous === undefined) {
+      this.fileBytes.set(relative, bytes);
+    } else {
+      this.totalBytes -= previous;
+      this.fileBytes.set(relative, bytes);
     }
     this.totalBytes += bytes;
     return { bytes };
@@ -106,6 +133,10 @@ class Workspace {
 
   async readText(relative) {
     const target = await this.resolveTarget(relative, { mustExist: true });
+    const stat = await lstat(target);
+    if (!stat.isFile()) {
+      throw new WorkspacePolicyError("PATH_INVALID", `path is not a file: ${relative}`);
+    }
     const data = await readFile(target);
     if (data.byteLength > this.quotas.maxFileBytes) {
       throw new WorkspacePolicyError("QUOTA_FILE", "file exceeds per-file read quota");

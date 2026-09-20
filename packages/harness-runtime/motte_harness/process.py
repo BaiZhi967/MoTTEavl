@@ -12,7 +12,6 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
 from typing import Any, Callable
 
 
@@ -74,40 +73,6 @@ class ProcessRunner:
             except ProcessLookupError:
                 pass
         kill_tree(pid)
-
-
-# ---------------------------------------------------------------- M4-T05 监督器
-
-@dataclass(frozen=True)
-class SupervisedLimits:
-    """双管道有界监督的限制（M4-G09/A05/A06/A08）。"""
-
-    max_line_bytes: int = 1_000_000
-    max_total_bytes: int = 8_000_000
-    idle_timeout: float = 30.0
-    total_timeout: float = 300.0
-    interrupt_grace: float = 5.0
-    residual_grace: float = 3.0
-
-
-class SupervisedProcessError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-@dataclass
-class ProcessOutcome:
-    status: str  # exited | interrupted | timeout | line_limit | byte_limit | invalid_utf8
-    exit_code: int | None
-    stdout: str
-    stderr: str
-    stdout_bytes: int = 0
-    stderr_bytes: int = 0
-    truncated: bool = False
-    residual_pids: list[int] = field(default_factory=list)
-    duration_ms: int = 0
-    detail: str | None = None
 
 
 def minimal_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -212,9 +177,15 @@ def process_identity(pid: int) -> dict[str, Any]:
 
 
 def identity_matches(record: dict[str, Any], pid: int) -> bool:
-    """PID 复用判定：命令行一致才视为同一进程（时间戳缺失时保守拒绝）。"""
+    """PID 复用判定：命令行一致且创建时间一致（缺失即保守拒绝）。"""
     current = process_identity(pid)
     recorded_cmd = [str(part) for part in record.get("cmdline") or []]
     if not recorded_cmd:
         return False
-    return current.get("cmdline") == recorded_cmd
+    if current.get("cmdline") != recorded_cmd:
+        return False
+    recorded_time = record.get("create_time")
+    current_time = current.get("create_time")
+    if recorded_time is not None and current_time is not None:
+        return float(recorded_time) == float(current_time)
+    return False

@@ -1,9 +1,8 @@
-{"id": "resp_fixture_0001", "msg": {"type": "thread.started", "thread_id": "th_fixture_0001"}}
-{"id": "resp_fixture_0002", "msg": {"type": "turn.started", "turn_id": "turn_0001"}}
-{"id": "resp_fixture_0003", "msg": {"type": "item.started", "item": {"id": "item_0001", "type": "agent_message", "text": ""}}}
-{"id": "resp_fixture_0004", "msg": {"type": "item.updated", "item": {"id": "item_0001", "type": "agent_message", "text": "Writing the file now."}}}
-{"id": "resp_fixture_0005", "msg": {"type": "item.started", "item": {"id": "item_0002", "type": "command_execution", "command": "python -c \"open('hello.txt','w').write('hello')\"", "cwd": "/workspace/case-1", "exit_code": null, "status": "in_progress"}}}
-{"id": "resp_fixture_0006", "msg": {"type": "item.completed", "item": {"id": "item_0002", "type": "command_execution", "command": "python -c \"open('hello.txt','w').write('hello')\"", "cwd": "/workspace/case-1", "exit_code": 0, "status": "completed"}}}
-{"id": "resp_fixture_0007", "msg": {"type": "item.completed", "item": {"id": "item_0001", "type": "agent_message", "text": "Created hello.txt with content 'hello'."}}}
-{"id": "resp_fixture_0008", "msg": {"type": "turn.completed", "usage": {"input_tokens": 512, "cached_input_tokens": 128, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 128, "output_tokens": 64}}}
-{"id": "resp_fixture_0009", "msg": {"type": "thread.completed", "reason": "done"}}
+{"timestamp": "2026-09-20T00:00:00.000Z", "type": "thread.started", "thread_id": "th_fixture_0001"}
+{"timestamp": "2026-09-20T00:00:01.000Z", "type": "turn.started", "turn_id": "turn_0001"}
+{"timestamp": "2026-09-20T00:00:02.000Z", "type": "item.started", "item": {"id": "item_0001", "type": "agent_message", "text": ""}}
+{"timestamp": "2026-09-20T00:00:03.000Z", "type": "item.updated", "item": {"id": "item_0001", "type": "agent_message", "text": "Writing the file now."}}
+{"timestamp": "2026-09-20T00:00:04.000Z", "type": "item.started", "item": {"id": "item_0002", "type": "command_execution", "command": "python -c \"open('hello.txt','w').write('hello')\"", "cwd": "/workspace/case-1", "exit_code": null, "status": "in_progress"}}
+{"timestamp": "2026-09-20T00:00:05.000Z", "type": "item.completed", "item": {"id": "item_0002", "type": "command_execution", "command": "python -c \"open('hello.txt','w').write('hello')\"", "cwd": "/workspace/case-1", "exit_code": 0, "status": "completed"}}
+{"timestamp": "2026-09-20T00:00:06.000Z", "type": "item.completed", "item": {"id": "item_0001", "type": "agent_message", "text": "Created hello.txt with content 'hello'."}}
+{"timestamp": "2026-09-20T00:00:07.000Z", "type": "turn.completed", "usage": {"input_tokens": 512, "cached_input_tokens": 128, "output_tokens": 64, "reasoning_output_tokens": 0}}

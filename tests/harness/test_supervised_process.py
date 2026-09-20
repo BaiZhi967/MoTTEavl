@@ -219,3 +219,90 @@ def test_wait_before_start_is_rejected():
     process = SupervisedProcess(["python", "-c", "pass"])
     with pytest.raises(SupervisedProcessError):
         process.wait()
+
+
+def test_orphan_descendant_stopped_after_parent_exit(tmp_path):
+    """R05：父进程退出后的孤儿后代仍被停止——写入不再增长。
+
+    父进程 spawn 持续写 tick 的子进程后立即退出；监督器在父进程存活
+    期间登记后代身份，父进程退出后按登记清理（PID 复用核对，不误杀）。
+    """
+    child = _script(
+        tmp_path, "tick-child.py",
+        """
+        import pathlib
+        import time
+
+        marker = pathlib.Path(__file__).with_name("ticks")
+        for index in range(2000):
+            marker.write_text(f"tick {index}", encoding="utf-8")
+            time.sleep(0.02)
+        """,
+    )
+    parent_source = textwrap.dedent(
+        """
+        import os
+        import sys
+
+        child_argv = [sys.executable, CHILD]
+        os.spawnv(os.P_NOWAIT, child_argv[0], child_argv)
+        """,
+    ).replace("CHILD", repr(str(child)))
+    parent_path = tmp_path / "exit-parent.py"
+    parent_path.write_text(parent_source, encoding="utf-8")
+
+    process = SupervisedProcess(
+        [sys.executable, str(parent_path)],
+        cwd=str(tmp_path),
+        env=minimal_env(),
+        limits=SupervisedLimits(total_timeout=20.0, idle_timeout=10.0,
+                                residual_grace=2.0),
+    )
+    process.start()
+    outcome = process.wait()
+    assert outcome.status == "exited"
+
+    marker = tmp_path / "ticks"
+    assert marker.exists(), "test fixture: child never started"
+    # 父进程退出后，孤儿后代被清理：写入停止增长（无论 residual 上报形态）。
+    time.sleep(0.8)
+    first = marker.read_text(encoding="utf-8")
+    time.sleep(0.8)
+    second = marker.read_text(encoding="utf-8")
+    assert first == second, (
+        f"orphan descendant kept writing after parent exit "
+        f"({first!r} -> {second!r})"
+    )
+
+
+def test_reader_drain_captures_tail_after_process_exit(tmp_path):
+    """R12：慢消费者不吞尾帧——进程退出后 reader 有界排空再返回。"""
+    producer = _script(
+        tmp_path, "producer.py",
+        """
+        for index in range(100):
+            print(f"line-{index:03d}", flush=True)
+        """,
+    )
+    collected: list[str] = []
+
+    def slow_consumer(line: str) -> None:
+        collected.append(line.rstrip("\n"))
+        time.sleep(0.02)
+
+    process = SupervisedProcess(
+        [sys.executable, str(producer)],
+        cwd=str(tmp_path),
+        env=minimal_env(),
+        limits=SupervisedLimits(total_timeout=30.0, idle_timeout=10.0,
+                                drain_timeout=6.0),
+        on_stdout=slow_consumer,
+    )
+    process.start()
+    outcome = process.wait()
+    assert outcome.status == "exited"
+    assert outcome.truncated is False
+    assert outcome.detail is None
+    # 全部 100 行都被采集（回调 0.02s/行 ≈ 2s < drain 期限）。
+    assert outcome.stdout.count("line-") == 100
+    assert len(collected) == 100

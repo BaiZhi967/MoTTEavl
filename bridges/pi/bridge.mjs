@@ -213,24 +213,25 @@ async function handleRun(message) {
     emitError(id, "RUN_ACTIVE", "a run is already active on this session");
     return;
   }
+  // run 任务不阻塞控制消息链：interrupt 在执行期间即可被处理（M4 review
+  // R03——取消不能排队到任务完成之后）。串行化只约束消息处理本身。
   activeRun = (async () => {
-    const result = await session.run(message.text);
-    // interrupted 事件先于 finished：客户端以 finished 收口，中断标记不能迟到
-    if (session.interruptRequested) {
-      const ack = (seq += 1);
-      emitEvent(withIdentity({ type: "interrupted", seq: ack, id, status: "cancelled" }));
+    try {
+      const result = await session.run(message.text);
+      // interrupted 事件先于 finished：客户端以 finished 收口，中断标记不能迟到
+      if (session.interruptRequested) {
+        const ack = (seq += 1);
+        emitEvent(withIdentity({ type: "interrupted", seq: ack, id, status: "cancelled" }));
+      }
+      const next = (seq += 1);
+      emitEvent(withIdentity({ type: "finished", seq: next, id, status: result.status, result }));
+    } catch (error) {
+      originalStderrWrite(`[pi-bridge] run failed: ${error && error.stack ? error.stack : error}\n`);
+      emitError(id, "RUN_FAILED", "run raised an internal error");
+    } finally {
+      activeRun = null;
     }
-    const next = (seq += 1);
-    emitEvent(withIdentity({ type: "finished", seq: next, id, status: result.status, result }));
-    activeRun = null;
   })();
-  try {
-    await activeRun;
-  } catch (error) {
-    activeRun = null;
-    emitError(id, "RUN_FAILED", "run raised an internal error");
-    originalStderrWrite(`[pi-bridge] run failed: ${error && error.stack ? error.stack : error}\n`);
-  }
 }
 
 async function handleInterrupt(message) {
@@ -246,7 +247,7 @@ async function handleInterrupt(message) {
   }
   session.interruptRequested = true;
   session.abort();
-  await activeRun.catch(() => {});
+  // 不等待 run 收尾：interrupt 的确认是随后的 interrupted/finished 事件对。
 }
 
 async function handleMessage(message) {

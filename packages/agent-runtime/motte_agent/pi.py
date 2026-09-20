@@ -17,6 +17,7 @@ import os
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, BinaryIO
@@ -157,9 +158,11 @@ class PiBridgeSession:
         workspace: str | Path,
         model_config: dict[str, Any] | None = None,
         responses: list[Any] | None = None,
+        provider_config: dict[str, Any] | None = None,
         tools: list[str] | None = None,
         system_prompt: str = "",
         budgets: dict[str, Any] | None = None,
+        workspace_quotas: dict[str, Any] | None = None,
         bridge_path: str | Path | None = None,
         node_binary: str | None = None,
         idle_timeout: float = 60.0,
@@ -179,14 +182,17 @@ class PiBridgeSession:
         self.workspace = str(workspace)
         self.model_config = model_config or {}
         self.responses = responses or []
+        self.provider_config = provider_config
         self.tools = tools or ["read_file", "write_file", "list_files"]
         self.system_prompt = system_prompt
         self.budgets = budgets or {}
+        self.workspace_quotas = workspace_quotas or {}
         self.bridge_path = Path(bridge_path) if bridge_path else DEFAULT_BRIDGE
         self._node = node_binary or shutil.which("node")
         self.idle_timeout = idle_timeout
         self.total_timeout = total_timeout
         self.event_callback = event_callback
+        self.sdk_version: str | None = None
         self._process: subprocess.Popen[Any] | None = None
         self._lines: Queue[str | None] = Queue()
         self._overflow = Event()
@@ -214,15 +220,22 @@ class PiBridgeSession:
             self._send({"type": "probe"})
             version = self._expect(_VERSION_KEYS, terminal=False)
             self._validate_version(version)
+            self.sdk_version = version.get("sdk_version")
+            config: dict[str, Any] = {
+                "system_prompt": self.system_prompt,
+                "max_steps": self.budgets.get("max_steps"),
+                "tools": self.tools,
+                "tokens_per_second": self.budgets.get("tokens_per_second"),
+            }
+            if self.workspace_quotas:
+                config["workspace_quotas"] = self.workspace_quotas
+            if self.responses:
+                config["responses"] = self.responses
+            if self.provider_config is not None:
+                config["provider"] = self.provider_config
             self._send({"type": "init", **self.identity, "workspace": self.workspace,
                         "model": self.model_config, "budgets": self.budgets,
-                        "config": {
-                            "system_prompt": self.system_prompt,
-                            "max_steps": self.budgets.get("max_steps"),
-                            "tools": self.tools,
-                            "responses": self.responses,
-                            "tokens_per_second": self.budgets.get("tokens_per_second"),
-                        }})
+                        "config": config})
             ready = None
             while ready is None:
                 candidate = self._next_event()
@@ -258,8 +271,11 @@ class PiBridgeSession:
         tool_calls: list[dict[str, Any]] = []
         outputs: list[str] = []
         interrupted = False
+        # 总时限是单调时钟 deadline：持续产出事件也不能无限延长占用
+        # （M4 review R09）。超时先 interrupt 再失败，证据由调用方收尾。
+        deadline = time.monotonic() + self.total_timeout
         while True:
-            event = self._next_event()
+            event = self._next_event(deadline=deadline)
             events.append(event)
             kind = event.get("type")
             if kind == "tool_call":
@@ -377,10 +393,24 @@ class PiBridgeSession:
                 "pi bridge transport closed", code="PI_BRIDGE_EXITED",
             ) from error
 
-    def _next_raw_line(self) -> str:
+    def _next_raw_line(self, deadline: float | None = None) -> str:
+        wait = max(0.05, self.idle_timeout)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.interrupt()
+                raise PiBridgeError(
+                    "pi bridge total timeout exceeded", code="PI_BRIDGE_TIMEOUT",
+                )
+            wait = min(wait, remaining)
         try:
-            line = self._lines.get(timeout=max(0.05, self.idle_timeout))
+            line = self._lines.get(timeout=wait)
         except Empty as error:
+            if deadline is not None and time.monotonic() >= deadline:
+                self.interrupt()
+                raise PiBridgeError(
+                    "pi bridge total timeout exceeded", code="PI_BRIDGE_TIMEOUT",
+                ) from error
             raise PiBridgeError("pi bridge timed out", code="PI_BRIDGE_TIMEOUT") from error
         if line is None:
             raise PiBridgeError(
@@ -388,13 +418,13 @@ class PiBridgeSession:
             )
         return line
 
-    def _next_event(self) -> dict[str, Any]:
+    def _next_event(self, deadline: float | None = None) -> dict[str, Any]:
         if self._overflow.is_set():
             raise PiBridgeError(
                 self._reader_error or "pi bridge output exceeded the protocol limit",
                 code="PI_BRIDGE_OUTPUT_LIMIT",
             )
-        line = self._next_raw_line().rstrip("\r\n")
+        line = self._next_raw_line(deadline).rstrip("\r\n")
         if not line.strip():
             raise PiBridgeError("pi bridge emitted a blank protocol line", code="PI_PROTOCOL_INVALID")
         try:
@@ -503,7 +533,9 @@ class PiBridgeSession:
             "steps": result.get("steps", 0),
             "tool_calls": result.get("tool_calls", 0),
             "usage": result.get("usage") or {"reported": False, "source": "scripted-model"},
+            "transport": result.get("transport"),
             "budget_stop": bool(result.get("budget_stop")),
+            "budget_stop_reason": result.get("budget_stop_reason"),
             "failure": result.get("failure"),
             "interrupted": interrupted,
             "tool_calls_detail": tool_calls,

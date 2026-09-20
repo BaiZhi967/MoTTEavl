@@ -1,8 +1,12 @@
 """M4-T07：Codex batch（exec JSONL parser + 受控进程 + 平台链路）。
 
-主断言 test_codex_partial_json_turn_failure_and_unknown_cost：partial
-JSONL / turn.failed / exit=0 缺 terminal 不假成功；未回报模型/费用保持
-unknown。fixture：codex-exec-events-v1.jsonl 与 fake binary。
+parser 按 pinned 0.155.1 的官方顶层 ``type`` 事件形态解析（M4 review R02：
+thread.started / turn.started / item.* / turn.completed；正常任务以
+turn.completed 终结）。fixture codex-exec-events-v1.jsonl 是按官方文档
+形态重建的合成流（provenance: synthetic-from-docs）。
+
+主断言：partial JSONL / turn.failed / exit=0 缺 terminal 不假成功；未回报
+模型/费用保持 unknown；工具轨迹完整度如实报告（R13）。
 """
 from __future__ import annotations
 
@@ -36,7 +40,26 @@ class TestParser:
         assert parsed["usage"]["reported"] is True
         assert parsed["usage"]["input_tokens"] == 512
         assert parsed["usage"]["output_tokens"] == 64
+        assert parsed["usage"]["cache_read_input_tokens"] == 128
         assert parsed["coverage"] == "complete"
+        assert parsed["tool_trajectory"] == "complete"
+        assert parsed["parser_version"] == "codex-jsonl-v2"
+
+    def test_official_shape_without_msg_envelope(self):
+        # 官方事件没有 msg 包装：顶层 type 直达（R02 回归锚）。
+        stream = "\n".join([
+            json.dumps({"type": "thread.started", "thread_id": "th_1"}),
+            json.dumps({"type": "turn.started"}),
+            json.dumps({"type": "item.completed", "item": {
+                "id": "i1", "type": "agent_message", "text": "hi"}}),
+            json.dumps({"type": "turn.completed", "usage": {
+                "input_tokens": 1, "output_tokens": 2}}),
+        ])
+        parsed = parse_codex_exec_events(stream)
+        assert parsed["status"] == "final"
+        assert parsed["final_output"] == "hi"
+        assert parsed["usage"]["reported"] is True
+        assert parsed["malformed_lines"] == 0
 
     def test_partial_json_retained_with_lowered_coverage(self):
         lines = _fixture_lines()
@@ -44,25 +67,35 @@ class TestParser:
         parsed = parse_codex_exec_events(stream)
         assert parsed["malformed_lines"] == 1
         assert parsed["coverage"] == "partial"
+        assert parsed["tool_trajectory"] == "partial"
         # 其余事件仍然解析
         assert parsed["status"] == "final"
 
-    def test_turn_failure_without_terminal_is_error(self):
+    def test_turn_failure_without_success_is_error(self):
         lines = [
             line for line in _fixture_lines()
-            if '"thread.completed"' not in line and '"turn.completed"' not in line
+            if '"turn.completed"' not in line
         ]
         lines.append(json.dumps({
-            "id": "resp_x", "msg": {"type": "turn.failed", "error": "tool crashed"},
+            "type": "turn.failed", "error": {"message": "tool crashed"},
         }))
         parsed = parse_codex_exec_events("\n".join(lines))
         assert parsed["status"] == "error"
         assert "tool crashed" in parsed["turn_failures"][0]
 
+    def test_turn_aborted_is_cancelled(self):
+        lines = [
+            line for line in _fixture_lines()
+            if '"turn.completed"' not in line
+        ]
+        lines.append(json.dumps({"type": "turn.aborted"}))
+        parsed = parse_codex_exec_events("\n".join(lines))
+        assert parsed["status"] == "cancelled"
+
     def test_exit_zero_without_terminal_is_insufficient(self):
         lines = [
             line for line in _fixture_lines()
-            if '"thread.completed"' not in line and '"turn.completed"' not in line
+            if '"turn.completed"' not in line
         ]
         parsed = parse_codex_exec_events("\n".join(lines))
         assert parsed["status"] == "insufficient"
@@ -70,7 +103,7 @@ class TestParser:
 
     def test_missing_usage_stays_unknown_never_zero(self):
         lines = [line for line in _fixture_lines() if '"turn.completed"' not in line]
-        lines.append(json.dumps({"id": "x", "msg": {"type": "thread.completed"}}))
+        lines.append(json.dumps({"type": "turn.completed"}))
         parsed = parse_codex_exec_events("\n".join(lines))
         assert parsed["status"] == "final"
         assert parsed["usage"]["reported"] is False
@@ -81,7 +114,7 @@ class TestParser:
 
     def test_unknown_message_types_are_retained_not_fatal(self):
         stream = "\n".join(_fixture_lines()) + "\n" + json.dumps({
-            "id": "x", "msg": {"type": "future.event", "data": 1},
+            "type": "future.event", "data": 1,
         })
         parsed = parse_codex_exec_events(stream)
         assert parsed["status"] == "final"
@@ -94,7 +127,7 @@ def _fake_codex(tmp_path: Path, *, mode: str = "success") -> Path:
     if mode == "no-terminal":
         lines = [
             line for line in lines
-            if '"thread.completed"' not in line and '"turn.completed"' not in line
+            if '"turn.completed"' not in line
         ]
     events_file = tmp_path / f"fake-codex-{mode}-events.jsonl"
     events_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -133,6 +166,8 @@ class TestHarnessBatch:
         assert result["parsed"]["status"] == "final"
         assert result["parsed"]["commands"][0]["exit_code"] == 0
         assert (tmp_path / "answer.txt").read_text(encoding="utf-8") == "codex-was-here"
+        # R14：原始 stdout/stderr 随结果返回，供上层冻结。
+        assert result["stdout"].startswith("{\"timestamp\"")
 
     def test_batch_missing_terminal_is_insufficient(self, tmp_path):
         fake = _fake_codex(tmp_path, mode="no-terminal")
@@ -141,7 +176,7 @@ class TestHarnessBatch:
             "quiet task", cwd=str(tmp_path), argv=argv,
             limits=SupervisedLimits(total_timeout=30, idle_timeout=10),
         )
-        # exit=0 但缺 thread/turn 终态：不假成功（A07）
+        # exit=0 但缺 turn 终态：不假成功（A07）
         assert result["process"]["exit_code"] == 0
         assert result["parsed"]["status"] == "insufficient"
 

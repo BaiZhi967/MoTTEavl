@@ -3,6 +3,8 @@
 单对象结果按 pinned 2.1.278 的文档形态解析；未知 schema/缺终态不变成
 假成功：success→final；error_*→error；结构不符→insufficient（coverage
 partial）。usage/cost 只取原生回报值，缺失保持 unknown（M4-A10）。
+单对象结果**不包含工具轨迹**：tool_trajectory 如实标记 absent，
+消费方不得据此证明"未调用工具"（M4 review R13）。
 """
 from __future__ import annotations
 
@@ -49,6 +51,7 @@ def parse_claude_batch(stdout: str, *, raw_ref: str | None = None) -> dict[str, 
             "model": _observed_model(payload),
             "num_turns": payload.get("num_turns"),
             "coverage": "partial" if unknown_fields else "complete",
+            "tool_trajectory": "absent",
             "unknown_fields": unknown_fields,
         }
     if subtype not in _SUCCESS_SUBTYPES:
@@ -66,6 +69,7 @@ def parse_claude_batch(stdout: str, *, raw_ref: str | None = None) -> dict[str, 
         "model": _observed_model(payload),
         "num_turns": payload.get("num_turns"),
         "coverage": "partial" if unknown_fields else "complete",
+        "tool_trajectory": "absent",
         "unknown_fields": unknown_fields,
     }
 
@@ -123,6 +127,7 @@ def _insufficient(
         "model": None,
         "num_turns": None,
         "coverage": "partial",
+        "tool_trajectory": "absent",
         "unknown_fields": unknown or [],
         "raw_ref": raw_ref,
     }

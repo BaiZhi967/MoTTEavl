@@ -181,14 +181,16 @@ def test_non_interactive_run_messages_rejected_at_api():
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "COMMAND_UNSUPPORTED"
 
+    # R17（M4 review）：app-server 的持久命令消费者尚未接进 Worker——
+    # 即使 manifest 声称 interactive，注册能力不开放 → 501 显式不可用，
+    # 不接收 202 让命令永久 queued。库级投递语义由上面的纯函数测试覆盖。
     run_id2 = _run(service, interactive=True)
     response = client.post(
         f"/api/v1/runs/{run_id2}/messages",
         json={"content": "hi", "kind": "user_message", "session_id": "s1",
                "dedupe_key": "api-1"},
     )
-    assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "queued"
+    assert response.status_code == 501
+    assert response.json()["error"]["code"] == "RUN_COMMANDS_NOT_IMPLEMENTED"
     listed = client.get(f"/api/v1/runs/{run_id2}/commands").json()
-    assert any(item["id"] == body["command_id"] for item in listed["items"])
+    assert listed["items"] == []
