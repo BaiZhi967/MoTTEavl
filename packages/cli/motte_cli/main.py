@@ -564,6 +564,70 @@ def _build_parser() -> argparse.ArgumentParser:
     runtime_sub.add_parser("publish", help="发布规范 runtime 版本到资源仓库（幂等）")
     runtime.add_argument("--json", action="store_true")
 
+    scenario = sub.add_parser(
+        "scenario", help="逐步骤 Scenario：Workflow 文档预检 / 目标能力 / 创建运行",
+    )
+    scenario_sub = scenario.add_subparsers(dest="scenario_command", required=True)
+    scenario_validate = scenario_sub.add_parser(
+        "validate",
+        help="纯预检 WorkflowVersion（不发布、不执行、零模型调用；JSON 文件或 name@version）",
+    )
+    scenario_validate.add_argument(
+        "document", help="WorkflowVersion JSON 文件，或已发布引用 name@version",
+    )
+    scenario_validate.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    scenario_targets = scenario_sub.add_parser(
+        "targets", help="列出可用 scenario target 及其真实能力（零模型调用）",
+    )
+    scenario_targets.add_argument("--json", action="store_true")
+    scenario_run = scenario_sub.add_parser(
+        "run", help="创建逐步骤 Scenario queued Run（与 run/API 同一条创建路径）",
+    )
+    scenario_run.add_argument(
+        "--spec", help="run 定义 JSON 或 @文件：{scenario_version, manifest, case_ids}",
+    )
+    scenario_run.add_argument("--scenario", help="已发布 ScenarioVersion 引用，如 order-cancel@1")
+    scenario_run.add_argument(
+        "--workflow", help="已发布 Workflow 引用，如 order-cancel-confirmed@1",
+    )
+    scenario_run.add_argument(
+        "--target-runtime", dest="target_runtime",
+        help="目标 runtime 引用（写进 manifest.runtime，如 codex-cli@1）",
+    )
+    scenario_run.add_argument(
+        "--target-agent", dest="target_agent",
+        help="目标内置 Agent 引用（写进 manifest.agent，如 builtin-agent@1）",
+    )
+    scenario_run.add_argument(
+        "--case-ids", dest="case_ids", help="只跑指定 case：逗号分隔 case id",
+    )
+    scenario_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
+    workflow = sub.add_parser(
+        "workflow", help="Workflow 版本资源：发布 / 列表 / 旧 DSL 只读转换报告",
+    )
+    workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
+    wf_publish = workflow_sub.add_parser(
+        "publish", help="发布不可变 WorkflowVersion（与 API 同一校验；同内容幂等）",
+    )
+    wf_publish.add_argument("file", help="WorkflowVersion JSON 文件")
+    wf_publish.add_argument("--json", action="store_true")
+    wf_publish.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    wf_list = workflow_sub.add_parser("list", help="列出已发布 Workflow 版本（只读）")
+    wf_list.add_argument("--json", action="store_true")
+    wf_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    wf_convert = workflow_sub.add_parser(
+        "convert-legacy", help="旧 DSL 只读转换报告（诊断 + 映射；不发布、不执行）",
+    )
+    wf_convert.add_argument("file", help="旧 DSL 场景 JSON 文件")
+    wf_convert.add_argument(
+        "--workflow-id", dest="workflow_id", help="目标 workflow_id（缺省取旧文档 id）",
+    )
+    wf_convert.add_argument("--version", help="目标版本（缺省取旧文档 version）")
+    wf_convert.add_argument(
+        "--published-at", dest="published_at",
+        help="发布时刻（只用于生成候选引用；缺省取当前 UTC）",
+    )
     run = sub.add_parser("run", help="创建 queued Run（由 Worker 异步执行）")
     run.add_argument("--spec", required=True, help="run 定义 JSON 或 @文件：{scenario_version, manifest, case_ids}")
     run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
@@ -874,9 +938,9 @@ def _service(args):
     return RunService(SQLiteRunStore(args.db)) if args.db else build_run_service()
 
 
-def _error(code: str, message: str) -> int:
-    print(json.dumps({"error": {"code": code, "message": message}}, ensure_ascii=False),
-          file=sys.stderr)
+def _error(code: str, message: str, **extra) -> int:
+    payload = {"code": code, "message": message, **extra}
+    print(json.dumps({"error": payload}, ensure_ascii=False), file=sys.stderr)
     return 2
 
 
@@ -1403,6 +1467,180 @@ def _resources(args):
     return SQLiteResourceStore(args.db) if args.db else create_resource_store()
 
 
+def _workflow_command(args) -> int:
+    """workflow publish/list/convert-legacy：与 API 同一契约、同一编译器。
+
+    预检与转换都不执行步骤、不创建 Run、不调用模型；发布只写不可变版本资源。
+    """
+    from motte_cli import workflows as wf
+    from motte_storage.resource_store import ResourceConflictError
+
+    command = args.workflow_command
+    if command == "list":
+        items = _resources(args).workflows.list()
+        if getattr(args, "json", False):
+            print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+            return 0
+        if not items:
+            print("（没有已发布的 Workflow 版本）")
+        for item in items:
+            print(
+                f"  {item.get('workflow_id')}@{item.get('version')}  "
+                f"hash={item.get('content_hash')}"
+            )
+        return 0
+
+    if command == "publish":
+        try:
+            document = wf.load_document(args.file)
+            stored = wf.publish_workflow(_resources(args), document)
+        except wf.WorkflowDocumentError as error:
+            return _error(error.code, str(error), **({"fields": error.fields} if error.fields else {}))
+        except ResourceConflictError as error:
+            return _error("RESOURCE_CONFLICT", str(error))
+        except ValueError as error:
+            return _error("CONTRACT_INVALID", str(error))
+        if getattr(args, "json", False):
+            print(json.dumps(stored, ensure_ascii=False))
+        else:
+            print(
+                f"published {stored.get('workflow_id')}@{stored.get('version')} "
+                f"content_hash={stored.get('content_hash')}"
+            )
+        return 0
+
+    if command == "convert-legacy":
+        try:
+            legacy = wf.load_document(args.file)
+            report = wf.conversion_report(
+                legacy, workflow_id=args.workflow_id, version=args.version,
+                published_at=args.published_at,
+            )
+        except wf.WorkflowDocumentError as error:
+            return _error(error.code, str(error), **({"fields": error.fields} if error.fields else {}))
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report["publishable"] else 1
+
+    return _error("CONTRACT_INVALID", f"unknown workflow subcommand: {command}")
+
+
+def _scenario_run(args) -> int:
+    """创建逐步骤 Scenario Run：与 CLI run / API POST /runs 共用 prepare_run+create_run。"""
+    from motte_sdk.resolve import ManifestResolutionError, prepare_run
+
+    if args.spec:
+        if args.scenario or args.workflow or args.target_runtime or args.target_agent:
+            return _error(
+                "CONTRACT_INVALID",
+                "--spec 与 --scenario/--workflow/--target-runtime/--target-agent 不能同时使用",
+            )
+        try:
+            spec = _load_json(args.spec)
+        except (OSError, json.JSONDecodeError) as error:
+            return _error("RUN_SPEC_INVALID", f"--spec 不是可解析的 JSON：{error}")
+        if not isinstance(spec, dict):
+            return _error(
+                "RUN_SPEC_INVALID",
+                "--spec 必须是 JSON 对象：{scenario_version, manifest, case_ids}",
+            )
+    else:
+        if not args.scenario or not args.workflow:
+            return _error("CONTRACT_INVALID", "需要 --spec，或同时提供 --scenario 与 --workflow")
+        if args.target_runtime and args.target_agent:
+            return _error("CONTRACT_INVALID", "--target-runtime 与 --target-agent 只能选一个")
+        manifest: dict = {"workflow": args.workflow}
+        if args.target_runtime:
+            manifest["runtime"] = args.target_runtime
+        if args.target_agent:
+            manifest["agent"] = args.target_agent
+        case_ids = [
+            item.strip()
+            for item in (args.case_ids or "").replace("，", ",").split(",")
+            if item.strip()
+        ]
+        spec = {"scenario_version": args.scenario, "manifest": manifest, "case_ids": case_ids}
+
+    scenario_version = spec.get("scenario_version") or ""
+    manifest = spec.get("manifest") or {}
+    case_ids = spec.get("case_ids") or []
+    if not isinstance(scenario_version, str) or not scenario_version:
+        return _error("SCENARIO_REQUIRED", "scenario_version is required")
+    if not isinstance(manifest, dict):
+        return _error("RUN_CONFIG_INVALID", "manifest must be an object")
+    try:
+        prepared, resolved_case_ids = prepare_run(
+            scenario_version, manifest, case_ids, _resources(args)
+        )
+    except ManifestResolutionError as error:
+        return _error(error.code, str(error))
+    except ValueError as error:
+        return _error("CONTRACT_INVALID", str(error))
+    try:
+        run = _service(args).create_run(
+            scenario_version, prepared, resolved_case_ids, requested_manifest=manifest
+        )
+    except ValueError as error:
+        return _error("RUN_CREATE_FAILED", str(error))
+    print(json.dumps({
+        "id": run["id"],
+        "status": run["status"],
+        "scenario": scenario_version,
+        "workflow": prepared.get("workflow"),
+        "execution": prepared.get("execution") or {},
+        "cases": len(resolved_case_ids),
+        "提示": "由 Worker 执行：uv run python -m apps.worker.motte_worker --once",
+    }, ensure_ascii=False))
+    return 0
+
+
+def _scenario_command(args) -> int:
+    """scenario validate/targets/run：预检纯只读，运行走同一条创建路径。"""
+    from motte_cli import workflows as wf
+
+    command = args.scenario_command
+    if command == "targets":
+        items = wf.scenario_targets()
+        if args.json:
+            print(json.dumps(
+                {"items": items, "total": len(items), "available": bool(items)},
+                ensure_ascii=False,
+            ))
+            return 0
+        if not items:
+            print("（没有注册的 scenario target adapter；逐步骤 Scenario Run 会在创建期被拒绝）")
+        for item in items:
+            flags = "/".join(
+                "Y" if item.get(flag) else "N"
+                for flag in ("multi_turn", "interrupt", "skill_injection")
+            )
+            print(
+                f"  {item.get('kind')} available={item.get('available')} "
+                f"multi_turn/interrupt/skill={flags} "
+                f"tool_modes={','.join(item.get('tool_modes') or [])}"
+            )
+        return 0
+
+    if command == "validate":
+        try:
+            resources = _resources(args)
+            if "@" in args.document and not Path(args.document).exists():
+                document = wf.published_document(resources, args.document)
+            else:
+                document = wf.load_document(args.document)
+            report = wf.preflight_report(document, resources=resources)
+        except wf.WorkflowDocumentError as error:
+            # 预检失败是**结果**不是崩溃：稳定 JSON + 非 0 退出码（与 API 同一 code）。
+            print(json.dumps({"ok": False, "error": error.to_dict()}, ensure_ascii=False))
+            return 1
+        print(json.dumps(report, ensure_ascii=False))
+        return 0
+
+    if command == "run":
+        return _scenario_run(args)
+
+    return _error("CONTRACT_INVALID", f"unknown scenario subcommand: {command}")
+
+
 def main(argv=None):
     args = _build_parser().parse_args(argv)
 
@@ -1424,6 +1662,12 @@ def main(argv=None):
 
     if args.command == "runtime":
         return _cmd_runtime(args)
+
+    if args.command == "scenario":
+        return _scenario_command(args)
+
+    if args.command == "workflow":
+        return _workflow_command(args)
 
     if args.command == "inspect-import":
         from pathlib import Path as _Path

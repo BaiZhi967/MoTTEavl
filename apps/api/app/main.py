@@ -43,7 +43,11 @@ from apps.api.app.schemas import (
     RunCommandListResponse,
     RunListResponse,
     RunMessageRequest,
+    ScenarioTargetListResponse,
     ScoringPassListResponse,
+    SkillValidationResponse,
+    WorkflowConversionResponse,
+    WorkflowValidationResponse,
 )
 
 SSE_POLL_INTERVAL_SECONDS = 1.0
@@ -148,6 +152,72 @@ def _resource_hash(record: dict[str, Any]) -> str:
     payload = {key: value for key, value in record.items() if key not in ignored}
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _contract_field_errors(error) -> list[dict[str, str]]:
+    """逐字段契约错误：只暴露 field/code/message，不回显输入值、路径或堆栈。"""
+    fields: list[dict[str, str]] = []
+    for issue in error.errors():
+        location = ".".join(str(part) for part in issue.get("loc", ())) or "$"
+        fields.append(
+            {
+                "field": location,
+                "code": str(issue.get("type") or "invalid"),
+                "message": str(issue.get("msg") or "invalid value"),
+            }
+        )
+    return fields
+
+
+def _error_json(status_code: int, code: str, message: str, **extra: Any) -> JSONResponse:
+    payload = {"error": {"code": code, "message": message, **extra}}
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+def _workflow_publication_record(
+    body: Any, *, published_at: str,
+) -> tuple[dict[str, Any] | None, list[str], JSONResponse | None]:
+    """把请求体规范化为可发布的 WorkflowVersion 记录（**纯函数**：不写库、不执行）。
+
+    草稿在契约层被拒绝；内容 hash 由服务端固定，客户端提交不一致的 hash 即
+    拒绝。published_at 缺失时补发布时刻（记录在 defaulted_fields，供预检如实
+    报告），因此同一内容的重复发布保持幂等（见 publish_workflow 路由）。
+    """
+    if not isinstance(body, dict):
+        return None, [], _error_json(422, "CONTRACT_INVALID", "workflow body must be an object")
+    managed = sorted(set(body).intersection({"_deleted"}))
+    if managed:
+        return None, [], _error_json(
+            422, "SERVER_MANAGED_FIELD", f"server-managed fields are not accepted: {managed}"
+        )
+    rejected = _reject_secret_fields(body)
+    if rejected is not None:
+        return None, [], rejected
+    from motte_contracts.workflow import WorkflowVersion, workflow_content_hash
+    from pydantic import ValidationError
+
+    defaulted: list[str] = []
+    candidate = deepcopy(body)
+    if not candidate.get("published_at"):
+        candidate["published_at"] = published_at
+        defaulted.append("published_at")
+    try:
+        workflow = WorkflowVersion.model_validate(candidate)
+    except ValidationError as error:
+        return None, defaulted, _error_json(
+            422,
+            "WORKFLOW_INVALID",
+            f"workflow document is not a publishable version: {error.error_count()} field error(s)",
+            fields=_contract_field_errors(error),
+        )
+    computed = workflow_content_hash(workflow)
+    if workflow.content_hash is not None and workflow.content_hash != computed:
+        return None, defaulted, _error_json(
+            422,
+            "WORKFLOW_CONTENT_HASH_MISMATCH",
+            "workflow content_hash does not match its content; omit it to let the server pin it",
+        )
+    return {**workflow.model_dump(mode="json"), "content_hash": computed}, defaulted, None
 
 
 def _dataset_summary(record: dict[str, Any]) -> dict[str, Any]:
@@ -1470,6 +1540,269 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         registry[record["name"]] = record
         return record
 
+    # ------------------------------------------------------ M5 workflow 资源
+
+    @application.get("/api/v1/workflows")
+    def list_workflows():
+        """已发布 Workflow 版本目录：只读仓库，零模型调用、零执行（M5-G21/A18）。"""
+        items = resources.workflows.list()
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/workflows", status_code=201)
+    def publish_workflow(body: dict):
+        """发布不可变 Workflow 版本：同内容幂等，同版本异内容 409。
+
+        校验与预检共用 _workflow_publication_record：草稿在契约层被拒绝，
+        内容 hash 由服务端固定，客户端提交不一致的 hash 立即拒绝。
+        """
+        record, _defaulted, invalid = _workflow_publication_record(
+            body, published_at=datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        )
+        if invalid is not None:
+            return invalid
+        repository = resources.workflows
+        try:
+            return resources.publish_workflow(record)
+        except ResourceConflictError:
+            # 只有服务端补的发布时刻不同（重试）：同内容仍幂等返回原记录，
+            # 内容真的变了才让 409 冒到统一异常处理器。
+            existing = repository.get(record["workflow_id"], record["version"])
+            comparison = dict(record)
+            if "published_at" not in body and existing is not None:
+                comparison["published_at"] = existing.get("published_at")
+            if existing != comparison:
+                raise
+            return existing
+        except ValueError as error:
+            return _error_json(422, "WORKFLOW_INVALID", str(error))
+
+    @application.get("/api/v1/workflows/{workflow_id}/{version}")
+    def get_workflow(workflow_id: str, version: str):
+        record = resources.workflows.get(workflow_id, version)
+        if record is None:
+            raise HTTPException(status_code=404, detail="workflow not found")
+        return record
+
+    @application.delete("/api/v1/workflows/{workflow_id}/{version}")
+    def delete_workflow(workflow_id: str, version: str):
+        if resources.workflows.get(workflow_id, version) is None:
+            raise HTTPException(status_code=404, detail="workflow not found")
+        return _error_json(
+            409,
+            "PUBLISHED_RESOURCE_IMMUTABLE",
+            f"published resource cannot be deleted: {workflow_id}@{version}",
+        )
+
+    @application.post(
+        "/api/v1/workflows/validate", response_model=WorkflowValidationResponse
+    )
+    def validate_workflow_document(body: dict):
+        """纯预检：编译 Workflow 文档并返回逐字段错误；不发布、不执行、零模型调用。"""
+        from motte_contracts.workflow import WorkflowVersion
+        from motte_scenario.compiler import WorkflowResolutionError, compile_workflow
+
+        record, defaulted, invalid = _workflow_publication_record(
+            body, published_at=datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        )
+        if invalid is not None:
+            return invalid
+        try:
+            compiled = compile_workflow(
+                WorkflowVersion.model_validate(record), resources=resources
+            )
+        except WorkflowResolutionError as error:
+            return _error_json(422, error.code, str(error))
+        return {
+            "ok": True,
+            "publishable": True,
+            "executed": False,
+            "workflow_id": compiled.workflow_id,
+            "version": compiled.version,
+            "ref": compiled.ref,
+            "schema_version": compiled.schema_version,
+            "content_hash": compiled.content_hash,
+            "step_count": len(compiled.steps),
+            "top_level_step_ids": [step.step_id for step in compiled.top_level_steps],
+            "condition_count": len(compiled.conditions),
+            "target_requirements": compiled.target_requirements.model_dump(mode="json"),
+            "limits": compiled.limits.model_dump(mode="json"),
+            "fixture_refs": [ref.model_dump(mode="json") for ref in compiled.fixture_refs],
+            "defaulted_fields": defaulted,
+        }
+
+    @application.post(
+        "/api/v1/workflows/legacy-conversion",
+        response_model=WorkflowConversionResponse,
+    )
+    def convert_legacy_workflow(body: dict):
+        """旧 DSL 只读转换报告：诊断 + 映射 + publishable + runs_executed。
+
+        只解析、不发布、不执行任何步骤（M5-T01；runs_executed 恒为 0）。
+        """
+        from motte_scenario.conversion import (
+            ConversionIncompleteError,
+            convert_legacy_scenario,
+        )
+
+        if not isinstance(body, dict) or not isinstance(body.get("legacy"), dict):
+            return _error_json(
+                422, "LEGACY_DOCUMENT_REQUIRED", "a legacy document object is required"
+            )
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        source = body.get("source") if isinstance(body.get("source"), dict) else None
+        workflow_id = body.get("workflow_id") if isinstance(body.get("workflow_id"), str) else None
+        version = body.get("version") if isinstance(body.get("version"), str) else None
+        result = convert_legacy_scenario(
+            body["legacy"], source=source, workflow_id=workflow_id, version=version
+        )
+        diagnostics = result.diagnostic_dicts()
+        publishable = result.publishable
+        candidate: dict[str, Any] | None = None
+        if publishable:
+            stamp = body.get("published_at")
+            if not isinstance(stamp, str) or not stamp:
+                stamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            # 严格契约只有在无阻断诊断时才能构建；构建失败也是诊断，不假装可发布。
+            try:
+                workflow = result.to_publishable_workflow(published_at=stamp)
+            except ConversionIncompleteError as error:
+                publishable = False
+                known = {json.dumps(item, sort_keys=True) for item in diagnostics}
+                for item in error.diagnostics:
+                    marker = json.dumps(item, sort_keys=True)
+                    if marker not in known:
+                        diagnostics.append(item)
+            else:
+                from motte_contracts.workflow import workflow_content_hash
+
+                candidate = {
+                    "ref": f"{workflow.workflow_id}@{workflow.version}",
+                    "content_hash": workflow_content_hash(workflow),
+                }
+        return {
+            "publishable": publishable,
+            "published": False,
+            "executed": False,
+            "runs_executed": result.runs_executed,
+            "blocking_codes": list(result.blocking_codes),
+            "diagnostics": diagnostics,
+            "mapping": [dict(item) for item in result.mapping],
+            "workflow_draft": result.workflow,
+            "fixture_draft": result.fixture_draft,
+            "source": dict(result.source or {}),
+            "candidate": candidate,
+        }
+
+    @application.get(
+        "/api/v1/scenario-targets", response_model=ScenarioTargetListResponse
+    )
+    def list_scenario_targets():
+        """可用 scenario target 及其**真实**能力；注册表为空即明确不可用，不猜测。"""
+        from motte_scenario.targets import describe_targets
+
+        items = describe_targets()
+        return {"items": items, "total": len(items), "available": bool(items)}
+
+    # -------------------------------------------------------- M5 skill 版本资源
+
+    # /api/v1/skills 的集合路径被 v0 内存注册表占用（见上面的 skills 路由），
+    # 因此已发布 SkillVersion 走**同一组**的 versions 子资源，不新开第二套顶层
+    # 名字。发布（POST）暂不暴露：motte_skill 要求发布期重新核验内容寻址的
+    # 资源字节，而 API 进程尚未接内容存储；缺字节时具名拒绝而不是近似成功。
+
+    @application.get("/api/v1/skills/versions")
+    def list_skill_versions():
+        """已发布 Skill 版本目录：只读仓库，零模型调用、零执行。"""
+        items = resources.skills.list()
+        return {"items": items, "total": len(items)}
+
+    @application.get("/api/v1/skills/{skill_id}/versions/{version}")
+    def get_skill_version(skill_id: str, version: str):
+        record = resources.skills.get(skill_id, version)
+        if record is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+        return record
+
+    @application.post("/api/v1/skills/validate", response_model=SkillValidationResponse)
+    def validate_skill_document(body: dict):
+        """纯静态校验：契约、kind 分型、entrypoint 形状与依赖 pin；不发布、不执行。
+
+        只声明 static 作用域：内容寻址的资源字节核验属于 executable fixture
+        作用域（需要内容存储），本响应明确 resource_bytes_verified=False，
+        不把读 manifest 谎称为已执行（M5-A10）。
+        """
+        if not isinstance(body, dict):
+            return _error_json(422, "CONTRACT_INVALID", "skill body must be an object")
+        managed = sorted(set(body).intersection({"_deleted"}))
+        if managed:
+            return _error_json(
+                422,
+                "SERVER_MANAGED_FIELD",
+                f"server-managed fields are not accepted: {managed}",
+            )
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        from motte_skill.versions import (
+            SkillContentHashMismatch,
+            SkillDraft,
+            SkillVersion,
+            skill_content_hash,
+            verify_dependency_refs,
+        )
+        from pydantic import ValidationError
+
+        candidate = deepcopy(body)
+        defaulted: list[str] = []
+        lifecycle = candidate.get("lifecycle", "published")
+        if lifecycle == "draft":
+            model = SkillDraft
+        else:
+            if not candidate.get("published_at"):
+                candidate["published_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                defaulted.append("published_at")
+            model = SkillVersion
+        try:
+            skill = model.model_validate(candidate)
+        except ValidationError as error:
+            return _error_json(
+                422,
+                "SKILL_INVALID",
+                f"skill document is not a valid version: {error.error_count()} field error(s)",
+                fields=_contract_field_errors(error),
+            )
+        try:
+            verify_dependency_refs(skill.dependency_refs)
+            content_hash = skill_content_hash(skill)
+            if skill.content_hash is not None and skill.content_hash != content_hash:
+                raise SkillContentHashMismatch(
+                    "skill content_hash does not match its content"
+                )
+        except (SkillContentHashMismatch, ValueError) as error:
+            return _error_json(422, "SKILL_INVALID", str(error))
+        return {
+            "ok": True,
+            "executed": False,
+            "validation_scope": "static",
+            "resource_bytes_verified": False,
+            "skill_id": skill.skill_id,
+            "version": skill.version,
+            "ref": skill.ref,
+            "kind": skill.kind,
+            "lifecycle": skill.lifecycle,
+            "schema_version": skill.schema_version,
+            "content_hash": content_hash,
+            "executable": skill.kind == "executable",
+            "dependency_refs": [
+                ref.model_dump(mode="json") for ref in skill.dependency_refs
+            ],
+            "resource_paths": list(skill.resource_paths),
+            "fixture_refs": [ref.model_dump(mode="json") for ref in skill.fixture_refs],
+            "requested_permissions": skill.requested_permissions.model_dump(mode="json"),
+            "defaulted_fields": defaulted,
+        }
     # ------------------------------------------------- GSM8K 基准（测试集管理 + 跑测）
 
     @application.get("/api/v1/benchmarks/gsm8k")

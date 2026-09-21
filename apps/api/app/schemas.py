@@ -305,6 +305,100 @@ class DirectLlmDryRunResponse(APIModel):
     estimated: Literal[True] = True
 
 
+class WorkflowValidationResponse(APIModel):
+    """Workflow 纯预检结果：结构、条件、预算与目标要求都可编译时才 ok。
+
+    executed 恒为 False：预检不发布版本、不创建 Run、不调用模型。
+    """
+
+    ok: bool
+    publishable: bool
+    executed: bool
+    workflow_id: str
+    version: str
+    ref: str
+    schema_version: int = Field(ge=1)
+    content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    step_count: int = Field(ge=1)
+    top_level_step_ids: list[str] = Field(default_factory=list)
+    condition_count: int = Field(ge=0)
+    target_requirements: dict[str, Any]
+    limits: dict[str, Any]
+    fixture_refs: list[dict[str, Any]] = Field(default_factory=list)
+    defaulted_fields: list[str] = Field(default_factory=list)
+
+
+class WorkflowDiagnostic(APIModel):
+    """一条转换诊断：稳定 code + 严重度 + 旧 DSL 路径 + 可读原因。"""
+
+    code: str
+    severity: str
+    path: str
+    message: str
+
+
+class WorkflowConversionResponse(APIModel):
+    """旧 DSL 只读转换报告：不发布、不执行（runs_executed 恒为 0）。"""
+
+    publishable: bool
+    published: bool
+    executed: bool
+    runs_executed: int = Field(ge=0)
+    blocking_codes: list[str] = Field(default_factory=list)
+    diagnostics: list[WorkflowDiagnostic] = Field(default_factory=list)
+    mapping: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_draft: dict[str, Any]
+    fixture_draft: dict[str, Any]
+    source: dict[str, Any] = Field(default_factory=dict)
+    candidate: dict[str, Any] | None = None
+
+
+class ScenarioTargetSummary(APIModel):
+    """一个注册目标的能力声明；available=False 表示只有声明、不可执行。"""
+
+    kind: str
+    available: bool
+    multi_turn: bool | None = None
+    tool_modes: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    interrupt: bool | None = None
+    skill_injection: bool | None = None
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ScenarioTargetListResponse(APIModel):
+    items: list[ScenarioTargetSummary] = Field(default_factory=list)
+    total: int = Field(ge=0)
+    available: bool
+
+
+class SkillValidationResponse(APIModel):
+    """Skill 纯静态校验结果。
+
+    validation_scope 只有 static：不运行入口、不执行 fixture、不调用模型；
+    resource_bytes_verified=False 表示内容寻址的资源字节核验属于另一个作用域，
+    不能把读 manifest 说成已执行（M5-A10）。
+    """
+
+    ok: bool
+    executed: bool
+    validation_scope: Literal["static"] = "static"
+    resource_bytes_verified: bool
+    skill_id: str
+    version: str
+    ref: str
+    kind: str
+    lifecycle: str
+    schema_version: int = Field(ge=1)
+    content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    executable: bool
+    dependency_refs: list[dict[str, Any]] = Field(default_factory=list)
+    resource_paths: list[str] = Field(default_factory=list)
+    fixture_refs: list[dict[str, Any]] = Field(default_factory=list)
+    requested_permissions: dict[str, Any] = Field(default_factory=dict)
+    defaulted_fields: list[str] = Field(default_factory=list)
+
+
 class ResourcePublication(APIModel):
     id: str = Field(min_length=1)
     dataset: str = Field(min_length=1)
