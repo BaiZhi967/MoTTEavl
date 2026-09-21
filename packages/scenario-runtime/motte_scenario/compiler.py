@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 from motte_contracts.workflow import (
     BranchStep,
+    Condition,
     FixtureRef,
     LoopStep,
     TargetRequirements,
@@ -80,11 +81,15 @@ class CompiledWorkflow:
     content_hash: str
     snapshot: dict[str, Any]
     workflow: WorkflowVersion
+    #: 顶层声明顺序的步骤；引擎按它执行（branch/loop 子层自行展开）。
+    top_level_steps: tuple[Any, ...]
+    #: 深度优先展开的全部步骤（含嵌套），用于索引与身份。
     steps: tuple[Any, ...]
     limits: WorkflowLimits
     target_requirements: TargetRequirements
     fixture_refs: tuple[FixtureRef, ...]
     conditions: tuple[CompiledCondition, ...]
+    completion_assertions: tuple[Condition, ...] = ()
 
     def step_by_id(self, step_id: str) -> Any:
         for step in self.steps:
@@ -155,11 +160,13 @@ def compile_workflow(
         content_hash=content_hash,
         snapshot=workflow.model_dump(mode="json"),
         workflow=workflow,
+        top_level_steps=tuple(workflow.steps),
         steps=steps,
         limits=workflow.limits,
         target_requirements=workflow.target_requirements,
         fixture_refs=workflow.fixture_refs,
         conditions=compiled_conditions,
+        completion_assertions=tuple(workflow.completion_assertions),
     )
     if resources is not None:
         _verify_fixture_refs(compiled, resources)
