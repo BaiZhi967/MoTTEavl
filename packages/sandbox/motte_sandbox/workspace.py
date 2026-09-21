@@ -6,6 +6,8 @@
 - 工作区目录链（anchor 之下的每个组件）必须是真实目录：预先存在的
   symlink 指向外部目录时拒绝创建，cleanup 前重新校验清理对象归属（R3 #3）；
 - 拒绝设备/管道/套接字文件；
+- 目录链在支持 os.open(dir_fd=...) 的平台逐组件按 fd 打开，其他平台用同一组
+  规则（逐组件 lstat + 解析后归属校验）的便携实现；
 - 每文件 / 总量 / 文件数配额在写入前强制；
 - 不挂载宿主凭据、不提供网络（文件工具本身无网络面）。
 """
@@ -16,6 +18,29 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+
+#: os.open(dir_fd=...) / O_DIRECTORY 的平台能力。
+#: Windows 上 os.open 根本打不开目录（实测连 C:\Windows 也是 EACCES），
+#: os.mkdir/os.open 的 dir_fd= 也不受支持，所以 fd 链必须是可选路径。
+_DIR_FD_SUPPORTED = os.name == "posix" and hasattr(os, "O_DIRECTORY")
+
+
+def _is_reparse_point(info: os.stat_result) -> bool:
+    """链接或 Windows 重解析点（junction）。POSIX 上等价于 S_ISLNK。"""
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    attributes = getattr(info, "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def is_link_path(path: str | Path) -> bool:
+    """路径本身是否是链接/重解析点；不存在或不可访问时为 False。"""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return _is_reparse_point(info)
 
 
 class WorkspacePolicyError(ValueError):
@@ -152,18 +177,85 @@ class CaseWorkspace:
             raise
         return fd, anchor_real, current_path
 
+    # ------------------------------------------------- 便携链（无 dir_fd 的平台）
+    #
+    # 验收 F-03：fd 链在 Windows 上必然失败，M1 的 agent 文件任务因此从不调用
+    # 模型就失败（PermissionError: [Errno 13] 'var\agent-workspaces'），错误还被
+    # 归类成 network。便携实现用同一组规则代替 fd 链：逐组件 lstat 拒绝链接与
+    # 非目录，最后要求解析后的根仍落在受信 anchor 之内。对外 API 与错误码不变。
+
+    @staticmethod
+    def _check_component(path: Path, part: str) -> None:
+        try:
+            info = os.lstat(path)
+        except OSError as error:
+            raise WorkspacePolicyError(
+                "workspace_chain_invalid",
+                f"cannot inspect workspace component {part!r}: {error}",
+            ) from error
+        if _is_reparse_point(info):
+            raise WorkspacePolicyError(
+                "symlink_rejected",
+                f"workspace chain component is a symlink: {part!r}",
+            )
+        if not stat.S_ISDIR(info.st_mode):
+            raise WorkspacePolicyError(
+                "workspace_chain_invalid",
+                f"workspace chain component is not a directory: {part!r}",
+            )
+
+    def _resolved_root(self, anchor_real: Path) -> Path:
+        root_real = self.root.resolve()
+        if root_real != anchor_real and anchor_real not in root_real.parents:
+            raise WorkspacePolicyError(
+                "path_escape",
+                f"resolved workspace root escapes its anchor: {root_real}",
+            )
+        return root_real
+
+    def _ensure_chain_portable(self, anchor: Path) -> tuple[Path, Path]:
+        anchor.mkdir(parents=True, exist_ok=True)  # anchor 是受信配置前缀
+        anchor_real = anchor.resolve()
+        current = anchor_real
+        for part in self._relative_to_anchor(anchor).parts:
+            current = current / part
+            if not current.exists() and not is_link_path(current):
+                try:
+                    current.mkdir()
+                except FileExistsError:
+                    pass  # 竞态放置：下面按当前对象类型判定
+            self._check_component(current, part)
+        return anchor_real, self._resolved_root(anchor_real)
+
+    def _validate_chain_portable(self, anchor: Path) -> tuple[Path, Path]:
+        anchor_real = anchor.resolve()
+        current = anchor_real
+        for part in self._relative_to_anchor(anchor).parts:
+            current = current / part
+            if not current.exists() and not is_link_path(current):
+                raise WorkspacePolicyError(
+                    "workspace_chain_invalid",
+                    f"workspace chain component missing: {part!r}",
+                )
+            self._check_component(current, part)
+        return anchor_real, self._resolved_root(anchor_real)
+
     def _validate_chain(self, anchor: Path) -> tuple[Path, Path]:
         """纯校验（不创建，按 fd 打开）：anchor 之下到 root 全部为真实目录。
 
         预先存在 symlink（含 root 本身指向外部目录）在此拒绝；返回
         (anchor 解析后路径, root 解析后路径) 供归属比较与清理前复核使用。
         """
+        if not _DIR_FD_SUPPORTED:
+            return self._validate_chain_portable(anchor)
         fd, anchor_real, root_real = self._open_chain_fd(anchor, create=False)
         os.close(fd)
         return anchor_real, root_real
 
     def _ensure_chain(self, anchor: Path) -> tuple[Path, Path]:
         """验证已有组件 + 单级创建缺失目录（全部相对受信 fd 执行）。"""
+        if not _DIR_FD_SUPPORTED:
+            return self._ensure_chain_portable(anchor)
         fd, anchor_real, root_real = self._open_chain_fd(anchor, create=True)
         os.close(fd)
         return anchor_real, root_real
@@ -180,7 +272,7 @@ class CaseWorkspace:
             if not current.exists() and not current.is_symlink():
                 continue
             info = current.lstat()
-            if stat.S_ISLNK(info.st_mode):
+            if _is_reparse_point(info):
                 raise WorkspacePolicyError(
                     "symlink_rejected", f"symlink components are not allowed: {part!r}"
                 )
@@ -190,7 +282,7 @@ class CaseWorkspace:
             raise WorkspacePolicyError("path_escape", f"resolved path escapes workspace: {path!r}")
         if target.exists() or target.is_symlink():
             info = target.lstat()
-            if stat.S_ISLNK(info.st_mode):
+            if _is_reparse_point(info):
                 raise WorkspacePolicyError("symlink_rejected", "symlink target rejected")
             if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                 raise WorkspacePolicyError(
@@ -267,8 +359,8 @@ class CaseWorkspace:
             for name in filenames:
                 full = Path(dirpath) / name
                 rel = full.relative_to(self.root).as_posix()
-                if full.is_symlink():
-                    continue  # 符号链接不属于受控清单
+                if is_link_path(full):
+                    continue  # 链接不属于受控清单
                 files.append(rel)
         return sorted(files)
 

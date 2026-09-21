@@ -28,22 +28,6 @@ def test_workspace_escape_and_quota_rejection(tmp_path):
     with pytest.raises(WorkspacePolicyError):
         workspace.write_text("../escape.txt", "x")
 
-    # 指向宿主的 symlink：读和写都拒绝
-    outside = tmp_path / "host-secret.txt"
-    outside.write_text("secret")
-    link = workspace.root / "secret-link"
-    os.symlink(outside, link)
-    with pytest.raises(WorkspacePolicyError, match="symlink"):
-        workspace.read_text("secret-link")
-    with pytest.raises(WorkspacePolicyError, match="symlink"):
-        workspace.write_text("secret-link", "tamper")
-
-    # workspace 内部自建 symlink 同样拒绝（防 TOCTOU 链接替换）
-    inside_link = workspace.root / "self-link"
-    os.symlink(workspace.root / "input.json", inside_link)
-    with pytest.raises(WorkspacePolicyError, match="symlink"):
-        workspace.read_text("self-link")
-
     # 设备 / 管道文件拒绝
     fifo = workspace.root / "pipe"
     if hasattr(os, "mkfifo"):
@@ -125,3 +109,86 @@ def test_regular_dir_components_are_fine(tmp_path):
     assert workspace.read_text("deep/nested/file.txt") == "ok"
     info = (workspace.root / "deep" / "nested" / "file.txt").stat()
     assert stat.S_ISREG(info.st_mode)
+
+
+def symlink_or_skip(target, link):
+    """Windows 需要开发者模式或管理员权限才能建 symlink；缺权限就跳过本用例。"""
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError) as error:  # pragma: no cover - 平台能力
+        pytest.skip(f"this host cannot create symlinks: {error}")
+
+
+def test_workspace_rejects_symlink_components(tmp_path):
+    """指向宿主的链接与工作区内部自建链接都必须拒绝（防逃逸与 TOCTOU 替换）。"""
+    workspace = CaseWorkspace(tmp_path / "run-1" / "case-1")
+    workspace.write_text("input.json", "[1, 2]")
+
+    outside = tmp_path / "host-secret.txt"
+    outside.write_text("secret")
+    symlink_or_skip(outside, workspace.root / "secret-link")
+    with pytest.raises(WorkspacePolicyError, match="symlink"):
+        workspace.read_text("secret-link")
+    with pytest.raises(WorkspacePolicyError, match="symlink"):
+        workspace.write_text("secret-link", "tamper")
+
+    symlink_or_skip(workspace.root / "input.json", workspace.root / "self-link")
+    with pytest.raises(WorkspacePolicyError, match="symlink"):
+        workspace.read_text("self-link")
+
+
+
+def test_workspace_chain_works_without_dir_fd(tmp_path, monkeypatch):
+    """验收 F-03：没有 os.open(dir_fd=...) 的平台也必须能建链与读写。
+
+    Windows 上 os.open 打不开任何目录（连系统目录也是 EACCES），fd 链因此
+    必然失败；M1 的 agent 文件任务从不调用模型就失败。这里显式关掉 fd 能力，
+    钉住便携实现的行为与错误码。
+    """
+    import motte_sandbox.workspace as module
+
+    monkeypatch.setattr(module, "_DIR_FD_SUPPORTED", False)
+    workspace = module.CaseWorkspace(tmp_path / "root" / "run-1" / "case-1")
+
+    assert workspace.write_text("out.txt", "ok").startswith("wrote")
+    assert workspace.read_text("out.txt") == "ok"
+    assert workspace.list_files() == ["out.txt"]
+    snapshot = workspace.snapshot()
+    assert snapshot["complete"] is True and set(snapshot["hashes"]) == {"out.txt"}
+
+    # 越界规则在便携路径上同样生效
+    with pytest.raises(WorkspacePolicyError):
+        workspace.write_text("../escape.txt", "x")
+    with pytest.raises(WorkspacePolicyError):
+        workspace._safe_target("/etc/passwd")
+
+    assert workspace.cleanup()["status"] == "success"
+
+
+def test_portable_chain_rejects_a_non_directory_component(tmp_path, monkeypatch):
+    """便携链逐组件校验：目录链上出现普通文件必须拒绝（anchor 之下）。"""
+    import motte_sandbox.workspace as module
+
+    monkeypatch.setattr(module, "_DIR_FD_SUPPORTED", False)
+    (tmp_path / "root").mkdir()
+    (tmp_path / "root" / "run-1").write_text("not a directory")
+
+    with pytest.raises(WorkspacePolicyError) as error:
+        module.CaseWorkspace(
+            tmp_path / "root" / "run-1" / "case-1", anchor=tmp_path / "root",
+        )
+    assert error.value.code == "workspace_chain_invalid"
+
+
+def test_portable_chain_requires_every_component_to_exist_for_cleanup(tmp_path, monkeypatch):
+    """校验（不创建）路径上缺组件时具名拒绝，而不是静默跳过清理归属检查。"""
+    import motte_sandbox.workspace as module
+
+    monkeypatch.setattr(module, "_DIR_FD_SUPPORTED", False)
+    workspace = module.CaseWorkspace(tmp_path / "root" / "run-1" / "case-1")
+    workspace.cleanup()
+    assert not workspace.root.exists()
+
+    with pytest.raises(WorkspacePolicyError) as error:
+        workspace._validate_chain(workspace._anchor)
+    assert error.value.code == "workspace_chain_invalid"
