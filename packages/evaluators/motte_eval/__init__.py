@@ -1,2 +1,89 @@
+"""MoTTEavl evaluator package.
+
+API 保持既有模块路径不变；这里只做加法式 re-export，方便调用方从一个入口取得
+M5 的 Judge / rubric / 校准契约。
+"""
+from .judge import (
+    JUDGE_PURPOSE,
+    JudgeAuthorisation,
+    JudgeBudget,
+    JudgeCandidateInput,
+    JudgeCandidateRef,
+    JudgeError,
+    JudgeInputBundle,
+    JudgeInputError,
+    JudgeInputSelector,
+    JudgeNotAuthorised,
+    JudgeOutcome,
+    JudgePairwiseInput,
+    JudgePreflight,
+    JudgeSpec,
+    JudgeSpecError,
+    build_judge_input,
+    build_judge_request,
+    build_judge_spec,
+    build_pairwise_input,
+    judge_job_fingerprint,
+    judge_metrics,
+    judge_spec_sha256,
+    pairwise_metrics,
+    parse_judge_output,
+    parse_pairwise_output,
+    preflight_judge,
+    scan_candidate_content,
+)
+from .rubrics import (
+    CalibrationPolicy,
+    Criterion,
+    Rubric,
+    RubricError,
+    available_rubrics,
+    build_rubric,
+    get_rubric,
+    policy_for,
+    validate_policy,
+)
+
+from . import workflow as workflow  # noqa: E402 - M5-T04 指标在导入时注册
+
 __version__ = "0.1.0"
-__version__ = "0.1.0"
+
+__all__ = [
+    "CalibrationPolicy",
+    "Criterion",
+    "JUDGE_PURPOSE",
+    "JudgeAuthorisation",
+    "JudgeBudget",
+    "JudgeCandidateInput",
+    "JudgeCandidateRef",
+    "JudgeError",
+    "JudgeInputBundle",
+    "JudgeInputError",
+    "JudgeInputSelector",
+    "JudgeNotAuthorised",
+    "JudgeOutcome",
+    "JudgePairwiseInput",
+    "JudgePreflight",
+    "JudgeSpec",
+    "JudgeSpecError",
+    "Rubric",
+    "RubricError",
+    "available_rubrics",
+    "build_judge_input",
+    "build_judge_request",
+    "build_judge_spec",
+    "build_pairwise_input",
+    "build_rubric",
+    "get_rubric",
+    "judge_job_fingerprint",
+    "judge_metrics",
+    "judge_spec_sha256",
+    "pairwise_metrics",
+    "parse_judge_output",
+    "parse_pairwise_output",
+    "policy_for",
+    "preflight_judge",
+    "scan_candidate_content",
+    "validate_policy",
+    "workflow",
+]
