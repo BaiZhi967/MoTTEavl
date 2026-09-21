@@ -80,6 +80,9 @@ pythonpath = [
 line-length = 100
 target-version = "py312"
 lint.ignore = ["E401", "E402", "F401", "F403"]
+# var/ 是运行期状态与本地验收脚本的落点（.gitignore 已忽略其中的数据目录），
+# 不是随包发布的源码：让 lint 只看真正会被交付的代码。
+extend-exclude = ["var"]
 
 [tool.mypy]
 python_version = "3.12"

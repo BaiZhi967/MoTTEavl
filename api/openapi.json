@@ -6780,6 +6780,150 @@
         "summary": "Get Versioned"
       }
     },
+    "/api/v1/fixtures": {
+      "get": {
+        "description": "已发布 Fixture 版本目录：只读仓库，零模型调用、零执行。",
+        "operationId": "list_fixtures_api_v1_fixtures_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Fixtures"
+      },
+      "post": {
+        "description": "发布不可变 FixtureSpec 版本：同内容幂等，同版本异内容 409。\n\n验收 F-04：这是 Fixture 的第一个公共发布入口；没有它，引用 fixture 的\nWorkflow 只会在创建 Run 时被 WORKFLOW_FIXTURE_MISSING 拒绝。",
+        "operationId": "publish_fixture_api_v1_fixtures_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Fixture"
+      }
+    },
+    "/api/v1/fixtures/{fixture_id}/{version}": {
+      "delete": {
+        "operationId": "delete_fixture_api_v1_fixtures__fixture_id___version__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fixture_id",
+            "required": true,
+            "schema": {
+              "title": "Fixture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Fixture"
+      },
+      "get": {
+        "operationId": "get_fixture_api_v1_fixtures__fixture_id___version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fixture_id",
+            "required": true,
+            "schema": {
+              "title": "Fixture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Fixture"
+      }
+    },
     "/api/v1/gates": {
       "post": {
         "operationId": "evaluate_run_gate_api_v1_gates_post",
@@ -8457,6 +8601,44 @@
         "summary": "List Run Sessions"
       }
     },
+    "/api/v1/runs/{run_id}/steps": {
+      "get": {
+        "description": "场景 Run 的逐步证据（步骤 / checkpoint / fixture 清理）；零模型调用。\n\n验收 F-08：Web 的步骤下钻页一直请求这个端点，而它以前没有注册（404），\n于是 M5 最核心的\"流程可验证\"在 UI 上永久显示为\"能力不可用\"。这里只读\n已持久化的证据（workflow-observation@1 与冻结快照），不重算结论；没有\n观察时只回退到声明的步骤并标 unknown=True。",
+        "operationId": "scenario_run_steps_api_v1_runs__run_id__steps_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scenario Run Steps"
+      }
+    },
     "/api/v1/runs/{run_id}/tasks": {
       "get": {
         "operationId": "run_terminal_bench_tasks_api_v1_runs__run_id__tasks_get",
@@ -9092,6 +9274,43 @@
           }
         },
         "summary": "List Skill Versions"
+      },
+      "post": {
+        "description": "发布不可变 SkillVersion：同内容幂等，同版本异内容 409。\n\n验收 F-05：以前没有发布入口（旧注释说\"API 进程尚未接内容存储\"，但\ncreate_resource_store() 早已装配 default_content_store()），于是 Skill\n的注入与三臂对照在产品面完全不可达。校验规则与 /api/v1/skills/validate\n同源：内容 hash 由服务端固定，客户端提交不一致的 hash 立即拒绝；草稿、\n未固定依赖与凭证字段都在这里被具名拒绝。",
+        "operationId": "publish_skill_version_api_v1_skills_versions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Skill Version"
       }
     },
     "/api/v1/skills/{skill_id}/versions/{version}": {

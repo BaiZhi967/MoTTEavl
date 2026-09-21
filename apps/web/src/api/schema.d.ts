@@ -692,6 +692,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/fixtures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Fixtures
+         * @description 已发布 Fixture 版本目录：只读仓库，零模型调用、零执行。
+         */
+        get: operations["list_fixtures_api_v1_fixtures_get"];
+        put?: never;
+        /**
+         * Publish Fixture
+         * @description 发布不可变 FixtureSpec 版本：同内容幂等，同版本异内容 409。
+         *
+         *     验收 F-04：这是 Fixture 的第一个公共发布入口；没有它，引用 fixture 的
+         *     Workflow 只会在创建 Run 时被 WORKFLOW_FIXTURE_MISSING 拒绝。
+         */
+        post: operations["publish_fixture_api_v1_fixtures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fixtures/{fixture_id}/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fixture */
+        get: operations["get_fixture_api_v1_fixtures__fixture_id___version__get"];
+        put?: never;
+        post?: never;
+        /** Delete Fixture */
+        delete: operations["delete_fixture_api_v1_fixtures__fixture_id___version__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/gates": {
         parameters: {
             query?: never;
@@ -1344,6 +1389,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scenario Run Steps
+         * @description 场景 Run 的逐步证据（步骤 / checkpoint / fixture 清理）；零模型调用。
+         *
+         *     验收 F-08：Web 的步骤下钻页一直请求这个端点，而它以前没有注册（404），
+         *     于是 M5 最核心的"流程可验证"在 UI 上永久显示为"能力不可用"。这里只读
+         *     已持久化的证据（workflow-observation@1 与冻结快照），不重算结论；没有
+         *     观察时只回退到声明的步骤并标 unknown=True。
+         */
+        get: operations["scenario_run_steps_api_v1_runs__run_id__steps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/tasks": {
         parameters: {
             query?: never;
@@ -1639,7 +1709,17 @@ export interface paths {
          */
         get: operations["list_skill_versions_api_v1_skills_versions_get"];
         put?: never;
-        post?: never;
+        /**
+         * Publish Skill Version
+         * @description 发布不可变 SkillVersion：同内容幂等，同版本异内容 409。
+         *
+         *     验收 F-05：以前没有发布入口（旧注释说"API 进程尚未接内容存储"，但
+         *     create_resource_store() 早已装配 default_content_store()），于是 Skill
+         *     的注入与三臂对照在产品面完全不可达。校验规则与 /api/v1/skills/validate
+         *     同源：内容 hash 由服务端固定，客户端提交不一致的 hash 立即拒绝；草稿、
+         *     未固定依赖与凭证字段都在这里被具名拒绝。
+         */
+        post: operations["publish_skill_version_api_v1_skills_versions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4556,6 +4636,125 @@ export interface operations {
             };
         };
     };
+    list_fixtures_api_v1_fixtures_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    publish_fixture_api_v1_fixtures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fixture_api_v1_fixtures__fixture_id___version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fixture_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_fixture_api_v1_fixtures__fixture_id___version__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fixture_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     evaluate_run_gate_api_v1_gates_post: {
         parameters: {
             query?: never;
@@ -5905,6 +6104,37 @@ export interface operations {
             };
         };
     };
+    scenario_run_steps_api_v1_runs__run_id__steps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_terminal_bench_tasks_api_v1_runs__run_id__tasks_get: {
         parameters: {
             query?: never;
@@ -6437,6 +6667,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    publish_skill_version_api_v1_skills_versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
