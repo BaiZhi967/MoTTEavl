@@ -82,6 +82,20 @@ class WorkerLoop:
             postgres_dsn=self._postgres_dsn,
         )
 
+    def _platform_block_reason(self) -> str | None:
+        """M7 运维屏障：维护窗口/恢复守卫激活时不领取、不恢复、不执行。"""
+        try:
+            from motte_storage.platform import platform_for
+
+            meta = platform_for(self.service.store).meta
+        except Exception:  # pragma: no cover - 平台表缺失时按无屏障处理
+            return None
+        if meta.get("maintenance") == "active":
+            return "maintenance_mode"
+        if meta.get("restored_from_backup"):
+            return "restore_guard_active"
+        return None
+
     def recover_interrupted(self) -> list[str]:
         """Recover safe work and atomically quarantine uncertain external calls."""
         with self._execution_guard():
@@ -218,10 +232,17 @@ class WorkerLoop:
     def run_once(self, run_id: str | None = None) -> dict | None:
         """Recover and execute while holding the guard for the actual store."""
         with self._execution_guard():
+            if self._platform_block_reason() is not None:
+                # 维护/恢复屏障下连恢复回队也不做（它同样是状态写入）。
+                return self._claim_and_execute_unlocked(run_id)
             self._recover_interrupted_unlocked()
             return self._claim_and_execute_unlocked(run_id)
 
     def _claim_and_execute_unlocked(self, run_id: str | None = None) -> dict | None:
+        blocked = self._platform_block_reason()
+        if blocked is not None:
+            self.reporter.emit(blocked, note="worker refuses to claim while platform barrier is active")
+            return None
         # 领取顺序：先至多一个 Judge 作业，再一个 Run。显式 run_id 时只领取该 Run。
         judge_result = None
         if run_id is None and self.scoring_jobs is not None:

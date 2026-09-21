@@ -653,6 +653,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Capabilities
+         * @description SDK 能力握手（协议 §1.2）：api_version 不匹配或 feature 缺失由客户端判定。
+         */
+        get: operations["capabilities_api_v1_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/comparisons": {
         parameters: {
             query?: never;
@@ -1120,6 +1140,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Maintenance Status */
+        get: operations["maintenance_status_api_v1_maintenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Maintenance Begin */
+        post: operations["maintenance_begin_api_v1_maintenance_begin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Maintenance End */
+        post: operations["maintenance_end_api_v1_maintenance_end_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/models": {
         parameters: {
             query?: never;
@@ -1477,6 +1548,26 @@ export interface paths {
         };
         /** Events */
         get: operations["events_api_v1_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/events/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Events Snapshot
+         * @description SSE 断线/缺口的持久查询（协议 §2）：JSON 一次返回，去重与排序由 DB 保证。
+         */
+        get: operations["events_snapshot_api_v1_runs__run_id__events_snapshot_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2210,6 +2301,26 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /**
+         * CapabilitiesResponse
+         * @description SDK 能力握手（M7 协议 §1.2）；未知 feature 键由客户端忽略。
+         */
+        CapabilitiesResponse: {
+            /** Api Version */
+            api_version: string;
+            /** App Version */
+            app_version: string;
+            /** Features */
+            features: {
+                [key: string]: boolean;
+            };
+            /** Limits */
+            limits: {
+                [key: string]: number;
+            };
+            /** Name */
+            name: string;
+        };
         /** CaseRun */
         CaseRun: {
             /** Attempt Id */
@@ -2243,6 +2354,8 @@ export interface components {
             manifest?: {
                 [key: string]: unknown;
             };
+            /** Request Key */
+            request_key?: string | null;
             /** Scenario Version */
             scenario_version: string;
         };
@@ -2521,6 +2634,22 @@ export interface components {
             scorer_id: string;
             /** Scorer Version */
             scorer_version: string;
+        };
+        /**
+         * EventsSnapshotResponse
+         * @description SSE 断线/缺口的持久查询（M7 协议 §2）。
+         */
+        EventsSnapshotResponse: {
+            /** Events */
+            events: {
+                [key: string]: unknown;
+            }[];
+            /** Last Seq */
+            last_seq?: number | null;
+            /** Partial */
+            partial: boolean;
+            /** Run Status */
+            run_status: string;
         };
         /** ExecutionError */
         ExecutionError: {
@@ -4880,6 +5009,26 @@ export interface operations {
             };
         };
     };
+    capabilities_api_v1_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesResponse"];
+                };
+            };
+        };
+    };
     compare_runs_api_v1_comparisons_get: {
         parameters: {
             query: {
@@ -5873,6 +6022,83 @@ export interface operations {
             };
         };
     };
+    maintenance_status_api_v1_maintenance_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    maintenance_begin_api_v1_maintenance_begin_post: {
+        parameters: {
+            query?: {
+                reason?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    maintenance_end_api_v1_maintenance_end_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_items_api_v1_models_get: {
         parameters: {
             query?: never;
@@ -6689,6 +6915,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    events_snapshot_api_v1_runs__run_id__events_snapshot_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventsSnapshotResponse"];
                 };
             };
             /** @description Validation Error */

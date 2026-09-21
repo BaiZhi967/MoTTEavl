@@ -19,6 +19,8 @@ class CreateRunRequest(APIModel):
     scenario_version: str = Field(min_length=1)
     manifest: dict[str, Any] = Field(default_factory=dict)
     case_ids: list[str] = Field(default_factory=list)
+    # M7 幂等键（协议 §1.3）：可选；同 key 同 body 幂等重放，同 key 异 body 409。
+    request_key: str | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator("case_ids")
     @classmethod
@@ -77,6 +79,25 @@ class RunListResponse(APIModel):
 class RunCommandListResponse(APIModel):
     items: list[RunCommand]
     total: int = Field(ge=0)
+
+
+class CapabilitiesResponse(APIModel):
+    """SDK 能力握手（M7 协议 §1.2）；未知 feature 键由客户端忽略。"""
+
+    name: str
+    api_version: str
+    app_version: str
+    features: dict[str, bool]
+    limits: dict[str, int]
+
+
+class EventsSnapshotResponse(APIModel):
+    """SSE 断线/缺口的持久查询（M7 协议 §2）。"""
+
+    events: list[dict[str, Any]]
+    last_seq: int | None = None
+    run_status: str
+    partial: bool
 
 
 class ScoringPassListResponse(APIModel):

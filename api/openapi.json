@@ -255,6 +255,47 @@
         "title": "CancelRunRequest",
         "type": "object"
       },
+      "CapabilitiesResponse": {
+        "additionalProperties": false,
+        "description": "SDK 能力握手（M7 协议 §1.2）；未知 feature 键由客户端忽略。",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "string"
+          },
+          "app_version": {
+            "title": "App Version",
+            "type": "string"
+          },
+          "features": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Features",
+            "type": "object"
+          },
+          "limits": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Limits",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "api_version",
+          "app_version",
+          "features",
+          "limits"
+        ],
+        "title": "CapabilitiesResponse",
+        "type": "object"
+      },
       "CaseRun": {
         "additionalProperties": false,
         "properties": {
@@ -354,6 +395,19 @@
             "additionalProperties": true,
             "title": "Manifest",
             "type": "object"
+          },
+          "request_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Key"
           },
           "scenario_version": {
             "minLength": 1,
@@ -1310,6 +1364,46 @@
           "scorer_version"
         ],
         "title": "EvaluationDescriptor",
+        "type": "object"
+      },
+      "EventsSnapshotResponse": {
+        "additionalProperties": false,
+        "description": "SSE 断线/缺口的持久查询（M7 协议 §2）。",
+        "properties": {
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "last_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seq"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "run_status": {
+            "title": "Run Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "events",
+          "run_status",
+          "partial"
+        ],
+        "title": "EventsSnapshotResponse",
         "type": "object"
       },
       "ExecutionError": {
@@ -6666,6 +6760,25 @@
         "summary": "Terminal Bench Tasks"
       }
     },
+    "/api/v1/capabilities": {
+      "get": {
+        "description": "SDK 能力握手（协议 §1.2）：api_version 不匹配或 feature 缺失由客户端判定。",
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities"
+      }
+    },
     "/api/v1/comparisons": {
       "get": {
         "operationId": "compare_runs_api_v1_comparisons_get",
@@ -7954,6 +8067,88 @@
         "summary": "Judge Cancel"
       }
     },
+    "/api/v1/maintenance": {
+      "get": {
+        "operationId": "maintenance_status_api_v1_maintenance_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Maintenance Status Api V1 Maintenance Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Maintenance Status"
+      }
+    },
+    "/api/v1/maintenance/begin": {
+      "post": {
+        "operationId": "maintenance_begin_api_v1_maintenance_begin_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "default": "operator requested",
+              "title": "Reason",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Maintenance Begin Api V1 Maintenance Begin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Maintenance Begin"
+      }
+    },
+    "/api/v1/maintenance/end": {
+      "post": {
+        "operationId": "maintenance_end_api_v1_maintenance_end_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Maintenance End Api V1 Maintenance End Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Maintenance End"
+      }
+    },
     "/api/v1/models": {
       "get": {
         "operationId": "list_items_api_v1_models_get",
@@ -9012,6 +9207,66 @@
           }
         },
         "summary": "Events"
+      }
+    },
+    "/api/v1/runs/{run_id}/events/snapshot": {
+      "get": {
+        "description": "SSE 断线/缺口的持久查询（协议 §2）：JSON 一次返回，去重与排序由 DB 保证。",
+        "operationId": "events_snapshot_api_v1_runs__run_id__events_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Events Snapshot"
       }
     },
     "/api/v1/runs/{run_id}/external-jobs": {

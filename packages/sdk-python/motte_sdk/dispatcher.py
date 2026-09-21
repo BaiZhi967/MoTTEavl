@@ -21,7 +21,11 @@ class RunDispatcher:
 
     @staticmethod
     def _ready_for_claim(run: dict[str, Any]) -> bool:
+        # M7-T07：imported Run 永不进入执行队列（协议 §5.3）。即使状态被误写为
+        # queued（正常导入只产生终态），带 import_source 的 Run 也一律拒领。
         manifest = run.get("manifest") or {}
+        if isinstance(manifest, dict) and manifest.get("import_source"):
+            return False
         try:
             projected = legacy_execution(run) if not isinstance(manifest.get("execution"), dict) else manifest
         except ExecutionBackendError:
