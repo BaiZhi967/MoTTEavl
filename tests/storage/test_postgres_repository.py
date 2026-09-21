@@ -42,6 +42,35 @@ def test_alembic_revision_chain_is_linear_and_complete():
     assert "postgresql+psycopg://" in config.get_main_option("sqlalchemy.url")
 
 
+@pytest.mark.parametrize('filename', ['0009_runtime_resources.py', '0010_interactive_sessions.py'])
+def test_runtime_migrations_share_idempotent_fixture_cleanup(filename):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import create_engine, inspect, text
+
+    module = _load_version_module(MIGRATIONS_DIR / 'versions' / filename)
+    statements = module.DOWN_STATEMENTS
+    assert isinstance(statements, tuple) and statements
+    engine = create_engine('sqlite://')
+    try:
+        with engine.begin() as connection:
+            # Parent tables are outside the new migrations' ownership.
+            connection.execute(text('CREATE TABLE runs (id TEXT PRIMARY KEY)'))
+            connection.execute(text('CREATE TABLE run_commands (run_id TEXT, payload JSONB)'))
+            with Operations.context(MigrationContext.configure(connection)):
+                module.upgrade()
+                module.downgrade()
+                # The PG reset fixture replays these on fresh or downgraded DBs.
+                for statement in statements:
+                    connection.execute(text(statement))
+                module.upgrade()
+                for statement in statements:
+                    connection.execute(text(statement))
+            assert set(inspect(connection).get_table_names()) == {'runs', 'run_commands'}
+    finally:
+        engine.dispose()
+
+
 def test_initial_migration_covers_all_entities_with_downgrade():
     module = _load_version_module()
     assert callable(module.upgrade) and callable(module.downgrade)

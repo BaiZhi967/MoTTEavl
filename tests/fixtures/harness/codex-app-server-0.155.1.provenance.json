@@ -4,7 +4,7 @@
   "package": "@openai/codex@0.155.1",
   "schema_generator": "codex app-server generate-json-schema",
   "bundle_sha256": "F1F3591667D8DCF77352C04BE5D0667153E492D1A378E4205D69E9AF6F31C0C3",
-  "subset_sha256": "4f5bee41f941e69a1d4c940bf1db09b2b001bbe141b5eac5610f47860ea09c98",
+  "subset_sha256": "d94a6634cc55b4fd95debf9f42a3eac5453c43d3936652b26af9fe599845cd3b",
   "sources": {
     "InitializeParams": {
       "path": "v1/InitializeParams.json",
@@ -78,5 +78,6 @@
       "path": "v2/LoginAccountResponse.json",
       "sha256": "72e6d77f49bc5809c3af50f183e2a0862dd8f7836816d4796ff69bb13eae0e89"
     }
-  }
+  },
+  "subset_encoding": "UTF-8, LF line endings (enforced by .gitattributes)"
 }

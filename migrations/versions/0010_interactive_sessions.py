@@ -6,6 +6,12 @@ down_revision = '0009_runtime_resources'
 branch_labels = None
 depends_on = None
 
+# IF EXISTS supports both fresh and already-downgraded fixture databases.
+DOWN_STATEMENTS: tuple[str, ...] = (
+    'DROP INDEX IF EXISTS run_commands_dedupe_idx',
+    'DROP TABLE IF EXISTS runtime_sessions',
+)
+
 
 def upgrade():
     op.execute('''CREATE TABLE runtime_sessions (
@@ -19,5 +25,5 @@ def upgrade():
 
 
 def downgrade():
-    op.execute('DROP INDEX run_commands_dedupe_idx')
-    op.drop_table('runtime_sessions')
+    for statement in DOWN_STATEMENTS:
+        op.execute(statement)

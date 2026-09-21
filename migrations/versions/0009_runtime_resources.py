@@ -16,6 +16,12 @@ down_revision = "0008_trials"
 branch_labels = None
 depends_on = None
 
+# Shared with the PostgreSQL fixture's reverse-order schema reset.
+DOWN_STATEMENTS: tuple[str, ...] = (
+    "DROP TABLE IF EXISTS runtime_profiles",
+    "DROP TABLE IF EXISTS runtime_versions",
+)
+
 
 def upgrade() -> None:
     op.execute(
@@ -35,5 +41,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS runtime_profiles")
-    op.execute("DROP TABLE IF EXISTS runtime_versions")
+    for statement in DOWN_STATEMENTS:
+        op.execute(statement)

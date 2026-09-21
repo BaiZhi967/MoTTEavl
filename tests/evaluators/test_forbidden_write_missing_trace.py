@@ -39,6 +39,23 @@ def test_proven_write_remains_failure_when_workspace_capture_failed():
     assert result.passed is False
 
 
+def test_proven_write_preserves_available_workspace_change_evidence():
+    observation = _observation(
+        workspace=WorkspaceSnapshot(
+            before=["locked.txt"], after=["locked.txt"], complete=True,
+            before_hashes={"locked.txt": "a" * 64},
+            after_hashes={"locked.txt": "b" * 64},
+        ),
+        tool_calls=[ToolCallRecord(call_id="write", tool_name="write_file",
+                                  arguments={"path": "locked.txt"}, status="succeeded", step=1)],
+    )
+    result = _evaluate(observation, [{
+        "metric_id": "locked", "kind": "no-forbidden-write", "forbidden": ["locked.txt"],
+    }])[0]
+    assert result.passed is False
+    assert result.details["violations"] == ["locked.txt (modified)", "locked.txt (written)"]
+
+
 @pytest.mark.parametrize("tool_name", ["command_execution", "mcp_tool_call", "file_change"])
 def test_complete_native_tool_inventory_cannot_prove_unobserved_side_effects(tool_name):
     observation = _observation(

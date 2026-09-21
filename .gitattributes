@@ -1,0 +1,2 @@
+# The checked-in protocol subset has a byte-level provenance hash.
+tests/fixtures/harness/codex-app-server-0.155.1.schema.json text eol=lf

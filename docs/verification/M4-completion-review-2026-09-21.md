@@ -59,6 +59,7 @@
 | ruff check . | 通过（最终提交前再核对） |
 | mypy packages/contracts | 26 源文件通过 |
 | make openapi | 已导出 API 并重生成 TS |
+| 固定 Codex 原生零模型探针 | 0.155.1 initialize + initialized + thread/start 成功；返回 readOnly/networkAccess=false/on-request。空凭据、未发送 turn/start；关闭后 residual_pids=[]、truncated=false。只证明协议握手，不算 live 小任务 |
 | Pi integration（停止失败/attempt 身份修复后） | 11 通过 |
 | native configuration（隔离/脱敏/惰性 Git/扫描上限） | 11 通过；F5 最终独立复审通过 |
 | native + CLI backend（前一快照） | 13 通过 |
@@ -66,7 +67,8 @@
 | Task3 独立复审 | 49 通过 |
 | app-server 实现者定向集 | 109 通过、5 PG 跳过；追加 session 脱敏 5 项通过；三个 P1 及最后增量均独立复审通过 |
 | Windows make check | exit 2；283 failed / 1639 passed / 52 skipped / 1 deselected，323.88 秒。失败用例集合与本轮初始修复快照完全一致；不能写作全绿。最后 Git filter/不完整配置反例另以 11 项定向集补验 |
-| Linux/PG 最终 make check | 尚未执行；CI 已补 Node/pnpm 依赖，必须运行真实 SDK 与完整 make check |
+| Linux/PG 首次完整 make check | CI 35554874385：1943 passed / 29 skipped / 1 deselected，4 failed / 11 errors。迁移清理接口、固定历史 HEAD 测试、schema 换行哈希、禁止写入证据聚合/旧预期已定位修复，需重跑确认；该次不是全绿 |
+| 首次 CI 修复定向验证 | 禁止写入、schema、CLI catalog：19 passed；迁移与存储相关：28 passed / 17 skipped（本机没有 PG）；ruff check . 通过。PG 与 Linux 最终结果以下次 CI 为准 |
 | 真实模型 live | 未执行；未获得本次具体 runtime/model/凭据引用与费用上限 |
 
 独立审查涵盖 Pi、公共契约/比较、Harness、产品、Inspect、命令 UI 和 M5 计划。最后一轮额外发现 Pi 未确认停止、parser lifecycle/类型、未知计量、native config/auth、app-server 事件身份/过期提案/错误脱敏，均要求反例验证后复审。最终报告须更新新发现的关闭情况，不以早期通过覆盖新发现。
@@ -77,5 +79,9 @@
 2. Linux + PostgreSQL CI 的完整 make check、audit、生成契约检查通过；本机缺 Docker/WSL 不替代这些证据。
 3. G16/T09 真实小任务需明确后端、模型、凭据引用与调用/费用上限，分别记录 Pi/Claude/Codex 及 app-server 的 live 来源。不得读取或使用操作者已有登录态推定授权。
 4. 用户要求“全部 M4 完成后合并主干”；在上述验收未完成时不宣称全部完成或已满足该合入条件。M5 文档可先准备，实际 M4 主干 SHA 只在真实合并后登记。
+
+本轮已提交并推送开发分支：`aa63cf2`（M4 修复）、`1389fa0`（M5 计划）、`543614e`（同步 main）、`78f372a`（修复主干测试对开发机目录的依赖，27 项通过）。这不是向 main 合入。首次 Linux/PG 完整 CI：[35554874385](https://github.com/BaiZhi967/MoTTEavl/actions/runs/35554874385)，Web 通过、Python make check 失败，以上如实记录。
+
+固定 Windows x64 二进制静态核对收据：Claude 2.1.278 SHA256 `006ea5c8638f67f10a5ae66bb232fd267c9f6af294e3f03f4cfcf1fd3f2cced8`；Codex 0.155.1 SHA256 `eba0f32c976667cb9298efafd98513e823eeda7b576a03ec658bb8be8d336316`。均安装于忽略的专项工具目录，未替换主机已有 CLI。
 
 回退关闭新 Runtime 创建/consumer，不覆盖既有版本、命令审计、冻结证据或评分历史。停止不明的进程保留现场，不删工作区掩盖失败。

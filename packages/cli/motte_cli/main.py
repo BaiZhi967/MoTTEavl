@@ -14,10 +14,11 @@ def _runtime_catalog():
 
     items = []
     for backend_id in backend_ids():
-        definition = (CANONICAL_RUNTIME_VERSIONS.get(backend_id) or {}).get("definition") or {}
+        resource = CANONICAL_RUNTIME_VERSIONS.get(backend_id) or {}
+        definition = resource.get("definition") or {}
         items.append({
             "name": backend_id,
-            "version": "1",
+            "version": resource.get('version'),
             "kind": definition.get("kind"),
             "transport": definition.get("transport"),
             "upstream_version": definition.get("upstream_version"),

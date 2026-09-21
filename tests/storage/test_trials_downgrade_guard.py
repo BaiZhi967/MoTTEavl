@@ -18,10 +18,13 @@ from typing import Any, Iterator
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
+from motte_storage.migrations import revision_ids
+
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 VERSION_FILE = MIGRATIONS_DIR / "versions" / "0008_trials.py"
-HEAD = "0008_trials"
+HEAD = revision_ids()[-1]
 PREVIOUS = "0007_benchmark_datasets"
+TRIAL_DOWNGRADE_STEPS = len(revision_ids()) - 1 - revision_ids().index(PREVIOUS)
 
 #: 迁移形状的最小复刻（列名与 0008 一致）；单行字面语句 + 绑定参数。
 _TRIALS_DDL = "CREATE TABLE trials (trial_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_key TEXT NOT NULL, repeat_index INTEGER NOT NULL, status TEXT NOT NULL, plan_hash TEXT NOT NULL, payload TEXT NOT NULL, result_payload TEXT, created_at TEXT NOT NULL, finished_at TEXT)"  # noqa: E501
@@ -175,7 +178,7 @@ def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真
     from motte_storage.postgres import normalize_dsn
 
     dsn = normalize_dsn(os.environ["MOTTE_PG_DSN"])
-    assert upgrade(dsn) == HEAD, "旧库（或空库）必须能升级到 0008"
+    assert upgrade(dsn) == HEAD, "旧库（或空库）必须能升级到当前 head"
 
     run_id = f"pg-downgrade-{uuid4().hex}"
     task_key = compute_task_key(
@@ -194,7 +197,8 @@ def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真
     assert [item["status"] for item in trials.create_plans([plan])] == ["created"]
 
     with pytest.raises(RuntimeError, match="trials"):
-        downgrade(dsn)
+        # Cross newer revisions too, so this continues testing the 0008 guard.
+        downgrade(dsn, steps=TRIAL_DOWNGRADE_STEPS)
     assert current(dsn) == HEAD, "拒绝降级后版本不变"
     assert trials.get(str(plan["trial_id"])) is not None, "拒绝降级不得删除证据"
 
@@ -208,7 +212,7 @@ def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真
     finally:
         connection.close()
 
-    assert downgrade(dsn) == PREVIOUS
+    assert downgrade(dsn, steps=TRIAL_DOWNGRADE_STEPS) == PREVIOUS
     try:
         with psycopg.connect(dsn) as connection:
             with connection.cursor() as cursor:

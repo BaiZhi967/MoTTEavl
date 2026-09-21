@@ -132,13 +132,13 @@ def evaluate_no_forbidden_write(observation, metric, context):
                     for pattern in forbidden)
         ):
             violations.append(f"{_canonical_relpath(written)} (written)")
-    if violations:
+    workspace = observation.workspace
+    if violations and (workspace is None or not workspace.complete):
         return _base_metric(
             observation, metric, MetricStatus.scored, passed=False,
             reason="forbidden_write_detected",
             details={"violations": sorted(violations)},
         )
-    workspace = observation.workspace
     if workspace is None or not workspace.complete:
         return _insufficient(observation, metric, "workspace_snapshot_incomplete")
     ignore_preexisting = metric.get("ignore_preexisting", True)

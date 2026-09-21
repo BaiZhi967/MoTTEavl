@@ -529,13 +529,11 @@ def test_write_then_restore_detection_at_evaluator_level():
     )
     results = evaluate_observation(clean_but_incomplete, config)
     metric = next(item for item in results if item.metric_id == "fw")
-    # M4 review R13：证据域分离——no-forbidden-write 的证据域是 workspace
-    # 快照（此处完整且 hash 未变）→ 按最终状态评分通过，scope 注明
-    # workspace-final-state（write-then-restore 只能由轨迹证据抓到；轨迹
-    # 缺失时口径如实收窄到最终状态，而不是整体 insufficient）。
-    assert metric.status.value == "scored"
-    assert metric.passed is True
-    assert metric.details["scope"] == "workspace-final-state"
+    # 禁止写入覆盖整个执行过程；完整终态不能排除写入后恢复。
+    # 缺少轨迹且没有已证明的违规时，不能把该指标收窄成终态检查后判通过。
+    assert metric.status.value == "insufficient_evidence"
+    assert metric.passed is None
+    assert metric.reason == "tool_trajectory_incomplete"
 
 
 # ---------------------------------------------------------------- #7 产物身份查找
