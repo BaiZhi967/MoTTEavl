@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event, validate_scores
+from .platform import PLATFORM_SCHEMA
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -144,7 +145,7 @@ CREATE TABLE IF NOT EXISTS default_baseline_history (
   payload TEXT NOT NULL,
   PRIMARY KEY (scope, position)
 );
-"""
+""" + PLATFORM_SCHEMA
 
 # Worker 崩溃后卡住的中间态；重启时回收回 queued。
 INTERRUPTED_STATES = ("preparing", "running", "collecting", "scoring")

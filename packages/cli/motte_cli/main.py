@@ -1,4 +1,9 @@
-"""`python -m motte_cli` 入口：doctor / run / replay / live-smoke。"""
+"""`python -m motte_cli` 入口：doctor / run / replay / live-smoke。
+
+M7（协议 docs/protocols/sdk-and-migration.md §3）起支持 local/server 模式路由：
+server 模式只经 MotteClient HTTP（见 motte_cli.remote），local 模式与既有行为
+完全一致。
+"""
 import argparse
 import asyncio
 import json
@@ -6,6 +11,8 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+
+from motte_cli import ops, remote, runops
 
 
 def _runtime_catalog():
@@ -692,7 +699,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="创建 queued Run（由 Worker 异步执行）")
     run.add_argument("--spec", required=True, help="run 定义 JSON 或 @文件：{scenario_version, manifest, case_ids}")
+    run.add_argument(
+        "--request-key", dest="request_key",
+        help="幂等创建键（协议 §1.3：同键同 body 重放同一 Run；同键异 body 拒绝）",
+    )
     run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
+    remote.add_mode_arguments(run)
 
     replay = sub.add_parser("replay", help="创建并同步执行 replay Run")
     replay.add_argument("--scenario", default="replay@1")
@@ -700,10 +712,16 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
     replay.add_argument("--json", action="store_true")
 
-    from motte_provider.config import smoke_kinds
+    try:
+        from motte_provider.config import smoke_kinds
+        smoke_kind_hint = ", ".join(smoke_kinds())
+    except ModuleNotFoundError:
+        # 干净安装（protocol §8：cli 闭包 = sdk + storage）下 provider 不在场，
+        # --help 不应因此失败；真正执行 live-smoke 时命令处理器会再按需导入。
+        smoke_kind_hint = "需安装 motte-provider"
 
     smoke = sub.add_parser("live-smoke", help="显式发起一次真实 Provider 调用（会产生费用）")
-    smoke.add_argument("--provider", required=True, help=f"provider kind：{', '.join(smoke_kinds())}（连字符拼写兼容）")
+    smoke.add_argument("--provider", required=True, help=f"provider kind：{smoke_kind_hint}（连字符拼写兼容）")
     smoke.add_argument("--model", required=True)
     smoke.add_argument("--base-url", required=True)
     smoke.add_argument("--credentials", default=None, help="凭据文件 profile 名（~/.motte/credentials.toml），优先于环境变量")
@@ -723,10 +741,8 @@ def _build_parser() -> argparse.ArgumentParser:
     credentials_remove = credentials_sub.add_parser("remove", help="删除一个 profile")
     credentials_remove.add_argument("profile")
 
-    backup = sub.add_parser("backup", help="在线备份 SQLite 与 artifacts")
-    backup.add_argument("--target", required=True, help="备份目录")
-    backup.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
-    backup.add_argument("--artifacts-root", default=None, help="artifact 根目录（默认不备份工件）")
+    # backup / restore 的解析器与处理器都在 motte_cli.ops（M7 起支持 --consistent /
+    # --staging；flag-less 行为保持 legacy 兼容）。
 
     benchmark = sub.add_parser("benchmark", help="GSM8K 基准（下载 / 导入数据集，创建运行）")
     benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
@@ -981,15 +997,16 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_run.add_argument("--case-ids", help="只跑指定任务：逗号分隔 case id")
     agent_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
-    restore = sub.add_parser("restore", help="从最新备份恢复（先停 API 与 Worker）")
-    restore.add_argument("--source", required=True, help="备份目录")
-    restore.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
-    restore.add_argument("--artifacts-root", default=None, help="artifact 根目录（备份含工件时恢复）")
+    # restore 的解析器在 motte_cli.ops（M7 起支持 --staging staging 恢复）。
 
-    cleanup = sub.add_parser("cleanup-artifacts", help="按 TTL 清理 artifact（默认 dry-run）")
+    cleanup = sub.add_parser(
+        "cleanup-artifacts",
+        help="按 TTL 清理 artifact（默认 dry-run；legacy 简单清理，M7 起优先使用 motte gc）",
+    )
     cleanup.add_argument("--older-than-days", type=float, required=True)
     cleanup.add_argument("--artifacts-root", default=None, help="artifact 根目录，默认 ARTIFACT_ROOT")
     cleanup.add_argument("--apply", action="store_true", help="真正删除（缺省仅报告）")
+    remote.add_mode_arguments(cleanup)
 
     experiment = sub.add_parser(
         "experiment",
@@ -1001,16 +1018,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     exp_preview.add_argument("--spec", required=True, help="ExperimentSpec JSON 或 @文件")
     exp_preview.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(exp_preview)
     exp_create = experiment_sub.add_parser(
         "create", help="发布 spec（幂等）并为每 cell 分配恰好一个 initial Run",
     )
     exp_create.add_argument("--spec", required=True, help="ExperimentSpec JSON 或 @文件")
     exp_create.add_argument("--request-key", dest="request_key", help="幂等键（同键异内容拒绝）")
     exp_create.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(exp_create)
     exp_status = experiment_sub.add_parser("status", help="读取实验状态与 cell 进度（只读）")
     exp_status.add_argument("experiment_id")
     exp_status.add_argument("--version", help="指定版本（省略取最新）")
     exp_status.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(exp_status)
     exp_cancel = experiment_sub.add_parser(
         "cancel", help="取消实验（只作用于本实验拥有的 cell 与 Run）",
     )
@@ -1018,8 +1038,9 @@ def _build_parser() -> argparse.ArgumentParser:
     exp_cancel.add_argument("--version", help="指定版本（省略取最新）")
     exp_cancel.add_argument("--reason", default="operator request")
     exp_cancel.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(exp_cancel)
     exp_retry = experiment_sub.add_parser(
-        "retry-cell", help="显式重试：superseding 子 Run，原结果不消失",
+        "retry-cell", help="显式重试：superseding 子 Run，原结果不消失（local-only）",
     )
     exp_retry.add_argument("cell_id")
     exp_retry.add_argument("--reason", default="operator retry")
@@ -1037,6 +1058,7 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="固定候选 scoring pass id（缺省 current）")
     compare.add_argument("--json", dest="json_out", help="把比较 JSON 写入文件")
     compare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(compare)
 
     baseline = sub.add_parser(
         "baseline", help="M6 BaselineSnapshot：创建 / 列表 / 默认指针（指针是 CAS 操作）",
@@ -1057,8 +1079,10 @@ def _build_parser() -> argparse.ArgumentParser:
     bl_create.add_argument("--reason", required=True, help="创建原因（审计）")
     bl_create.add_argument("--source-note", dest="source_note", help="来源备注（审计）")
     bl_create.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(bl_create)
     bl_list = baseline_sub.add_parser("list", help="列出 baseline 快照（只读）")
     bl_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(bl_list)
     bl_select = baseline_sub.add_parser("select", help="设置 scope 默认 baseline 指针（CAS）")
     bl_select.add_argument("--scope", required=True)
     bl_select.add_argument("--baseline", required=True, help="baseline_id")
@@ -1069,9 +1093,11 @@ def _build_parser() -> argparse.ArgumentParser:
     bl_select.add_argument("--by", required=True, help="操作者（审计）")
     bl_select.add_argument("--reason", required=True, help="原因（审计）")
     bl_select.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(bl_select)
     bl_default = baseline_sub.add_parser("default", help="读取 scope 当前默认 baseline 指针")
     bl_default.add_argument("--scope", required=True)
     bl_default.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(bl_default)
 
     gate = sub.add_parser(
         "gate", help="M6 版本化 Gate：政策发布 / 固定报告求值 / 结果读取与导出（零调用）",
@@ -1082,6 +1108,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     gate_publish.add_argument("--policy", required=True, help="GatePolicyVersion JSON 或 @文件")
     gate_publish.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(gate_publish)
     gate_evaluate = gate_sub.add_parser(
         "evaluate",
         help="固定报告求值（只读）；退出码=决策映射（协议 §7）：pass=0 quality_fail=1 "
@@ -1097,14 +1124,17 @@ def _build_parser() -> argparse.ArgumentParser:
     gate_evaluate.add_argument("--json", dest="json_out", help="把导出 JSON 写入文件")
     gate_evaluate.add_argument("--junit", dest="junit_out", help="把 JUnit XML 写入文件")
     gate_evaluate.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(gate_evaluate)
     gate_result = gate_sub.add_parser("result", help="读取一个 GateResult（只读）")
     gate_result.add_argument("gate_result_id")
     gate_result.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(gate_result)
     gate_export = gate_sub.add_parser("export", help="导出 GateResult（exporter v1：json/junit）")
     gate_export.add_argument("--result", required=True, help="gate_result_id")
     gate_export.add_argument("--format", choices=("json", "junit"), default="json")
     gate_export.add_argument("--out", help="写文件（缺省打印 stdout）")
     gate_export.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(gate_export)
 
     regression = sub.add_parser(
         "regression", help="M6 两份固定报告的逐 case 回归分类（只读；added/removed 独立列出）",
@@ -1116,6 +1146,11 @@ def _build_parser() -> argparse.ArgumentParser:
     regression.add_argument("--candidate-pass", dest="candidate_pass",
                             help="固定候选 scoring pass id（缺省 current）")
     regression.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    remote.add_mode_arguments(regression)
+
+    # M7 新增：run 生命周期子命令与运维命令（local/server 路由见各模块）。
+    runops.add_run_lifecycle_parsers(sub)
+    ops.add_ops_parsers(sub)
     return parser
 
 
@@ -2094,6 +2129,8 @@ def _experiment_command(args) -> int:
 
     preview 纯只读（零创建零调用）；violations 非空按"请求不合法"族退出 2。
     create 只发布 spec 并铺 cell/分配 Run，执行仍在 Worker 的执行锁内。
+    server 模式（协议 §3）只覆盖 preview/create/status/cancel；retry-cell 无
+    远端入口，local-only。
     """
     from pydantic import ValidationError
 
@@ -2102,6 +2139,42 @@ def _experiment_command(args) -> int:
     command = args.experiment_command
     if command not in ("preview", "create", "status", "cancel", "retry-cell"):
         return _error("CONTRACT_INVALID", f"unknown experiment subcommand: {command}")
+
+    if remote.is_server(args):
+        if command not in ("preview", "create", "status", "cancel"):
+            return remote.cli_error(
+                "LOCAL_ONLY_COMMAND",
+                f"experiment {command} has no remote endpoint; run it with --mode local",
+            )
+        document = None
+        if command in ("preview", "create"):
+            document, usage_error = _load_m6_document(args.spec, "EXPERIMENT_SPEC_INVALID")
+            if usage_error:
+                return _error("EXPERIMENT_SPEC_INVALID", usage_error)
+
+        def invoke(client):
+            if command == "preview":
+                return client.experiment_preview(document)
+            if command == "create":
+                return client.experiment_create(
+                    document, request_key=getattr(args, "request_key", None),
+                )
+            if command == "status":
+                return client.experiment_status(
+                    args.experiment_id, getattr(args, "version", None),
+                ).raw
+            return client.experiment_cancel(
+                args.experiment_id, getattr(args, "version", None),
+                reason=getattr(args, "reason", None),
+            )
+
+        outcome = remote.call_remote(args, invoke, default_code="EXPERIMENT_NOT_FOUND")
+        if isinstance(outcome, remote.RemoteOk):
+            print(_m6_json(outcome.payload))
+            if command == "preview":
+                return 2 if outcome.payload.get("violations") else 0
+            return 0
+        return outcome
 
     if command in ("preview", "create"):
         document, usage_error = _load_m6_document(
@@ -2160,6 +2233,22 @@ def _compare_command(args) -> int:
     from motte_sdk.export import comparison_to_json
 
     factors = [item.strip() for item in (args.factors or "model").split(",") if item.strip()]
+    if remote.is_server(args):
+        def invoke(client):
+            return client.compare(
+                args.baseline, args.candidate,
+                factors=",".join(factors),
+                baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
+            ).raw
+
+        outcome = remote.call_remote(args, invoke, default_code="RUN_NOT_FOUND")
+        if isinstance(outcome, remote.RemoteOk):
+            payload = outcome.payload
+            if args.json_out:
+                _write_text(args.json_out, _m6_json(payload))
+            print(_m6_json(payload))
+            return 5 if payload.get("level") == "not_comparable" else 0
+        return outcome
     service = _comparison_service(args)
     try:
         result = service.compare(
@@ -2195,6 +2284,57 @@ def _baseline_command(args) -> int:
     from motte_sdk.comparisons import ComparisonError
 
     command = args.baseline_command
+    if command not in ("create", "list", "select", "default"):
+        return _error("CONTRACT_INVALID", f"unknown baseline subcommand: {command}")
+
+    if remote.is_server(args):
+        invoke = None
+        if command == "create":
+            entries, usage_error = _load_m6_document(args.entries, "ENTRIES_INVALID", kind=list)
+            if usage_error:
+                return _error("ENTRIES_INVALID", usage_error)
+            if any(not isinstance(item, dict) for item in entries):
+                return _error(
+                    "ENTRIES_INVALID",
+                    '--entries 每项必须是对象：{"cell_key"?, "run_id", "scoring_pass_id"}',
+                )
+            policy = None
+            if args.policy:
+                loaded, policy_error = _load_m6_document(
+                    args.policy, "COMPARISON_POLICY_INVALID",
+                )
+                if policy_error:
+                    return _error("COMPARISON_POLICY_INVALID", policy_error)
+                policy = loaded
+
+            def invoke(client):
+                return client.create_baseline(
+                    args.id, entries, policy=policy, created_by=args.by,
+                    reason=args.reason, source_note=args.source_note,
+                ).raw
+        elif command == "list":
+            def invoke(client):
+                items = [snapshot.raw for snapshot in client.list_baselines()]
+                return {"items": items, "total": len(items)}
+        elif command == "select":
+            def invoke(client):
+                return client.set_default_baseline(
+                    args.scope, args.baseline, updated_by=args.by, reason=args.reason,
+                    expected_current=args.expected_current,
+                )
+        else:
+            def invoke(client):
+                # 读取指针：client 未暴露便捷方法，仍只经 MotteClient（GET /baselines/default）。
+                return client._get(  # noqa: SLF001 - 协议 §3：远端数据只经 SDK client
+                    "/api/v1/baselines/default", params={"scope": args.scope},
+                )
+
+        outcome = remote.call_remote(args, invoke, default_code="BASELINE_NOT_FOUND")
+        if isinstance(outcome, remote.RemoteOk):
+            print(_m6_json(outcome.payload))
+            return 0
+        return outcome
+
     service = _comparison_service(args)
 
     if command == "create":
@@ -2275,6 +2415,73 @@ def _gate_policy_ref(args) -> tuple[tuple[str, str], None] | tuple[None, str]:
     return (policy_id, policy_version), None
 
 
+def _gate_command_remote(args, command: str) -> int:
+    """gate 的 server 模式：求值/读取/导出都只经 MotteClient（协议 §3）。
+
+    junit 导出端点返回 XML（非 JSON），因此走 get_gate_result + 本地
+    result_to_junit 纯函数格式化——仍是零模型/零 Judge 调用。
+    """
+    from motte_sdk.export import result_to_json, result_to_junit
+
+    if command == "policy-publish":
+        document, usage_error = _load_m6_document(args.policy, "GATE_POLICY_INVALID")
+        if usage_error:
+            return _error("GATE_POLICY_INVALID", usage_error)
+
+        def invoke(client):
+            return client.publish_gate_policy(document)
+    elif command == "evaluate":
+        ref, usage_error = _gate_policy_ref(args)
+        if usage_error:
+            return _error("POLICY_REF_INVALID", usage_error)
+
+        def invoke(client):
+            return client.evaluate_gate_versioned(
+                args.run, ref[0], ref[1],
+                scoring_pass_id=args.scoring_pass, baseline_id=args.baseline,
+            ).raw
+    elif command == "result":
+        def invoke(client):
+            return client.get_gate_result(args.gate_result_id).raw
+    else:  # export
+        def invoke(client):
+            if args.format == "junit":
+                stored = client.get_gate_result(args.result).raw
+                return ("junit", result_to_junit(stored))
+            return ("json", client.export_gate(args.result, format="json"))
+
+    outcome = remote.call_remote(args, invoke, default_code="GATE_RESULT_NOT_FOUND")
+    if not isinstance(outcome, remote.RemoteOk):
+        return outcome
+    payload = outcome.payload
+
+    if command == "policy-publish":
+        print(_m6_json(payload))
+        return 0
+    if command == "evaluate":
+        if args.json_out:
+            _write_text(args.json_out, _m6_json(result_to_json(payload)))
+        if args.junit_out:
+            _write_text(args.junit_out, result_to_junit(payload) + "\n")
+        print(_m6_json(payload))
+        exit_code = payload.get("exit_code")
+        if exit_code is None:
+            from motte_eval.gates import gate_exit_code
+
+            exit_code = gate_exit_code(payload.get("decision"))
+        return int(exit_code)
+    if command == "result":
+        print(_m6_json(payload))
+        return 0
+    kind, content = payload
+    formatted = content + "\n" if kind == "junit" else _m6_json(content)
+    if args.out:
+        _write_text(args.out, formatted)
+    else:
+        sys.stdout.write(formatted)
+    return 0
+
+
 def _gate_command(args) -> int:
     """gate policy-publish/evaluate/result/export（协议 §6–§7）。
 
@@ -2288,6 +2495,10 @@ def _gate_command(args) -> int:
     command = args.gate_command
     if command not in ("policy-publish", "evaluate", "result", "export"):
         return _error("CONTRACT_INVALID", f"unknown gate subcommand: {command}")
+
+    if remote.is_server(args):
+        return _gate_command_remote(args, command)
+
     service = _comparison_service(args)
 
     if command == "policy-publish":
@@ -2359,6 +2570,28 @@ def _regression_command(args) -> int:
     """regression：两份固定报告的逐 case 回归分类（A10/G14，只读）。"""
     from motte_sdk.comparisons import ComparisonError
 
+    if remote.is_server(args):
+        def invoke(client):
+            return client.classify_regression(
+                args.baseline, args.candidate,
+                baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
+            )
+
+        outcome = remote.call_remote(args, invoke, default_code="RUN_NOT_FOUND")
+        if isinstance(outcome, remote.RemoteOk):
+            report = outcome.payload
+            classification = report.get("classification") or {}
+            report["new_failure_cases"] = sorted(
+                case_id for case_id, result in classification.items()
+                if result == "new_failure"
+            )
+            report["fixed_cases"] = sorted(
+                case_id for case_id, result in classification.items()
+                if result == "fixed"
+            )
+            print(_m6_json(report))
+            return 0
+        return outcome
     service = _comparison_service(args)
     try:
         report = service.classify_regression(
@@ -2380,6 +2613,52 @@ def _regression_command(args) -> int:
     )
     print(_m6_json(report))
     return 0
+
+
+#: 与 apps/api/app/main.py 的 BUILTIN_SCENARIOS 同一集合（SCENARIO_NOT_FOUND parity）。
+_BUILTIN_SCENARIOS = {"replay@1", "json_extract@1", "direct-llm@1", "vision@1"}
+
+
+def _scenario_missing(scenario: str, resources) -> str | None:
+    """镜像 API 的场景存在性预检：local/server 同输入产出同错误码（协议 §3）。"""
+    if scenario in _BUILTIN_SCENARIOS:
+        return None
+    try:
+        scenario_name, scenario_version = scenario.rsplit("@", 1)
+    except ValueError:
+        scenario_name, scenario_version = scenario, ""
+    if (
+        not scenario_name
+        or resources.scenarios.get(scenario_name, scenario_version) is None
+    ):
+        return f"scenario not found: {scenario}"
+    return None
+
+
+def _run_create_remote(args) -> int:
+    """`motte run` 的 server 模式：POST /runs（可选 request_key 幂等，协议 §1.3）。"""
+    try:
+        spec = _load_json(args.spec)
+    except (OSError, json.JSONDecodeError) as error:
+        return remote.cli_error("RUN_SPEC_INVALID", f"--spec 不是可解析的 JSON：{error}")
+    if not isinstance(spec, dict):
+        return remote.cli_error(
+            "RUN_SPEC_INVALID", "--spec 必须是 JSON 对象：{scenario_version, manifest, case_ids}",
+        )
+
+    def invoke(client):
+        return client.create_run(
+            spec.get("scenario_version", "default@1"),
+            spec.get("manifest") or {},
+            spec.get("case_ids") or [],
+            request_key=getattr(args, "request_key", None),
+        ).raw
+
+    outcome = remote.call_remote(args, invoke)
+    if isinstance(outcome, remote.RemoteOk):
+        print(json.dumps(outcome.payload, ensure_ascii=False))
+        return 0
+    return outcome
 
 
 def main(argv=None):
@@ -2428,6 +2707,33 @@ def main(argv=None):
     if args.command == "workflow":
         return _workflow_command(args)
 
+    # M7：run 生命周期子命令与运维命令（local/server 路由见 motte_cli.runops / ops）。
+    if args.command in (
+        "run-list", "run-get", "run-cancel", "run-retry",
+        "run-events", "run-wait", "run-report",
+    ):
+        return {
+            "run-list": runops.run_list_command,
+            "run-get": runops.run_get_command,
+            "run-cancel": runops.run_cancel_command,
+            "run-retry": runops.run_retry_command,
+            "run-events": runops.run_events_command,
+            "run-wait": runops.run_wait_command,
+            "run-report": runops.run_report_command,
+        }[args.command](args)
+    if args.command == "backup":
+        return ops.backup_command(args)
+    if args.command == "restore":
+        return ops.restore_command(args)
+    if args.command == "restore-guard":
+        return ops.restore_guard_command(args)
+    if args.command == "maintenance":
+        return ops.maintenance_command(args)
+    if args.command == "gc":
+        return ops.gc_command(args)
+    if args.command == "import":
+        return ops.import_command(args)
+
     if args.command == "inspect-import":
         from pathlib import Path as _Path
 
@@ -2452,21 +2758,49 @@ def main(argv=None):
     if args.command == "run":
         from motte_sdk.resolve import ManifestResolutionError, prepare_run
 
+        if remote.is_server(args):
+            return _run_create_remote(args)
         spec = _load_json(args.spec)
         service = _service(args)
         requested_manifest = spec.get("manifest", {})
         manifest = requested_manifest
+        missing_scenario = _scenario_missing(
+            spec.get("scenario_version", "default@1"), _resources(args))
+        if missing_scenario is not None:
+            print(json.dumps({"error": {"code": "SCENARIO_NOT_FOUND",
+                                        "message": missing_scenario}},
+                             ensure_ascii=False), file=sys.stderr)
+            return 2
         try:
             manifest, case_ids = prepare_run(spec.get("scenario_version", "default@1"), manifest, spec.get("case_ids", []), _resources(args))
         except ManifestResolutionError as error:
             print(json.dumps({"error": {"code": error.code, "message": str(error)}}, ensure_ascii=False), file=sys.stderr)
             return 2
-        run = service.create_run(
-            spec.get("scenario_version", "default@1"),
-            manifest,
-            case_ids,
-            requested_manifest=requested_manifest,
-        )
+        request_key = getattr(args, "request_key", None)
+        if request_key:
+            # local 幂等创建（协议 §1.3）：与 API 同一 canonical-hash + 注册表语义。
+            from motte_cli.idempotent_create import create_run_idempotent
+            from motte_storage.platform import RequestConflict
+
+            try:
+                run = create_run_idempotent(
+                    service,
+                    scenario_version=spec.get("scenario_version", "default@1"),
+                    manifest=manifest,
+                    case_ids=case_ids,
+                    requested_manifest=requested_manifest,
+                    raw_case_ids=spec.get("case_ids", []),
+                    request_key=request_key,
+                )
+            except RequestConflict as error:
+                return _error(getattr(error, "code", "REQUEST_KEY_CONFLICT"), str(error))
+        else:
+            run = service.create_run(
+                spec.get("scenario_version", "default@1"),
+                manifest,
+                case_ids,
+                requested_manifest=requested_manifest,
+            )
         print(json.dumps(run, ensure_ascii=False))
         return 0
 
@@ -2661,22 +2995,14 @@ def main(argv=None):
         print(f"已删除 profile {args.profile}")
         return 0
 
-    if args.command in ("backup", "restore", "cleanup-artifacts"):
-        import os
+    if args.command == "cleanup-artifacts":
+        # local-only（涉及宿主文件；协议 §3）；M7 起优先使用 motte gc。
+        blocked = remote.local_only_error(args, "cleanup-artifacts")
+        if blocked is not None:
+            return blocked
+        from motte_storage.maintenance import cleanup_artifacts
 
-        from motte_storage.maintenance import backup_sqlite, cleanup_artifacts, restore_sqlite
-
-        db_path = args.db or os.environ.get("MOTTE_DB_PATH", "var/runs.db")
         artifacts_root = getattr(args, "artifacts_root", None) or os.environ.get("ARTIFACT_ROOT")
-
-        if args.command == "backup":
-            manifest = backup_sqlite(db_path, args.target, artifacts_root=artifacts_root)
-            print(json.dumps(manifest, ensure_ascii=False))
-            return 0
-        if args.command == "restore":
-            restored = restore_sqlite(args.source, db_path, artifacts_root=artifacts_root)
-            print(json.dumps(restored, ensure_ascii=False))
-            return 0
         if not artifacts_root:
             print("cleanup-artifacts 需要 --artifacts-root 或 ARTIFACT_ROOT", file=sys.stderr)
             return 2

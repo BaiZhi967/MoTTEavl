@@ -2,3 +2,26 @@
 name = "motte-sdk"
 version = "0.1.0"
 requires-python = ">=3.12"
+# SDK 依赖闭包保持最小（G09）：contracts + httpx，仅此而已。
+# Runner/Worker 专属依赖（docker/celery/psutil/pyyaml）不得进入这里。
+dependencies = [
+    "motte-contracts",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+# pytest 插件（T04 的 entry point）安装位：装了该 extra 才带 pytest。
+pytest = ["pytest>=9"]
+# 便捷运行本地 API 用；正式部署仍以根 workspace 部署为准。
+server = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
+
+# M7-T04：opt-in pytest 插件注册（协议 §4）。插件未开启时零行为（A06）。
+[project.entry-points.pytest11]
+motte = "motte_sdk.pytest_plugin"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["motte_sdk"]

@@ -38,9 +38,7 @@ jobs:
           scan-type: config
           scan-ref: infra/docker-compose.yml
       - name: openapi 无漂移
-        run: |
-          uv run python -c "import json; from apps.api.app.main import app; open('api/openapi.json.new', 'w', encoding='utf-8').write(json.dumps(app.openapi(), ensure_ascii=False, indent=2, sort_keys=True) + '\n')"
-          diff api/openapi.json api/openapi.json.new
+        run: uv run python scripts/check_openapi.py
   web:
     runs-on: ubuntu-latest
     steps:
@@ -59,3 +57,21 @@ jobs:
         run: |
           pnpm --dir apps/web gen:api
           git diff --exit-code apps/web/src/api/schema.d.ts
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: make wheels
+      - name: clean venv wheel 安装冒烟（checkout 外，无 PYTHONPATH）
+        run: |
+          VENV_DIR="$(mktemp -d)/venv"
+          python -m venv "$VENV_DIR"
+          "$VENV_DIR/bin/pip" install dist/*.whl
+          WORK_DIR="$(mktemp -d)"
+          cd "$WORK_DIR"
+          "$VENV_DIR/bin/python" -c "import motte_sdk; from motte_sdk import MotteClient; print(motte_sdk.__file__)"
+          "$VENV_DIR/bin/python" -m motte_cli --help

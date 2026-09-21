@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from motte_contracts.compat import adapt_legacy_report, adapt_legacy_run, adapt_legacy_trace_event
 from motte_contracts.events import TraceEvent
+from motte_contracts.identity import canonical_sha256
 from motte_contracts.report import ReportSummary, RunReport
 from motte_contracts.run import Run, RunCommand
 from motte_sdk.execution_backends import legacy_execution
@@ -23,13 +24,16 @@ from motte_sdk.resolve import (
 from motte_sdk.service import RunService, build_run_service
 from motte_storage import RunConflictError
 from motte_storage.factory import create_resource_store
+from motte_storage.platform import RequestConflict, platform_for
 from motte_storage.resource_store import InMemoryResourceStore, ResourceConflictError
+from starlette.middleware.cors import CORSMiddleware
 
 from apps.api.app.schemas import (
     AgentTasksDryRunResponse,
     AgentTasksImportRequest,
     AgentTasksRunRequest,
     CancelRunRequest,
+    CapabilitiesResponse,
     CreateRunRequest,
     DatasetSourceListResponse,
     DatasetSummaryListResponse,
@@ -38,6 +42,7 @@ from apps.api.app.schemas import (
     DirectLlmImportResponse,
     DirectLlmOverviewResponse,
     DirectLlmRunRequest,
+    EventsSnapshotResponse,
     JudgeCancelView,
     JudgeJobListResponse,
     JudgeJobView,
@@ -56,11 +61,33 @@ from apps.api.app.schemas import (
     WorkflowConversionResponse,
     WorkflowValidationResponse,
 )
+from apps.api.app.security import (
+    MaintenanceModeMiddleware,
+    SingleUserSecurityMiddleware,
+    security_config_from_env,
+)
 
 #: create_app 的"未指定"哨兵：显式传 None 表示关闭 Judge 执行（submit 明确拒绝）。
 _UNSET: Any = object()
 
 SSE_POLL_INTERVAL_SECONDS = 1.0
+#: 单轮 poll 最多推送的事件数（协议 §2 流大小上限）；超出部分下一轮继续。
+SSE_EVENTS_PER_POLL = 500
+#: 单轮 poll 最多推送的事件数（协议 §2 流大小上限）；超出部分下一轮继续。
+SSE_EVENTS_PER_POLL = 500
+#: events/snapshot 持久查询的单次上限。
+EVENTS_SNAPSHOT_LIMIT = 500
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def redact_event(event: dict[str, Any]) -> dict[str, Any]:
+    """SSE 公共流出口脱敏（懒导入，保持 API 模块导入零副作用）。"""
+    from motte_trace.redaction import redact_secrets
+
+    return redact_secrets(event)
 
 AGENT_CATALOG = [
     {
@@ -369,6 +396,7 @@ def _load_json_file(path: str | None) -> dict | None:
 
 def create_app(
     store=None, resource_store=None, *, judge_provider_factory: Any = _UNSET,
+    allowed_hosts: Any = None, allowed_origins: Any = None, api_token: Any = None,
 ) -> FastAPI:
     service = build_run_service() if store is None else RunService(store)
     resources = (
@@ -379,6 +407,33 @@ def create_app(
     application = FastAPI(title="MoTTEavl API", version="0.1.0")
     application.state.run_service = service
     application.state.resource_store = resources
+
+    # M7 安全边界（协议 §10）：Host/Origin/token；远程部署必须显式配置。
+    security = security_config_from_env(
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+        api_token=api_token,
+    )
+    application.state.security = security
+
+    def _maintenance_active() -> bool:
+        try:
+            return platform_for(service.store).meta.get("maintenance") == "active"
+        except Exception:  # pragma: no cover - 平台表缺失时按非维护处理
+            return False
+
+    application.state.maintenance_active = _maintenance_active
+    # add_middleware 后添加者在外层：CORS → 安全 → 维护 → 应用。
+    application.add_middleware(MaintenanceModeMiddleware, is_active=_maintenance_active)
+    application.add_middleware(SingleUserSecurityMiddleware, **security)
+    if security["allowed_origins"]:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=sorted(security["allowed_origins"]),
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @application.exception_handler(ResourceConflictError)
     async def resource_conflict(request, error):
@@ -403,6 +458,47 @@ def create_app(
     @application.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @application.get("/api/v1/capabilities", response_model=CapabilitiesResponse)
+    def capabilities() -> dict[str, Any]:
+        """SDK 能力握手（协议 §1.2）：api_version 不匹配或 feature 缺失由客户端判定。"""
+        return {
+            "name": "motteavl",
+            "api_version": "v1",
+            "app_version": application.version,
+            "features": {
+                "idempotent_run_create": True,
+                "sse_cursor": True,
+                "sse_gap": True,
+                "events_snapshot": True,
+                "maintenance_mode": True,
+                "gate_export": True,
+            },
+            "limits": {
+                "sse_events_per_poll": SSE_EVENTS_PER_POLL,
+                "events_snapshot_limit": EVENTS_SNAPSHOT_LIMIT,
+            },
+        }
+
+    @application.get("/api/v1/maintenance")
+    def maintenance_status() -> dict[str, Any]:
+        started_at = platform_for(service.store).meta.get("maintenance_started_at")
+        return {"active": _maintenance_active(), "started_at": started_at}
+
+    @application.post("/api/v1/maintenance/begin")
+    def maintenance_begin(reason: str = "operator requested") -> dict[str, Any]:
+        platform_stores = platform_for(service.store)
+        if not _maintenance_active():
+            platform_stores.meta.set("maintenance", "active")
+            platform_stores.meta.set("maintenance_started_at", _utc_now_iso())
+        return maintenance_status() | {"reason": reason}
+
+    @application.post("/api/v1/maintenance/end")
+    def maintenance_end() -> dict[str, Any]:
+        platform_stores = platform_for(service.store)
+        platform_stores.meta.delete("maintenance")
+        platform_stores.meta.delete("maintenance_started_at")
+        return maintenance_status()
 
     @application.post(
         "/api/v1/runs",
@@ -517,9 +613,62 @@ def create_app(
             invalid = _validate_provider(manifest["provider"])
             if invalid is not None:
                 return invalid
-        return service.create_run(
-            scenario, manifest, case_ids, requested_manifest=requested_manifest
-        )
+        # M7 幂等创建（协议 §1.3）：run_id 由 request_key 确定性派生，runs 表主键
+        # 天然原子去重；注册表是可查询索引 + hash 冲突检测器。同 key 同 body →
+        # 同一 Run；同 key 不同 body → 409；bind 与 create 之间不存在悬挂窗口。
+        request_key = body.get("request_key") or ""
+        deterministic_run_id = None
+        registry = None
+        canonical_hash = ""
+        if request_key:
+            canonical_payload = {
+                key: value for key, value in body.items() if key != "request_key"
+            }
+            canonical_hash = canonical_sha256(canonical_payload)
+            registry = platform_for(service.store).requests
+            existing = registry.get(request_key)
+            if existing is not None and existing["canonical_hash"] != canonical_hash:
+                return JSONResponse(
+                    status_code=409,
+                    content={"error": {"code": "REQUEST_KEY_CONFLICT", "message": (
+                        "request key was already used with a different request body"
+                    )}},
+                )
+            if existing is not None:
+                try:
+                    replayed = service.get_run(existing["run_id"])
+                except KeyError:
+                    replayed = None  # 陈旧绑定：按确定性 id 重建同一 Run
+                if replayed is not None:
+                    return JSONResponse(
+                        status_code=200,
+                        content={**adapt_legacy_run(replayed), "idempotent_replay": True},
+                        headers={"Idempotent-Replay": "true"},
+                    )
+            deterministic_run_id = "run-" + hashlib.sha256(
+                ("motte-request-key:" + request_key).encode("utf-8")
+            ).hexdigest()[:32]
+        try:
+            created = service.create_run(
+                scenario, manifest, case_ids, requested_manifest=requested_manifest,
+                run_id=deterministic_run_id,
+            )
+        except RunConflictError:
+            # 确定性 id 已存在（并发同 key，或注册表丢失后的重放）：返回现有 Run。
+            if not request_key:
+                raise
+            try:
+                replayed = service.get_run(deterministic_run_id or "")
+            except KeyError as error:
+                raise HTTPException(status_code=409, detail="run already exists") from error
+            return JSONResponse(
+                status_code=200,
+                content={**adapt_legacy_run(replayed), "idempotent_replay": True},
+                headers={"Idempotent-Replay": "true"},
+            )
+        if request_key:
+            registry.bind(request_key, canonical_hash, created["id"])
+        return created
 
     @application.get(
         "/api/v1/runs",
@@ -814,26 +963,77 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         last_event_id = request.headers.get("last-event-id")
-        cursor = max(after, int(last_event_id)) if last_event_id is not None else after
+        if last_event_id is not None:
+            try:
+                cursor = max(after, int(last_event_id))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "LAST_EVENT_ID_INVALID", "message": (
+                        "Last-Event-ID must be an integer event sequence"
+                    )},
+                ) from None
+        else:
+            cursor = after
+
+        def _envelope(event: dict[str, Any]) -> str:
+            # R3 #4：SSE 公共流按值形状脱敏；持久 trace 原文不动
+            payload = TraceEvent.model_validate(
+                adapt_legacy_trace_event(redact_event(event))
+            ).model_dump(mode="json", exclude_none=True)
+            return json.dumps(payload, ensure_ascii=False)
 
         async def stream():
             nonlocal cursor
-            from motte_trace.redaction import redact_secrets
-
             while True:
-                for event in service.events_after(run_id, cursor):
+                pending = service.events_after(run_id, cursor)
+                if pending:
+                    # 协议 §2 gap：请求的游标之后第一帧之前存在被清理的段时，
+                    # 先发命名事件 motte-gap，客户端负责 partial 标记与持久补齐。
+                    first_seq = pending[0]["seq"]
+                    if first_seq > cursor + 1:
+                        gap = {
+                            "type": "gap", "after": cursor,
+                            "next_seq": first_seq, "partial": True,
+                        }
+                        yield (
+                            "event: motte-gap\ndata: "
+                            + json.dumps(gap, ensure_ascii=False) + "\n\n"
+                        )
+                for event in pending[:SSE_EVENTS_PER_POLL]:
                     cursor = event["seq"]
-                    # R3 #4：SSE 公共流按值形状脱敏；持久 trace 原文不动
-                    envelope = TraceEvent.model_validate(
-                        adapt_legacy_trace_event(redact_secrets(event))
-                    ).model_dump(mode="json", exclude_none=True)
-                    yield f"id: {event['seq']}\ndata: {json.dumps(envelope, ensure_ascii=False)}\n\n"
+                    yield f"id: {event['seq']}\ndata: {_envelope(event)}\n\n"
                 if service.get_run(run_id)["status"] in RunService.TERMINAL:
                     return
                 yield ": ping\n\n"
                 await asyncio.sleep(SSE_POLL_INTERVAL_SECONDS)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    @application.get(
+        "/api/v1/runs/{run_id}/events/snapshot", response_model=EventsSnapshotResponse,
+    )
+    def events_snapshot(run_id: str, after: int = 0, limit: int = EVENTS_SNAPSHOT_LIMIT):
+        """SSE 断线/缺口的持久查询（协议 §2）：JSON 一次返回，去重与排序由 DB 保证。"""
+        try:
+            run = service.get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="run not found") from error
+        bounded = max(1, min(limit, EVENTS_SNAPSHOT_LIMIT))
+        pending = service.events_after(run_id, max(0, after))[:bounded]
+        # 快照内不会出现 gap（一次查询原子的 seq > after 前缀）；快照之外是否
+        # 还有事件由 last_seq 与调用方游标比较得出。
+        return {
+            "events": [
+                TraceEvent.model_validate(
+                    adapt_legacy_trace_event(redact_event(event))
+                ).model_dump(mode="json", exclude_none=True)
+                for event in pending
+            ],
+            "last_seq": pending[-1]["seq"] if pending else None,
+            "run_status": run.get("status"),
+            "partial": False,
+        }
 
     @application.get(
         "/api/v1/runs/{run_id}/report",

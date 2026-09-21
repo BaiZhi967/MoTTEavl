@@ -6,3 +6,10 @@ dependencies = [
     "cel-python>=0.5,<0.6",
     "pydantic>=2.8",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["motte_contracts"]
