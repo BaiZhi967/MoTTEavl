@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from motte_contracts.compat import adapt_legacy_report, adapt_legacy_run, adapt_legacy_trace_event
 from motte_contracts.events import TraceEvent
 from motte_contracts.report import ReportSummary, RunReport
@@ -3516,9 +3516,13 @@ def create_app(
             )
         return {
             "eligible": result.eligible,
+            "level": result.level.value,
             "reasons": list(result.reasons),
+            "structural_reasons": list(result.structural_reasons),
+            "metric_reasons": list(result.metric_reasons),
             "metric_eligibility": result.metric_eligibility,
             "case_diff": result.case_diff,
+            "allowed_differences": list(result.allowed_differences),
         }
 
     @application.post("/api/v1/gates")
@@ -3584,6 +3588,280 @@ def create_app(
         except ComparisonError:
             conclusion["coverage_summary"] = None
         return conclusion
+
+    # ------------------------------------------- M6-Full：Experiment/Baseline/GatePolicy/导出（只读求值 + 持久接收）
+
+    def _m6_error(error: Exception) -> JSONResponse | None:
+        """M6 服务错误 → 结构化响应；非 M6 错误返回 None 交上层。"""
+        code = getattr(error, "code", None)
+        if code is None:
+            return None
+        status = 409 if str(code).endswith(("CONFLICT", "IMMUTABLE", "APPEND_ONLY")) else 422
+        return JSONResponse(
+            status_code=status,
+            content={"error": {"code": str(code), "message": str(error)}},
+        )
+
+    # -- ReportSnapshot / 回归分类 -------------------------------------------
+
+    @application.get("/api/v1/runs/{run_id}/report-snapshot")
+    def get_report_snapshot(run_id: str, scoring_pass_id: str | None = None):
+        try:
+            snapshot = comparisons_service.report_snapshot(
+                run_id, scoring_pass_id=scoring_pass_id,
+            )
+        except KeyError:
+            return _error_json(404, "RUN_NOT_FOUND", f"run {run_id} not found")
+        except ComparisonError as error:
+            return _error_json(422, error.code, str(error))
+        return snapshot.model_dump()
+
+    @application.get("/api/v1/regressions")
+    def classify_regression(
+        baseline: str,
+        candidate: str,
+        baseline_pass: str | None = None,
+        candidate_pass: str | None = None,
+    ):
+        try:
+            return comparisons_service.classify_regression(
+                baseline, candidate,
+                baseline_pass_id=baseline_pass, candidate_pass_id=candidate_pass,
+            )
+        except KeyError:
+            return _error_json(404, "RUN_NOT_FOUND", "run not found")
+        except ComparisonError as error:
+            return _error_json(422, error.code, str(error))
+
+    # -- Baseline -------------------------------------------------------------
+
+    @application.get("/api/v1/baselines")
+    def list_baselines(limit: int = 100):
+        items = comparisons_service.list_baselines(limit=limit)
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/baselines")
+    def create_baseline(body: dict):
+        baseline_id = body.get("baseline_id")
+        if not isinstance(baseline_id, str) or not baseline_id:
+            return _error_json(422, "BASELINE_ID_REQUIRED", "baseline_id is required")
+        entries = body.get("entries")
+        if not isinstance(entries, list) or not entries:
+            return _error_json(
+                422, "ENTRIES_REQUIRED",
+                "entries must be a nonempty list of {cell_key?, run_id, scoring_pass_id}",
+            )
+        try:
+            stored = comparisons_service.create_baseline(
+                baseline_id, entries,
+                policy=body.get("policy") or {"allowed_factors": ["model"]},
+                created_by=str(body.get("created_by") or "api"),
+                reason=str(body.get("reason") or ""),
+                source_note=body.get("source_note"),
+            )
+        except ComparisonError as error:
+            return _error_json(422, error.code, str(error))
+        except Exception as error:  # BaselineConflict 等
+            mapped = _m6_error(error)
+            if mapped is not None:
+                return mapped
+            raise
+        return JSONResponse(status_code=201, content=stored)
+
+    @application.get("/api/v1/baselines/default")
+    def get_default_baseline(scope: str):
+        pointer = comparisons_service.get_default_baseline(scope)
+        return {"scope": scope, "pointer": pointer}
+
+    @application.post("/api/v1/baselines/default")
+    def set_default_baseline(body: dict):
+        scope = body.get("scope")
+        baseline_id = body.get("baseline_id")
+        if not isinstance(scope, str) or not scope or not isinstance(baseline_id, str) or not baseline_id:
+            return _error_json(422, "POINTER_INVALID", "scope and baseline_id are required")
+        expected = body.get("expected_current")
+        if expected is not None and not isinstance(expected, str):
+            return _error_json(422, "POINTER_INVALID", "expected_current must be a string")
+        try:
+            pointer = comparisons_service.set_default_baseline(
+                scope, baseline_id,
+                updated_by=str(body.get("updated_by") or "api"),
+                reason=str(body.get("reason") or ""),
+                expected_current=expected,
+            )
+        except Exception as error:
+            mapped = _m6_error(error)
+            if mapped is not None:
+                return mapped
+            if isinstance(error, ComparisonError):
+                return _error_json(422, error.code, str(error))
+            raise
+        return pointer
+
+    @application.get("/api/v1/baselines/{baseline_id}")
+    def get_baseline(baseline_id: str):
+        snapshot = comparisons_service.get_baseline(baseline_id)
+        if snapshot is None:
+            return _error_json(404, "BASELINE_NOT_FOUND", f"baseline {baseline_id} not found")
+        return snapshot
+
+    # -- GatePolicy -----------------------------------------------------------
+
+    @application.get("/api/v1/gate-policies")
+    def list_gate_policies(policy_id: str | None = None):
+        gate_repo = getattr(service.store, "gate_store", None)
+        if gate_repo is None:
+            return _error_json(501, "GATE_STORE_UNAVAILABLE", "gate store not wired")
+        items = gate_repo.list_policies(policy_id=policy_id)
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/gate-policies")
+    def publish_gate_policy(body: dict):
+        try:
+            stored = comparisons_service.publish_gate_policy(body)
+        except ComparisonError as error:
+            return _error_json(422, error.code, str(error))
+        return JSONResponse(status_code=201, content=stored)
+
+    @application.get("/api/v1/gate-policies/{policy_id}/{version}")
+    def get_gate_policy(policy_id: str, version: str):
+        gate_repo = getattr(service.store, "gate_store", None)
+        if gate_repo is None:
+            return _error_json(501, "GATE_STORE_UNAVAILABLE", "gate store not wired")
+        policy = gate_repo.get_policy(policy_id, version)
+        if policy is None:
+            return _error_json(404, "GATE_POLICY_NOT_FOUND", "policy not found")
+        return policy
+
+    @application.post("/api/v1/gate-policies/{policy_id}/{version}/deprecate")
+    def deprecate_gate_policy(policy_id: str, version: str):
+        gate_repo = getattr(service.store, "gate_store", None)
+        if gate_repo is None:
+            return _error_json(501, "GATE_STORE_UNAVAILABLE", "gate store not wired")
+        try:
+            return gate_repo.deprecate_policy(policy_id, version)
+        except KeyError:
+            return _error_json(404, "GATE_POLICY_NOT_FOUND", "policy not found")
+
+    # -- 版本化 Gate 求值与导出 --------------------------------------------------
+
+    @application.post("/api/v1/gates/versioned")
+    def evaluate_versioned_gate(body: dict):
+        run_id = body.get("run_id")
+        policy_id = body.get("policy_id")
+        policy_version = body.get("policy_version")
+        if not isinstance(run_id, str) or not run_id:
+            return _error_json(422, "RUN_REQUIRED", "run_id is required")
+        if not isinstance(policy_id, str) or not isinstance(policy_version, str):
+            return _error_json(422, "POLICY_REF_REQUIRED", "policy_id and policy_version are required")
+        try:
+            result = comparisons_service.evaluate_gate_versioned(
+                policy_id=policy_id, policy_version=policy_version, run_id=run_id,
+                scoring_pass_id=body.get("scoring_pass_id"),
+                baseline_id=body.get("baseline_id"),
+                allowed_factors=tuple(body.get("allowed_factors") or ("model",)),
+            )
+        except KeyError as error:
+            return _error_json(404, "RUN_NOT_FOUND", str(error))
+        except ComparisonError as error:
+            return _error_json(422, error.code, str(error))
+        return result
+
+    @application.get("/api/v1/gates/results/{gate_result_id}")
+    def get_gate_result(gate_result_id: str):
+        gate_repo = getattr(service.store, "gate_store", None)
+        if gate_repo is None:
+            return _error_json(501, "GATE_STORE_UNAVAILABLE", "gate store not wired")
+        result = gate_repo.get_result(gate_result_id)
+        if result is None:
+            return _error_json(404, "GATE_RESULT_NOT_FOUND", "gate result not found")
+        return result
+
+    @application.get("/api/v1/gates/results/{gate_result_id}/export")
+    def export_gate_result(gate_result_id: str, format: str = "json"):
+        gate_repo = getattr(service.store, "gate_store", None)
+        if gate_repo is None:
+            return _error_json(501, "GATE_STORE_UNAVAILABLE", "gate store not wired")
+        result = gate_repo.get_result(gate_result_id)
+        if result is None:
+            return _error_json(404, "GATE_RESULT_NOT_FOUND", "gate result not found")
+        if format == "junit":
+            from motte_sdk.export import result_to_junit
+
+            return Response(
+                content=result_to_junit(result),
+                media_type="application/xml",
+            )
+        from motte_sdk.export import result_to_json
+
+        return result_to_json(result)
+
+    # -- Experiment -----------------------------------------------------------
+
+    from motte_sdk.experiments import ExperimentError, ExperimentService
+
+    experiments_service = ExperimentService(service.store, service)
+    application.state.experiments = experiments_service
+
+    @application.post("/api/v1/experiments/preview")
+    def preview_experiment(body: dict):
+        try:
+            return experiments_service.preview(body)
+        except Exception as error:
+            code = getattr(error, "code", "EXPERIMENT_INVALID")
+            return _error_json(422, str(code), str(error))
+
+    @application.post("/api/v1/experiments")
+    def create_experiment(body: dict):
+        request_key = body.pop("_request_key", None) or body.pop("request_key", None)
+        try:
+            outcome = experiments_service.create(body, request_key=request_key)
+        except ExperimentError as error:
+            return _error_json(422, error.code, str(error))
+        except Exception as error:
+            code = getattr(error, "code", None)
+            if code is not None:
+                status = 409 if str(code).endswith(("CONFLICT", "IMMUTABLE")) else 422
+                return _error_json(status, str(code), str(error))
+            raise
+        return JSONResponse(status_code=202, content=outcome)
+
+    @application.post("/api/v1/experiments/{experiment_id}/allocate")
+    def allocate_experiment(experiment_id: str, body: dict | None = None):
+        version = str((body or {}).get("version") or "1")
+        try:
+            return experiments_service.allocate(experiment_id, version)
+        except KeyError:
+            return _error_json(404, "EXPERIMENT_NOT_FOUND", f"experiment {experiment_id} not found")
+        except ExperimentError as error:
+            return _error_json(422, error.code, str(error))
+
+    @application.get("/api/v1/experiments/{experiment_id}")
+    def get_experiment(experiment_id: str, version: str | None = None):
+        try:
+            return experiments_service.status(experiment_id, version)
+        except KeyError:
+            return _error_json(404, "EXPERIMENT_NOT_FOUND", f"experiment {experiment_id} not found")
+
+    @application.post("/api/v1/experiments/{experiment_id}/cancel")
+    def cancel_experiment(experiment_id: str, body: dict | None = None):
+        version = (body or {}).get("version")
+        try:
+            return experiments_service.cancel(
+                experiment_id, version,
+                reason=str((body or {}).get("reason") or "experiment cancelled"),
+            )
+        except KeyError:
+            return _error_json(404, "EXPERIMENT_NOT_FOUND", f"experiment {experiment_id} not found")
+
+    @application.post("/api/v1/experiments/cells/{cell_id}/retry")
+    def retry_experiment_cell(cell_id: str, body: dict | None = None):
+        try:
+            return experiments_service.retry_cell(
+                cell_id, reason=str((body or {}).get("reason") or "explicit retry"),
+            )
+        except KeyError:
+            return _error_json(404, "CELL_NOT_FOUND", f"cell {cell_id} not found")
 
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 
