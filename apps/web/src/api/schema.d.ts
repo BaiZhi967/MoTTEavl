@@ -1437,6 +1437,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scenario-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Scenario Targets
+         * @description 可用 scenario target 及其**真实**能力；注册表为空即明确不可用，不猜测。
+         */
+        get: operations["list_scenario_targets_api_v1_scenario_targets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scenarios": {
         parameters: {
             query?: never;
@@ -1486,6 +1506,154 @@ export interface paths {
         /** Register Skill */
         post: operations["register_skill_api_v1_skills_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Skill Document
+         * @description 纯静态校验：契约、kind 分型、entrypoint 形状与依赖 pin；不发布、不执行。
+         *
+         *     只声明 static 作用域：内容寻址的资源字节核验属于 executable fixture
+         *     作用域（需要内容存储），本响应明确 resource_bytes_verified=False，
+         *     不把读 manifest 谎称为已执行（M5-A10）。
+         */
+        post: operations["validate_skill_document_api_v1_skills_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skill Versions
+         * @description 已发布 Skill 版本目录：只读仓库，零模型调用、零执行。
+         */
+        get: operations["list_skill_versions_api_v1_skills_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/{skill_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill Version */
+        get: operations["get_skill_version_api_v1_skills__skill_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workflows
+         * @description 已发布 Workflow 版本目录：只读仓库，零模型调用、零执行（M5-G21/A18）。
+         */
+        get: operations["list_workflows_api_v1_workflows_get"];
+        put?: never;
+        /**
+         * Publish Workflow
+         * @description 发布不可变 Workflow 版本：同内容幂等，同版本异内容 409。
+         *
+         *     校验与预检共用 _workflow_publication_record：草稿在契约层被拒绝，
+         *     内容 hash 由服务端固定，客户端提交不一致的 hash 立即拒绝。
+         */
+        post: operations["publish_workflow_api_v1_workflows_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/legacy-conversion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Convert Legacy Workflow
+         * @description 旧 DSL 只读转换报告：诊断 + 映射 + publishable + runs_executed。
+         *
+         *     只解析、不发布、不执行任何步骤（M5-T01；runs_executed 恒为 0）。
+         */
+        post: operations["convert_legacy_workflow_api_v1_workflows_legacy_conversion_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Workflow Document
+         * @description 纯预检：编译 Workflow 文档并返回逐字段错误；不发布、不执行、零模型调用。
+         */
+        post: operations["validate_workflow_document_api_v1_workflows_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_id}/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workflow */
+        get: operations["get_workflow_api_v1_workflows__workflow_id___version__get"];
+        put?: never;
+        post?: never;
+        /** Delete Workflow */
+        delete: operations["delete_workflow_api_v1_workflows__workflow_id___version__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2287,6 +2455,37 @@ export interface components {
             /** Terminal At */
             terminal_at?: string | null;
         };
+        /** ScenarioTargetListResponse */
+        ScenarioTargetListResponse: {
+            /** Available */
+            available: boolean;
+            /** Items */
+            items?: components["schemas"]["ScenarioTargetSummary"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ScenarioTargetSummary
+         * @description 一个注册目标的能力声明；available=False 表示只有声明、不可执行。
+         */
+        ScenarioTargetSummary: {
+            /** Available */
+            available: boolean;
+            /** Evidence */
+            evidence?: string[];
+            /** Interrupt */
+            interrupt?: boolean | null;
+            /** Kind */
+            kind: string;
+            /** Multi Turn */
+            multi_turn?: boolean | null;
+            /** Skill Injection */
+            skill_injection?: boolean | null;
+            /** Tool Modes */
+            tool_modes?: string[];
+            /** Tools */
+            tools?: string[];
+        };
         /** Score */
         Score: {
             /** Attempted */
@@ -2369,6 +2568,60 @@ export interface components {
             items: components["schemas"]["ScoringPass"][];
             /** Total */
             total: number;
+        };
+        /**
+         * SkillValidationResponse
+         * @description Skill 纯静态校验结果。
+         *
+         *     validation_scope 只有 static：不运行入口、不执行 fixture、不调用模型；
+         *     resource_bytes_verified=False 表示内容寻址的资源字节核验属于另一个作用域，
+         *     不能把读 manifest 说成已执行（M5-A10）。
+         */
+        SkillValidationResponse: {
+            /** Content Hash */
+            content_hash: string;
+            /** Defaulted Fields */
+            defaulted_fields?: string[];
+            /** Dependency Refs */
+            dependency_refs?: {
+                [key: string]: unknown;
+            }[];
+            /** Executable */
+            executable: boolean;
+            /** Executed */
+            executed: boolean;
+            /** Fixture Refs */
+            fixture_refs?: {
+                [key: string]: unknown;
+            }[];
+            /** Kind */
+            kind: string;
+            /** Lifecycle */
+            lifecycle: string;
+            /** Ok */
+            ok: boolean;
+            /** Ref */
+            ref: string;
+            /** Requested Permissions */
+            requested_permissions?: {
+                [key: string]: unknown;
+            };
+            /** Resource Bytes Verified */
+            resource_bytes_verified: boolean;
+            /** Resource Paths */
+            resource_paths?: string[];
+            /** Schema Version */
+            schema_version: number;
+            /** Skill Id */
+            skill_id: string;
+            /**
+             * Validation Scope
+             * @default static
+             * @constant
+             */
+            validation_scope: "static";
+            /** Version */
+            version: string;
         };
         /** SourceArtifact */
         SourceArtifact: {
@@ -2567,6 +2820,102 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * WorkflowConversionResponse
+         * @description 旧 DSL 只读转换报告：不发布、不执行（runs_executed 恒为 0）。
+         */
+        WorkflowConversionResponse: {
+            /** Blocking Codes */
+            blocking_codes?: string[];
+            /** Candidate */
+            candidate?: {
+                [key: string]: unknown;
+            } | null;
+            /** Diagnostics */
+            diagnostics?: components["schemas"]["WorkflowDiagnostic"][];
+            /** Executed */
+            executed: boolean;
+            /** Fixture Draft */
+            fixture_draft: {
+                [key: string]: unknown;
+            };
+            /** Mapping */
+            mapping?: {
+                [key: string]: unknown;
+            }[];
+            /** Publishable */
+            publishable: boolean;
+            /** Published */
+            published: boolean;
+            /** Runs Executed */
+            runs_executed: number;
+            /** Source */
+            source?: {
+                [key: string]: unknown;
+            };
+            /** Workflow Draft */
+            workflow_draft: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * WorkflowDiagnostic
+         * @description 一条转换诊断：稳定 code + 严重度 + 旧 DSL 路径 + 可读原因。
+         */
+        WorkflowDiagnostic: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Path */
+            path: string;
+            /** Severity */
+            severity: string;
+        };
+        /**
+         * WorkflowValidationResponse
+         * @description Workflow 纯预检结果：结构、条件、预算与目标要求都可编译时才 ok。
+         *
+         *     executed 恒为 False：预检不发布版本、不创建 Run、不调用模型。
+         */
+        WorkflowValidationResponse: {
+            /** Condition Count */
+            condition_count: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Defaulted Fields */
+            defaulted_fields?: string[];
+            /** Executed */
+            executed: boolean;
+            /** Fixture Refs */
+            fixture_refs?: {
+                [key: string]: unknown;
+            }[];
+            /** Limits */
+            limits: {
+                [key: string]: unknown;
+            };
+            /** Ok */
+            ok: boolean;
+            /** Publishable */
+            publishable: boolean;
+            /** Ref */
+            ref: string;
+            /** Schema Version */
+            schema_version: number;
+            /** Step Count */
+            step_count: number;
+            /** Target Requirements */
+            target_requirements: {
+                [key: string]: unknown;
+            };
+            /** Top Level Step Ids */
+            top_level_step_ids?: string[];
+            /** Version */
+            version: string;
+            /** Workflow Id */
+            workflow_id: string;
         };
     };
     responses: never;
@@ -5244,6 +5593,26 @@ export interface operations {
             };
         };
     };
+    list_scenario_targets_api_v1_scenario_targets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioTargetListResponse"];
+                };
+            };
+        };
+    };
     list_items_api_v1_scenarios_get: {
         parameters: {
             query?: never;
@@ -5400,6 +5769,282 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_skill_document_api_v1_skills_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skill_versions_api_v1_skills_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_skill_version_api_v1_skills__skill_id__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workflows_api_v1_workflows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    publish_workflow_api_v1_workflows_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    convert_legacy_workflow_api_v1_workflows_legacy_conversion_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowConversionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_workflow_document_api_v1_workflows_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_api_v1_workflows__workflow_id___version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_workflow_api_v1_workflows__workflow_id___version__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
