@@ -67,16 +67,26 @@ from motte_storage.scoring_jobs import (
 )
 
 __all__ = [
+    "FrozenProviderFactory",
+    "JudgeEvidenceError",
     "JudgeProviderPolicy",
+    "JudgeProviderSnapshot",
+    "JudgeProviderSnapshotError",
     "ScoringJobError",
     "ScoringJobConflict",
     "ScoringJobRequest",
     "ScoringJobService",
+    "build_judge_submission",
     "default_artifact_reader",
+    "freeze_judge_provider_snapshot",
+    "resolve_saved_observations",
 ]
 
 #: 一次调用的 usage 累计维度；任一已结算调用缺失就整项保持未知。
 _USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+#: 快照里只作审计、不参与身份的时间戳：重复提交必须得到同一 snapshot hash。
+_SNAPSHOT_AUDIT_FIELDS = frozenset({"frozen_at"})
 
 
 def default_artifact_reader(root: str | None = None) -> Callable[[str], bytes | None]:
@@ -92,6 +102,322 @@ def default_artifact_reader(root: str | None = None) -> Callable[[str], bytes | 
             return None
 
     return read
+
+
+class JudgeProviderSnapshotError(JudgeError):
+    """冻结的 Provider 快照缺失、不完整或与冻结 spec 不一致。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class JudgeEvidenceError(JudgeInputError):
+    """服务端保存的 Observation 缺失或归属不符；零调用、零发布。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _verify_saved_observation(run_id: str, case_id: str, raw: Any) -> dict[str, Any]:
+    """校验保存的 Observation：契约、evidence_hash 与 run/case 归属。"""
+    from motte_contracts.evaluation import FrozenObservation, observation_evidence_hash
+
+    if not isinstance(raw, dict):
+        raise JudgeEvidenceError(
+            "JUDGE_EVIDENCE_INVALID", f"saved observation is not an object: {case_id}"
+        )
+    try:
+        frozen = FrozenObservation.model_validate(raw)
+    except Exception as error:  # noqa: BLE001 - 损坏的观察按不可评证据处理
+        raise JudgeEvidenceError(
+            "JUDGE_EVIDENCE_INVALID", f"saved observation is invalid: {case_id}: {error}"
+        ) from error
+    payload = {
+        key: value for key, value in raw.items()
+        if key not in {"evidence_hash", "recorded_at"}
+    }
+    if observation_evidence_hash(payload) != raw.get("evidence_hash"):
+        raise JudgeEvidenceError(
+            "JUDGE_EVIDENCE_INVALID",
+            f"saved observation hash does not match its content: {case_id}",
+        )
+    if frozen.run_id != run_id:
+        raise JudgeEvidenceError(
+            "JUDGE_EVIDENCE_INVALID",
+            f"saved observation belongs to another run: {frozen.run_id!r} != {run_id!r}",
+        )
+    if frozen.case_id != case_id:
+        raise JudgeEvidenceError(
+            "JUDGE_EVIDENCE_INVALID",
+            f"saved observation belongs to another case: {frozen.case_id!r} != {case_id!r}",
+        )
+    return raw
+
+
+def resolve_saved_observations(
+    store: Any, run_id: str, case_ids: Any = None,
+) -> dict[str, dict[str, Any]]:
+    """服务端解析 Judge 证据：只读**保存过的** CaseRun 结果，客户端不提供内容。
+
+    sample_count 因此来自这里解析出的证据数量，而不是客户端填写的计数。
+    任何缺失/归属不符都在提交期拒绝：零调用、零发布。
+    """
+    run = store.runs.get(run_id)
+    if run is None:
+        raise JudgeEvidenceError("JUDGE_EVIDENCE_MISSING", f"subject run is missing: {run_id}")
+    selected = [str(case_id) for case_id in (case_ids or run.get("case_ids") or [])]
+    if not selected:
+        raise JudgeEvidenceError(
+            "JUDGE_EVIDENCE_MISSING", "judge submission requires at least one saved case"
+        )
+    run_cases = set(run.get("case_ids") or [])
+    resolved: dict[str, dict[str, Any]] = {}
+    for case_id in selected:
+        if case_id in resolved:
+            raise JudgeEvidenceError(
+                "JUDGE_EVIDENCE_INVALID", f"duplicate case id in the judge request: {case_id}"
+            )
+        if run_cases and case_id not in run_cases:
+            raise JudgeEvidenceError(
+                "JUDGE_EVIDENCE_MISSING", f"case is not part of the saved run: {case_id}"
+            )
+        row = store.case_runs.get(run_id, case_id)
+        raw = None
+        if isinstance(row, dict):
+            result = row.get("result")
+            if isinstance(result, dict):
+                raw = result.get("observation")
+        if not isinstance(raw, dict):
+            raise JudgeEvidenceError(
+                "JUDGE_EVIDENCE_MISSING",
+                f"no saved observation for case: {case_id}",
+            )
+        resolved[case_id] = _verify_saved_observation(run_id, case_id, raw)
+    return resolved
+
+
+class JudgeProviderSnapshot(Contract):
+    """提交期冻结的非秘密 Provider 身份：引用、hash、adapter、端点与凭据引用。
+
+    执行期只按这份快照构造 Provider，不再按可变名称重新解析资源；凭据引用
+    只是一个**名字**（凭据文件 profile / 环境变量名），秘密在构造 Provider 时
+    才解析，绝不进入 job / manifest / event / log。
+    """
+
+    schema_version: Literal[1] = 1
+    model_resource_id: str | None = None
+    model_profile_generation: int | None = None
+    model_profile_sha256: str | None = None
+    provider_connection: str | None = None
+    provider_connection_generation: int | None = None
+    provider_connection_sha256: str | None = None
+    adapter_id: str | None = None
+    adapter_version: str | None = None
+    endpoint: str | None = None
+    request_path: str | None = None
+    model: str = Field(min_length=1)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    reasoning: dict[str, Any] | None = None
+    reasoning_level: str | None = None
+    identity_policy: str | None = None
+    identity_aliases: dict[str, str] | None = None
+    identity_alias_version: str | None = None
+    #: 非秘密凭据引用：profile 名与 env 变量名，绝不是密钥本身。
+    credential_ref: str | None = None
+    api_key_env: str | None = None
+    price_table_version: str | None = None
+    price_table_sha256: str | None = None
+    price_table: dict[str, Any] | None = None
+    transport: dict[str, Any] = Field(default_factory=dict)
+    frozen_at: str | None = None
+    snapshot_sha256: str = Field(min_length=71, max_length=71)
+
+    @model_validator(mode="after")
+    def sealed_and_secret_free(self) -> "JudgeProviderSnapshot":
+        from .resolve import find_secret_paths
+
+        payload = self.model_dump(mode="json")
+        declared = payload.pop("snapshot_sha256")
+        for audit in _SNAPSHOT_AUDIT_FIELDS:
+            payload.pop(audit, None)
+        if declared != canonical_sha256(payload):
+            raise ValueError("judge provider snapshot_sha256 does not match its content")
+        leaked = find_secret_paths(payload)
+        if leaked:
+            raise ValueError(
+                "judge provider snapshot must only carry non-secret references: "
+                + ", ".join(leaked)
+            )
+        return self
+
+    @classmethod
+    def seal(cls, payload: dict[str, Any]) -> "JudgeProviderSnapshot":
+        """按内容封存快照：snapshot_sha256 由**契约归一化后**的内容决定。"""
+        data = {key: value for key, value in payload.items() if key != "snapshot_sha256"}
+        # 先按契约补全默认值，再对归一化视图取 hash，保证校验与封存同一公式。
+        data["snapshot_sha256"] = "sha256:" + "0" * 64
+        view = cls.model_construct(**data).model_dump(mode="json")
+        view.pop("snapshot_sha256")
+        # 审计时间戳不进身份：同一资源内容的重复提交必须得到同一快照 hash。
+        for audit in _SNAPSHOT_AUDIT_FIELDS:
+            view.pop(audit, None)
+        data["snapshot_sha256"] = canonical_sha256(view)
+        return cls.model_validate(data)
+
+    @classmethod
+    def minimal(cls, model: str) -> "JudgeProviderSnapshot":
+        """没有提交期快照时的最小身份（库内直连路径，仅用于向后兼容）。"""
+        return cls.seal({"model": model})
+
+    def provider_config(self) -> dict[str, Any]:
+        """还原成 motte_provider 的 provider 配置（凭据仍只是引用）。"""
+        if not self.adapter_id or not self.endpoint:
+            raise JudgeProviderSnapshotError(
+                "JUDGE_SNAPSHOT_INCOMPLETE",
+                "a frozen judge provider snapshot requires adapter_id and endpoint",
+            )
+        config: dict[str, Any] = {
+            "kind": self.adapter_id,
+            "implementation_version": self.adapter_version,
+            "base_url": self.endpoint,
+            "model": self.model,
+            "parameters": dict(self.parameters or {}),
+            "credentials": self.credential_ref,
+            "api_key_env": self.api_key_env,
+            "price_table": self.price_table,
+            "max_output_tokens": self.max_output_tokens,
+            "reasoning": self.reasoning,
+            "reasoning_level": self.reasoning_level,
+            "identity_policy": self.identity_policy or "report_only",
+            "identity_aliases": self.identity_aliases,
+            "identity_alias_version": self.identity_alias_version,
+            **{key: value for key, value in (self.transport or {}).items()},
+        }
+        if self.request_path:
+            config["request_path"] = self.request_path
+        return {key: value for key, value in config.items() if value is not None}
+
+
+def freeze_judge_provider_snapshot(
+    *,
+    model_resource_id: str,
+    resources: Any,
+    price_table_version: str | None = None,
+    frozen_at: str | None = None,
+) -> JudgeProviderSnapshot:
+    """提交期解析已发布 ModelProfile / ProviderConnection / 价格版本并封存快照。
+
+    解析复用既有 resolve_manifest（生命周期、enabled、adapter 与价格解析都在
+    这里发生），因此 API 与 CLI 得到同一份证据；执行期不再读资源仓库。
+    """
+    from motte_provider.config import provider_class_for
+
+    from .resolve import resolve_manifest
+
+    manifest: dict[str, Any] = {"model": model_resource_id}
+    if price_table_version:
+        manifest["price_table_version"] = price_table_version
+    resolved = resolve_manifest(manifest, resources)
+    provider = resolved.get("provider")
+    if not isinstance(provider, dict):
+        raise JudgeProviderSnapshotError(
+            "JUDGE_PROVIDER_UNRESOLVED",
+            f"model {model_resource_id} did not resolve to a provider connection",
+        )
+    adapter_id = provider.get("adapter_id") or provider.get("kind")
+    if not isinstance(adapter_id, str) or not adapter_id:
+        raise JudgeProviderSnapshotError(
+            "JUDGE_PROVIDER_UNRESOLVED", "resolved provider has no adapter identity"
+        )
+    if provider_class_for(adapter_id) is None:
+        # replay / 脚本 adapter 没有 .complete：不能作为 Judge Provider。
+        raise JudgeProviderSnapshotError(
+            "JUDGE_ADAPTER_UNSUPPORTED",
+            f"provider adapter {adapter_id!r} cannot serve judge completions",
+        )
+    wire_model = provider.get("model")
+    if not isinstance(wire_model, str) or not wire_model:
+        raise JudgeProviderSnapshotError(
+            "JUDGE_PROVIDER_UNRESOLVED", "resolved provider has no model"
+        )
+    snapshots = resolved.get("resource_snapshots") or {}
+    model_snapshot = snapshots.get("model_profile") or {}
+    connection_snapshot = snapshots.get("provider_connection") or {}
+    price_snapshot = snapshots.get("price_table") or {}
+    price_record = provider.get("price_table")
+    price_record = price_record if isinstance(price_record, dict) else None
+    transport = {
+        key: provider[key]
+        for key in ("timeout", "max_retries", "backoff_initial_ms", "backoff_max_ms")
+        if provider.get(key) is not None
+    }
+    ceiling = provider.get("max_output_tokens")
+    return JudgeProviderSnapshot.seal({
+        "model_resource_id": model_resource_id,
+        "model_profile_generation": model_snapshot.get("generation"),
+        "model_profile_sha256": (
+            model_snapshot.get("content_hash") or model_snapshot.get("profile_hash")
+        ),
+        "provider_connection": connection_snapshot.get("name") or provider.get("name"),
+        "provider_connection_generation": connection_snapshot.get("generation"),
+        "provider_connection_sha256": connection_snapshot.get("content_hash"),
+        "adapter_id": adapter_id,
+        "adapter_version": (
+            provider.get("adapter_version") or provider.get("implementation_version")
+        ),
+        "endpoint": provider.get("base_url"),
+        "request_path": provider.get("request_path"),
+        "model": wire_model,
+        "parameters": dict(provider.get("parameters") or {}),
+        "max_output_tokens": ceiling if type(ceiling) is int and ceiling > 0 else None,
+        "reasoning": provider.get("reasoning") or None,
+        "reasoning_level": provider.get("reasoning_level"),
+        "identity_policy": provider.get("identity_policy"),
+        "identity_aliases": provider.get("identity_aliases") or None,
+        "identity_alias_version": provider.get("identity_alias_version"),
+        "credential_ref": provider.get("credentials") or provider.get("name"),
+        "api_key_env": provider.get("api_key_env"),
+        "price_table_version": (
+            (price_record or {}).get("version") or price_snapshot.get("version")
+        ),
+        "price_table_sha256": price_snapshot.get("content_hash"),
+        "price_table": price_record,
+        "transport": transport,
+        "frozen_at": frozen_at or _now(),
+    })
+
+
+class FrozenProviderFactory:
+    """按冻结快照构造 Judge Provider；秘密引用只在**构造期**解析一次。
+
+    这是 Worker 的 provider_factory 契约：参数是 JudgeProviderSnapshot，不是
+    可变的模型名字。快照缺失 adapter/endpoint 时明确拒绝，绝不回落到按名字
+    重新解析资源。
+    """
+
+    def __call__(self, snapshot: Any) -> Any:
+        frozen = (
+            snapshot if isinstance(snapshot, JudgeProviderSnapshot)
+            else JudgeProviderSnapshot.model_validate(snapshot)
+        )
+        from motte_provider.config import build_case_provider
+
+        try:
+            built = build_case_provider(frozen.provider_config(), {})
+        except (KeyError, ValueError, TypeError) as error:
+            raise JudgeProviderSnapshotError(
+                "JUDGE_PROVIDER_BUILD_FAILED", str(error)
+            ) from error
+        provider = getattr(built, "provider", built)
+        if not hasattr(provider, "complete"):
+            raise JudgeProviderSnapshotError(
+                "JUDGE_PROVIDER_BUILD_FAILED",
+                f"provider adapter {frozen.adapter_id!r} exposes no completion call",
+            )
+        return provider
 
 
 class JudgeProviderPolicy(Contract):
@@ -142,6 +468,8 @@ class ScoringJobRequest(Contract):
     estimated_prompt_tokens: int = Field(default=0, ge=0)
     estimated_completion_tokens: int = Field(default=0, ge=0)
     price_table: dict[str, Any] | None = None
+    #: 提交期冻结的非秘密 Provider 身份；存在时执行只按它构造 Provider。
+    provider_snapshot: JudgeProviderSnapshot | None = None
 
     @model_validator(mode="after")
     def shape(self) -> "ScoringJobRequest":
@@ -238,6 +566,88 @@ def _accumulate_usage(
     return totals
 
 
+def build_judge_submission(
+    *,
+    store: Any,
+    resources: Any,
+    request_key: str,
+    run_id: str,
+    mode: str,
+    spec_request: dict[str, Any],
+    case_ids: Any = None,
+    source_pass_id: str | None = None,
+    authorisation: Any = None,
+    publish_policy: str = "all_scored",
+    repeats: int = 1,
+    presentation_orders: Any = None,
+    price_table_version: str | None = None,
+) -> ScoringJobRequest:
+    """API 与 CLI 共用的提交编译：服务端解析资源与证据，客户端只给引用。
+
+    - spec_request.model 是**已发布 ModelProfile id**；线路模型、adapter、端点与
+      价格版本都在这里解析并冻结；
+    - 预算的 price_known / price_table_version 由服务端从解析出的价格表填写，
+      客户端声明不了"价格已知"；
+    - 证据只从保存过的 CaseRun 结果解析，客户端不提供 observation 内容，
+      sample_count 因此也不是客户端能填的。
+    """
+    from motte_eval.judge import JudgeAuthorisation, JudgeBudget, build_judge_spec
+
+    if mode != "single":
+        raise JudgeInputError(
+            "the public judge submission path accepts single-mode jobs only"
+        )
+    model_resource_id = spec_request.get("model")
+    if not isinstance(model_resource_id, str) or not model_resource_id:
+        raise JudgeInputError("judge submission requires a published model resource id")
+    snapshot = freeze_judge_provider_snapshot(
+        model_resource_id=model_resource_id,
+        resources=resources,
+        price_table_version=price_table_version,
+    )
+    price = price_view(snapshot.price_table)
+    budget_request = spec_request.get("budget") or {}
+    budget = JudgeBudget(
+        max_calls=budget_request.get("max_calls"),
+        max_prompt_tokens=budget_request.get("max_prompt_tokens", 0),
+        max_completion_tokens=budget_request.get("max_completion_tokens", 0),
+        price_known=bool(price["known"]),
+        price_table_version=(price["version"] if price["known"] else None),
+        hard_cost_cap_usd=budget_request.get("hard_cost_cap_usd"),
+    )
+    spec = build_judge_spec(
+        judge_profile_id=str(spec_request.get("judge_profile_id") or ""),
+        model=snapshot.model,
+        rubric_id=str(spec_request.get("rubric_id") or ""),
+        rubric_version=str(spec_request.get("rubric_version") or ""),
+        criteria=list(spec_request.get("criteria") or []) or None,
+        parameters=dict(spec_request.get("parameters") or {}),
+        input_selector=spec_request.get("input_selector"),
+        missing_evidence_policy=spec_request.get("missing_evidence_policy"),
+        calibration_version=spec_request.get("calibration_version"),
+        budget=budget,
+        mode=mode,
+    )
+    observations = resolve_saved_observations(store, run_id, case_ids)
+    auth = authorisation
+    if isinstance(auth, dict):
+        auth = JudgeAuthorisation.model_validate(auth)
+    return ScoringJobRequest(
+        request_key=request_key,
+        judge_spec=spec,
+        mode=mode,
+        run_id=run_id,
+        source_pass_id=source_pass_id,
+        observations=observations,
+        authorisation=auth,
+        publish_policy=publish_policy,
+        repeats=repeats,
+        presentation_orders=[list(order) for order in (presentation_orders or [])],
+        price_table=snapshot.price_table,
+        provider_snapshot=snapshot,
+    )
+
+
 class ScoringJobService:
     """ScoringJob 的提交、领取、执行、取消与发布。"""
 
@@ -276,13 +686,44 @@ class ScoringJobService:
         """评分历史读取：零模型调用，不领取、不触发任何 job。"""
         return {"run_id": run_id, "jobs": self.list_for_run(run_id)}
 
+    def get_public(self, job_id: str) -> dict[str, Any]:
+        """公共读取视图：不含输入原文与响应正文。"""
+        job = self.jobs.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return self.public_view(job)
+
+    def history_public(self, run_id: str) -> list[dict[str, Any]]:
+        return [self.public_view(job) for job in self.jobs.list_for_run(run_id)]
+
     # ------------------------------------------------------------- 提交
-    def submit(self, request: ScoringJobRequest) -> dict[str, Any]:
+    def _compile(self, request: ScoringJobRequest) -> dict[str, Any]:
+        """预检与提交共用的唯一编译路径：计划、预算、fingerprint 与冻结快照。
+
+        预检不落库、不构造 Provider；提交只多一步持久化。两条路径消费同一份
+        编译结果，因此不存在第二个调用数公式。
+        """
         spec = request.judge_spec
+        snapshot = request.provider_snapshot
+        if snapshot is not None and snapshot.model != spec.model:
+            raise JudgeProviderSnapshotError(
+                "JUDGE_SNAPSHOT_MODEL_MISMATCH",
+                "frozen provider snapshot model differs from the judge spec model: "
+                f"{snapshot.model!r} != {spec.model!r}",
+            )
         inputs, plans = self._prepare_inputs(request)
         # 先编译完整请求计划，再算预算与 fingerprint：预检的调用数就是计划长度，
         # 不存在第二个公式。
         plans = self._freeze_plans(spec, inputs, plans, request.price_table)
+        if snapshot is not None and snapshot.max_output_tokens is not None:
+            for plan in plans:
+                value = plan.get("output_tokens")
+                if value is not None and value > snapshot.max_output_tokens:
+                    raise JudgeProviderSnapshotError(
+                        "JUDGE_OUTPUT_CEILING_UNSUPPORTED",
+                        f"frozen plan output ceiling {value} exceeds the frozen model "
+                        f"ceiling {snapshot.max_output_tokens}",
+                    )
         allowance = self._allowance(plans)
         preflight = preflight_judge(
             spec,
@@ -317,11 +758,6 @@ class ScoringJobService:
                 f"job would issue {preflight.max_calls} calls, above the provider "
                 f"policy limit of {self.policy.max_calls_per_job}"
             )
-        if self.provider_factory is None:
-            raise JudgeError(
-                "no judge provider factory is configured; submitting would create an "
-                "unexecutable job"
-            )
 
         owner = request.owner
         owner_ref = (
@@ -347,13 +783,58 @@ class ScoringJobService:
             calibration_version=spec.calibration_version,
             plans=plans,
         )
+        if snapshot is not None:
+            # Provider 身份也是请求身份的一部分：资源变了，同一 request_key 就是
+            # 不同内容（409），而不是静默复用旧快照。
+            fingerprint = canonical_sha256({
+                "job_fingerprint": fingerprint,
+                "provider_snapshot_sha256": snapshot.snapshot_sha256,
+            })
+        return {
+            "spec": spec,
+            "inputs": inputs,
+            "plans": plans,
+            "allowance": allowance,
+            "preflight": preflight,
+            "owner": owner,
+            "owner_ref": owner_ref,
+            "fingerprint": fingerprint,
+            "snapshot": (
+                snapshot.model_dump(mode="json") if snapshot is not None else None
+            ),
+        }
+
+    def preflight(self, request: ScoringJobRequest) -> dict[str, Any]:
+        """零费用预检：不落作业、不构造 Provider、不调用模型。"""
+        compiled = self._compile(request)
+        report = compiled["preflight"].model_dump(mode="json")
+        report["executed"] = False
+        report["provider_factory_available"] = self.provider_factory is not None
+        report["provider_snapshot"] = deepcopy(compiled["snapshot"])
+        report["model_resource_id"] = (
+            (compiled["snapshot"] or {}).get("model_resource_id")
+        )
+        return report
+
+    def submit(self, request: ScoringJobRequest) -> dict[str, Any]:
+        compiled = self._compile(request)
+        if self.provider_factory is None:
+            raise JudgeError(
+                "no judge provider factory is configured; submitting would create an "
+                "unexecutable job"
+            )
+        spec = compiled["spec"]
+        owner = compiled["owner"]
+        owner_ref = compiled["owner_ref"]
+        plans = compiled["plans"]
+        preflight = compiled["preflight"]
         job_id = new_job_id()
         reserved_pass_id = new_reserved_pass_id()
         record = {
             "schema_version": 1,
             "job_id": job_id,
             "request_key": request.request_key,
-            "fingerprint": fingerprint,
+            "fingerprint": compiled["fingerprint"],
             "owner": deepcopy(owner),
             "owner_kind": owner["kind"],
             "owner_ref": owner_ref,
@@ -377,15 +858,20 @@ class ScoringJobService:
                 if request.authorisation is not None else None
             ),
             "calibration_version": spec.calibration_version,
-            "inputs": {key: value.model_dump(mode="json") for key, value in inputs.items()},
+            "inputs": {
+                key: value.model_dump(mode="json")
+                for key, value in compiled["inputs"].items()
+            },
             # 冻结的唯一调用计划：call_id / owner / mode / repeat_index /
             # presentation_order / input_sha256 每项各有一份，执行只消费这一份。
             "plans": plans,
-            "allowance": allowance,
+            "allowance": compiled["allowance"],
             "input_digests": {
                 plan["case_id"]: plan["input_sha256"] for plan in plans
             },
             "price_table": deepcopy(request.price_table),
+            # 提交期冻结的 Provider 身份：执行期只按它构造 Provider。
+            "provider_snapshot": deepcopy(compiled["snapshot"]),
             "usage_total": None,
             "calls": [],
             "cost_total_usd": 0.0 if preflight.price_coverage["known"] else None,
@@ -397,7 +883,33 @@ class ScoringJobService:
         result = job_view(outcome["job"])
         result["reused"] = not outcome["created"]
         result["preflight"] = deepcopy(preflight.model_dump(mode="json"))
+        result["provider_snapshot"] = deepcopy(compiled["snapshot"])
         return result
+
+    def public_view(self, job: dict[str, Any]) -> dict[str, Any]:
+        """公共作业视图：身份、计划、账本与结果；不含输入原文与响应正文。"""
+        view = job_view(job)
+        view.pop("inputs", None)
+        view["plans"] = [
+            {key: value for key, value in plan.items() if key != "pair"}
+            for plan in view.get("plans") or []
+        ]
+        calls = []
+        for item in view.get("calls") or []:
+            raw = item.get("raw_response")
+            calls.append({
+                **item,
+                "raw_response": (
+                    {
+                        "response_id": raw.get("response_id"),
+                        "provider": raw.get("provider"),
+                        "model": raw.get("model"),
+                    }
+                    if isinstance(raw, dict) else None
+                ),
+            })
+        view["calls"] = calls
+        return view
 
     # ------------------------------------------------------------- 领取与执行
     def claim_next(self) -> dict[str, Any] | None:
@@ -467,7 +979,7 @@ class ScoringJobService:
                 invocation=invocation, call=call,
             )
             try:
-                envelope = self._complete(current["judge_spec"]["model"], request)
+                envelope = self._complete(current, request)
             except Exception as error:  # noqa: BLE001 - 调用失败即持久边界
                 return self._call_failed(current, plan, error)
             summary = self._response_summary(envelope)
@@ -507,7 +1019,24 @@ class ScoringJobService:
         return self.run_claimed(claimed)
 
     def recover_interrupted(self) -> list[str]:
-        return self.jobs.recover_interrupted()
+        """崩溃恢复：prepared 回队列、dispatching 标不确定（绝不自动重发）。
+
+        已 dispatch 但结果未知时费用必须保持未知：把 0.0 的"暂无支出"改回 None，
+        否则不确定作业会假装自己没有产生费用（F17）。
+        """
+        touched = self.jobs.recover_interrupted()
+        for job_id in touched:
+            job = self.jobs.get(job_id)
+            if job is None or job.get("status") != "indeterminate":
+                continue
+            if job.get("cost_total_usd") is None:
+                continue
+            self.jobs.transition(
+                job_id, expected_revision=job["revision"],
+                expected_status="indeterminate", status="indeterminate",
+                allow_same_status=True, changes={"cost_total_usd": None},
+            )
+        return touched
 
     def retry_parse(self, job_id: str) -> dict[str, Any]:
         """确定性重解析：响应已落地的 failed job 可以零费用重试解析。"""
@@ -800,6 +1329,23 @@ class ScoringJobService:
         bundle = JudgeInputBundle.model_validate(job["inputs"][plan["case_id"]])
         return build_judge_request(spec, bundle, max_output_tokens=ceiling)
 
+    @staticmethod
+    def _snapshot_identity(job: dict[str, Any]) -> dict[str, Any]:
+        """冻结 Provider 的非秘密身份摘要（Invocation 与 pass 共用同一份）。"""
+        raw = job.get("provider_snapshot")
+        if not isinstance(raw, dict) or not raw:
+            return {}
+        adapter = raw.get("adapter_id")
+        return {
+            "provider_snapshot_sha256": raw.get("snapshot_sha256"),
+            "model_resource_id": raw.get("model_resource_id"),
+            "provider_connection": raw.get("provider_connection"),
+            "provider_adapter": (
+                f"{adapter}@{raw.get('adapter_version')}" if adapter else None
+            ),
+            "provider_endpoint": raw.get("endpoint"),
+        }
+
     def _invocation_record(
         self, job: dict[str, Any], plan: dict[str, Any],
     ) -> dict[str, Any]:
@@ -852,15 +1398,32 @@ class ScoringJobService:
                 "price_table_version": (
                     job["budget"].get("price_table_version")
                 ),
+                **self._snapshot_identity(job),
             },
             "prepared_at": self._clock(),
         }
 
     # ------------------------------------------------------------- 内部：调用
-    def _complete(self, model: str, request: Any) -> dict[str, Any]:
+    def _snapshot_for(self, job: dict[str, Any]) -> JudgeProviderSnapshot:
+        """执行期的 Provider 身份：只读提交期冻结的快照，绝不按名字重选模型。"""
+        raw = job.get("provider_snapshot")
+        spec = JudgeSpec.model_validate(job["judge_spec"])
+        if isinstance(raw, dict) and raw:
+            frozen = JudgeProviderSnapshot.model_validate(raw)
+            if frozen.model != spec.model:
+                raise JudgeProviderSnapshotError(
+                    "JUDGE_SNAPSHOT_MODEL_MISMATCH",
+                    "frozen provider snapshot model differs from the frozen judge spec "
+                    f"model: {frozen.model!r} != {spec.model!r}",
+                )
+            return frozen
+        # 库内直连路径（无提交期快照）保留最小身份，仅携带冻结 spec 的模型名。
+        return JudgeProviderSnapshot.minimal(spec.model)
+
+    def _complete(self, job: dict[str, Any], request: Any) -> dict[str, Any]:
         if self.provider_factory is None:
             raise JudgeError("no judge provider is configured")
-        provider = self.provider_factory(model)
+        provider = self.provider_factory(self._snapshot_for(job))
         envelope = provider.complete(request)
         if not isinstance(envelope, dict):
             raise JudgeError("judge provider must return an envelope object")
@@ -1076,6 +1639,14 @@ class ScoringJobService:
                 # 只能产生新 pass 并保留 previous_pass_id，绝不覆盖已有评分。
                 "save_policy": "append_pass_append_trials",
                 "publish_policy": job["publish_policy"],
+                # 冻结 Provider 身份：历史评分可核验它当时用的是哪个连接/端点。
+                "provider_snapshot_sha256": self._snapshot_identity(job).get(
+                    "provider_snapshot_sha256"
+                ),
+                "model_resource_id": self._snapshot_identity(job).get("model_resource_id"),
+                "provider_connection": self._snapshot_identity(job).get("provider_connection"),
+                "provider_adapter": self._snapshot_identity(job).get("provider_adapter"),
+                "endpoint": self._snapshot_identity(job).get("provider_endpoint"),
                 "owner": deepcopy(job["owner"]),
                 "source_pass_id": job.get("source_pass_id"),
                 "calibration_version": job.get("calibration_version"),

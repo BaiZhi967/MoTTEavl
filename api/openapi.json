@@ -1415,6 +1415,782 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "JudgeAuthorisationRequest": {
+        "additionalProperties": false,
+        "description": "显式付费授权；purpose 由服务端固定为 judge。",
+        "properties": {
+          "actor": {
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "authorised": {
+            "default": false,
+            "title": "Authorised",
+            "type": "boolean"
+          },
+          "hard_cost_cap_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Cost Cap Usd"
+          },
+          "max_calls": {
+            "minimum": 0.0,
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "max_total_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Tokens"
+          }
+        },
+        "required": [
+          "actor",
+          "max_calls"
+        ],
+        "title": "JudgeAuthorisationRequest",
+        "type": "object"
+      },
+      "JudgeBudgetRequest": {
+        "additionalProperties": false,
+        "description": "Judge 预算请求；价格已知性与价格版本由服务端解析，客户端不能声明。",
+        "properties": {
+          "hard_cost_cap_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Cost Cap Usd"
+          },
+          "max_calls": {
+            "minimum": 1.0,
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "max_completion_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Max Completion Tokens",
+            "type": "integer"
+          },
+          "max_prompt_tokens": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Max Prompt Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_calls"
+        ],
+        "title": "JudgeBudgetRequest",
+        "type": "object"
+      },
+      "JudgeCancelView": {
+        "additionalProperties": true,
+        "description": "幂等取消结果：已发出的请求只中断，不宣称未计费。",
+        "properties": {
+          "billed_calls": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billed Calls"
+          },
+          "in_flight": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Flight"
+          },
+          "job": {
+            "$ref": "#/components/schemas/JudgeJobView"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt"
+          }
+        },
+        "required": [
+          "job",
+          "outcome"
+        ],
+        "title": "JudgeCancelView",
+        "type": "object"
+      },
+      "JudgeJobListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JudgeJobView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "JudgeJobListResponse",
+        "type": "object"
+      },
+      "JudgeJobView": {
+        "additionalProperties": true,
+        "description": "持久 ScoringJob 的公共视图；输入原文与响应正文不在这里。",
+        "properties": {
+          "attempted_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Attempted Calls",
+            "type": "integer"
+          },
+          "billed_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Billed Calls",
+            "type": "integer"
+          },
+          "cancellation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancellation"
+          },
+          "cost_total_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Total Usd"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "judge_spec_sha256": {
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "owner": {
+            "additionalProperties": true,
+            "title": "Owner",
+            "type": "object"
+          },
+          "preflight": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preflight"
+          },
+          "provider_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Snapshot"
+          },
+          "publish_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publish Outcome"
+          },
+          "publish_policy": {
+            "title": "Publish Policy",
+            "type": "string"
+          },
+          "published": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published"
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt"
+          },
+          "repeats": {
+            "minimum": 1.0,
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "request_key": {
+            "title": "Request Key",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "reused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reused"
+          },
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "terminal": {
+            "title": "Terminal",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_id",
+          "request_key",
+          "fingerprint",
+          "status",
+          "terminal",
+          "revision",
+          "owner",
+          "run_id",
+          "mode",
+          "publish_policy",
+          "repeats",
+          "judge_spec_sha256",
+          "created_at"
+        ],
+        "title": "JudgeJobView",
+        "type": "object"
+      },
+      "JudgePreflightRequest": {
+        "additionalProperties": false,
+        "description": "零费用预检：不落作业、不构造 Provider、不调用模型。",
+        "properties": {
+          "authorisation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgeAuthorisationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "case_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Case Ids",
+            "type": "array"
+          },
+          "mode": {
+            "default": "single",
+            "enum": [
+              "single",
+              "pairwise"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "presentation_orders": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Presentation Orders",
+            "type": "array"
+          },
+          "price_table_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Table Version"
+          },
+          "publish_policy": {
+            "default": "all_scored",
+            "enum": [
+              "all_scored",
+              "allow_non_scored"
+            ],
+            "title": "Publish Policy",
+            "type": "string"
+          },
+          "repeats": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "run_id": {
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Pass Id"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/JudgeSpecRequest"
+          }
+        },
+        "required": [
+          "run_id",
+          "spec"
+        ],
+        "title": "JudgePreflightRequest",
+        "type": "object"
+      },
+      "JudgePreflightView": {
+        "additionalProperties": true,
+        "description": "预检结果 + 服务端冻结的 Provider 身份（非秘密）。",
+        "properties": {
+          "authorised": {
+            "title": "Authorised",
+            "type": "boolean"
+          },
+          "budget_executable": {
+            "title": "Budget Executable",
+            "type": "boolean"
+          },
+          "executed": {
+            "const": false,
+            "default": false,
+            "title": "Executed",
+            "type": "boolean"
+          },
+          "hard_monetary_cap": {
+            "title": "Hard Monetary Cap",
+            "type": "boolean"
+          },
+          "max_calls": {
+            "minimum": 0.0,
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "model_resource_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Resource Id"
+          },
+          "orderings": {
+            "minimum": 1.0,
+            "title": "Orderings",
+            "type": "integer"
+          },
+          "provider_factory_available": {
+            "title": "Provider Factory Available",
+            "type": "boolean"
+          },
+          "provider_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Snapshot"
+          },
+          "purpose": {
+            "const": "judge",
+            "default": "judge",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "repeats": {
+            "minimum": 1.0,
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "sample_count": {
+            "minimum": 0.0,
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "spec_sha256": {
+            "title": "Spec Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "model",
+          "spec_sha256",
+          "sample_count",
+          "repeats",
+          "orderings",
+          "max_calls",
+          "authorised",
+          "budget_executable",
+          "hard_monetary_cap",
+          "provider_factory_available"
+        ],
+        "title": "JudgePreflightView",
+        "type": "object"
+      },
+      "JudgeSpecRequest": {
+        "additionalProperties": false,
+        "description": "Judge 配置请求；model 是**已发布的 ModelProfile id**，不是线路模型名。\n\n服务端在提交期解析它并冻结 adapter / endpoint / 线路模型 / 价格版本；\n客户端不能提交估算 token 数或价格覆盖。",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/JudgeBudgetRequest"
+          },
+          "calibration_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Version"
+          },
+          "criteria": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "input_selector": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Selector"
+          },
+          "judge_profile_id": {
+            "minLength": 1,
+            "title": "Judge Profile Id",
+            "type": "string"
+          },
+          "missing_evidence_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "insufficient_evidence",
+                  "not_applicable",
+                  "fail"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Evidence Policy"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "title": "Rubric Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judge_profile_id",
+          "model",
+          "rubric_id",
+          "rubric_version",
+          "budget"
+        ],
+        "title": "JudgeSpecRequest",
+        "type": "object"
+      },
+      "JudgeSubmitRequest": {
+        "additionalProperties": false,
+        "description": "持久提交：request_key 是幂等键，内容 fingerprint 与它分离。",
+        "properties": {
+          "authorisation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgeAuthorisationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "case_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Case Ids",
+            "type": "array"
+          },
+          "mode": {
+            "default": "single",
+            "enum": [
+              "single",
+              "pairwise"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "presentation_orders": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Presentation Orders",
+            "type": "array"
+          },
+          "price_table_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Table Version"
+          },
+          "publish_policy": {
+            "default": "all_scored",
+            "enum": [
+              "all_scored",
+              "allow_non_scored"
+            ],
+            "title": "Publish Policy",
+            "type": "string"
+          },
+          "repeats": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "request_key": {
+            "minLength": 1,
+            "title": "Request Key",
+            "type": "string"
+          },
+          "run_id": {
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Pass Id"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/JudgeSpecRequest"
+          }
+        },
+        "required": [
+          "run_id",
+          "spec",
+          "request_key"
+        ],
+        "title": "JudgeSubmitRequest",
+        "type": "object"
+      },
       "ReplayCase": {
         "additionalProperties": false,
         "properties": {
@@ -3168,7 +3944,7 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ScoringPass"
+              "$ref": "#/components/schemas/ScoringPassView"
             },
             "title": "Items",
             "type": "array"
@@ -3184,6 +3960,138 @@
           "total"
         ],
         "title": "ScoringPassListResponse",
+        "type": "object"
+      },
+      "ScoringPassView": {
+        "additionalProperties": true,
+        "description": "ScoringPass 契约 + M5 Judge 身份（purpose / job_id / judge / interventions）。\n\n契约模型是 extra=\"forbid\" 且没有这些字段：直接用契约序列化会把 R3 的统一\npass 身份（rubric / spec / calibration / owner / save_policy）丢掉，甚至让\nJudge pass 的历史读取直接 500。公共读取必须看到完整身份。",
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge"
+          },
+          "previous_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Pass Id"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "scorer_id": {
+            "title": "Scorer Id",
+            "type": "string"
+          },
+          "scorer_version": {
+            "title": "Scorer Version",
+            "type": "string"
+          },
+          "scores": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Scores",
+            "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "source_run_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Revision"
+          },
+          "source_snapshot_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Hash"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "title": "Summary",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "scorer_id",
+          "scorer_version"
+        ],
+        "title": "ScoringPassView",
         "type": "object"
       },
       "SkillValidationResponse": {
@@ -5958,6 +6866,178 @@
         "summary": "Import Inspect"
       }
     },
+    "/api/v1/judges": {
+      "post": {
+        "operationId": "judge_submit_api_v1_judges_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgeSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge Submit"
+      }
+    },
+    "/api/v1/judges/preflight": {
+      "post": {
+        "operationId": "judge_preflight_api_v1_judges_preflight_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgePreflightRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgePreflightView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge Preflight"
+      }
+    },
+    "/api/v1/judges/{job_id}": {
+      "get": {
+        "operationId": "judge_get_api_v1_judges__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge Get"
+      }
+    },
+    "/api/v1/judges/{job_id}/cancel": {
+      "post": {
+        "description": "幂等取消：已发出的请求只中断，绝不宣称未计费。",
+        "operationId": "judge_cancel_api_v1_judges__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CancelRunRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeCancelView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge Cancel"
+      }
+    },
     "/api/v1/models": {
       "get": {
         "operationId": "list_items_api_v1_models_get",
@@ -7029,6 +8109,46 @@
           }
         },
         "summary": "Run Invocations"
+      }
+    },
+    "/api/v1/runs/{run_id}/judge-jobs": {
+      "get": {
+        "description": "评分历史读取：零模型调用，不领取、不触发任何作业。",
+        "operationId": "judge_history_api_v1_runs__run_id__judge_jobs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeJobListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Judge History"
       }
     },
     "/api/v1/runs/{run_id}/messages": {

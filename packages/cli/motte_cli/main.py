@@ -603,8 +603,42 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scenario_run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
-    workflow = sub.add_parser(
-        "workflow", help="Workflow 版本资源：发布 / 列表 / 旧 DSL 只读转换报告",
+    judge = sub.add_parser(
+        "judge", help="Judge 评分作业：预检 / 提交 / 查询 / 历史 / 取消（与 API 同一编译器）",
+    )
+    judge_sub = judge.add_subparsers(dest="judge_command", required=True)
+    judge_preflight = judge_sub.add_parser(
+        "preflight", help="零费用预检：服务端解析资源与证据，不落作业、不调用模型",
+    )
+    judge_preflight.add_argument(
+        "--spec", required=True,
+        help="judge 请求 JSON 或 @文件：{run_id, mode, spec{model,budget,...}, case_ids, authorisation}",
+    )
+    judge_preflight.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    judge_submit = judge_sub.add_parser(
+        "submit", help="持久提交 Judge 作业（由 Worker 在执行锁内领取执行）",
+    )
+    judge_submit.add_argument("--spec", required=True, help="同 preflight 的请求 JSON 或 @文件")
+    judge_submit.add_argument(
+        "--request-key", dest="request_key", help="幂等键；缺省时取 spec.request_key",
+    )
+    judge_submit.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    judge_status = judge_sub.add_parser("status", help="读取一个 Judge 作业（零模型调用）")
+    judge_status.add_argument("job_id")
+    judge_status.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    judge_history = judge_sub.add_parser(
+        "history", help="列出某个 Run 的 Judge 作业历史（零模型调用）",
+    )
+    judge_history.add_argument("--run", required=True, help="subject Run id")
+    judge_history.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    judge_cancel = judge_sub.add_parser(
+        "cancel", help="幂等取消 Judge 作业（已发出的请求只中断，不宣称未计费）",
+    )
+    judge_cancel.add_argument("job_id")
+    judge_cancel.add_argument("--reason", default="operator request")
+    judge_cancel.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
+    workflow = sub.add_parser(        "workflow", help="Workflow 版本资源：发布 / 列表 / 旧 DSL 只读转换报告",
     )
     workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
     wf_publish = workflow_sub.add_parser(
@@ -1641,6 +1675,121 @@ def _scenario_command(args) -> int:
     return _error("CONTRACT_INVALID", f"unknown scenario subcommand: {command}")
 
 
+def _judge_command(args) -> int:
+    """judge preflight/submit/status/history/cancel：与 API 共用同一编译器。
+
+    预检与读取零模型调用；提交只落持久作业，执行永远在 Worker 的执行锁内。
+    """
+    from motte_eval.judge import JudgeBudgetError, JudgeError, JudgeInputError, JudgeNotAuthorised
+    from motte_sdk.resolve import ManifestResolutionError
+    from motte_sdk.scoring_jobs import (
+        FrozenProviderFactory,
+        JudgeEvidenceError,
+        JudgeProviderSnapshotError,
+        ScoringJobService,
+        build_judge_submission,
+    )
+    from motte_storage.scoring_jobs import ScoringJobConflict, ScoringJobError
+
+    command = args.judge_command
+    service = _service(args)
+    try:
+        judge = ScoringJobService(service.store, provider_factory=FrozenProviderFactory())
+    except ScoringJobError as error:
+        return _error("JUDGE_UNAVAILABLE", str(error))
+
+    if command in ("preflight", "submit"):
+        try:
+            document = _load_json(args.spec)
+        except (OSError, json.JSONDecodeError) as error:
+            return _error("JUDGE_SPEC_INVALID", f"--spec 不是可解析的 JSON：{error}")
+        if not isinstance(document, dict):
+            return _error("JUDGE_SPEC_INVALID", "--spec 必须是 JSON 对象")
+        request_key = (
+            getattr(args, "request_key", None) or document.get("request_key") or ""
+        )
+        if command == "submit" and not request_key:
+            return _error(
+                "JUDGE_SPEC_INVALID", "submit 需要 --request-key 或 spec.request_key"
+            )
+        try:
+            request = build_judge_submission(
+                store=service.store,
+                resources=_resources(args),
+                request_key=request_key or "judge-preflight",
+                run_id=str(document.get("run_id") or ""),
+                mode=str(document.get("mode") or "single"),
+                spec_request=document.get("spec") or {},
+                case_ids=document.get("case_ids"),
+                source_pass_id=document.get("source_pass_id"),
+                authorisation=document.get("authorisation"),
+                publish_policy=str(document.get("publish_policy") or "all_scored"),
+                repeats=int(document.get("repeats") or 1),
+                presentation_orders=document.get("presentation_orders"),
+                price_table_version=document.get("price_table_version"),
+            )
+        except ManifestResolutionError as error:
+            return _error(error.code, str(error))
+        except JudgeEvidenceError as error:
+            return _error(error.code, str(error))
+        except JudgeProviderSnapshotError as error:
+            return _error(error.code, str(error))
+        except JudgeNotAuthorised as error:
+            return _error("JUDGE_NOT_AUTHORISED", str(error))
+        except JudgeBudgetError as error:
+            return _error("JUDGE_BUDGET_NOT_EXECUTABLE", str(error))
+        except (JudgeInputError, ValueError, TypeError) as error:
+            return _error("JUDGE_INPUT_INVALID", str(error))
+        if command == "preflight":
+            print(json.dumps(judge.preflight(request), ensure_ascii=False))
+            return 0
+        try:
+            result = judge.submit(request)
+        except JudgeNotAuthorised as error:
+            return _error("JUDGE_NOT_AUTHORISED", str(error))
+        except JudgeBudgetError as error:
+            return _error("JUDGE_BUDGET_NOT_EXECUTABLE", str(error))
+        except ScoringJobConflict as error:
+            return _error("SCORING_JOB_CONFLICT", str(error))
+        except JudgeError as error:
+            return _error("JUDGE_PROVIDER_UNAVAILABLE", str(error))
+        stored = judge.jobs.get(result["job_id"])
+        view = judge.public_view(stored) if stored is not None else result
+        view["reused"] = result.get("reused")
+        view["preflight"] = result.get("preflight")
+        print(json.dumps(view, ensure_ascii=False))
+        return 0
+
+    if command == "status":
+        try:
+            print(json.dumps(judge.get_public(args.job_id), ensure_ascii=False))
+        except KeyError:
+            return _error("JUDGE_NOT_FOUND", f"scoring job not found: {args.job_id}")
+        return 0
+
+    if command == "history":
+        try:
+            service.get_run(args.run)
+        except KeyError:
+            return _error("RUN_NOT_FOUND", f"run not found: {args.run}")
+        print(json.dumps({
+            "run_id": args.run, "items": judge.history_public(args.run),
+        }, ensure_ascii=False))
+        return 0
+
+    if command == "cancel":
+        if judge.jobs.get(args.job_id) is None:
+            return _error("JUDGE_NOT_FOUND", f"scoring job not found: {args.job_id}")
+        try:
+            outcome = judge.cancel(args.job_id, actor="cli", reason=args.reason)
+        except ScoringJobError as error:
+            return _error("SCORING_JOB_CONFLICT", str(error))
+        print(json.dumps(outcome, ensure_ascii=False))
+        return 0
+
+    return _error("CONTRACT_INVALID", f"unknown judge subcommand: {command}")
+
+
 def main(argv=None):
     args = _build_parser().parse_args(argv)
 
@@ -1665,6 +1814,9 @@ def main(argv=None):
 
     if args.command == "scenario":
         return _scenario_command(args)
+
+    if args.command == "judge":
+        return _judge_command(args)
 
     if args.command == "workflow":
         return _workflow_command(args)

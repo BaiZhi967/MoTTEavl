@@ -38,6 +38,13 @@ from apps.api.app.schemas import (
     DirectLlmImportResponse,
     DirectLlmOverviewResponse,
     DirectLlmRunRequest,
+    JudgeCancelView,
+    JudgeJobListResponse,
+    JudgeJobView,
+    JudgePreflightRequest,
+    JudgePreflightView,
+    JudgeSubmissionBase,
+    JudgeSubmitRequest,
     ReplayRunRequest,
     ResourcePublicationListResponse,
     RunCommandListResponse,
@@ -49,6 +56,9 @@ from apps.api.app.schemas import (
     WorkflowConversionResponse,
     WorkflowValidationResponse,
 )
+
+#: create_app 的"未指定"哨兵：显式传 None 表示关闭 Judge 执行（submit 明确拒绝）。
+_UNSET: Any = object()
 
 SSE_POLL_INTERVAL_SECONDS = 1.0
 
@@ -286,7 +296,9 @@ def _load_json_file(path: str | None) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def create_app(store=None, resource_store=None) -> FastAPI:
+def create_app(
+    store=None, resource_store=None, *, judge_provider_factory: Any = _UNSET,
+) -> FastAPI:
     service = build_run_service() if store is None else RunService(store)
     resources = (
         resource_store
@@ -787,6 +799,169 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="run not found") from error
         items = service.store.scoring_passes.list_for_run(run_id)
         return {"items": items, "total": len(items)}
+
+    # ------------------------------------------------------------- judges
+    # Judge 是独立授权作业：API 只做预检 / 提交 / 读取 / 取消。领取与执行只在
+    # WorkerLoop 的执行锁内发生；这里任何路径都不构造 Provider、不调用模型。
+    judge_state: dict[str, Any] = {}
+
+    def _judge_service():
+        if "service" not in judge_state:
+            from motte_sdk.scoring_jobs import FrozenProviderFactory, ScoringJobService
+
+            factory = (
+                FrozenProviderFactory() if judge_provider_factory is _UNSET
+                else judge_provider_factory
+            )
+            judge_state["service"] = ScoringJobService(
+                service.store, provider_factory=factory,
+            )
+        return judge_state["service"]
+
+    def _judge_error(error: Exception) -> JSONResponse:
+        """把 Judge 契约错误映射成结构化响应；未知异常继续向上抛。"""
+        from motte_eval.judge import (
+            JudgeBudgetError,
+            JudgeError,
+            JudgeInputError,
+            JudgeNotAuthorised,
+            JudgeSpecError,
+        )
+        from motte_sdk.scoring_jobs import JudgeEvidenceError, JudgeProviderSnapshotError
+        from motte_storage.scoring_jobs import ScoringJobConflict, ScoringJobError
+
+        from pydantic import ValidationError
+
+        if isinstance(error, ScoringJobConflict):
+            return _error_json(409, "SCORING_JOB_CONFLICT", str(error))
+        if isinstance(error, ValidationError):
+            # JudgeBudget/JudgeSpec 契约拒绝（例如未知价格下声明金额硬上限）。
+            return _error_json(
+                422,
+                "JUDGE_CONTRACT_INVALID",
+                "judge request does not satisfy its frozen contract",
+                fields=_contract_field_errors(error),
+            )
+        if isinstance(error, JudgeEvidenceError):
+            return _error_json(422, error.code, str(error))
+        if isinstance(error, JudgeProviderSnapshotError):
+            return _error_json(422, error.code, str(error))
+        if isinstance(error, ManifestResolutionError):
+            return _error_json(422, error.code, str(error))
+        if isinstance(error, JudgeNotAuthorised):
+            return _error_json(422, "JUDGE_NOT_AUTHORISED", str(error))
+        if isinstance(error, JudgeBudgetError):
+            return _error_json(422, "JUDGE_BUDGET_NOT_EXECUTABLE", str(error))
+        if isinstance(error, (JudgeInputError, JudgeSpecError)):
+            return _error_json(422, "JUDGE_INPUT_INVALID", str(error))
+        if isinstance(error, ScoringJobError):
+            return _error_json(503, "JUDGE_UNAVAILABLE", str(error))
+        if isinstance(error, JudgeError):
+            return _error_json(503, "JUDGE_PROVIDER_UNAVAILABLE", str(error))
+        raise error
+
+    def _judge_request(body: JudgeSubmissionBase, *, request_key: str):
+        """服务端解析资源与证据，编译唯一冻结请求（与 CLI 共用同一编译器）。"""
+        from motte_sdk.scoring_jobs import build_judge_submission
+
+        return build_judge_submission(
+            store=service.store,
+            resources=resources,
+            request_key=request_key,
+            run_id=body.run_id,
+            mode=body.mode,
+            spec_request=body.spec.model_dump(),
+            case_ids=body.case_ids,
+            source_pass_id=body.source_pass_id,
+            authorisation=(
+                body.authorisation.model_dump()
+                if body.authorisation is not None else None
+            ),
+            publish_policy=body.publish_policy,
+            repeats=body.repeats,
+            presentation_orders=body.presentation_orders,
+            price_table_version=body.price_table_version,
+        )
+
+    def _judge_mode_supported(mode: str) -> JSONResponse | None:
+        if mode == "single":
+            return None
+        return _error_json(
+            422,
+            "JUDGE_MODE_UNSUPPORTED",
+            "the public judge API currently accepts single-mode submissions only; "
+            "pairwise judge jobs stay on the library path",
+        )
+
+    @application.post("/api/v1/judges/preflight", response_model=JudgePreflightView)
+    def judge_preflight(body: JudgePreflightRequest):
+        unsupported = _judge_mode_supported(body.mode)
+        if unsupported is not None:
+            return unsupported
+        try:
+            judge = _judge_service()
+            return judge.preflight(_judge_request(body, request_key="judge-preflight"))
+        except Exception as error:  # noqa: BLE001 - 统一映射，未知异常继续抛
+            return _judge_error(error)
+
+    @application.post(
+        "/api/v1/judges", status_code=202, response_model=JudgeJobView,
+        response_model_exclude_unset=True,
+    )
+    def judge_submit(body: JudgeSubmitRequest):
+        unsupported = _judge_mode_supported(body.mode)
+        if unsupported is not None:
+            return unsupported
+        try:
+            judge = _judge_service()
+            request = _judge_request(body, request_key=body.request_key)
+            return judge.submit(request)
+        except Exception as error:  # noqa: BLE001
+            return _judge_error(error)
+
+    @application.get("/api/v1/judges/{job_id}", response_model=JudgeJobView)
+    def judge_get(job_id: str):
+        try:
+            judge = _judge_service()
+            return judge.get_public(job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="scoring job not found") from error
+        except Exception as error:  # noqa: BLE001
+            return _judge_error(error)
+
+    @application.get(
+        "/api/v1/runs/{run_id}/judge-jobs", response_model=JudgeJobListResponse,
+    )
+    def judge_history(run_id: str):
+        """评分历史读取：零模型调用，不领取、不触发任何作业。"""
+        try:
+            service.get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="run not found") from error
+        try:
+            judge = _judge_service()
+            items = judge.history_public(run_id)
+            return {"items": items, "total": len(items)}
+        except Exception as error:  # noqa: BLE001
+            return _judge_error(error)
+
+    @application.post(
+        "/api/v1/judges/{job_id}/cancel", response_model=JudgeCancelView,
+    )
+    def judge_cancel(job_id: str, body: CancelRunRequest | None = None):
+        """幂等取消：已发出的请求只中断，绝不宣称未计费。"""
+        try:
+            judge = _judge_service()
+            if judge.jobs.get(job_id) is None:
+                raise HTTPException(status_code=404, detail="scoring job not found")
+            return judge.cancel(
+                job_id, actor="api",
+                reason=(body.reason if body is not None and body.reason else "operator request"),
+            )
+        except HTTPException:
+            raise
+        except Exception as error:  # noqa: BLE001
+            return _judge_error(error)
 
     # ------------------------------------------------------- 资源 CRUD
 

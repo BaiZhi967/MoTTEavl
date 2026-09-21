@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from motte_contracts.evidence import ScoringPass
 from motte_contracts.run import ReplayCase, Run, RunCommand
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -81,7 +80,7 @@ class RunCommandListResponse(APIModel):
 
 
 class ScoringPassListResponse(APIModel):
-    items: list[ScoringPass]
+    items: list[ScoringPassView]
     total: int = Field(ge=0)
 
 
@@ -303,6 +302,168 @@ class DirectLlmDryRunResponse(APIModel):
     price_table_version: str | None = None
     currency: str | None = None
     estimated: Literal[True] = True
+
+
+class ScoringPassView(APIModel):
+    """ScoringPass 契约 + M5 Judge 身份（purpose / job_id / judge / interventions）。
+
+    契约模型是 extra="forbid" 且没有这些字段：直接用契约序列化会把 R3 的统一
+    pass 身份（rubric / spec / calibration / owner / save_policy）丢掉，甚至让
+    Judge pass 的历史读取直接 500。公共读取必须看到完整身份。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    run_id: str
+    scorer_id: str
+    scorer_version: str
+    created_at: str | None = None
+    source: str | None = None
+    source_run_revision: int | None = None
+    source_snapshot_hash: str | None = None
+    previous_pass_id: str | None = None
+    summary: dict[str, Any] = Field(default_factory=dict)
+    scores: list[dict[str, Any]] = Field(default_factory=list)
+    purpose: str | None = None
+    job_id: str | None = None
+    judge: dict[str, Any] | None = None
+
+
+class JudgeBudgetRequest(APIModel):
+    """Judge 预算请求；价格已知性与价格版本由服务端解析，客户端不能声明。"""
+
+    max_calls: int = Field(ge=1)
+    max_prompt_tokens: int = Field(default=0, ge=0)
+    max_completion_tokens: int = Field(default=0, ge=0)
+    hard_cost_cap_usd: float | None = Field(default=None, ge=0.0)
+
+
+class JudgeAuthorisationRequest(APIModel):
+    """显式付费授权；purpose 由服务端固定为 judge。"""
+
+    authorised: bool = False
+    actor: str = Field(min_length=1)
+    max_calls: int = Field(ge=0)
+    max_total_tokens: int | None = Field(default=None, ge=0)
+    hard_cost_cap_usd: float | None = Field(default=None, ge=0.0)
+
+
+class JudgeSpecRequest(APIModel):
+    """Judge 配置请求；model 是**已发布的 ModelProfile id**，不是线路模型名。
+
+    服务端在提交期解析它并冻结 adapter / endpoint / 线路模型 / 价格版本；
+    客户端不能提交估算 token 数或价格覆盖。
+    """
+
+    judge_profile_id: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    rubric_id: str = Field(min_length=1)
+    rubric_version: str = Field(min_length=1)
+    criteria: list[str] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    input_selector: dict[str, Any] | None = None
+    missing_evidence_policy: Literal["insufficient_evidence", "not_applicable", "fail"] | None = None
+    calibration_version: str | None = None
+    budget: JudgeBudgetRequest
+
+
+class JudgeSubmissionBase(APIModel):
+    """预检与提交共用的请求形状；证据与计数一律由服务端解析。"""
+
+    run_id: str = Field(min_length=1)
+    mode: Literal["single", "pairwise"] = "single"
+    spec: JudgeSpecRequest
+    case_ids: list[str] = Field(default_factory=list)
+    source_pass_id: str | None = None
+    authorisation: JudgeAuthorisationRequest | None = None
+    publish_policy: Literal["all_scored", "allow_non_scored"] = "all_scored"
+    repeats: int = Field(default=1, ge=1)
+    presentation_orders: list[list[str]] = Field(default_factory=list)
+    price_table_version: str | None = None
+
+
+class JudgePreflightRequest(JudgeSubmissionBase):
+    """零费用预检：不落作业、不构造 Provider、不调用模型。"""
+
+
+class JudgeSubmitRequest(JudgeSubmissionBase):
+    """持久提交：request_key 是幂等键，内容 fingerprint 与它分离。"""
+
+    request_key: str = Field(min_length=1)
+
+
+class JudgePreflightView(APIModel):
+    """预检结果 + 服务端冻结的 Provider 身份（非秘密）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    purpose: Literal["judge"] = "judge"
+    mode: str
+    model: str
+    model_resource_id: str | None = None
+    spec_sha256: str
+    sample_count: int = Field(ge=0)
+    repeats: int = Field(ge=1)
+    orderings: int = Field(ge=1)
+    max_calls: int = Field(ge=0)
+    authorised: bool
+    budget_executable: bool
+    hard_monetary_cap: bool
+    executed: Literal[False] = False
+    provider_factory_available: bool
+    provider_snapshot: dict[str, Any] | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class JudgeJobView(APIModel):
+    """持久 ScoringJob 的公共视图；输入原文与响应正文不在这里。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    request_key: str
+    fingerprint: str
+    status: str
+    terminal: bool
+    revision: int = Field(ge=1)
+    owner: dict[str, Any]
+    run_id: str
+    mode: str
+    publish_policy: str
+    repeats: int = Field(ge=1)
+    judge_spec_sha256: str
+    created_at: str
+    billed_calls: int = Field(default=0, ge=0)
+    attempted_calls: int = Field(default=0, ge=0)
+    cost_total_usd: float | None = None
+    preflight: dict[str, Any] | None = None
+    provider_snapshot: dict[str, Any] | None = None
+    receipt: dict[str, Any] | None = None
+    failure: dict[str, Any] | None = None
+    cancellation: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    reused: bool | None = None
+    published: bool | None = None
+    publish_outcome: str | None = None
+
+
+class JudgeJobListResponse(APIModel):
+    items: list[JudgeJobView]
+    total: int = Field(ge=0)
+
+
+class JudgeCancelView(APIModel):
+    """幂等取消结果：已发出的请求只中断，不宣称未计费。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    job: JudgeJobView
+    outcome: str
+    receipt: dict[str, Any] | None = None
+    billed_calls: int | None = None
+    in_flight: bool | None = None
+    note: str | None = None
 
 
 class WorkflowValidationResponse(APIModel):
