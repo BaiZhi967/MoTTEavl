@@ -326,3 +326,89 @@ seq 7 failed {"error":{"message":"'NoneType' object has no attribute 'get'","typ
 6. 之后再补：M3 的 docker/数据集、M4 的 runtime profile 与 CLI harness 协议就绪、M5 的 ≥30 条人工校准资料。
 
 在上述 1–5 完成并复跑本报告清单之前，**不建议把 M5 标为完成或合并**。
+
+
+---
+
+# 附录：修复与复测（2026-09-21 晚）
+
+本节记录"先合并主干、再修复、再重启复测"的**实际**结果。数据来自修复后的运行栈
+（API 8000 / Web 5173 / Worker），原始证据在 `var/m5-accept/evidence/retest*.json`。
+
+## A. 合并与修复清单
+
+主干合并：`merge(m5): land the M5 scenarios/skills/judges branch on trunk`（M5 分支整体合入
+main；分支基线 a7b2d96）。随后在主干上按发现顺序修复：
+
+| 提交 | 主题 | 对应发现 |
+|---|---|---|
+| `dfc2bf0` | SQLite 旧库按当前 DDL 对齐（补列或按主键重建） | F-01 |
+| `a755133` | case 结果为 NULL 时产出缺口行而不是崩溃 | F-02 |
+| `388c106` | Judge 证据解析同时认 frozen_observation | F-06 |
+| `7450009` | 受控 workspace 目录链在无 dir_fd 平台可用 | F-03 |
+| `1e1cd73` | Fixture 版本的公共发布入口（API + CLI） | F-04 |
+| `892dfa8` | Skill 版本的公共发布入口（API + CLI） | F-05 |
+| `0a0ecad` | CLI 资源仓库测试替身对齐真实构造器 | F-05 回归 |
+| `01ec18e` | 场景 Run 逐步证据端点（Web 步骤页读的接口） | F-08 |
+| `b409f81` | scenario targets 装配内置注册 + Judge 请求形状文档 | F-09 / F-10 |
+| `709f3f4` | 重新生成 OpenAPI 产物；ruff 排除 var/ | 门禁 |
+| `b2dd235` | canonical 工具调用按 chat wire 形状发送 | **F-11（复测新发现）** |
+
+每项都带回归测试，并逐项验证过"修复前失败"。修复后的门禁：
+`ruff check .` 通过、`mypy packages/contracts` 通过、`openapi-check` 无漂移、
+`pnpm --dir apps/web test` 20 文件 / 270 通过、`pnpm --dir apps/web build` 成功、
+受影响测试域 576 passed / 2 failed（这 2 条是 `tests/cli/test_terminalbench_cli.py`，
+已在 HEAD JUnit 基线上确认为既有失败，与本次改动无关）。
+
+## B. 复测结果（真实运行栈 + 真实模型）
+
+| 复测项 | 结果 | 证据 |
+|---|---|---|
+| F-01 现有库原地升级 | **PASS** | `score_sets` 8 列（含 trial_id/evaluator_id/evaluator_version）、`trials` 10 列、`external_jobs` 5 列；18 条既有 Run 保留 |
+| F-01 场景 Run 在**现有库**上结算 | **PASS** | status=completed，pass=`pass-cc2e70…`，scores=2 |
+| F-02 缺结果不再吞掉真实原因 | **PASS** | 单元回归 3 条，修复前 3 条全失败 |
+| F-03 M1 Agent 真实工具循环 | **PASS** | 7 次调用（4 model + 3 tool），status=completed |
+| M1-A02 文件内容断言 | **PASS** | `file-content:report.json`=true、`no-forbidden-write`=true；产物经公共读取路径返回 sha256 |
+| M1-A03 工具失败后恢复 | **PASS** | acc-002 `file-content:result.txt`=true |
+| M1-A07 禁止副作用 | **PASS** | acc-004 `no-forbidden-write`=true 且正向文件达成 |
+| M1-A04 预算终止 | **PASS** | termination=`max_tool_calls`，且 **passed_metrics=[]**（不伪造通过；此前的"PASS 但无效"已消除） |
+| F-04 Fixture 发布 + 业务状态主流程 | **PASS** | fixture 201；workflow v4 绑定已发布 hash；Run 202 创建；`before-confirm` checkpoint **succeeded** |
+| F-04 真实业务状态断言 | **PASS** | `initial-state-active`=true、`cancellation-count-zero`=true、`no-refund`=true（全部来自冻结 fixture 证据） |
+| F-04 未登记 fixture 工具 | REFUSED-OK | `SCENARIO_TOOL_MOCK_MISSING: fixture tool 'orders.get' has no mock implementation; mock mode never falls back to the real handler` |
+| F-05 Skill 发布 | **PASS** | `POST /api/v1/skills/versions` → 201（acc-brief@1，kind=instruction） |
+| F-06 Judge 预检接受场景 Run | **PASS** | 200，max_calls=1、sample_count=1、budget_executable=true、provider_factory=true（修复前 422 JUDGE_EVIDENCE_INVALID） |
+| F-08 步骤证据端点 | **PASS** | 200，steps=[ask, reply, final-check]，workflow=acc-clarify-flow，unknown=false |
+| F-09 CLI targets 与 API 一致 | **PASS** | CLI 列出 builtin-agent，与 `/api/v1/scenario-targets` 同一集合 |
+| F-11 真实 provider 工具历史 | **PASS** | 修复前第 2 次模型调用 422 `missing field name`；修复后完整 4 轮模型调用 |
+
+## C. 复测中新发现并已修复
+
+**F-11（高，真实 provider 才暴露）**：`OpenAICompatibleProvider.build_request_body` 把
+canonical Message 原样序列化进请求体，而归一化层把响应的
+`function.name/function.arguments` 拍平成 `name/arguments`，`/chat/completions` 却要求
+`tool_calls[].function.{name,arguments}`。结果：**任何真实 Agent 循环只要发生一次工具调用，
+第二次模型调用就被严格网关以 422 拒绝**（实测 `messages[2]: missing field name`）。
+修复在适配器侧（它拥有 wire 格式）：转成 wire 形状，已是 wire 形状的原样通过（幂等），
+非字符串 arguments 序列化为 JSON 文本。回归：`tests/provider/test_tool_call_wire_shape.py`。
+
+复测中还暴露两条**拒绝语义**（行为正确，仅作为口径记录）：客户端自算的 fixture
+`content_hash` 若未先按契约规范化会得到 `FIXTURE_CONTENT_HASH_MISMATCH`（文档建议省略，
+由服务端固定；我就是这么踩到的）；Workflow 引用的 fixture hash 与实际发布版本不一致会得到
+`WORKFLOW_FIXTURE_HASH_MISMATCH`（漂移被拦下，符合预期）。
+
+## D. 仍未完成
+
+* **F-07（高，需 Web 重做而非改路径）**：`apps/web/src/pages/judges/JudgesPage.tsx` 的表单模型
+  （judge_id / version / purpose / sample_count）早于真实 Judge API（run_id + mode + spec + authorisation）。
+  仅把路径改成真实路由会让提交以 422 失败而不是"能力不可用"，因此**故意保持现状**：
+  页面继续如实显示能力不可用，重做列入后续工作。
+* M3 Terminal-Bench 全链路、M2 C-Eval 端到端、M4 Claude/Codex CLI 真实任务、真实 PostgreSQL、
+  ≥30 条人工校准资料：仍为 not_run（缺 Docker / 数据集 / 运行时协议就绪 / 授权 / 标注资料）。
+
+## E. 环境备注
+
+* 本工作树同时有**另一路 M6 文档工作**在进行（`docs/prompts/M6-development-agent.md`、
+  `docs/superpowers/plans/2026-09-21-m6-*.md`、`docs/verification/M6.md`、`docs/roadmap/README.md` 修改）：
+  本轮提交只 add 自己的文件，未触碰这些内容。
+* 期间有一次外部版本管理工具重写了提交的 SHA 与作者（reflog 被清空），当前提交作者为仓库默认
+  `WhiteZhi <moycx@qq.com>`；本文档引用的 SHA 以当前历史为准。
