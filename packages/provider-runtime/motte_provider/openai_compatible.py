@@ -7,6 +7,7 @@ envelope 是所有入口（Run/CLI/SDK）共享的结果形状：
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from motte_contracts.messages import Message, ModelRequest, ModelResponse
@@ -16,6 +17,7 @@ from .normalization import normalize_finish_reason, normalize_usage_details
 
 __all__ = [
     "BaseHTTPProvider",
+    "wire_tool_calls",
     "CaseDrivenProvider",
     "OpenAICompatibleProvider",
     "ProviderCallError",
@@ -40,6 +42,38 @@ _API_NAMES = {
 }
 
 
+def wire_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
+    """canonical 工具调用 → /chat/completions 的 wire 形状（验收 F-11）。
+
+    canonical 与 wire 不是同一个东西：归一化层把响应里的
+    function.name / function.arguments 拍平成 name / arguments
+    （normalization.py），而请求体要求 tool_calls[].function.{name,arguments}。
+    把 canonical 原样塞回历史会被严格网关以 422 invalid_request_error
+    "missing field name" 拒绝——实测第二次模型调用即失败，真实 Agent 循环根本
+    走不完一轮工具调用。
+
+    已经是 wire 形状的项原样通过，因此对已转换过的历史是幂等的。
+    """
+    wire: list[dict[str, Any]] = []
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        if isinstance(call.get("function"), dict):
+            wire.append(dict(call))
+            continue
+        arguments = call.get("arguments")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(
+                {} if arguments is None else arguments, ensure_ascii=False,
+            )
+        wire.append({
+            "id": call.get("id"),
+            "type": call.get("type") or "function",
+            "function": {"name": call.get("name"), "arguments": arguments},
+        })
+    return wire
+
+
 class OpenAICompatibleProvider(BaseHTTPProvider):
     kind = "openai_compatible"
     IMPLEMENTATION_VERSION = "1"
@@ -53,7 +87,11 @@ class OpenAICompatibleProvider(BaseHTTPProvider):
         messages: list[dict[str, Any]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        messages.extend(message.model_dump(exclude_none=True) for message in request.messages)
+        for message in request.messages:
+            payload = message.model_dump(exclude_none=True)
+            if payload.get("tool_calls"):
+                payload["tool_calls"] = wire_tool_calls(payload["tool_calls"])
+            messages.append(payload)
         body: dict[str, Any] = {"model": self.model, "messages": messages}
         for name, value in merged.items():
             if value is not None:
