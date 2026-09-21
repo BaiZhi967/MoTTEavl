@@ -740,6 +740,12 @@ class ResourceStore:
     fixtures: Any
     skills: Any
     _pair_publisher: PairPublisher
+    #: Skill 资源字节的内容寻址存储（motte_skill.content_store）；非空资源清单的
+    #: 发布必须有它并逐个核验字节（F12）。
+    content_store: Any = None
+    #: 可选依赖解析器（接收 SkillDependency，返回版本是否存在）：证明依赖版本
+    #: 确实存在，而不是只检查 pin 的写法。
+    dependency_resolver: Any = None
 
     def publish_dataset_scenario(
         self, dataset: dict[str, Any], scenario: dict[str, Any], *,
@@ -761,15 +767,31 @@ class ResourceStore:
         return self.fixtures.put(deepcopy(fixture))
 
     def publish_skill(self, skill: dict[str, Any]) -> dict[str, Any]:
-        """发布/弃用一个 SkillVersion。
+        """发布/弃用一个 SkillVersion（与 motte_skill.publish_skill 同一保证）。
 
-        只有 published→deprecated 这一种受控转换允许写回；其余内容变化一律
-        冲突，历史 Run 读到的 hash 不会被草稿编辑改写。
+        这里不再允许绕过校验直接 put：
+
+        * 非空资源清单必须有内容存储（content_store）并逐字节核验 hash/size；
+        * 依赖必须固定版本，配置 dependency_resolver 时还要能解析到该版本；
+        * 只有 published→deprecated 这一种受控转换允许写回（且只改生命周期与
+          弃用元数据），其余内容变化一律冲突。
         """
-        return self.skills.put(deepcopy(skill))
+        from motte_skill.versions import SkillVersionConflict
+        from motte_skill.versions import publish_skill as publish_skill_version
+
+        try:
+            return publish_skill_version(
+                self.skills,
+                deepcopy(skill),
+                resource_store=self.content_store,
+                dependency_resolver=self.dependency_resolver,
+            )
+        except SkillVersionConflict as error:
+            raise ResourceConflictError(str(error)) from error
 
 
-def _build(builder, publisher_builder) -> ResourceStore:
+def _build(builder, publisher_builder, *, content_store: Any = None,
+           dependency_resolver: Any = None) -> ResourceStore:
     providers = builder(*RESOURCE_TABLES["providers"])
     models = builder(*RESOURCE_TABLES["models"])
     price_tables = builder(*RESOURCE_TABLES["price_tables"])
@@ -794,10 +816,14 @@ def _build(builder, publisher_builder) -> ResourceStore:
         fixtures=fixtures,
         skills=skills,
         _pair_publisher=publisher_builder(datasets, scenarios, publications),
+        content_store=content_store,
+        dependency_resolver=dependency_resolver,
     )
 
 
-def SQLiteResourceStore(path: str | Path) -> ResourceStore:
+def SQLiteResourceStore(
+    path: str | Path, *, content_store: Any = None, dependency_resolver: Any = None,
+) -> ResourceStore:
     path = str(path)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -805,21 +831,28 @@ def SQLiteResourceStore(path: str | Path) -> ResourceStore:
         return _SQLiteResourceRepository(path, table, keys)
 
     return _build(
-        builder, lambda _datasets, _scenarios, _publications: _sqlite_pair_publisher(path)
+        builder, lambda _datasets, _scenarios, _publications: _sqlite_pair_publisher(path),
+        content_store=content_store, dependency_resolver=dependency_resolver,
     )
 
 
-def PostgresResourceStore(dsn: str) -> ResourceStore:
+def PostgresResourceStore(
+    dsn: str, *, content_store: Any = None, dependency_resolver: Any = None,
+) -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _PgResourceRepository(dsn, table, keys)
 
     return _build(
-        builder, lambda _datasets, _scenarios, _publications: _postgres_pair_publisher(dsn)
+        builder, lambda _datasets, _scenarios, _publications: _postgres_pair_publisher(dsn),
+        content_store=content_store, dependency_resolver=dependency_resolver,
     )
 
 
-def InMemoryResourceStore() -> ResourceStore:
+def InMemoryResourceStore(
+    *, content_store: Any = None, dependency_resolver: Any = None,
+) -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _InMemoryResourceRepository(keys, table)
 
-    return _build(builder, _memory_pair_publisher)
+    return _build(builder, _memory_pair_publisher, content_store=content_store,
+                  dependency_resolver=dependency_resolver)

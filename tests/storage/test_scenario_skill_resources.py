@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from typing import Any
@@ -13,6 +14,8 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from motte_contracts.fixture import FixtureSpec, fixture_content_hash
+from motte_skill.content_store import ContentAddressedMemoryStore
+from motte_skill.versions import SkillResourceMissing, SkillResourceStoreRequired
 from motte_storage.migrations import MIGRATIONS_DIR
 from motte_storage.resource_store import (
     InMemoryResourceStore,
@@ -21,6 +24,7 @@ from motte_storage.resource_store import (
 )
 
 PUBLISHED_AT = "2026-09-21T00:00:00Z"
+RESOURCE_BYTES = b"# order helper\n\nconfirm before cancelling.\n"
 
 
 def fixture_record(**overrides: Any) -> dict[str, Any]:
@@ -126,6 +130,86 @@ def test_skill_versions_are_immutable(store):
     store.publish_skill(skill_record())
     with pytest.raises(ResourceConflictError, match="immutable"):
         store.skills.delete("cancel-helper", "1")
+
+
+def resource_skill_record(**overrides: Any) -> dict[str, Any]:
+    """带非空资源清单的 SkillVersion；字节由调用方 ingest。"""
+    from motte_skill.versions import SkillVersion, skill_content_hash
+
+    payload: dict[str, Any] = {
+        "skill_id": "cancel-helper",
+        "version": "1",
+        "kind": "instruction_with_resources",
+        "instruction_ref": "instruction.md",
+        "injection_mode": "context-section",
+        "resource_manifest": [{
+            "path": "instruction.md",
+            "sha256": "sha256:" + hashlib.sha256(RESOURCE_BYTES).hexdigest(),
+            "size_bytes": len(RESOURCE_BYTES),
+            "media_type": "text/markdown",
+        }],
+        "published_at": PUBLISHED_AT,
+        "lifecycle": "published",
+    }
+    payload.update(overrides)
+    model = SkillVersion.model_validate(payload)
+    return {**payload, "content_hash": skill_content_hash(model)}
+
+
+def test_skill_with_resources_cannot_be_published_without_a_content_store(store):
+    """F12：Memory 与 SQLite 都必须拒绝"没有字节"的资源清单。"""
+    with pytest.raises(SkillResourceStoreRequired):
+        store.publish_skill(resource_skill_record())
+    assert store.skills.get("cancel-helper", "1") is None
+
+
+def test_attached_content_store_is_required_for_every_resource_byte(store):
+    """底层发布入口同样核验字节：缺字节拒绝，字节齐备才落库。"""
+    store.content_store = ContentAddressedMemoryStore()
+    with pytest.raises(SkillResourceMissing):
+        store.publish_skill(resource_skill_record())
+    assert store.skills.get("cancel-helper", "1") is None
+
+    store.content_store.put(RESOURCE_BYTES)
+    published = store.publish_skill(resource_skill_record())
+    assert published["resource_manifest"][0]["sha256"] == (
+        "sha256:" + hashlib.sha256(RESOURCE_BYTES).hexdigest()
+    )
+    assert store.skills.get("cancel-helper", "1")["content_hash"] == published["content_hash"]
+    # 幂等：同内容再次发布返回同一条记录。
+    assert store.publish_skill(resource_skill_record()) == published
+
+
+def test_resource_skill_publish_refuses_a_missing_dependency_version(store):
+    store.content_store = ContentAddressedMemoryStore()
+    store.content_store.put(RESOURCE_BYTES)
+    record = resource_skill_record(dependency_refs=[{"name": "requests", "version": "2.32.3"}])
+    from motte_skill.versions import SkillDependencyUnavailable
+
+    store.dependency_resolver = lambda dependency: dependency.version == "9.9.9"
+    with pytest.raises(SkillDependencyUnavailable):
+        store.publish_skill(record)
+    assert store.skills.get("cancel-helper", "1") is None
+    store.dependency_resolver = lambda dependency: dependency.version == "2.32.3"
+    assert store.publish_skill(record)["dependency_refs"][0]["version"] == "2.32.3"
+
+
+def test_deprecation_cannot_rewrite_published_at(store):
+    """F20：弃用只允许 lifecycle/deprecated_* 变化，发布时间保持原值。"""
+    published = store.publish_skill(skill_record())
+    tampered = {
+        **published,
+        "lifecycle": "deprecated",
+        "deprecated_at": "2026-09-22T00:00:00Z",
+        "published_at": "2030-01-01T00:00:00Z",
+    }
+    with pytest.raises(ResourceConflictError):
+        store.publish_skill(tampered)
+    assert store.skills.get("cancel-helper", "1")["published_at"] == PUBLISHED_AT
+    # 仓库层（直接 put）同样不认这次"弃用"。
+    with pytest.raises(ResourceConflictError):
+        store.skills.put(tampered)
+    assert store.skills.get("cancel-helper", "1")["published_at"] == PUBLISHED_AT
 
 
 # -------------------------------------------------------------------- 降级

@@ -22,14 +22,17 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from pydantic import Field, field_validator, model_validator
 
 from motte_contracts.identity import canonical_sha256
 from motte_contracts.messages import Contract
 from motte_sandbox.policy import SandboxPolicy
+
+from .content_store import CONTENT_ROOT_ENV, ContentStoreCorruption, is_content_store
 
 SKILL_SCHEMA_VERSION = 1
 
@@ -48,8 +51,65 @@ SHELL_INTERPRETERS = frozenset({
     "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "ash", "busybox",
     "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe", "wsl",
 })
-#: 解释器代码求值开关：把代码字符串塞进 argv 等于绕过资源 hash 校验。
+#: 解释器代码求值开关（旧常量，保留给外部调用方）：把代码字符串塞进 argv 等于
+#: 绕过资源 hash 校验。发布期的真实判定见 INTERPRETER_GRAMMARS / parse_entrypoint_argv。
 INTERPRETER_EVAL_FLAGS = frozenset({"-c", "-e", "--eval", "/c", "/k", "-Command", "-EncodedCommand"})
+
+
+@dataclass(frozen=True)
+class InterpreterGrammar:
+    """某个允许的解释器家族的前置 argv 语法（F13）。
+
+    * inline_code：开关本身携带代码字符串（python -c、node -e）。任何以它开头的
+      短 token（含 -cprint(42) 这种连写）或 --name[=值] 写法都拒绝。
+    * by_name：按名字加载模块/包（python -m、node -r）；被加载的入口不在已发布
+      资源里，因此同样拒绝。
+    * value：这些开关后面跟一个值；值不是入口文件，解析入口时必须跳过
+      （python -X dev run.py 的入口是 run.py）。
+
+    元素写法：短开关取首字母（"c"），长开关带前导 --（"--eval"）。
+    """
+
+    inline_code: frozenset[str] = frozenset()
+    by_name: frozenset[str] = frozenset()
+    value: frozenset[str] = frozenset()
+
+
+#: 明确列出语法的解释器家族。未列出的解释器只应用保守的通用规则：入口文件必须
+#: 紧跟解释器（第一个 token），任何前置开关都会让入口判定失败（fail closed）。
+INTERPRETER_GRAMMARS: dict[str, InterpreterGrammar] = {
+    "python": InterpreterGrammar(
+        inline_code=frozenset({"c"}),
+        by_name=frozenset({"m"}),
+        value=frozenset({"X", "W", "Q", "--check-hash-based-pycs"}),
+    ),
+    "node": InterpreterGrammar(
+        inline_code=frozenset({"e", "p", "--eval", "--print"}),
+        by_name=frozenset({
+            "r", "--require", "--import", "--loader", "--experimental-loader",
+        }),
+        value=frozenset({
+            "C", "--conditions", "--max-old-space-size", "--title", "--openssl-config",
+            "--stack-trace-limit", "--input-type",
+        }),
+    ),
+    "ruby": InterpreterGrammar(
+        inline_code=frozenset({"e"}),
+        by_name=frozenset({"r"}),
+        value=frozenset({"I", "K"}),
+    ),
+    "perl": InterpreterGrammar(
+        inline_code=frozenset({"e"}),
+        by_name=frozenset({"M", "m"}),
+        value=frozenset({"I"}),
+    ),
+    "lua": InterpreterGrammar(inline_code=frozenset({"e"}), by_name=frozenset({"l"})),
+    "php": InterpreterGrammar(inline_code=frozenset({"r"}), value=frozenset({"d"})),
+}
+#: 未列出解释器的保守语法：沿用旧规则覆盖的写法（-c/-e/--eval，含连写）。
+_GENERIC_GRAMMAR = InterpreterGrammar(inline_code=frozenset({"c", "e", "--eval"}))
+#: 常见别名归一到上表的家族名。
+_INTERPRETER_ALIASES = {"nodejs": "node", "pypy": "python", "pypy3": "python", "cpython": "python"}
 #: 加载器注入类环境变量永不放行（env allowlist 只允许名字，不允许这些名字）。
 FORBIDDEN_ENV_NAMES = frozenset({
     "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES",
@@ -76,6 +136,8 @@ _SECRET_PREFIXES = (
 _CONTENT_EXCLUDED = frozenset({
     "lifecycle", "published_at", "content_hash", "deprecated_at", "deprecated_reason",
 })
+#: 生命周期转换唯一允许改写的字段（F20）：其余发布元数据必须保持原值。
+_LIFECYCLE_FIELDS = frozenset({"lifecycle", "deprecated_at", "deprecated_reason"})
 
 
 class SkillError(ValueError):
@@ -110,6 +172,18 @@ class SkillResourceMismatch(SkillError):
 
 class SkillDependencyNotPinned(SkillError):
     code = "unpinned_dependency"
+
+
+class SkillDependencyUnavailable(SkillError):
+    """依赖虽然固定了版本，但解析器证明该版本不存在（发布拒绝）。"""
+
+    code = "skill_dependency_unavailable"
+
+
+class SkillResourceStoreRequired(SkillError):
+    """非空资源清单必须有可按内容地址读回字节的存储；缺失时发布一律拒绝。"""
+
+    code = "skill_resource_store_required"
 
 
 def _canonical_utc(value: Any, field: str) -> str:
@@ -303,6 +377,76 @@ def _unique(values: tuple[str, ...], field: str) -> tuple[str, ...]:
     return values
 
 
+def interpreter_family(interpreter: Any) -> str:
+    """把 python3.12 / nodejs / lua5.4 归一成家族名（python / node / lua）。"""
+    program = str(interpreter).strip().lower()
+    program = re.sub(r"[.-]?\d+(?:\.\d+)*$", "", program) or program
+    return _INTERPRETER_ALIASES.get(program, program)
+
+
+def interpreter_grammar(interpreter: Any) -> InterpreterGrammar:
+    """该解释器的 argv 语法；未列出的解释器使用保守的通用语法。"""
+    if not isinstance(interpreter, str):
+        return _GENERIC_GRAMMAR
+    return INTERPRETER_GRAMMARS.get(interpreter_family(interpreter), _GENERIC_GRAMMAR)
+
+
+def _reject_code_flag(grammar: InterpreterGrammar, flag: str, token: str) -> None:
+    if flag in grammar.inline_code or flag in grammar.by_name:
+        raise ValueError(
+            "entrypoint.argv must not evaluate an inline code string or load a module by "
+            "name (no -c/-e/-p/-m/-r/--eval/--print/--require): keep code in hashed "
+            f"resources: {token!r}"
+        )
+
+
+def parse_entrypoint_argv(interpreter: Any, argv: Sequence[str]) -> str:
+    """按解释器语法解析入口 argv，返回入口文件 token；违规写法抛 ValueError。
+
+    规则（M5-T06 规则 1、R5/F13）：
+
+    * 内联代码（-c、-e、-p、--eval，含 -cprint(42) 连写）与按名加载模块（-m、
+      -r、--require）一律拒绝：它们把未发布、未校验的代码带进进程。
+    * "-" 表示从 stdin 读程序，同样拒绝。
+    * 第一个位置参数是入口文件；已知解释器的取值开关会跳过它的值。清单层面的
+      "入口必须是已发布资源"由 SkillVersion._entrypoint_resources 核对。
+    """
+    tokens = list(argv)
+    if not tokens:
+        raise ValueError("entrypoint.argv must be a non-empty argument list")
+    grammar = interpreter_grammar(interpreter)
+    entry: str | None = None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not isinstance(token, str) or token == "":
+            raise ValueError("entrypoint.argv parts must be non-empty strings")
+        if token == "-":
+            raise ValueError("entrypoint.argv must not read the program from stdin")
+        if token.startswith("--"):
+            name = "--" + token[2:].split("=", 1)[0]
+            _reject_code_flag(grammar, name, token)
+            index += 2 if name in grammar.value and "=" not in token else 1
+            continue
+        if token.startswith("-"):
+            short = token[1:]
+            _reject_code_flag(grammar, short[0], token)
+            if short[0] in grammar.value:
+                index += 2 if len(short) == 1 else 1
+            else:
+                index += 1
+            continue
+        if entry is None:
+            entry = token
+        index += 1
+    if entry is None:
+        raise ValueError(
+            "entrypoint.argv must name a declared resource entry file as its first "
+            "positional argument: inline code is not a published resource"
+        )
+    return entry
+
+
 class SkillEntrypoint(Contract):
     """executable Skill 的受控入口：固定 interpreter + argv 列表，不经 shell。"""
 
@@ -328,18 +472,16 @@ class SkillEntrypoint(Contract):
 
     @field_validator("argv")
     @classmethod
-    def _argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+    def _argv(cls, value: tuple[str, ...], info: Any) -> tuple[str, ...]:
         if not value:
             raise ValueError("entrypoint.argv must be a non-empty argument list")
         for part in value:
             if not isinstance(part, str) or part == "":
                 raise ValueError("entrypoint.argv parts must be non-empty strings")
             _reject_shell_fragment(part, "entrypoint.argv")
-        if any(flag in INTERPRETER_EVAL_FLAGS for flag in value):
-            raise ValueError(
-                "entrypoint.argv must not evaluate an inline code string "
-                "(no -c/-e/--eval): keep code in hashed resources"
-            )
+        # 解释器语法在契约层就生效：内联代码（含 -cprint(42) 连写）与按名加载模块
+        # 一律拒绝，绝不等到发布或执行期。interpreter 校验失败时退回通用语法。
+        parse_entrypoint_argv(info.data.get("interpreter", ""), value)
         return tuple(value)
 
     @field_validator("cwd")
@@ -378,8 +520,17 @@ class SkillEntrypoint(Contract):
         """实际命令行 = interpreter + argv；调用方不得再做 shell 拼接。"""
         return (self.interpreter, *self.argv)
 
+    def entry_file(self) -> str:
+        """入口文件 token（相对路径规范化为资源清单里的写法）。"""
+        return parse_entrypoint_argv(self.interpreter, list(self.argv)).removeprefix("./")
+
     def validated_command(self) -> tuple[str, ...]:
-        """用 SandboxPolicy 再校验一次，fail closed（含 forbidden_programs）。"""
+        """用 argv 语法与 SandboxPolicy 再校验一次，fail closed（含 forbidden_programs）。
+
+        构造期已经校验过；这里重跑一次是为了挡住 model_construct / 直接改字段等绕过
+        pydantic 的调用方（F13）。
+        """
+        parse_entrypoint_argv(self.interpreter, list(self.argv))
         return tuple(self.sandbox.commands.validate_command(list(self.command())))
 
 
@@ -580,14 +731,22 @@ class SkillVersion(Contract):
         return self
 
     def _entrypoint_resources(self, paths: list[str]) -> None:
+        """入口必须绑定到已发布、已核验的资源文件（F13）。
+
+        第一位置参数就是入口文件，必须在 resource_manifest 里；其余位置参数里凡是
+        脚本后缀或带路径分隔符的 token（它们同样可能是被执行的代码）也必须已声明。
+        """
         assert self.entrypoint is not None
+        entry = self.entrypoint.entry_file()
+        if entry not in paths:
+            raise ValueError(
+                f"entrypoint entry file must be a declared resource: {entry!r}"
+            )
         for part in self.entrypoint.argv:
             token = part.removeprefix("./")
-            if token in paths:
+            if token in paths or part.startswith("-"):
                 continue
-            if part.startswith("-") or "." not in token:
-                continue
-            if token.endswith(_SCRIPT_SUFFIXES):
+            if token.endswith(_SCRIPT_SUFFIXES) or "/" in token or "\\" in token:
                 raise ValueError(f"entrypoint script must be a declared resource: {token!r}")
 
     @property
@@ -662,11 +821,29 @@ def skill_content_hash(record: Any) -> str:
     return canonical_sha256(_content_payload(_skill_model(record)))
 
 
+def _publication_payload(record: SkillVersion | SkillDraft) -> dict[str, Any]:
+    """发布元数据（不可改写）：除生命周期三字段外的全部字段。
+
+    F20：published_at、content_hash、资源清单等都属于发布身份；只有 lifecycle 与
+    deprecated_* 允许在弃用转换里变化。注意它和 skill_content_hash 用的
+    _content_payload 不同：后者必须允许草稿（无 published_at）与已发布版本同 hash。
+    """
+    return {
+        key: value
+        for key, value in record.model_dump(mode="json").items()
+        if key not in _LIFECYCLE_FIELDS
+    }
+
+
 def skill_version_transition(existing: Any, record: Any) -> str:
-    """同一 (skill_id, version) 上允许的转换：identical / deprecation / conflict。"""
+    """同一 (skill_id, version) 上允许的转换：identical / deprecation / conflict。
+
+    只有 lifecycle/deprecated_* 可以变化；published_at 与 content_hash 等发布元数据
+    必须保持原值，否则一律 conflict（F20）。
+    """
     before = _skill_model(existing)
     after = _skill_model(record)
-    if _content_payload(before) != _content_payload(after):
+    if _publication_payload(before) != _publication_payload(after):
         return "conflict"
     if (
         before.lifecycle == after.lifecycle
@@ -684,8 +861,27 @@ def is_deprecation_transition(existing: Any, record: Any) -> bool:
     return skill_version_transition(existing, record) == "deprecation"
 
 
-def verify_dependency_refs(refs: Any) -> tuple[SkillDependency, ...]:
-    """发布期再核验依赖 pin：契约校验之外的第二道 fail-closed 防线。"""
+def require_content_store(store: Any) -> Any:
+    """非空资源清单的发布前置条件：必须有可按内容地址读回字节的存储（F12）。
+
+    旧实现把 resource_store=None 当作"没有字节要验"，于是 Memory 与 SQLite 都能发布
+    声明任意 hash/size 的资源。这里 fail closed：没有可用存储就不发布。
+    """
+    if not is_content_store(store):
+        raise SkillResourceStoreRequired(
+            "skill resources require a readable content-addressed store; configure "
+            f"{CONTENT_ROOT_ENV} (motte_skill.content_store.create_content_store) or pass "
+            "resource_store=... to publish_skill"
+        )
+    return store
+
+
+def verify_dependency_refs(refs: Any, resolver: Any = None) -> tuple[SkillDependency, ...]:
+    """发布期再核验依赖：固定版本（契约之外的第二道防线）+ 版本确实存在。
+
+    resolver 是可选的可调用对象（接收 SkillDependency，返回它是否存在）。没有配置
+    resolver 时只核验 pin；resolver 报不存在或自己失败都拒绝发布（fail closed）。
+    """
     verified: list[SkillDependency] = []
     for item in refs:
         raw = item if isinstance(item, dict) else getattr(item, "__dict__", {})
@@ -701,19 +897,37 @@ def verify_dependency_refs(refs: Any) -> tuple[SkillDependency, ...]:
             item if isinstance(item, SkillDependency) else SkillDependency.model_validate(item)
         )
         verified.append(dependency)
+    if resolver is not None:
+        for dependency in verified:
+            try:
+                available = bool(resolver(dependency))
+            except Exception as error:  # noqa: BLE001 - 解析失败按"依赖不可用"处理
+                raise SkillDependencyUnavailable(
+                    f"dependency {dependency.name}@{dependency.version} could not be resolved: "
+                    f"{error}"
+                ) from error
+            if not available:
+                raise SkillDependencyUnavailable(
+                    f"dependency {dependency.name}@{dependency.version} "
+                    f"({dependency.kind}) does not exist"
+                )
     return tuple(verified)
 
 
 def verify_resources(store: Any, entries: Any) -> tuple[SkillResource, ...]:
-    """按内容寻址重新读取并核验字节；缺失或漂移都拒绝发布。"""
+    """按内容寻址重新读取并核验字节；缺失、漂移或损坏都拒绝发布。"""
     verified: list[SkillResource] = []
     for item in entries:
         entry = item if isinstance(item, SkillResource) else SkillResource.model_validate(item)
         try:
-            data = store.get(entry.sha256)
+            data = require_content_store(store).get(entry.sha256)
         except KeyError as error:
             raise SkillResourceMissing(
                 f"resource bytes are missing from the content store: {entry.sha256}"
+            ) from error
+        except ContentStoreCorruption as error:
+            raise SkillResourceMismatch(
+                f"resource bytes are corrupted for {entry.path}: expected {entry.sha256}"
             ) from error
         if data is None:
             raise SkillResourceMissing(
@@ -728,12 +942,25 @@ def verify_resources(store: Any, entries: Any) -> tuple[SkillResource, ...]:
     return tuple(verified)
 
 
+def _revalidated(record: SkillVersion | SkillDraft) -> SkillVersion | SkillDraft:
+    """发布前从 JSON 形状重跑一次契约校验。
+
+    调用方可能用 model_construct 或直接改字段绕过 pydantic；发布是最后一道边界，
+    这里重新验证 argv 语法、entrypoint 与资源的绑定、kind/lifecycle 规则。
+    """
+    payload = record.model_dump(mode="json")
+    if payload.get("lifecycle") == "draft":
+        return SkillDraft.model_validate(payload)
+    return SkillVersion.model_validate(payload)
+
+
 def publish_skill(
     repository: Any,
     record: Any,
     *,
     resource_store: Any = None,
     published_at: str | None = None,
+    dependency_resolver: Any = None,
 ) -> dict[str, Any]:
     """把一个草稿/内容发布进版本仓库，返回仓库中的记录。
 
@@ -741,19 +968,21 @@ def publish_skill(
 
     * 同 (skill_id, version) 同内容 => 幂等，返回既有记录，不重写；
     * 同版本异内容 => SkillVersionConflict；
-    * published -> deprecated 的纯生命周期转换允许写入（弃用）。
+    * published -> deprecated 的纯生命周期转换允许写入（弃用）；
+    * 非空资源清单必须有可读写字节的内容存储，且逐个核验（F12）；
+    * 依赖必须固定版本；配置了 resolver 时还必须能解析到（版本不存在即拒绝）。
     """
-    model = _skill_model(record)
+    model = _revalidated(_skill_model(record))
     if model.lifecycle == "draft":
-        model = model.published(published_at)
+        model = _revalidated(model.published(published_at))
     elif published_at is not None and model.published_at != published_at:
         raise SkillError("published_at is fixed when a version is first published")
     computed = skill_content_hash(model)
     if model.content_hash is not None and model.content_hash != computed:
         raise SkillContentHashMismatch("skill content_hash does not match its content")
-    verify_dependency_refs(model.dependency_refs)
-    if resource_store is not None:
-        verify_resources(resource_store, model.resource_manifest)
+    verify_dependency_refs(model.dependency_refs, resolver=dependency_resolver)
+    if model.resource_manifest:
+        verify_resources(require_content_store(resource_store), model.resource_manifest)
     payload = {**model.model_dump(mode="json"), "content_hash": computed}
     existing = repository.get(model.skill_id, model.version)
     if existing is None:

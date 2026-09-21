@@ -18,12 +18,15 @@ import hashlib
 import json
 import stat
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+import motte_skill.content_store as content_store
 import motte_skill.importer as importer
+from motte_skill.content_store import ContentStoreCorruption, FileContentStore
 from motte_skill.importer import (
     ContentAddressedMemoryStore,
     SkillImportCode,
@@ -36,6 +39,7 @@ from motte_skill.registry import SkillRegistry
 from motte_skill.versions import (
     SkillContentHashMismatch,
     SkillDependencyNotPinned,
+    SkillDependencyUnavailable,
     SkillDeprecated,
     SkillDraft,
     SkillEntrypoint,
@@ -43,6 +47,7 @@ from motte_skill.versions import (
     SkillResource,
     SkillResourceMissing,
     SkillResourceMismatch,
+    SkillResourceStoreRequired,
     SkillSetRef,
     SkillVersion,
     SkillVersionConflict,
@@ -51,6 +56,7 @@ from motte_skill.versions import (
     publish_skill,
     select_skills,
     skill_content_hash,
+    skill_version_transition,
     verify_dependency_refs,
     verify_resources,
 )
@@ -885,3 +891,336 @@ def test_skill_resource_paths_reject_traversal_and_absolute_paths():
     for path in ("../x.md", "/etc/passwd", "a//b.md", "C:/x.md", "./a.md"):
         with pytest.raises(ValidationError):
             SkillResource(path=path, sha256="sha256:" + "0" * 64, size_bytes=0)
+
+# ============================ 发布边界（F12/F13/F20）与缓存隔离（F19）
+
+
+def _resources_draft(**overrides) -> SkillDraft:
+    """一条 instruction_with_resources 草稿：清单非空，字节指向 instruction.md。"""
+    payload = {
+        "skill_id": "order-helper",
+        "version": "1",
+        "kind": "instruction_with_resources",
+        "instruction_ref": "instruction.md",
+        "injection_mode": "context-section",
+        "resource_manifest": [_entry("instruction.md", INSTRUCTION_MD, "text/markdown")],
+    }
+    payload.update(overrides)
+    return SkillDraft.model_validate(payload)
+
+
+def test_publishing_a_non_empty_manifest_without_a_content_store_is_refused():
+    """F12：没有可用内容存储时必须拒绝发布，而不是跳过所有字节校验。"""
+    repository = InMemorySkillRepository()
+    with pytest.raises(SkillResourceStoreRequired):
+        publish_skill(repository, _resources_draft(), published_at=PUBLISHED_AT)
+    assert repository.list() == []
+    # 纯指令 Skill 不携带字节：仍然允许没有内容存储地发布。
+    assert publish_skill(repository, instruction_draft(), published_at=PUBLISHED_AT)["kind"] == (
+        "instruction"
+    )
+
+
+def test_publishing_a_non_empty_manifest_requires_a_readable_content_store():
+    repository = InMemorySkillRepository()
+    for store in (object(), "memory"):
+        with pytest.raises(SkillResourceStoreRequired):
+            publish_skill(repository, _resources_draft(), resource_store=store,
+                          published_at=PUBLISHED_AT)
+    assert repository.list() == []
+
+
+def test_publish_refuses_missing_size_drifted_and_corrupted_resource_bytes(tmp_path):
+    """F12：缺失字节 / size 漂移 / 内容损坏都必须在落库之前拒绝。"""
+    repository = InMemorySkillRepository()
+    memory = ContentAddressedMemoryStore()
+    draft = _resources_draft()
+    entry = draft.resource_manifest[0]
+    with pytest.raises(SkillResourceMissing):
+        publish_skill(repository, draft, resource_store=memory, published_at=PUBLISHED_AT)
+    memory.put(INSTRUCTION_MD)
+    drifted = _resources_draft(resource_manifest=[
+        {**entry.model_dump(mode="json"), "size_bytes": entry.size_bytes + 1},
+    ])
+    with pytest.raises(SkillResourceMismatch):
+        publish_skill(repository, drifted, resource_store=memory, published_at=PUBLISHED_AT)
+    # 持久存储里字节损坏（payload 与 ref 不符）：同样拒绝，且不会落库。
+    persistent = FileContentStore(tmp_path / "content")
+    ref = persistent.put(INSTRUCTION_MD)
+    _blob_path(tmp_path / "content", ref).write_bytes(b"corrupted")
+    with pytest.raises(SkillResourceMismatch):
+        publish_skill(repository, draft, resource_store=persistent, published_at=PUBLISHED_AT)
+    assert repository.list() == []
+
+
+def test_publish_refuses_dependency_versions_the_resolver_cannot_find():
+    """依赖版本不存在（或解析失败）时拒绝发布；解析成功才落库。"""
+    repository = InMemorySkillRepository()
+    draft = instruction_draft(dependency_refs=[{"name": "requests", "version": "2.32.3"}])
+    with pytest.raises(SkillDependencyUnavailable, match="requests"):
+        publish_skill(repository, draft, published_at=PUBLISHED_AT,
+                      dependency_resolver=lambda dependency: False)
+    assert repository.list() == []
+
+    def broken(dependency):
+        raise RuntimeError("dependency service is down")
+
+    with pytest.raises(SkillDependencyUnavailable):
+        publish_skill(repository, draft, published_at=PUBLISHED_AT, dependency_resolver=broken)
+    assert repository.list() == []
+
+    published = publish_skill(
+        repository, draft, published_at=PUBLISHED_AT,
+        dependency_resolver=lambda dependency: dependency.version == "2.32.3",
+    )
+    assert published["dependency_refs"][0]["version"] == "2.32.3"
+
+
+#: F13 的组合参数：只比较完整 token 的实现会放过这些写法。
+INLINE_CODE_ARGV = (
+    {"interpreter": "python", "argv": ["-cprint(42)"]},
+    {"interpreter": "python3", "argv": ["-c", "print(42)"]},
+    {"interpreter": "python3.12", "argv": ["-mpdb", "run.py"]},
+    {"interpreter": "node", "argv": ["-econsole.log(1)"]},
+    {"interpreter": "node", "argv": ["-p1+1"]},
+    {"interpreter": "node", "argv": ["--eval=console.log(1)"]},
+    {"interpreter": "node", "argv": ["-r", "./preload"]},
+    {"interpreter": "ruby", "argv": ["-eputs 1"]},
+)
+
+
+def test_entrypoint_argv_grammar_refuses_inline_code_and_by_name_loading():
+    for entrypoint in INLINE_CODE_ARGV:
+        with pytest.raises(ValidationError, match="inline code string"):
+            SkillEntrypoint.model_validate({**entrypoint, "cwd": ".", "env_allowlist": []})
+
+
+def test_entrypoint_argv_grammar_refuses_stdin_and_an_empty_entry_file():
+    with pytest.raises(ValidationError, match="stdin"):
+        SkillEntrypoint.model_validate(
+            {"interpreter": "python3", "argv": ["-"], "cwd": ".", "env_allowlist": []}
+        )
+    with pytest.raises(ValidationError, match="entry file"):
+        SkillEntrypoint.model_validate(
+            {"interpreter": "python3", "argv": ["--version"], "cwd": ".", "env_allowlist": []}
+        )
+
+
+def test_executable_skill_publishes_only_with_verified_entry_bytes():
+    """入口绑定已发布资源的完整含义：落库前逐字节核验入口文件。"""
+    repository = InMemorySkillRepository()
+    store = ContentAddressedMemoryStore()
+    draft = executable_draft()
+    with pytest.raises(SkillResourceMissing):
+        publish_skill(repository, draft, resource_store=store, published_at=PUBLISHED_AT)
+    assert repository.list() == []
+    store.put(RUN_PY)
+    published = publish_skill(repository, draft, resource_store=store, published_at=PUBLISHED_AT)
+    entry = published["resource_manifest"][0]
+    assert store.get(entry["sha256"]) == RUN_PY
+    assert SkillVersion.model_validate(published).entrypoint.entry_file() == "run.py"
+
+
+def test_executable_entry_file_must_be_a_published_resource():
+    for entrypoint in (
+        {"interpreter": "python3", "argv": ["run.py"]},          # 清单为空
+        {"interpreter": "python3", "argv": ["other.py"]},        # 未声明的脚本
+        {"interpreter": "python3", "argv": ["/tmp/evil.py"]},    # 工作区外的绝对路径
+    ):
+        with pytest.raises(ValidationError, match="must be a declared resource"):
+            executable_draft(resource_manifest=[], entrypoint=entrypoint)
+    with pytest.raises(ValidationError, match="must be a declared resource"):
+        executable_draft(entrypoint={"interpreter": "python3", "argv": ["other.py", "run.py"]})
+
+
+def test_executable_entry_file_grammar_accepts_flags_after_the_entry():
+    draft = executable_draft(
+        entrypoint={"interpreter": "python3", "argv": ["run.py", "--verbose", "data.json"]},
+    )
+    assert draft.entrypoint is not None
+    assert draft.entrypoint.entry_file() == "run.py"
+    assert draft.entrypoint.validated_command() == ("python3", "run.py", "--verbose", "data.json")
+    # 已知解释器的值参数：-X dev 的 dev 不是入口文件，入口仍是已声明的 run.py。
+    values = executable_draft(entrypoint={"interpreter": "python3", "argv": ["-X", "dev", "run.py"]})
+    assert values.entrypoint is not None
+    assert values.entrypoint.entry_file() == "run.py"
+    assert values.entrypoint.validated_command() == ("python3", "-X", "dev", "run.py")
+
+
+def test_combined_inline_flag_is_refused_even_when_validation_is_bypassed():
+    """F13：绕过 pydantic 的就地改字段在 validated_command 与 publish 处同样被拒绝。"""
+    forged = SkillEntrypoint.model_construct(interpreter="python", argv=("-cprint(42)",))
+    with pytest.raises(ValueError, match="inline code string"):
+        forged.validated_command()
+    draft = executable_draft()
+    object.__setattr__(draft, "entrypoint", forged)
+    object.__setattr__(draft, "resource_manifest", ())
+    repository = InMemorySkillRepository()
+    with pytest.raises(ValidationError, match="inline code string"):
+        publish_skill(repository, draft, published_at=PUBLISHED_AT)
+    assert repository.list() == []
+
+
+def test_executable_skill_cannot_publish_an_empty_manifest_after_bypassing_validation():
+    """F13：executable 的入口必须绑定已发布资源，空清单在 publish 期仍被拒绝。"""
+    draft = executable_draft()
+    object.__setattr__(draft, "resource_manifest", ())
+    repository = InMemorySkillRepository()
+    with pytest.raises(ValidationError, match="must be a declared resource"):
+        publish_skill(repository, draft, published_at=PUBLISHED_AT)
+    assert repository.list() == []
+
+
+def test_registry_returns_isolated_models_and_never_hands_out_its_cache():
+    """F19：resolve/latest/cached 的返回值改动不得影响后续读取或相邻加载。"""
+    schema = {"type": "object", "properties": {"order_id": {"type": "string"}}}
+    repository = InMemorySkillRepository()
+    publish_skill(repository, instruction_draft(input_schema=schema), published_at=PUBLISHED_AT)
+    registry = SkillRegistry(repository)
+
+    first = registry.resolve("order-helper", "1")
+    first.input_schema["type"] = "string"
+    first.input_schema["properties"]["order_id"]["type"] = "integer"
+    assert registry.resolve("order-helper", "1").input_schema == schema
+    assert repository.get("order-helper", "1")["input_schema"] == schema
+
+    cached = registry.cached("order-helper", "1")
+    assert cached is not None
+    cached.input_schema["type"] = "array"
+    assert registry.cached("order-helper", "1").input_schema == schema
+
+    latest = registry.latest("order-helper")
+    assert latest is not None
+    latest.output_schema["title"] = "tampered"
+    assert registry.resolve("order-helper", "1").output_schema == {}
+
+    other = SkillRegistry(repository)
+    assert other.resolve("order-helper", "1").input_schema == schema
+    assert registry.resolve("order-helper", "1").input_schema == schema
+
+
+def test_deprecation_cannot_rewrite_publication_metadata():
+    """F20：published→deprecated 只允许 lifecycle/deprecated_* 变化。"""
+    repository = InMemorySkillRepository()
+    published = publish_skill(repository, instruction_draft(), published_at=PUBLISHED_AT)
+    tampered = {
+        **published,
+        "lifecycle": "deprecated",
+        "deprecated_at": DEPRECATED_AT,
+        "published_at": "2030-01-01T00:00:00Z",
+    }
+    assert skill_version_transition(published, tampered) == "conflict"
+    assert is_deprecation_transition(published, tampered) is False
+    with pytest.raises(SkillVersionConflict):
+        repository.put(tampered)
+    assert repository.get("order-helper", "1")["published_at"] == PUBLISHED_AT
+
+    # content_hash 属于发布元数据，也不能被弃用改写。
+    resigned = {
+        **published,
+        "lifecycle": "deprecated",
+        "deprecated_at": DEPRECATED_AT,
+        "content_hash": "sha256:" + "0" * 64,
+    }
+    assert skill_version_transition(published, resigned) == "conflict"
+
+    allowed = {
+        **published,
+        "lifecycle": "deprecated",
+        "deprecated_at": DEPRECATED_AT,
+        "deprecated_reason": "被 v2 取代",
+    }
+    assert skill_version_transition(published, allowed) == "deprecation"
+    deprecated = deprecate_skill(repository, "order-helper", "1",
+                                 deprecated_at=DEPRECATED_AT, reason="被 v2 取代")
+    assert deprecated["published_at"] == PUBLISHED_AT
+    assert repository.get("order-helper", "1")["published_at"] == PUBLISHED_AT
+
+
+# ==================================================== 持久内容存储（F12/R5）
+
+
+def _blob_path(root: Path, ref: str) -> Path:
+    """磁盘布局约定：<root>/sha256/<前两位>/<其余>（API 与 Worker 必须一致）。"""
+    digest = ref.removeprefix("sha256:")
+    return root / "sha256" / digest[:2] / digest
+
+
+def _temp_files(root: Path) -> list[str]:
+    return sorted(path.name for path in (root / "tmp").iterdir())
+
+
+def test_file_content_store_reads_after_a_restart(tmp_path):
+    root = tmp_path / "content"
+    first = FileContentStore(root)
+    ref = first.put(INSTRUCTION_MD)
+    assert ref == "sha256:" + hashlib.sha256(INSTRUCTION_MD).hexdigest()
+    reopened = FileContentStore(root)
+    assert reopened.get(ref) == INSTRUCTION_MD
+    assert reopened.list() == [ref]
+    assert reopened.put(INSTRUCTION_MD) == ref
+    assert reopened.get("sha256:" + "0" * 64) is None
+    assert _blob_path(root, ref).is_file()
+    assert _temp_files(root) == []
+
+
+def test_file_content_store_refuses_corrupted_payloads_and_reheals_on_put(tmp_path):
+    root = tmp_path / "content"
+    store = FileContentStore(root)
+    ref = store.put(b"original payload")
+    _blob_path(root, ref).write_bytes(b"corrupted")
+    with pytest.raises(ContentStoreCorruption):
+        store.get(ref)
+    assert store.put(b"original payload") == ref
+    assert store.get(ref) == b"original payload"
+
+
+def test_file_content_store_serialises_concurrent_writes_of_one_hash(tmp_path):
+    root = tmp_path / "content"
+    store = FileContentStore(root)
+    payload = b"concurrent" * 5000
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        refs = list(pool.map(lambda _: store.put(payload), range(8)))
+    expected = "sha256:" + hashlib.sha256(payload).hexdigest()
+    assert set(refs) == {expected}
+    assert store.get(expected) == payload
+    blobs = [path for path in (root / "sha256").rglob("*") if path.is_file()]
+    assert blobs == [_blob_path(root, expected)]
+    assert _temp_files(root) == []
+
+
+def test_file_content_store_never_exposes_an_interrupted_write(tmp_path, monkeypatch):
+    root = tmp_path / "content"
+    store = FileContentStore(root)
+    payload = b"interrupted payload"
+    ref = "sha256:" + hashlib.sha256(payload).hexdigest()
+    stale = root / "tmp" / "blob-left-by-a-crash"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(payload)
+    assert store.get(ref) is None
+    assert store.list() == []
+
+    def interrupted(source, target):  # noqa: ANN001 - 模拟 rename 之前进程被打断
+        raise OSError("simulated interruption before the atomic rename")
+
+    monkeypatch.setattr(content_store, "_commit_blob", interrupted)
+    with pytest.raises(OSError):
+        store.put(payload)
+    assert store.get(ref) is None
+    assert store.list() == []
+    assert not _blob_path(root, ref).exists()
+    assert _temp_files(root) == [stale.name]
+
+    monkeypatch.undo()
+    assert store.put(payload) == ref
+    assert store.get(ref) == payload
+
+
+def test_create_content_store_uses_the_shared_root_environment(tmp_path, monkeypatch):
+    root = tmp_path / "shared-content"
+    monkeypatch.setenv(content_store.CONTENT_ROOT_ENV, str(root))
+    store = content_store.create_content_store()
+    ref = store.put(INSTRUCTION_MD)
+    assert content_store.create_content_store().get(ref) == INSTRUCTION_MD
+    monkeypatch.delenv(content_store.CONTENT_ROOT_ENV)
+    assert content_store.create_content_store(tmp_path / "explicit").root == tmp_path / "explicit"

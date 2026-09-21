@@ -3,7 +3,8 @@
 导入器不解压到工作区、不运行安装钩子、不下载依赖、不执行入口、不 import 资源；
 它只把归档/目录读成有界的内存字节，逐文件分类、限额、算 hash，然后产出一个
 SkillDraft 与导入报告（来源 + 许可证）。资源字节由调用方显式 ingest 到内容寻址
-store，发布时 publish_skill 会再次核验字节与依赖 pin。
+store（content_store.FileContentStore / ContentAddressedMemoryStore）；非空资源
+清单的发布必须有该存储，publish_skill 会再次核验字节与依赖 pin。
 
 每个拒绝都有独立错误码（SkillImportCode.*），便于 API/CLI 给出稳定诊断。
 """
@@ -21,6 +22,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+# 内容寻址存储的唯一实现在 content_store；这里保留旧导入路径
+# (motte_skill.importer.ContentAddressedMemoryStore) 只是兼容别名。
+from .content_store import ContentAddressedMemoryStore as ContentAddressedMemoryStore
 from .versions import (
     SkillDependency,
     SkillDraft,
@@ -195,28 +199,6 @@ class SkillImportReport:
 
     def to_draft(self) -> SkillDraft:
         return self.draft
-
-
-class ContentAddressedMemoryStore:
-    """最小内容寻址资源存储：put(bytes) -> 'sha256:<hex>' / get(ref) -> bytes。"""
-
-    def __init__(self) -> None:
-        self._blobs: dict[str, bytes] = {}
-
-    def put(self, data: bytes) -> str:
-        payload = bytes(data)
-        ref = "sha256:" + hashlib.sha256(payload).hexdigest()
-        self._blobs.setdefault(ref, payload)
-        return ref
-
-    def get(self, ref: str) -> bytes | None:
-        return self._blobs.get(ref)
-
-    def list(self) -> list[str]:
-        return sorted(self._blobs)
-
-    def drop(self, ref: str) -> None:
-        self._blobs.pop(ref, None)
 
 
 @dataclass(frozen=True)

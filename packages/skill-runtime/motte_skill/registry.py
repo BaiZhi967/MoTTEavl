@@ -147,7 +147,9 @@ class SkillRegistry:
         return select_skills(self._repository, set_ref, allow_deprecated=allow_deprecated)
 
     def cached(self, skill_id: str, version: str) -> SkillVersion | None:
-        return self._cache.get((str(skill_id), str(version)))
+        """缓存中的已校验记录；返回隔离副本，调用方改不动缓存（F19）。"""
+        record = self._cache.get((str(skill_id), str(version)))
+        return None if record is None else record.model_copy(deep=True)
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -176,10 +178,13 @@ class SkillRegistry:
             and cached.lifecycle == raw.get("lifecycle")
             and cached.content_hash == raw.get("content_hash")
         ):
-            return cached
+            # F19：frozen 模型不冻结嵌套 dict，缓存对象一旦交给调用方就可能被改。
+            # 缓存只读，每次读取都返回隔离副本。
+            return cached.model_copy(deep=True)
         return self._cache_record(raw)
 
     def _cache_record(self, raw: dict[str, Any]) -> SkillVersion:
-        record = SkillVersion.model_validate(raw)
+        """校验后缓存一份**私有**记录，并返回它的隔离副本。"""
+        record = SkillVersion.model_validate(raw).model_copy(deep=True)
         self._cache[(record.skill_id, record.version)] = record
-        return record
+        return record.model_copy(deep=True)
