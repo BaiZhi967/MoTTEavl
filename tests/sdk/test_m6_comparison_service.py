@@ -658,3 +658,42 @@ def test_service_reads_do_not_mutate_stored_facts() -> None:
     service.case_outcomes("run-mixed")
     service.classify_regression("run-mixed", "run-mixed")
     assert store.scoring_passes.get("pass-mixed") == before
+
+
+def test_deleted_evidence_lowers_new_eligibility_not_old_results() -> None:
+    """A19/G21：证据（score sets）被删除后，新求值资格降低；已持久结论不变。
+
+    工件/证据删除只影响**新**计算的输入；旧 GateResult bytes/hash 与
+    baseline 引用不漂移，不从当前配置补历史事实。
+    """
+    store = InMemoryRunStore()
+    make_run(store, "run-a19", case_ids=["k1", "k2"])
+    append_pass(store, "run-a19", "pass-a19", [
+        score_row("k1", passed=True), score_row("k2", passed=True),
+    ])
+    service = ComparisonService(store)
+    service.publish_gate_policy(gate_policy_payload(
+        policy_id="pol-a19",
+        rules=[{
+            "rule_id": "acc", "kind": "metric_threshold",
+            "metric_id": "accuracy", "operator": "gte", "threshold": 0.5,
+        }],
+    ))
+    first = service.evaluate_gate_versioned(
+        policy_id="pol-a19", policy_version="1", run_id="run-a19",
+        scoring_pass_id="pass-a19",
+    )
+    assert first["decision"] == "pass"
+    stored_first = deepcopy(store.gate_store.get_result(first["gate_result_id"]))
+
+    # 模拟证据删除：清空该 pass 的 score sets（import-like 缺字段同类）。
+    store.score_sets._sets.pop("pass-a19", None)
+
+    again = service.evaluate_gate_versioned(
+        policy_id="pol-a19", policy_version="1", run_id="run-a19",
+        scoring_pass_id="pass-a19",
+    )
+    assert again["decision"] == "insufficient_evidence"
+    assert again["gate_result_id"] != first["gate_result_id"]
+    # 已持久结论原样保留（bytes/hash 不漂移）。
+    assert store.gate_store.get_result(first["gate_result_id"]) == stored_first

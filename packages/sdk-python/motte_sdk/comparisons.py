@@ -556,6 +556,13 @@ class ComparisonService:
         }
         if interventions:
             evidence["interventions"] = interventions
+        # 证据删除防护（A19/G21）：该 pass 的 score sets 内容进入 hash——
+        # 证据变化 ⇒ 不同 evidence hash ⇒ 不同 evaluation_input_hash，不会
+        # 与既有结论撞 id（append-only 冲突），也不从当前配置补历史事实。
+        evidence["score_sets_digest"] = hashlib.sha256(json.dumps(
+            self._score_rows(dict(scoring_pass)), ensure_ascii=False,
+            sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
         digest = hashlib.sha256(json.dumps(
             evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
