@@ -15,6 +15,9 @@
 - ``max_output_tokens`` 预算直接进入 ModelRequest（Provider 侧再约束上限）。
 - ``AgentFatalError``（副作用后证据边界失败）不被当作工具错误回灌，直接中止。
 ``run(prompt)`` 保留 M0 兼容返回；新链路使用 ``run_agent`` 拿完整结果。
+M5-T03a：会话状态（messages / 已执行 call_id / budget / event seq）抽到
+``BuiltinSession``；多轮业务 Target 用 ``begin`` / ``send`` / ``observe`` /
+``interrupt`` / ``close``，``run_agent`` 仍是逐字段兼容的 one-shot 入口。
 """
 from __future__ import annotations
 
@@ -32,6 +35,12 @@ from .native_tools import (
     validate_tool_arguments,
 )
 from .runtime import AgentRuntime
+from .session import (
+    STATE_IDLE,
+    BuiltinSession,
+    SessionStateError,
+    message_view,
+)
 
 LEGACY_SYSTEM_PROMPT = (
     "You are a ReAct agent. Reply with a single JSON object, nothing else:\n"
@@ -93,8 +102,12 @@ class BuiltinReActRuntime(AgentRuntime):
         # complete 已自带单次调用期限强制（executor 包装层，R3 #1）：期限、线程与
         # 调用日志结算都在主流程内完成，运行时不再二次套线程。
         self._per_call_self_enforced = per_call_self_enforced
-        self.events: list[dict[str, Any]] = []
-        self._legacy_call_seq = 0
+        # M5-T03a：会话状态（messages / 已执行 call_id / budget / event seq）
+        # 归 BuiltinSession 所有；运行时只持有当前 case 的容器引用，不保存任何
+        # 跨 case 共享的可变默认值。
+        self._session: BuiltinSession | None = None
+        self._orphan_events: list[dict[str, Any]] = []
+        self._interrupted = False
 
     # ------------------------------------------------------------ M0 兼容入口
 
@@ -103,20 +116,150 @@ class BuiltinReActRuntime(AgentRuntime):
         legacy_status = "completed" if outcome["termination_reason"] == "final_answer" else "budget_exceeded"
         return {"status": legacy_status, "answer": outcome["final_output"], "steps": outcome["steps"]}
 
+    # ------------------------------------------------------------ 会话入口
+
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        """当前（或最近一次）会话的事件流；尚未建立会话时为空。"""
+        session = self._session
+        return session.events if session is not None else self._orphan_events
+
+    @property
+    def session(self) -> BuiltinSession | None:
+        """当前 case 的会话容器；未 begin / 未 run_agent 时为 None。"""
+        return self._session
+
+    def begin(self) -> BuiltinSession:
+        """建立一个 case-owned 会话；每个运行时只允许一次（第二次拒绝）。"""
+        if self._session is not None:
+            raise SessionStateError(
+                f"session already begun ({self._session.session_id}); "
+                "begin() is allowed once",
+                state=self._session.state,
+                reason=self._session.termination_reason,
+            )
+        session = BuiltinSession(budget=self.budget)
+        session.activate()
+        self._session = session
+        self._last_call_stop = None
+        return session
+
+    def send(self, prompt: str) -> dict[str, Any]:
+        """执行一个 turn：可含多次模型/工具迭代，正常 final answer 结束本 turn。
+
+        返回 one-shot 结果的超集：``steps`` 是本次 turn 消耗的步数（累计值在
+        ``session`` 视图与 ``observe()`` 中），``events`` 是本次 turn 的事件，
+        ``messages`` 是**会话完整历史**（即模型实际看到的上下文）。
+        会话未 begin / 已关闭 / 已终止时抛 ``SessionStateError``。
+        """
+        session = self._session
+        if session is None:
+            raise SessionStateError("session has not begun; call begin() before send()")
+        refusal = session.send_refusal()
+        if refusal is not None:
+            raise SessionStateError(
+                refusal, state=session.state, reason=session.termination_reason,
+            )
+        if not isinstance(prompt, str):
+            raise ValueError("send() prompt must be a string")
+        start = len(session.events)
+        try:
+            outcome = self._run_turn(session, prompt)
+        except BaseException as error:  # noqa: BLE001 - 异常后会话不得保持可发送
+            session.mark_failed(error)
+            raise
+        outcome["events"] = list(session.events[start:])
+        outcome["turn"] = session.turns
+        outcome["session"] = session.view()
+        return outcome
+
+    def observe(self) -> dict[str, Any]:
+        """会话证据快照：状态、历史、事件、用量与预算；任何状态都不抛错。"""
+        base = {
+            "prompt_version": PROMPT_VERSIONS[self.mode],
+            "mode": self.mode,
+            "model": self.model,
+            "usage": self.budget.observed_usage(),
+            "budget": self.budget.enforcement_report(),
+        }
+        session = self._session
+        if session is None:
+            return {
+                "session_id": None, "state": STATE_IDLE, "begun": False,
+                "closed": False, "cancelled": self._interrupted, "turns": 0,
+                "steps": 0, "tool_calls": self.budget.tool_calls_made(),
+                "event_seq": 0, "message_count": 0, "executed_call_ids": [],
+                "termination_reason": None, "termination_detail": None,
+                "final_output": None, "messages": [], "events": [], **base,
+            }
+        return {
+            **session.view(),
+            "messages": session.message_views(),
+            "events": list(session.events),
+            **base,
+        }
+
+    def interrupt(self) -> None:
+        """请求取消：置位取消标志并结束会话，待办业务动作（含写入）不再执行。"""
+        self._interrupted = True
+        session = self._session
+        if session is not None:
+            session.cancel()
+
+    def close(self) -> bool:
+        """关闭会话；幂等，返回本次调用是否真的关闭。"""
+        session = self._session
+        if session is None:
+            return False
+        return session.close()
+
     # ------------------------------------------------------------ M1 主入口
 
     def run_agent(self, prompt: str) -> dict[str, Any]:
-        """完整执行一个 case；返回终止原因、用量与消息历史等证据。"""
-        self.events = []
-        context: list[Message] = [Message(role="user", content=prompt)]
-        executed_call_ids: set[str] = set()
+        """完整执行一个 case；返回终止原因、用量与消息历史等证据。
+
+        M5-T03a：one-shot 入口 = begin + 单 turn + close，返回结构与终止原因
+        与会话入口出现之前逐字段一致；多轮业务 Target 改用 ``begin`` /
+        ``send`` / ``observe`` / ``interrupt`` / ``close``。
+        """
+        existing = self._session
+        if existing is not None and existing.send_refusal() is None:
+            raise SessionStateError(
+                "session already accepts send(); close() it before run_agent()",
+                state=existing.state,
+            )
+        session = BuiltinSession(budget=self.budget)
+        session.activate()
+        self._session = session
+        try:
+            return self._run_turn(session, prompt)
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------ 算法本体
+
+    def _run_turn(self, session: BuiltinSession, prompt: str) -> dict[str, Any]:
+        try:
+            return self._run_loop(session, prompt)
+        except AgentFatalError as error:
+            # 证据边界失败不是工具错误：中止执行且不补写 terminated 事件
+            session.mark_failed(error)
+            raise
+
+    def _run_loop(self, session: BuiltinSession, prompt: str) -> dict[str, Any]:
+        """执行一个 turn；算法与 one-shot 时代逐句一致，状态改经会话容器。"""
+        turn_start_steps = session.steps
+        session.turns += 1
+        session.messages.append(Message(role="user", content=prompt))
+        context = session.messages
         termination_reason: str | None = None
         detail: str | None = None
         final_output: Any = None
-        step = 0
+        step = session.steps
 
         while termination_reason is None:
-            step += 1
+            session.steps += 1
+            step = session.steps
             stop = self.budget.step_allowed(step)
             if stop is not None:
                 termination_reason, detail = stop, f"blocked before step {step}"
@@ -153,7 +296,7 @@ class BuiltinReActRuntime(AgentRuntime):
                     if self._cancelled():
                         termination_reason = "cancelled"
                         break
-                    stop = self._run_native_tool_call(context, call, step, executed_call_ids)
+                    stop = self._run_native_tool_call(session, call, step)
                     if stop is not None:
                         termination_reason, detail = stop, "stopped during tool calls"
                         break
@@ -189,7 +332,7 @@ class BuiltinReActRuntime(AgentRuntime):
                 termination_reason = "cancelled"
                 detail = "cancelled between model response and tool execution"
                 break
-            stop = self._run_legacy_tool(context, decision, step)
+            stop = self._run_legacy_tool(session, decision, step)
             if stop is not None:
                 termination_reason, detail = stop, "stopped during tool call"
                 break
@@ -202,13 +345,14 @@ class BuiltinReActRuntime(AgentRuntime):
         self._record(
             "terminated", reason=termination_reason, detail=detail, steps=step,
         )
+        session.record_termination(termination_reason, detail, final_output)
         return {
             "final_output": final_output,
             "termination_reason": termination_reason,
             "termination_detail": detail,
-            "steps": step,
+            "steps": session.steps - turn_start_steps,
             "tool_calls": self.budget.tool_calls_made(),
-            "events": list(self.events),
+            "events": list(session.events),
             "messages": [self._message_view(message) for message in context],
             "usage": self.budget.observed_usage(),
             "budget": self.budget.enforcement_report(),
@@ -294,9 +438,10 @@ class BuiltinReActRuntime(AgentRuntime):
         self.budget.per_call_timeout_enforced = True
 
     def _run_native_tool_call(
-        self, context: list[Message], call: dict[str, Any], step: int,
-        executed_call_ids: set[str],
+        self, session: BuiltinSession, call: dict[str, Any], step: int,
     ) -> str | None:
+        context = session.messages
+        executed_call_ids = session.executed_call_ids
         call_id = str(call.get("id") or "")
         name = str(call.get("name") or "")
         arguments, parse_error = parse_tool_arguments(call.get("arguments"))
@@ -348,7 +493,10 @@ class BuiltinReActRuntime(AgentRuntime):
         outcome = self._execute_tool(name, arguments, call_id, step, context)
         return outcome
 
-    def _run_legacy_tool(self, context: list[Message], decision: dict[str, Any], step: int) -> str | None:
+    def _run_legacy_tool(
+        self, session: BuiltinSession, decision: dict[str, Any], step: int,
+    ) -> str | None:
+        context = session.messages
         name = str(decision.get("tool", ""))
         handler = self.tools.get(name)
         argument = decision.get("input")
@@ -362,8 +510,7 @@ class BuiltinReActRuntime(AgentRuntime):
             ))
             return None
         # legacy 模式也生成唯一 call_id（#13）：tool_call/tool_error/tool_result 匹配
-        self._legacy_call_seq += 1
-        call_id = f"legacy-{step}-{self._legacy_call_seq}"
+        call_id = session.note_legacy_call(step)
         self.budget.record_tool_call()
         self._record("tool_call", step=step, tool=name, call_id=call_id, input=argument)
         try:
@@ -402,6 +549,12 @@ class BuiltinReActRuntime(AgentRuntime):
         return None
 
     def _cancelled(self) -> bool:
+        # 会话级取消（interrupt）与宿主取消钩子任一命中即视为取消
+        if self._interrupted:
+            return True
+        session = self._session
+        if session is not None and session.cancelled:
+            return True
         if self._should_cancel is None:
             return False
         try:
@@ -427,13 +580,7 @@ class BuiltinReActRuntime(AgentRuntime):
 
     @staticmethod
     def _message_view(message: Message) -> dict[str, Any]:
-        return {
-            "role": message.role,
-            "content": message.content if isinstance(message.content, str)
-            else str(message.content),
-            **({"tool_calls": message.tool_calls} if message.tool_calls else {}),
-            **({"tool_call_id": message.tool_call_id} if message.tool_call_id else {}),
-        }
+        return message_view(message)
 
     @staticmethod
     def _parse_decision(content: Any) -> dict[str, Any] | None:
@@ -450,8 +597,12 @@ class BuiltinReActRuntime(AgentRuntime):
     _last_call_stop: str | None = None
 
     def _record(self, event_type: str, **payload: Any) -> None:
-        event = {"type": event_type, **payload}
-        self.events.append(event)
+        session = self._session
+        if session is not None:
+            event = session.record_event(event_type, **payload)
+        else:  # pragma: no cover - 循环内的事件总是落在当前会话上
+            event = {"type": event_type, **payload}
+            self._orphan_events.append(event)
         if self._event_sink is not None:
             try:
                 self._event_sink(event)
