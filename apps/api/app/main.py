@@ -1992,6 +1992,27 @@ def create_app(
             "candidate": candidate,
         }
 
+    @application.get("/api/v1/runs/{run_id}/steps")
+    def scenario_run_steps(run_id: str):
+        """场景 Run 的逐步证据（步骤 / checkpoint / fixture 清理）；零模型调用。
+
+        验收 F-08：Web 的步骤下钻页一直请求这个端点，而它以前没有注册（404），
+        于是 M5 最核心的"流程可验证"在 UI 上永久显示为"能力不可用"。这里只读
+        已持久化的证据（workflow-observation@1 与冻结快照），不重算结论；没有
+        观察时只回退到声明的步骤并标 unknown=True。
+        """
+        from apps.api.app.scenario_steps import build_scenario_steps_view
+
+        try:
+            run = service.get_run(run_id)
+        except KeyError:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "RUN_NOT_FOUND", "message": run_id}},
+            )
+        rows = service.store.case_runs.list_for_run(run_id)
+        return build_scenario_steps_view(run, rows)
+
     @application.get(
         "/api/v1/scenario-targets", response_model=ScenarioTargetListResponse
     )
