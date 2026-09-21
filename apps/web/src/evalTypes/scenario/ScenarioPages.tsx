@@ -9,6 +9,7 @@ import {
   getWorkflows,
   publishWorkflow,
   validateWorkflow,
+  validationIssuesFromError,
   type RunRecord,
   type ScenarioFixtureState,
   type ScenarioRunStepsView,
@@ -341,6 +342,7 @@ export function ScenarioWorkflowsPage() {
     && parsed.issues.length === 0
     && localSchemaIssues(parsed.value).length === 0
     && freshReport?.ok === true
+    && freshReport.publishable !== false
     && busy === null;
 
   const selectVersion = async (record: WorkflowVersionRecord) => {
@@ -378,10 +380,18 @@ export function ScenarioWorkflowsPage() {
       setReport(result);
       setValidatedText(submitted);
     } catch (error) {
-      setReport(null);
-      setValidatedText(null);
-      // 校验失败（含端点未注册）都保留草案文本，不清空编辑器
-      setActionError(failureText(error, "校验"));
+      const issues = validationIssuesFromError(error, "workflow");
+      if (issues) {
+        // 服务端 4xx 是**校验结论**（逐字段问题），不是读取故障：发布保持禁用
+        setReport({ ok: false, errors: issues, warnings: [] });
+        setValidatedText(submitted);
+        setActionError("");
+      } else {
+        setReport(null);
+        setValidatedText(null);
+        // 校验失败（含端点未注册）都保留草案文本，不清空编辑器
+        setActionError(failureText(error, "校验"));
+      }
     } finally {
       setBusy(null);
     }
@@ -397,8 +407,10 @@ export function ScenarioWorkflowsPage() {
       setPublishNotice("已发布 " + record.workflow_id + "@" + record.version + "（content_hash " + (record.content_hash ?? UNKNOWN_TEXT) + "）");
       await refresh();
     } catch (error) {
-      // 失败保留表单内容：只显示错误，不动草案文本
-      setActionError(failureText(error, "发布"));
+      // 失败保留表单内容：只动错误显示，不动草案文本
+      const issues = validationIssuesFromError(error, "workflow");
+      if (issues) setReport({ ok: false, errors: issues, warnings: [] });
+      else setActionError(failureText(error, "发布"));
     } finally {
       setBusy(null);
     }
@@ -580,6 +592,8 @@ export function ScenarioWorkflowsPage() {
             <span className="field-label">校验结论</span>
             <StatusBadge status={freshReport.ok ? "passed" : "failed"} />
             <span className="mono"> errors={freshReport.errors.length} warnings={(freshReport.warnings ?? []).length}</span>
+            {freshReport.step_count != null && <span className="mono"> steps={freshReport.step_count}</span>}
+            {freshReport.condition_count != null && <span className="mono"> conditions={freshReport.condition_count}</span>}
             {freshReport.content_hash && <span className="mono"> content_hash={freshReport.content_hash}</span>}
           </p>
         )}

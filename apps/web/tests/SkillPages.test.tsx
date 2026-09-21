@@ -151,24 +151,50 @@ describe("SkillValidationPage", () => {
     await waitFor(() => expect((screen.getByTestId("scope-run-behaviour") as HTMLButtonElement).disabled).toBe(false));
   });
 
-  it("静态校验只读调用并显示逐项检查与既有 Run 引用", async () => {
+  it("静态校验提交 Skill 文档本身，并显示静态作用域边界（不核验资源字节）", async () => {
     clientMocks.validateSkill.mockResolvedValue({
-      status: "passed",
-      checks: [
-        { id: "manifest", locator: "manifest", passed: true, message: "字段齐全" },
-        { id: "dependency", locator: "dependency_refs", passed: false, message: "依赖未固定" },
-      ],
-      run_id: "run-9",
-      conditions: { kind: "instruction" },
+      ok: true,
+      executed: false,
+      validation_scope: "static",
+      resource_bytes_verified: false,
+      skill_id: "order-cancel",
+      version: "1",
+      ref: "order-cancel@1",
+      kind: "instruction",
+      executable: false,
+      dependency_refs: [{ name: "motte", version: "1" }],
+      resource_paths: [],
+      defaulted_fields: [],
+      content_hash: "sha256:x",
     });
     render(wrap(<SkillValidationPage />));
     await waitFor(() => expect(screen.getByTestId("scope-run-static")).toBeTruthy());
     fireEvent.click(screen.getByTestId("scope-run-static"));
-    await waitFor(() => expect(clientMocks.validateSkill).toHaveBeenCalledWith({ skill_id: "order-cancel", version: "1" }));
-    await waitFor(() => expect(screen.getByText("依赖未固定")).toBeTruthy());
-    expect(screen.getByText("未通过")).toBeTruthy();
-    expect(screen.getByText("run-9")).toBeTruthy();
+    await waitFor(() => expect(clientMocks.validateSkill).toHaveBeenCalledTimes(1));
+    // 请求体是 Skill 文档本身（服务端只解析、不执行）
+    expect(clientMocks.validateSkill.mock.calls[0][0].skill_id).toBe("order-cancel");
+    await waitFor(() => expect(screen.getByText("契约、kind 分型与 schema 有效")).toBeTruthy());
+    expect(screen.getByText("1 条依赖引用已核验（版本固定）")).toBeTruthy();
+    // 资源字节核验属于 executable fixture 作用域：静态范围不得显示成已通过
+    expect(screen.getByText(/静态范围不核验资源字节/)).toBeTruthy();
+    expect(screen.getByText("无可执行入口（纯指令 / 带资源 Skill）")).toBeTruthy();
     expect(screen.queryByTestId("scope-reason-static")).toBeNull();
+  });
+
+  it("静态校验被 4xx 逐字段拒绝时就地显示字段错误，不算能力不可用", async () => {
+    clientMocks.validateSkill.mockRejectedValue(new ApiRequestError(422, {
+      code: "SKILL_INVALID",
+      message: "skill document is not a valid version",
+      details: { fields: [{ field: "kind", code: "literal_error", message: "Input should be 'instruction'" }] },
+    }));
+    render(wrap(<SkillValidationPage />));
+    await waitFor(() => expect(screen.getByTestId("scope-run-static")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("scope-run-static"));
+    await waitFor(() => expect(screen.getByText("literal_error")).toBeTruthy());
+    expect(screen.getByText(/Input should be 'instruction'/)).toBeTruthy();
+    expect(screen.getByText("kind")).toBeTruthy();
+    expect(screen.queryByTestId("scope-reason-static")).toBeNull();
+    expect(screen.queryByTestId("skill-action-error")).toBeNull();
   });
 
   it("静态校验端点未注册 → 能力不可用，入口禁用并说明原因", async () => {

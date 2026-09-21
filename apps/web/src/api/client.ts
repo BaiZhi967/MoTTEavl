@@ -143,10 +143,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // 结构化错误原样上抛（code/message/details）：页面不猜含义、也不吞掉身份。
     const error = payload?.error;
     if (error && typeof error === "object") {
+      // 结构化拒绝原样上抛：details 之外，服务端还会把逐字段错误放在
+      // error.fields（field/code/message）、允许取值放在 error.allowed —— 一并折叠进
+      // details，页面才能逐字段显示，而不是只剩一句 message。
       throw new ApiRequestError(response.status, {
         code: typeof error.code === "string" ? error.code : null,
         message: typeof error.message === "string" ? error.message : null,
-        details: error.details && typeof error.details === "object" ? error.details : null,
+        details: {
+          ...(error.details && typeof error.details === "object" ? error.details : {}),
+          ...(Array.isArray(error.fields) ? { fields: error.fields } : {}),
+          ...(Array.isArray(error.allowed) ? { allowed: error.allowed } : {}),
+        },
       });
     }
     throw new ApiRequestError(response.status, {
@@ -1128,11 +1135,57 @@ export interface ValidationIssue {
 /** 只读校验报告：不发布、不建 Run、不产生模型调用与费用。 */
 export interface WorkflowValidationReport {
   ok: boolean;
+  /** 逐字段问题；被服务端 4xx 拒绝时来自 error.fields，通过时为空数组。 */
   errors: ValidationIssue[];
   warnings?: ValidationIssue[];
   workflow_id?: string | null;
   version?: string | null;
   content_hash?: string | null;
+  /** 服务端预检字段：publishable / executed 恒为可发布的预检语义。 */
+  publishable?: boolean | null;
+  executed?: boolean | null;
+  ref?: string | null;
+  step_count?: number | null;
+  condition_count?: number | null;
+  defaulted_fields?: string[];
+}
+
+/** 服务端成功响应形状（POST /workflows/validate）。 */
+export interface WorkflowPreflightResponse {
+  ok: boolean;
+  publishable?: boolean | null;
+  executed?: boolean | null;
+  workflow_id?: string | null;
+  version?: string | null;
+  ref?: string | null;
+  content_hash?: string | null;
+  step_count?: number | null;
+  condition_count?: number | null;
+  defaulted_fields?: string[];
+}
+
+/**
+ * 结构化校验拒绝（HTTP 422 等）→ 逐字段问题。
+ * 服务端用 `error.fields`（field/code/message）表达契约错误；没有 fields 时
+ * 退化为一份文档级问题。非校验类错误返回 null，页面照常显示真实错误。
+ */
+export function validationIssuesFromError(error: unknown, fallbackLocator = "workflow"): ValidationIssue[] | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status !== 422 && error.status !== 400) return null;
+  const raw = (error.details as Record<string, any> | undefined)?.fields;
+  const fields = Array.isArray(raw) ? raw : [];
+  if (fields.length === 0) {
+    return [{
+      locator: fallbackLocator,
+      code: error.code ?? "INVALID",
+      message: error.message,
+    }];
+  }
+  return fields.map((field: any) => ({
+    locator: String(field?.field ?? field?.locator ?? fallbackLocator),
+    code: String(field?.code ?? "INVALID"),
+    message: String(field?.message ?? "服务端未给出字段说明"),
+  }));
 }
 
 export const getWorkflows = () =>
@@ -1140,12 +1193,27 @@ export const getWorkflows = () =>
 
 export const getWorkflow = (workflowId: string, version: string) =>
   request<WorkflowVersionRecord>(
-    `/api/v1/workflows/${encodeURIComponent(workflowId)}/versions/${encodeURIComponent(version)}`,
+    `/api/v1/workflows/${encodeURIComponent(workflowId)}/${encodeURIComponent(version)}`,
   );
 
-/** 只读校验：草案 JSON 原样送出，服务端返回逐字段问题；不落库、不建 Run。 */
-export const validateWorkflow = (draft: Record<string, unknown>) =>
-  request<WorkflowValidationReport>("/api/v1/workflows/validate", jsonBody(draft));
+/** 只读校验：草案 JSON 原样送出；成功响应规范化为报告，4xx 由页面用 validationIssuesFromError 展开。 */
+export const validateWorkflow = async (draft: Record<string, unknown>): Promise<WorkflowValidationReport> => {
+  const response = await request<WorkflowPreflightResponse>("/api/v1/workflows/validate", jsonBody(draft));
+  return {
+    ok: response.ok === true,
+    errors: [],
+    warnings: [],
+    workflow_id: response.workflow_id ?? null,
+    version: response.version ?? null,
+    content_hash: response.content_hash ?? null,
+    publishable: response.publishable ?? null,
+    executed: response.executed ?? null,
+    ref: response.ref ?? null,
+    step_count: response.step_count ?? null,
+    condition_count: response.condition_count ?? null,
+    defaulted_fields: response.defaulted_fields ?? [],
+  };
+};
 
 /** 发布一个 Workflow 版本；内容相同时服务端按幂等策略返回原记录或冲突。 */
 export const publishWorkflow = (draft: Record<string, unknown>) =>
@@ -1267,17 +1335,41 @@ export interface SkillVersionRecord {
   verification?: SkillVerificationView | null;
 }
 
+/** 已发布 SkillVersion 目录（M5）：/api/v1/skills 是 v0 内存注册表，版本资源走 versions 子资源。 */
 export const getSkills = () =>
-  request<{ items: SkillVersionRecord[]; total: number }>("/api/v1/skills");
+  request<{ items: SkillVersionRecord[]; total: number }>("/api/v1/skills/versions");
 
 export const getSkill = (skillId: string, version: string) =>
   request<SkillVersionRecord>(
     `/api/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`,
   );
 
-/** 静态校验（只读）：不运行入口、不注入、不建 Run。 */
-export const validateSkill = (body: { skill_id: string; version: string }) =>
-  request<SkillVerificationScopeView>("/api/v1/skills/validate", jsonBody(body));
+/**
+ * 静态校验（只读）：请求体是 Skill 文档本身，不运行入口、不执行 fixture、
+ * 零模型调用。服务端明确 validation_scope="static" 且 resource_bytes_verified=false
+ * —— 资源字节核验属于 executable fixture 作用域，不能把它说成已执行（M5-A10）。
+ */
+export interface SkillValidationResult {
+  ok: boolean;
+  executed?: boolean | null;
+  validation_scope?: string | null;
+  resource_bytes_verified?: boolean | null;
+  skill_id?: string | null;
+  version?: string | null;
+  ref?: string | null;
+  kind?: string | null;
+  lifecycle?: string | null;
+  content_hash?: string | null;
+  executable?: boolean | null;
+  dependency_refs?: Array<Record<string, unknown>>;
+  resource_paths?: string[];
+  fixture_refs?: Array<Record<string, unknown>>;
+  requested_permissions?: Record<string, unknown>;
+  defaulted_fields?: string[];
+}
+
+export const validateSkill = (document: Record<string, unknown>) =>
+  request<SkillValidationResult>("/api/v1/skills/validate", jsonBody(document));
 
 /** executable fixture：返回既有 Run 引用，不新建第二套执行对象。 */
 export const testSkillFixture = (body: { skill_id: string; version: string; fixture_id?: string }) =>

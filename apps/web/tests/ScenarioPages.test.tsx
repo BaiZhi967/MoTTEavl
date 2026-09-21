@@ -122,12 +122,18 @@ describe("ScenarioPages 纯函数", () => {
 
 describe("ScenarioWorkflowsPage", () => {
   it("逐字段校验：服务端错误就地显示，未通过校验前不能发布", async () => {
+    // 服务端把无效草稿作为 4xx 结构化拒绝（error.fields 是逐字段错误）
     clientMocks.validateWorkflow
+      .mockRejectedValueOnce(new ApiRequestError(422, {
+        code: "WORKFLOW_INVALID",
+        message: "workflow document is not valid",
+        details: {
+          fields: [{ field: "limits.max_turns", code: "BUDGET_INVALID", message: "max_turns 超出 DSL 上限" }],
+        },
+      }))
       .mockResolvedValueOnce({
-        ok: false,
-        errors: [{ locator: "limits.max_turns", code: "BUDGET_INVALID", message: "max_turns 超出 DSL 上限" }],
-      })
-      .mockResolvedValueOnce({ ok: true, errors: [], content_hash: "sha256:new" });
+        ok: true, errors: [], content_hash: "sha256:new", publishable: true, step_count: 1, condition_count: 2,
+      });
 
     render(wrap(<ScenarioWorkflowsPage />));
     const editor = (await screen.findByLabelText(/WorkflowVersion DSL/)) as HTMLTextAreaElement;
@@ -139,6 +145,8 @@ describe("ScenarioWorkflowsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "校验（只读）" }));
     await waitFor(() => expect(screen.getByTestId("validation-result").textContent).toContain("失败"));
     expect(screen.getByText(/BUDGET_INVALID/)).toBeTruthy();
+    // 4xx 是校验结论而不是读取故障：不显示成「能力不可用」
+    expect(screen.queryByTestId("workflow-action-error")).toBeNull();
 
     // Schema 视图把服务端错误逐字段显示在对应字段下方
     const schemaTab = screen.getByRole("tab", { name: "Schema 字段" });
@@ -153,10 +161,24 @@ describe("ScenarioWorkflowsPage", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "文本（JSON）" }), { button: 0, ctrlKey: false });
     fireEvent.click(screen.getByRole("button", { name: "校验（只读）" }));
     await waitFor(() => expect(screen.getByTestId("validation-result").textContent).toContain("通过"));
+    expect(screen.getByTestId("validation-result").textContent).toContain("steps=1");
     await waitFor(() => expect((screen.getByRole("button", { name: "发布版本" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "发布版本" }));
     await waitFor(() => expect(clientMocks.publishWorkflow).toHaveBeenCalledTimes(1));
     expect(clientMocks.publishWorkflow.mock.calls[0][0].workflow_id).toBe("order-cancel-confirmed");
+  });
+
+  it("预检通过但服务端声明不可发布时，发布入口仍然禁用", async () => {
+    clientMocks.validateWorkflow.mockResolvedValue({
+      ok: true, errors: [], publishable: false, defaulted_fields: ["published_at"],
+    });
+    render(wrap(<ScenarioWorkflowsPage />));
+    const editor = (await screen.findByLabelText(/WorkflowVersion DSL/)) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: draftText() } });
+    fireEvent.click(screen.getByRole("button", { name: "校验（只读）" }));
+    await waitFor(() => expect(screen.getByTestId("validation-result").textContent).toContain("通过"));
+    expect((screen.getByRole("button", { name: "发布版本" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(clientMocks.publishWorkflow).not.toHaveBeenCalled();
   });
 
   it("文本改动后上次校验结论失效：发布入口重新禁用并说明原因", async () => {

@@ -11,10 +11,13 @@ import {
   testSkillBehaviour,
   testSkillFixture,
   validateSkill,
+  validationIssuesFromError,
   type ComparisonReportView,
   type RunRecord,
+  type SkillValidationResult,
   type SkillVerificationScopeView,
   type SkillVersionRecord,
+  type ValidationIssue,
 } from "../../api/client";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
@@ -91,6 +94,74 @@ export function scopeStatusOf(scope: SkillVerificationScopeView | null | undefin
   const status = scope?.status;
   if (typeof status === "string" && status.trim() !== "") return status;
   return "not_run";
+}
+
+/**
+ * 静态校验响应 → 验证范围视图。服务端把作用域边界写在响应里：
+ * validation_scope 只有 static、resource_bytes_verified=false（资源字节核验属于
+ * executable fixture 作用域），页面照实显示为「未知/不适用」而不是通过。
+ */
+export function staticScopeFromValidation(result: SkillValidationResult): SkillVerificationScopeView {
+  const dependencies = result.dependency_refs ?? [];
+  const paths = result.resource_paths ?? [];
+  return {
+    status: result.ok === true ? "passed" : "failed",
+    checks: [
+      {
+        id: "contract",
+        locator: "manifest",
+        passed: result.ok === true,
+        message: result.ok === true ? "契约、kind 分型与 schema 有效" : "服务端拒绝该文档",
+      },
+      {
+        id: "dependency_pin",
+        locator: "dependency_refs",
+        passed: true,
+        message: dependencies.length + " 条依赖引用已核验（版本固定）",
+      },
+      {
+        id: "resource_manifest",
+        locator: "resource_manifest",
+        passed: paths.length > 0 ? true : null,
+        message: paths.length > 0
+          ? paths.length + " 个资源路径已登记（静态范围不读取字节）"
+          : "没有登记资源路径",
+      },
+      {
+        id: "resource_bytes",
+        locator: "resource_manifest",
+        passed: null,
+        message: result.resource_bytes_verified === false
+          ? "静态范围不核验资源字节：属于 executable fixture 作用域（M5-A10）"
+          : "服务端声明资源字节已核验",
+      },
+      {
+        id: "entrypoint",
+        locator: "entrypoint",
+        passed: result.executable === true,
+        message: result.executable === true ? "已声明受控可执行入口" : "无可执行入口（纯指令 / 带资源 Skill）",
+      },
+    ],
+    conditions: {
+      validation_scope: result.validation_scope ?? "unknown",
+      resource_bytes_verified: result.resource_bytes_verified ?? false,
+      content_hash: result.content_hash ?? "unknown",
+      defaulted_fields: (result.defaulted_fields ?? []).join(", ") || "无",
+    },
+  };
+}
+
+/** 服务端 4xx 的逐字段拒绝 → 失败的静态校验结论（不是读取故障）。 */
+export function staticScopeFromIssues(issues: ValidationIssue[]): SkillVerificationScopeView {
+  return {
+    status: "failed",
+    checks: issues.map((issue) => ({
+      id: issue.code,
+      locator: issue.locator,
+      passed: false,
+      message: issue.message,
+    })),
+  };
 }
 
 function ScopeChecks({ scope }: { scope: SkillVerificationScopeView }) {
@@ -178,7 +249,8 @@ export function SkillValidationPage() {
     setActionError("");
     try {
       const result = scope.id === "static"
-        ? await validateSkill({ skill_id: identity, version: skill.version })
+        // 静态校验把 Skill 文档本身交给服务端（只解析、不执行、零调用）
+        ? staticScopeFromValidation(await validateSkill(skill as unknown as Record<string, unknown>))
         : scope.id === "executable_fixture"
           ? await testSkillFixture({ skill_id: identity, version: skill.version })
           : await testSkillBehaviour({ skill_id: identity, version: skill.version, agent_id: agentId, model });
@@ -186,6 +258,12 @@ export function SkillValidationPage() {
       setResults((current) => ({ ...current, [scope.id]: result }));
     } catch (error) {
       if (scopeSeq.current !== seq) return;
+      const issues = scope.id === "static" ? validationIssuesFromError(error, "manifest") : null;
+      if (issues) {
+        // 服务端 4xx 是静态校验结论：逐字段拒绝就地显示，不算能力不可用
+        setResults((current) => ({ ...current, [scope.id]: staticScopeFromIssues(issues) }));
+        return;
+      }
       const reason = unavailableReason(error);
       if (reason) setUnavailable((current) => ({ ...current, [scope.id]: reason }));
       else setActionError(failureText(error, scope.label + "运行"));
