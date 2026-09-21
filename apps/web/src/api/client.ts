@@ -691,12 +691,19 @@ export interface TraceEvent {
   recorded_at?: string | null;
 }
 
-/** 订阅运行事件流；浏览器重连时自动携带 Last-Event-ID，服务端按 seq 续传。 */
+/** 订阅运行事件流；显式携带 after 游标，浏览器自动重连时继续发送 Last-Event-ID。 */
 export function subscribeRunEvents(
   runId: string,
-  handlers: { onEvent: (event: TraceEvent) => void; onError?: () => void },
+  handlers: {
+    onEvent: (event: TraceEvent) => void;
+    onError?: () => void;
+    /** 服务端事件被清理后按命名事件 motte-gap 通知（协议 sdk-and-migration §2）。 */
+    onGap?: (gap: { type: "gap"; after: number; next_seq: number; partial: boolean }) => void;
+  },
+  options?: { after?: number },
 ): () => void {
-  const source = new EventSource(`/api/v1/runs/${runId}/events`);
+  const query = options?.after && options.after > 0 ? `?after=${options.after}` : "";
+  const source = new EventSource(`/api/v1/runs/${runId}/events${query}`);
   source.onmessage = (message) => {
     try {
       handlers.onEvent(JSON.parse(message.data));
@@ -704,8 +711,35 @@ export function subscribeRunEvents(
       // 忽略无法解析的帧
     }
   };
+  if (handlers.onGap) {
+    source.addEventListener("motte-gap", (message) => {
+      try {
+        handlers.onGap?.(JSON.parse((message as MessageEvent).data));
+      } catch {
+        // 缺口通知帧损坏时忽略；下一次重连仍会重发
+      }
+    });
+  }
   source.onerror = () => handlers.onError?.();
   return () => source.close();
+}
+
+export interface EventsSnapshot {
+  events: TraceEvent[];
+  last_seq: number | null;
+  run_status: string;
+  partial: boolean;
+}
+
+/** SSE 断线/缺口的持久查询：一次性拉取 seq > after 的事件（协议 §2）。 */
+export async function fetchRunEventsSnapshot(
+  runId: string,
+  after: number,
+  limit = 500,
+): Promise<EventsSnapshot> {
+  return request<EventsSnapshot>(
+    `/api/v1/runs/${runId}/events/snapshot?after=${after}&limit=${limit}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
