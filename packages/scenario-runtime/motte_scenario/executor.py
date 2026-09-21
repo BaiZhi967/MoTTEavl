@@ -47,6 +47,12 @@ from .state import (
 )
 from .targets import target_adapter
 
+#: M5-T07：冻结注入声明在 Run 快照里的键（与 motte_skill.injection 同一常量）。
+try:  # pragma: no cover - 常量本身在 motte_skill 里定义
+    from motte_skill.injection import SKILL_INJECTION_SNAPSHOT_KEY
+except ImportError:  # pragma: no cover - skill-runtime 不可用时仍可执行旧 Run
+    SKILL_INJECTION_SNAPSHOT_KEY = "skill_injection"
+
 #: 需要 fixture 的步骤类型：声明了它们却没有固定 Fixture 时，创建期与执行期
 #: 必须给出同一个结论（R6 第 5 条：不能先接受、执行时才说缺 primary binding）。
 FIXTURE_TOUCHING_STEP_KINDS = frozenset({"invoke_fixture_tool", "trigger_fixture_event"})
@@ -414,9 +420,12 @@ class FixturePortAdapter:
         events: Mapping[str, Callable[..., Any]] | None = None,
         tool_log: list[dict[str, Any]] | None = None,
         ledger: ScenarioLedger | None = None,
+        gateway: Mapping[str, Any] | None = None,
     ) -> None:
         self.runtime = runtime
         self.binding = binding
+        #: M5-T07：冻结注入计划的**唯一执行网关**（None = 旧 Run，没有 Skill 声明）。
+        self.gateway = dict(gateway) if gateway else None
         #: 真实实现；只有 mode=real 才会被调用。
         self.tools = dict(tools or {})
         #: 显式模拟实现；mock 模式只走这里，绝不回退 real。
@@ -470,7 +479,24 @@ class FixturePortAdapter:
         self.ledger.tool_finished(handle, status="succeeded", result=result)
         return result
 
+    def _gateway_check(self, name: str, mode: str) -> None:
+        """有效权限在这里落地：Skill 不能让 deny/mock/replay 升级成 real。
+
+        网关消费的是创建期冻结、并在此重建校验过的注入计划；请求比授权更强的
+        模式（或未授权的工具）都具名拒绝，绝不静默降级成"实际还是跑了"。
+        """
+        gateway = self.gateway
+        if not gateway:
+            return
+        from motte_skill.injection import InjectionError, select_for_execution
+
+        try:
+            select_for_execution(gateway["plan"], {name: mode})
+        except InjectionError as error:
+            raise ScenarioToolError(error.code, str(error)) from error
+
     def _invoke(self, name: str, arguments: dict[str, Any], mode: str) -> Any:
+        self._gateway_check(name, mode)
         if mode == "deny":
             raise ScenarioToolError("SCENARIO_TOOL_DENIED", "tool denied by policy: " + name)
         if mode not in TOOL_MODES:
@@ -680,6 +706,9 @@ class ScenarioCaseExecutor:
         }
         self.event_handlers = dict(event_handlers or {})
         self._service = service
+        #: 冻结的 Skill 注入网关（惰性解析一次；篡改即具名拒绝）。
+        self._gateway: dict[str, Any] | None = None
+        self._gateway_resolved = False
 
     def bind_service(self, service: Any) -> None:
         self._service = service
@@ -784,6 +813,33 @@ class ScenarioCaseExecutor:
 
         return target_kind_of(self.manifest)
 
+    def _skill_gateway(self) -> dict[str, Any] | None:
+        """冻结注入声明 → 执行网关；无声明返回 None（普通 Run 行为不变）。"""
+        if self._gateway_resolved:
+            return self._gateway
+        self._gateway_resolved = True
+        snapshots = self.manifest.get("resource_snapshots")
+        declaration = (
+            snapshots.get(SKILL_INJECTION_SNAPSHOT_KEY)
+            if isinstance(snapshots, Mapping) else None
+        )
+        if not declaration:
+            return None
+        from motte_skill.injection import InjectionError, plan_from_declaration
+
+        try:
+            plan = plan_from_declaration(declaration)
+        except InjectionError as error:
+            raise ScenarioToolError(error.code, str(error)) from error
+        self._gateway = {
+            "plan": plan,
+            "plan_hash": plan.plan_hash,
+            "tool_modes": dict(plan.effective_permissions.tool_modes),
+            "tools": list(plan.effective_permissions.tools),
+            "network": plan.effective_permissions.network,
+        }
+        return self._gateway
+
     def _fixture_port(
         self,
         runtime: FixtureRuntime,
@@ -797,6 +853,7 @@ class ScenarioCaseExecutor:
             runtime, bindings[0], tools=self.tool_handlers,
             mock_tools=self.mock_handlers, replay_records=self.replay_records,
             events=self.event_handlers, tool_log=tool_log, ledger=ledger,
+            gateway=self._skill_gateway(),
         )
 
     def _open_target(
@@ -841,6 +898,20 @@ class ScenarioCaseExecutor:
         3. 声明里没有 real 又不止一个模式 → 有效 mode 无法确定，具名拒绝。
         旧 manifest 完全没有声明时沿用历史默认 real，不改变既有行为。
         """
+        gateway = self._skill_gateway()
+        if gateway is not None:
+            granted = {
+                str(mode) for mode in (gateway.get("tool_modes") or {}).values()
+            }
+            if not granted:
+                return "deny"
+            from motte_skill.injection import TOOL_MODE_STRENGTH
+
+            # 混合授权取**最保守**的模式：目标调用不允许借桥升级成 real。
+            return max(
+                sorted(granted),
+                key=lambda mode: TOOL_MODE_STRENGTH.get(mode, 99),
+            )
         declared = self._declared_tool_modes()
         if not declared:
             return "real"

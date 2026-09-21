@@ -10,6 +10,42 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+class SkillInjectionError(RuntimeError):
+    """冻结的 Skill 注入声明不可用：具名拒绝，绝不静默丢掉 Skill 内容。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.error_class = code
+
+
+def skill_injection_declaration(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Run 冻结快照里的注入声明；没有就返回 None（无 Skill 的普通 Run）。"""
+    from motte_skill.injection import SKILL_INJECTION_SNAPSHOT_KEY
+
+    snapshots = (manifest or {}).get("resource_snapshots")
+    if not isinstance(snapshots, Mapping):
+        return None
+    declaration = snapshots.get(SKILL_INJECTION_SNAPSHOT_KEY)
+    return dict(declaration) if isinstance(declaration, Mapping) else None
+
+
+def compose_declared_system_prompt(
+    declaration: Mapping[str, Any] | None, *, mode: str = "legacy-json",
+) -> str | None:
+    """把冻结声明渲染成实际送入模型的 system prompt（顺序与 hash 都来自声明）。"""
+    from motte_agent.builtin_react import LEGACY_SYSTEM_PROMPT, NATIVE_SYSTEM_PROMPT
+    from motte_skill.injection import InjectionError, compose_agent_system_prompt
+
+    if declaration is None:
+        return None
+    base = NATIVE_SYSTEM_PROMPT if mode == "native-tool" else LEGACY_SYSTEM_PROMPT
+    try:
+        return compose_agent_system_prompt(declaration, base_prompt=base)
+    except InjectionError as error:
+        raise SkillInjectionError(error.code, str(error)) from error
+
+
 def _budget_config(manifest: Mapping[str, Any]) -> dict[str, Any]:
     config = dict((manifest.get("agent_config") or {}).get("budget") or {})
     budget = manifest.get("budget")
@@ -41,10 +77,22 @@ class BuiltinTargetSession:
         self.manifest = dict(manifest)
         config = dict(manifest.get("agent_config") or {})
         self.mode = config.get("mode", "legacy-json")
+        # M5-T07：声明的 Skill 必须真的有冻结注入声明；只写 refs 却拿不到声明
+        # 是创建期错误，不能在这里静默降级成"没有 Skill"。
+        declaration = skill_injection_declaration(manifest)
+        if manifest.get("skills") and declaration is None:
+            raise SkillInjectionError(
+                "SCENARIO_SKILL_INJECTION_MISSING",
+                "manifest declares skills but carries no frozen skill injection declaration; "
+                "the Run must be created through the resolved manifest path",
+            )
+        self.skill_injection = declaration
+        system_prompt = compose_declared_system_prompt(declaration, mode=self.mode)
         provider = build_agent_provider(dict(manifest))
         self._runtime = BuiltinReActRuntime(
             provider.provider.complete,
             dict(tools),
+            system_prompt=system_prompt,
             model=(manifest.get("provider") or {}).get("model") or "scenario-target",
             mode=self.mode,
             budget=ExecutionBudget.from_config(_budget_config(manifest)),
@@ -137,8 +185,9 @@ def builtin_agent_capabilities(_manifest: Mapping[str, Any]) -> Any:
         tool_modes=("real", "mock", "replay", "deny"),
         tools=(),
         interrupt=True,
-        # T07 未交付：不做 Skill 注入声明。
-        skill_injection=False,
+        # M5-T07：消费者把**冻结的注入声明**渲染进真实 Agent 请求（system prompt）。
+        # 声明缺失但 manifest 声明了 skills 时开会话直接具名拒绝。
+        skill_injection=True,
         evidence=("events", "invocations", "artifacts", "usage"),
     )
 

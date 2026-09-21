@@ -60,6 +60,200 @@ def find_secret_paths(value: Any, path: str = "$") -> list[str]:
     return found
 
 
+# --------------------------------------------------------- M5-T07 Skill 注入
+
+
+def _declared_business_tools(resolved: Mapping[str, Any]) -> list[str]:
+    """运行可用的业务工具名字（冻结来源的并集，按声明顺序去重）。"""
+    names: list[str] = []
+
+    def add(items: Any) -> None:
+        for item in items or ():
+            text = str(item)
+            if text and text not in names:
+                names.append(text)
+
+    fixtures = resolved.get("fixture_snapshot")
+    if isinstance(fixtures, Mapping):
+        for record in fixtures.values():
+            payload = record.get("record") if isinstance(record, Mapping) else None
+            if isinstance(payload, Mapping):
+                add(payload.get("allowed_tools"))
+    snapshot = resolved.get("target_snapshot")
+    if isinstance(snapshot, Mapping):
+        add(snapshot.get("tools"))
+    workflow = resolved.get("workflow_snapshot")
+    if isinstance(workflow, Mapping):
+        requirements = workflow.get("target_requirements") or {}
+        if isinstance(requirements, Mapping):
+            add(requirements.get("required_tools"))
+    return names
+
+
+def _declared_tool_modes(resolved: Mapping[str, Any]) -> list[str]:
+    snapshot = resolved.get("target_snapshot")
+    modes = snapshot.get("tool_modes") if isinstance(snapshot, Mapping) else None
+    ordered: list[str] = []
+    for mode in modes or ():
+        text = str(mode)
+        if text not in ordered:
+            ordered.append(text)
+    return ordered
+
+
+def _skill_permission_policies(
+    resolved: Mapping[str, Any], selected: Any,
+) -> dict[str, dict[str, Any]]:
+    """四个权限来源：platform / scenario / target / skill（deny 优先）。
+
+    platform 是**服务端硬边界**，不由调用方声明：业务工具集与模式来自冻结的
+    fixture/target/workflow 快照；路径、凭据与网络默认全关（空列表 = 全部拒绝）。
+    skill 只贡献它**显式声明**的字段：未声明即不约束，绝不会因为挂了一个
+    Skill 就把平台已授予的工具清空。
+    """
+    tools = sorted(_declared_business_tools(resolved))
+    modes = _declared_tool_modes(resolved)
+    mode_map = {tool: modes[0] for tool in tools} if len(modes) == 1 else {}
+    default_mode = modes[0] if len(modes) == 1 else "real"
+    platform = {
+        "tools": tools,
+        "tool_modes": dict(mode_map),
+        "default_tool_mode": default_mode,
+        "filesystem_read": [],
+        "filesystem_write": [],
+        "allow_read": [],
+        "allow_write": [],
+        "allow_credentials": [],
+        "network": "none",
+    }
+    scenario = {"tools": tools, "network": "none"}
+    target = {"tools": tools, "tool_modes": dict(mode_map), "network": "none"}
+    skill_policy: dict[str, Any] = {}
+    for field in ("tools", "filesystem_read", "filesystem_write", "credential_refs"):
+        values: list[str] = []
+        for skill in selected:
+            requested = getattr(skill, "requested_permissions", None)
+            for item in getattr(requested, field, ()) or ():
+                text = str(item)
+                if text not in values:
+                    values.append(text)
+        if values:
+            skill_policy[field] = values
+    return {
+        "platform": platform, "scenario": scenario, "target": target, "skill": skill_policy,
+    }
+
+
+def _resolved_instruction(skill: Any, content_store: Any) -> Any:
+    """把 instruction_ref 的**已核验字节**解析成指令文本（不解析就拒绝注入）。"""
+    if getattr(skill, "instruction", None):
+        return skill
+    reference = getattr(skill, "instruction_ref", None)
+    if not reference:
+        return skill
+    entry = next(
+        (item for item in (skill.resource_manifest or ()) if item.path == reference), None,
+    )
+    if entry is None:
+        raise ManifestResolutionError(
+            "INJECTION_INSTRUCTION_UNRESOLVED",
+            f"skill {skill.skill_id}@{skill.version} references undeclared {reference!r}",
+        )
+    data = content_store.get(entry.sha256) if content_store is not None else None
+    if data is None:
+        raise ManifestResolutionError(
+            "SKILL_RESOURCE_MISSING",
+            f"instruction bytes for skill {skill.skill_id}@{skill.version} are not readable",
+        )
+    if (
+        "sha256:" + hashlib.sha256(bytes(data)).hexdigest() != entry.sha256
+        or len(data) != entry.size_bytes
+    ):
+        raise ManifestResolutionError(
+            "SKILL_RESOURCE_MISMATCH",
+            f"instruction bytes drifted for skill {skill.skill_id}@{skill.version}",
+        )
+    try:
+        text = bytes(data).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ManifestResolutionError(
+            "INJECTION_INSTRUCTION_UNRESOLVED",
+            f"instruction_ref {reference!r} is not UTF-8 text: {error}",
+        ) from error
+    return skill.model_copy(update={"instruction": text})
+
+
+def _freeze_skill_injection(
+    resolved: dict[str, Any], resources: Any, *, requested: Mapping[str, Any] | None = None,
+) -> None:
+    """创建期编译注入计划并冻结进 Run 快照（唯一的声明生成点）。
+
+    Worker/Target 只读冻结声明：Skill 名称、版本、渲染文本、渲染 hash、资源
+    hash 与**有效权限**一起固定。执行侧重建计划时会重算 hash，因此事后改声明
+    不可能静默生效。
+    """
+    from motte_skill.injection import (
+        SKILL_INJECTION_SNAPSHOT_KEY,
+        InjectionError,
+        compile_injection,
+        plan_as_declaration,
+    )
+
+    refs = [str(item) for item in (resolved.get("skills") or [])]
+    if not refs:
+        return
+    if SKILL_INJECTION_SNAPSHOT_KEY in (resolved.get("resource_snapshots") or {}):
+        raise ManifestResolutionError(
+            "SNAPSHOT_RESERVED", "skill injection declarations are generated at creation"
+        )
+    if isinstance(requested, Mapping) and "resource_snapshots" in requested:
+        raise ManifestResolutionError(
+            "SNAPSHOT_RESERVED", "resource_snapshots is generated at creation"
+        )
+    store = getattr(resources, "skills", None)
+    if store is None:
+        raise ManifestResolutionError(
+            "SKILL_STORE_MISSING",
+            "skill references require a published skill repository in this resource store",
+        )
+    bindings: list[dict[str, str]] = []
+    for reference in refs:
+        name, separator, version = reference.rpartition("@")
+        if not separator or not name or not version:
+            raise ManifestResolutionError(
+                "SKILL_REF_INVALID",
+                f"skill reference must be name@version: {reference!r}",
+            )
+        bindings.append({"skill_id": name, "version": version})
+    from motte_skill.versions import (
+        SkillContentHashMismatch,
+        SkillDeprecated,
+        SkillNotFound,
+        select_skills,
+    )
+
+    try:
+        selected = select_skills(store, bindings)
+    except SkillNotFound as error:
+        raise ManifestResolutionError("SKILL_NOT_FOUND", str(error)) from error
+    except SkillDeprecated as error:
+        raise ManifestResolutionError("SKILL_DEPRECATED", str(error)) from error
+    except SkillContentHashMismatch as error:
+        raise ManifestResolutionError("SKILL_CONTENT_HASH_MISMATCH", str(error)) from error
+    content_store = getattr(resources, "content_store", None)
+    resolved_skills = [_resolved_instruction(skill, content_store) for skill in selected]
+    policies = _skill_permission_policies(resolved, resolved_skills)
+    try:
+        plan = compile_injection(selected=resolved_skills, policies=policies)
+    except InjectionError as error:
+        raise ManifestResolutionError(error.code, str(error)) from error
+    snapshots = dict(resolved.get("resource_snapshots") or {})
+    snapshots[SKILL_INJECTION_SNAPSHOT_KEY] = plan_as_declaration(
+        plan, refs=refs, skills=resolved_skills,
+    )
+    resolved["resource_snapshots"] = snapshots
+
+
 def resolve_manifest(
     manifest: dict[str, Any], resources: Any, *, allow_draft_model: bool = False
 ) -> dict[str, Any]:
@@ -162,6 +356,9 @@ def resolve_manifest(
         }
     if snapshots:
         resolved["resource_snapshots"] = snapshots
+    # M5-T07：Skill 引用在创建期解析成已发布版本并编译注入计划；Worker 不再
+    # 按可变名称重新解析 Skill 资源。
+    _freeze_skill_injection(resolved, resources, requested=manifest)
     return resolved
 
 

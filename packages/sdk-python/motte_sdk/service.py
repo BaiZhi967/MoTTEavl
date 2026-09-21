@@ -1095,6 +1095,12 @@ class RunService:
         )
         if interventions is None:
             interventions = intervention_summary(self, run_id)
+            if not interventions.get("count"):
+                # 没有任何人工介入时不能留下一个"看起来发生过干预"的条件 hash：
+                # 消费者（motte_eval.comparison 的 Skill 归因判定）把非空
+                # condition_hash 读成"可能有人工介入"，从而阻断纯 Skill 归因。
+                # 零介入是**已知事实**，用 None 表达，而不是空列表的 hash。
+                interventions = {**interventions, "condition_hash": None}
         manifest_bytes = json.dumps(
             run.get("manifest") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
