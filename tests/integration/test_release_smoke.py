@@ -120,7 +120,7 @@ def test_release_smoke_end_to_end(tmp_path):
 def test_release_upgrade_old_shape_database_gets_platform_tables(tmp_path):
     """上一版本（无 M7 平台表）库打开即自动补齐，可继续创建/幂等。"""
     db_path = tmp_path / "legacy-shape.db"
-    store = SQLiteRunStore(db_path)
+    SQLiteRunStore(db_path)  # 先按当前 schema 建库，再回退到旧形状
     # 模拟旧库：删除 M7 新增的平台表（字面量 DDL，无动态构造）
     with sqlite3.connect(db_path) as connection:
         connection.execute("DROP TABLE IF EXISTS motte_request_keys")
