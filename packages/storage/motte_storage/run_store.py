@@ -101,6 +101,49 @@ CREATE TABLE IF NOT EXISTS agent_invocations (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_invocations_run_idx ON agent_invocations(run_id);
+CREATE TABLE IF NOT EXISTS experiment_specs (
+  experiment_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  PRIMARY KEY (experiment_id, version)
+);
+CREATE TABLE IF NOT EXISTS experiment_cells (
+  cell_id TEXT PRIMARY KEY,
+  experiment_id TEXT NOT NULL,
+  experiment_version TEXT NOT NULL,
+  allocation_status TEXT NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS experiment_cells_experiment_idx
+ON experiment_cells(experiment_id, experiment_version);
+CREATE TABLE IF NOT EXISTS gate_policies (
+  policy_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  PRIMARY KEY (policy_id, version)
+);
+CREATE TABLE IF NOT EXISTS gate_results (
+  gate_result_id TEXT PRIMARY KEY,
+  policy_id TEXT NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS gate_results_policy_idx ON gate_results(policy_id);
+CREATE TABLE IF NOT EXISTS m6_baselines (
+  baseline_id TEXT PRIMARY KEY,
+  payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS default_baselines (
+  scope TEXT PRIMARY KEY,
+  baseline_id TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS default_baseline_history (
+  scope TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  payload TEXT NOT NULL,
+  PRIMARY KEY (scope, position)
+);
 """
 
 # Worker 崩溃后卡住的中间态；重启时回收回 queued。
@@ -591,6 +634,9 @@ class RunStore:
     baselines: Any = None
     trials: Any = None
     runtime_sessions: Any = None
+    experiments: Any = None
+    gate_store: Any = None
+    baseline_store: Any = None
 
     def __post_init__(self) -> None:
         if self.commands is not None:
@@ -611,8 +657,11 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         # 于是"有 metric_id、没有 trial_id"的中间形状永远补不上，结算期缺列失败。
         create_and_upgrade(connection, _SCHEMA)
     from .baselines import SQLiteBaselines
+    from .baseline_store import SQLiteBaselineStore
     from .benchmark_datasets import SQLiteBenchmarkDatasets
+    from .experiments import SQLiteExperiments
     from .external_jobs import SQLiteExternalJobs
+    from .gate_store import SQLiteGateStore
     from .invocations import SQLiteInvocations
     from .trials import SQLiteTrials
 
@@ -630,6 +679,9 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         benchmark_datasets=SQLiteBenchmarkDatasets(path),
         baselines=SQLiteBaselines(path),
         trials=SQLiteTrials(path),
+        experiments=SQLiteExperiments(path),
+        gate_store=SQLiteGateStore(path),
+        baseline_store=SQLiteBaselineStore(path),
     )
 
 
@@ -643,8 +695,11 @@ def InMemoryRunStore() -> RunStore:
     score_sets = MemoryScoreSets(lock)
     attempts = MemoryAttempts(runs, cases, events, lock)
     from .baselines import MemoryBaselines
+    from .baseline_store import MemoryBaselineStore
     from .benchmark_datasets import MemoryBenchmarkDatasets
+    from .experiments import MemoryExperiments
     from .external_jobs import MemoryExternalJobs
+    from .gate_store import MemoryGateStore
     from .invocations import MemoryInvocations
     from .trials import MemoryTrials
 
@@ -662,4 +717,7 @@ def InMemoryRunStore() -> RunStore:
         benchmark_datasets=MemoryBenchmarkDatasets(lock),
         baselines=MemoryBaselines(lock),
         trials=MemoryTrials(lock),
+        experiments=MemoryExperiments(lock),
+        gate_store=MemoryGateStore(lock),
+        baseline_store=MemoryBaselineStore(lock),
     )

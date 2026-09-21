@@ -1,15 +1,19 @@
-"""比较资格求值（M6-T01 Lite）：固定两份 manifest → 逐条件/逐指标结论。
+"""比较资格求值（M6）：固定两份 manifest → 逐条件/逐指标/三级结论。
 
 比较按任务源对齐（dataset revision + selected case 集合 + 期望/提取器/
 prompt 版本），不按渲染后的 prompt。模型是合法变量时可比；缺费用只影响
 费用指标，不影响质量指标资格。
+
+M6-Full（协议 §3）：结论分三级——comparable（无阻断）、partially_comparable
+（结构可比但部分 metric 资格不足，典型仅 cost unknown）、not_comparable
+（结构性阻断）。``eligible`` 保持 Lite 兼容语义 = 结构可比（质量指标资格）。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from motte_contracts.comparison import ComparisonPolicy, RunReportRef
+from motte_contracts.comparison import ComparabilityLevel, ComparisonPolicy, RunReportRef
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,12 @@ class ComparisonResult:
     )
     #: 政策显式允许的差异（典型是 model）；记录以便"允许"本身可审计。
     allowed_differences: tuple[str, ...] = ()
+    #: 三级结论（协议 §3）；Lite 消费者继续读 eligible。
+    level: ComparabilityLevel = ComparabilityLevel.NOT_COMPARABLE
+    #: 结构性阻断原因（阻断一切指标）；与指标级原因（metric_reasons）分开。
+    structural_reasons: tuple[str, ...] = ()
+    #: 指标级原因（如 COST_UNKNOWN）；只影响对应 metric 资格。
+    metric_reasons: tuple[str, ...] = ()
 
 
 def _external(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -736,18 +746,30 @@ def compare_run_reports(
     elif base_few_shot is not None and base_few_shot != cand_few_shot:
         reasons.append("FEWSHOT_CONTENT_CHANGED: few-shot example content differs")
 
-    # 逐指标资格：费用未知只影响 cost。
+    # 逐指标资格：费用未知只影响 cost（指标级原因，不阻断质量可比）。
     baseline_cost_known = bool((baseline_cost or {}).get("known"))
     candidate_cost_known = bool((candidate_cost or {}).get("known"))
-    structural_ok = not reasons
+    structural_reasons = tuple(reasons)
+    structural_ok = not structural_reasons
     metric_eligibility["quality"] = structural_ok
     cost_ok = structural_ok and baseline_cost_known and candidate_cost_known
     metric_eligibility["cost"] = cost_ok
+    metric_reasons: list[str] = []
     if structural_ok and not cost_ok:
         if not baseline_cost_known:
-            reasons.append("COST_UNKNOWN:baseline")
+            metric_reasons.append("COST_UNKNOWN:baseline")
         if not candidate_cost_known:
-            reasons.append("COST_UNKNOWN:candidate")
+            metric_reasons.append("COST_UNKNOWN:candidate")
+    reasons.extend(metric_reasons)
+
+    # 三级结论（协议 §3）：结构性阻断 → not_comparable；仅指标级资格不足 →
+    # partially_comparable；全部资格完整 → comparable。
+    if not structural_ok:
+        level = ComparabilityLevel.NOT_COMPARABLE
+    elif metric_reasons:
+        level = ComparabilityLevel.PARTIALLY_COMPARABLE
+    else:
+        level = ComparabilityLevel.COMPARABLE
 
     return ComparisonResult(
         eligible=structural_ok,
@@ -759,4 +781,7 @@ def compare_run_reports(
             "changed": sorted(set(changed) | set(content_changed)),
         },
         allowed_differences=tuple(allowed_differences),
+        level=level,
+        structural_reasons=structural_reasons,
+        metric_reasons=tuple(metric_reasons),
     )
