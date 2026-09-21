@@ -78,7 +78,7 @@ MotteClientError                      # 基类：携带 request_id | None、http
 
 | 请求类别 | GET 查询 | POST 创建（带 request_key） | POST 创建（无 key） | cancel/rescore/retry | SSE 流 |
 |---|---|---|---|---|---|
-| 网络失败/超时/5xx/429/503 | 自动重试（默认 3 次指数退避 + 抖动，尊重 Retry-After） | 同左；重送**原 body 原 key**，由服务端幂等收口 | **不自动重试**（可能重复付费）→ 抛 TransportError 由调用方决定 | 同左（不自动重试） | 断开后由调用方决定重连；SDK 的 `stream_events` 提供自动重连+去重（§2） |
+| 网络失败/超时/5xx/429/503 | 自动重试（默认 3 次指数退避 + 抖动，尊重 Retry-After） | errata@1：默认**上抛** TransportError、由调用方重送原 body 原 key（服务端幂等收口）；实现可选择在此基础上自动重送，但绝不无条件盲重 | **不自动重试**（可能重复付费）→ 抛 TransportError 由调用方决定 | 同左（不自动重试） | 断开后由调用方决定重连；SDK 的 `stream_events` 提供自动重连+去重（§2） |
 | 422/auth/403/404/409/unsupported | 永不重试 | 永不重试 | 永不重试 | 永不重试 | — |
 
 Timeout 三段：`connect_timeout`（默认 5s）、`read_timeout`（默认 30s）、`overall_deadline`

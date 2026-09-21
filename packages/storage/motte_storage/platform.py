@@ -657,7 +657,13 @@ def ensure_sqlite_platform_tables(path: str) -> None:
 
 
 def platform_for(store: Any) -> PlatformStores:
-    """把平台仓库挂到既有 RunStore（SQLite / memory / PostgreSQL）。"""
+    """把平台仓库挂到既有 RunStore（SQLite / memory / PostgreSQL）。
+
+    同一 store 实例必须拿到**同一份**平台仓库：内存后端没有持久层，逐次新建
+    会让幂等注册表/账本在两次请求之间失忆（例如 API 测试里同 key 异 body 的
+    REQUEST_KEY_CONFLICT 检测落空）。因此内存实现按 store 实例缓存
+    （``store._motte_platform_stores``）；SQLite/PG 天然持久，每次新建连接即可。
+    """
     dsn = getattr(store, "dsn", None)
     if dsn:
         return PlatformStores(
@@ -677,13 +683,21 @@ def platform_for(store: Any) -> PlatformStores:
             tombstones=_SQLiteGCTombstones(path),
         )
     if all(hasattr(store, name) for name in ("runs", "events")):
+        cached = getattr(store, "_motte_platform_stores", None)
+        if isinstance(cached, PlatformStores):
+            return cached
         lock = RLock()
-        return PlatformStores(
+        fresh = PlatformStores(
             requests=_MemoryRequestRegistry(lock),
             meta=_MemoryMetaKV(lock),
             imports=_MemoryImportLedger(lock),
             tombstones=_MemoryGCTombstones(lock),
         )
+        try:
+            store._motte_platform_stores = fresh
+        except AttributeError:  # pragma: no cover - 不可变 store 对象退化为逐次新建
+            return fresh
+        return fresh
     raise ValueError("unsupported storage backend for platform stores")
 
 

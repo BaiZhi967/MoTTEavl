@@ -330,3 +330,23 @@ def test_dispatcher_refuses_claim_for_imported_runs(tmp_path):
     assert dispatcher.claim() is None
     assert dispatcher.claim("run-imported-1") is None
     assert store.runs.get("run-imported-1")["status"] == "queued"
+
+
+def test_run_create_idempotency_on_memory_store(tmp_path):
+    """内存后端：平台仓库按 store 实例缓存，跨请求幂等/冲突检测不失效。"""
+    from motte_storage.run_store import InMemoryRunStore
+
+    client = TestClient(create_app(InMemoryRunStore()))
+    body = _create_body(request_key="mem-1")
+    first = client.post("/api/v1/runs", json=body)
+    assert first.status_code == 202
+    conflict_body = json.loads(json.dumps(body))
+    conflict_body["case_ids"] = ["case-1", "case-2"]
+    conflict_body["manifest"]["replay_fixture"]["case-2"] = {"output": "ok", "expected": "ok"}
+    conflict = client.post("/api/v1/runs", json=conflict_body)
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "REQUEST_KEY_CONFLICT"
+    replay = client.post("/api/v1/runs", json=body)
+    assert replay.status_code == 200
+    assert replay.json()["id"] == first.json()["id"]
+    assert replay.json()["idempotent_replay"] is True
