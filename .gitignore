@@ -43,3 +43,6 @@ var/runtime-sessions/
 
 # Mimosa 扫描会话状态（不入库）
 .mimosa/
+
+# M7 迁移测试的确定性合成来源包（conftest 生成，不入库）
+tests/fixtures/m7-accept/
