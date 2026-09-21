@@ -48,9 +48,11 @@ def test_reload_scope_is_overridable_per_run(monkeypatch):
     assert dev.RELOAD_DIRS == ("apps", "packages"), "defaults stay the API's own source"
 
 
-def test_directory_excludes_are_made_absolute(monkeypatch):
+def test_directory_excludes_are_made_absolute(monkeypatch, tmp_path):
     """A relative directory would exclude nothing: uvicorn matches exclude directories
     against the absolute paths the watcher reports (measured — `.worktree` leaked)."""
+    (tmp_path / '.worktree').mkdir()
+    monkeypatch.setattr(dev, 'ROOT', tmp_path)
     monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, ".worktree")
     assert dev.reload_watch()[1] == (str((dev.ROOT / ".worktree").resolve()),)
     monkeypatch.setenv(dev.RELOAD_EXCLUDE_ENV, str(dev.ROOT / ".worktree"))
