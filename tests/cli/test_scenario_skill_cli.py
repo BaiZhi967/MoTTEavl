@@ -331,9 +331,11 @@ def test_cli_scenario_run_creates_a_run_through_the_public_path(tmp_path, capsys
         }
     )
     resources.scenarios.put({"name": "order-cancel", "version": "1"})
-    # _resources() 在给出 --db 时构造 SQLiteResourceStore：这里换成已准备的内存仓库。
+    # _resources() 在给出 --db 时构造 SQLiteResourceStore（并装配内容存储）：
+    # 这里换成已准备的内存仓库，签名必须与真实构造器一致。
     monkeypatch.setattr(
-        "motte_storage.resource_store.SQLiteResourceStore", lambda path: resources
+        "motte_storage.resource_store.SQLiteResourceStore",
+        lambda path, content_store=None: resources,
     )
     db = str(tmp_path / "cli.db")
     probe = _register_probe(PROBE_KIND)
