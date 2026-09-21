@@ -14,6 +14,14 @@ review R12 修复：
 - Gate 需要终态 Run；baseline 可引用不可变快照（baselines store）而非
   只能是活 Run；
 - 输出记录所用 RunReportRef（run + scoring_pass + 证据 hash）。
+
+review R9 修复：
+
+- 无冻结 aggregate 时，``candidate_summary`` 的覆盖与质量按 **Case** 计，
+  并与 ``motte_eval`` 的 ``denominator`` 口径一致：多指标 pass 的同一 Case
+  只算一个 attempted case，非分母行不占分母，全部入分母行都通过才算通过；
+  不再把 3 条指标行当成 3 个 attempted case 而抛
+  ``ValueError: attempted N exceeds selected M``。
 """
 from __future__ import annotations
 
@@ -75,6 +83,37 @@ def _trial_row_counts(scores: list[dict[str, Any]]) -> tuple[int, int, int, int]
     valid = [row for row in rows if row.get("denominator") is True]
     passed = [row for row in valid if row.get("passed") is True]
     return len(rows), len(valid), len(passed), len(rows) - len(valid)
+
+
+def _case_row_counts(scores: list[dict[str, Any]]) -> tuple[int, int]:
+    """ScoreSet 行 → (attempted cases, passed cases)：与 motte_eval 分母口径一致。
+
+    覆盖和质量都按 **Case** 计，而不是按指标行计（review R9）：
+
+    - ``denominator=False`` 的非分母行（insufficient_evidence /
+      evaluator_error / not_applicable）不占分母，也不参与 Case 判定；
+    - 一个 Case 的多条指标行只算**一个** attempted case（按 case_id 去重）；
+    - 一个 Case 只有在**它的全部入分母行都通过**时才算通过。这正是
+      ``motte_eval.workflow.goal-achieved`` 的合取口径（任一分量确认失败
+      即整题失败），也保证注册指标 ``accuracy``（unit=ratio、分母
+      selected_cases）不会超过 1；
+    - 缺 ``denominator`` 的历史单指标行按"有 passed 即入分母"读取：该字段
+      是后加的，旧行不能因此掉出分母。
+    """
+    attempted: set[str] = set()
+    failed: set[str] = set()
+    for score in scores:
+        if score.get("denominator") is False:
+            continue
+        case_id = score.get("case_id")
+        if not isinstance(case_id, str) or not case_id:
+            continue
+        if score.get("passed") is None:
+            continue
+        attempted.add(case_id)
+        if score.get("passed") is not True:
+            failed.add(case_id)
+    return len(attempted), len(attempted - failed)
 
 
 def _terminal_bench_summary(
@@ -174,6 +213,91 @@ def _resolve_pass(store: Any, run_id: str, scoring_pass_id: str | None) -> dict[
     )
 
 
+#: pass.judge 里属于评分身份的字段（Judge 写入的真实形状，见
+#: motte_eval.judge.JudgeSpec.as_summary）。历史 pass 缺这些字段时保持
+#: unknown，绝不从 subject 的原 evaluator 或当前设置补齐。
+_PROVENANCE_JUDGE_FIELDS: tuple[str, ...] = (
+    "judge_profile_id", "mode", "profile_sha256", "spec_sha256", "model",
+    "prompt", "prompt_sha256", "rubric_id", "rubric_version", "rubric_sha256",
+    "calibration_version", "input_selector", "missing_evidence_policy",
+)
+
+#: 人工修订沿血缘回溯的层数上限：只走已保存的 pass 引用，容忍损坏的血缘环。
+_MANUAL_REVISION_LINEAGE_LIMIT = 8
+
+
+def _manual_revision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    value = record.get("manual_revision")
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _instrument_pass(store: Any, record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """评分工具的出处：人工修订沿**已保存的血缘**回退到被修订的 pass。
+
+    只读 pass 之间记录在案的引用（manual_revision.source_pass_id /
+    previous_pass_id）：不读 current 指针，也不读任何当前资源设置；血缘缺失
+    就停在该 pass 上，身份保持 unknown（review F09）。
+    """
+    current: Mapping[str, Any] = record
+    run_id = record.get("run_id")
+    seen: set[str] = set()
+    for _ in range(_MANUAL_REVISION_LINEAGE_LIMIT):
+        judge = current.get("judge")
+        if isinstance(judge, dict) and judge:
+            return current
+        if current.get("source") != "manual_revision":
+            return current
+        manual = _manual_revision_summary(current) or {}
+        source_id = manual.get("source_pass_id") or current.get("previous_pass_id")
+        if not isinstance(source_id, str) or not source_id or source_id in seen:
+            return current
+        seen.add(source_id)
+        passes = getattr(store, "scoring_passes", None)
+        parent = passes.get(source_id) if passes is not None else None
+        if not isinstance(parent, dict):
+            return current
+        # 血缘只在同一个 Run 内成立：跨 Run 引用保持 unknown，不继承外来身份。
+        if run_id is not None and parent.get("run_id") != run_id:
+            return current
+        current = parent
+    return current
+
+
+def _scoring_provenance(store: Any, record: Mapping[str, Any]) -> dict[str, Any]:
+    """所选 pass 的真实评分身份（review F09）。
+
+    profile / spec / prompt / rubric / input-selector / calibration / 人工修订
+    全部只从该 pass（及其记录在案的血缘）读取；历史缺字段保持 unknown。
+    """
+    instrument = _instrument_pass(store, record)
+    judge = instrument.get("judge")
+    judge = judge if isinstance(judge, dict) else {}
+    provenance: dict[str, Any] = {
+        "scorer_id": instrument.get("scorer_id"),
+        "scorer_version": instrument.get("scorer_version"),
+    }
+    for field_name in _PROVENANCE_JUDGE_FIELDS:
+        provenance[field_name] = judge.get(field_name)
+    manual = _manual_revision_summary(record)
+    provenance["manual_revision"] = (
+        {
+            "revision_id": manual.get("revision_id") or record.get("id"),
+            "source_pass_id": (
+                manual.get("source_pass_id") or record.get("previous_pass_id")
+            ),
+            "actor": manual.get("actor"),
+            "reason": manual.get("reason"),
+            "changed_metrics": manual.get("changed_metrics"),
+            # 人工修订自身的 scorer 记在修订块；评分工具身份继承来源 pass。
+            "scorer_id": record.get("scorer_id"),
+            "scorer_version": record.get("scorer_version"),
+        }
+        if manual is not None
+        else None
+    )
+    return provenance
+
+
 class ComparisonService:
     """读取固定 Run（+ScoringPass）事实 → 比较/覆盖/Gate（同一 M6-Lite 服务）。"""
 
@@ -195,7 +319,14 @@ class ComparisonService:
         manifest = run.get("manifest") or {}
         scoring_pass = _resolve_pass(self.store, run_id, scoring_pass_id)
         interventions = (scoring_pass.get('summary') or {}).get('interventions')
-        evidence = {'manifest': manifest, 'interventions': interventions} if interventions else manifest
+        # 报告引用绑定**所选 pass 的评分身份**（F09）：不同的评分工具不能得到
+        # 同一个 evidence hash。人工修订的身份继承其记录在案的来源 pass。
+        evidence: dict[str, Any] = {
+            "manifest": manifest,
+            "scoring_provenance": _scoring_provenance(self.store, scoring_pass),
+        }
+        if interventions:
+            evidence["interventions"] = interventions
         digest = hashlib.sha256(json.dumps(
             evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
@@ -218,6 +349,10 @@ class ComparisonService:
         view["case_ids"] = list(run.get("case_ids") or [])
         scoring_pass = _resolve_pass(self.store, run_id, scoring_pass_id)
         view['interventions'] = (scoring_pass.get('summary') or {}).get('interventions') or {}
+        # F09：比较消费所选 pass 的真实评分身份，而不是 manifest 里 subject 的
+        # 原 evaluator，也不是被比较时的当前 Judge/资源设置。历史缺字段保持
+        # unknown，绝不补齐。
+        view["scoring_provenance"] = _scoring_provenance(self.store, scoring_pass)
         return view
 
     def _score_rows(self, record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -255,10 +390,7 @@ class ComparisonService:
             scores = self.store.score_sets.list_for_pass(
                 str(record.get("id")),
             ) if self.store.score_sets is not None else []
-            correct = sum(1 for score in scores if score.get("passed") is True)
-            attempted = sum(
-                1 for score in scores if score.get("passed") is not None
-            )
+            attempted, correct = _case_row_counts(scores)
             expectations = (run.get("manifest") or {}).get("case_expectations")
             if isinstance(expectations, dict) and expectations:
                 unscored = any(
@@ -379,6 +511,9 @@ class ComparisonService:
             result = self.compare(
                 baseline_run_id, run_id,
                 allowed_factors=policy.get("allowed_factors") or ["model"],
+                # 固定的候选 pass 不能被 current 指针替换（F09）：可比性判断与
+                # candidate_summary/report_ref 必须消费同一个 pass。
+                candidate_pass_id=scoring_pass_id,
             )
             comparison_view = {
                 "eligible": result.eligible,

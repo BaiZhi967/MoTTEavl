@@ -26,7 +26,16 @@ RESOURCE_TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
     "publications": ("resource_publications", ("id",)),
     "runtimes": ("runtime_versions", ("name", "version")),
     "runtime_profiles": ("runtime_profiles", ("name", "version")),
+    # M5-T01：Workflow 是独立于 Scenario 的版本资源，主键是 workflow_id+version。
+    "workflows": ("workflow_versions", ("workflow_id", "version")),
+    # M5-T02/T06：Fixture 与 Skill 同样是不可变版本资源。
+    "fixtures": ("fixture_versions", ("fixture_id", "version")),
+    "skills": ("skill_versions", ("skill_id", "version")),
 }
+
+#: 允许"发布后弃用"这一种受控转换的版本资源。其余版本资源仍旧严格不可变：
+#: 同版本异内容一律冲突，绝不覆盖历史。
+DEPRECATION_TRANSITION_TABLES = frozenset({"skill_versions"})
 
 
 class UnknownResourceError(ValueError):
@@ -39,7 +48,8 @@ class ResourceConflictError(ValueError):
 
 VERSIONED_TABLES = frozenset({
     "price_tables", "dataset_versions", "scenario_versions", "resource_publications",
-    "runtime_versions", "runtime_profiles",
+    "runtime_versions", "runtime_profiles", "workflow_versions",
+    "fixture_versions", "skill_versions",
 })
 
 
@@ -153,6 +163,28 @@ def _validate_publication(record: dict[str, Any]) -> None:
 
 def _validate_managed(table: str, record: dict[str, Any]) -> None:
     """Keep managed suite schema checks independent of version immutability."""
+    if table == "fixture_versions":
+        from motte_contracts.fixture import FixtureSpec, fixture_content_hash
+
+        spec = FixtureSpec.model_validate(record)
+        if spec.content_hash is not None and spec.content_hash != fixture_content_hash(spec):
+            raise ValueError("fixture content_hash does not match its content")
+        return
+    if table == "skill_versions":
+        from motte_skill.versions import SkillVersion, skill_content_hash
+
+        skill = SkillVersion.model_validate(record)
+        if skill.content_hash is not None and skill.content_hash != skill_content_hash(skill):
+            raise ValueError("skill content_hash does not match its content")
+        return
+    if table == "workflow_versions":
+        from motte_contracts.workflow import WorkflowVersion, workflow_content_hash
+
+        workflow = WorkflowVersion.model_validate(record)
+        # 已发布 Workflow 的内容 hash 必须自洽，否则拒绝入库（M5-T01）。
+        if workflow.content_hash is not None and workflow.content_hash != workflow_content_hash(workflow):
+            raise ValueError("workflow content_hash does not match its content")
+        return
     if table == "resource_publications":
         _validate_publication(record)
         return
@@ -174,9 +206,29 @@ def _validate_managed(table: str, record: dict[str, Any]) -> None:
         (validate_dataset if table == "dataset_versions" else validate_scenario)(record)
 
 
+def _is_allowed_transition(table: str, existing: dict[str, Any] | None,
+                           record: dict[str, Any]) -> bool:
+    """是否是一次**受控**的版本转换（当前只有 Skill 的 published→deprecated）。"""
+    if existing is None or table not in DEPRECATION_TRANSITION_TABLES:
+        return False
+    try:
+        from motte_skill.versions import is_deprecation_transition
+    except ImportError:  # pragma: no cover - 包缺失时不放宽任何转换
+        return False
+    try:
+        return bool(is_deprecation_transition(existing, record))
+    except Exception:  # noqa: BLE001 - 判定失败按"不是受控转换"处理
+        return False
+
+
 def _check_version(table: str, existing: dict[str, Any] | None,
                    record: dict[str, Any]) -> bool:
-    if table not in VERSIONED_TABLES or existing is None:
+    if existing is None:
+        return False
+    if _is_allowed_transition(table, existing, record):
+        # 受控转换必须真正落库，因此这里返回 False 让调用方继续写。
+        return False
+    if table not in VERSIONED_TABLES:
         return False
     if existing != record:
         raise ResourceConflictError("resource version already exists with different content; use a new version")
@@ -356,8 +408,15 @@ class _PgResourceRepository:
                     existing = cursor.fetchone()
                     if existing is None:
                         raise ResourceConflictError("resource version vanished while inserting")
-                    _check_version(self._table, existing[0], record)
-                    return deepcopy(existing[0])
+                    if _check_version(self._table, existing[0], record):
+                        return deepcopy(existing[0])
+                    # 受控转换（Skill 弃用）：必须真正更新，不能假装成功。
+                    where = " AND ".join(f"{field} = %s" for field in self._keys)
+                    cursor.execute(
+                        f"UPDATE {self._table} SET payload = %s WHERE {where}",
+                        [Json(record), *values],
+                    )
+                    return deepcopy(record)
                 where = " AND ".join(f"{field} = %s" for field in self._keys)
                 if expected_generation == 0:
                     cursor.execute(
@@ -677,7 +736,16 @@ class ResourceStore:
     publications: Any
     runtimes: Any
     runtime_profiles: Any
+    workflows: Any
+    fixtures: Any
+    skills: Any
     _pair_publisher: PairPublisher
+    #: Skill 资源字节的内容寻址存储（motte_skill.content_store）；非空资源清单的
+    #: 发布必须有它并逐个核验字节（F12）。
+    content_store: Any = None
+    #: 可选依赖解析器（接收 SkillDependency，返回版本是否存在）：证明依赖版本
+    #: 确实存在，而不是只检查 pin 的写法。
+    dependency_resolver: Any = None
 
     def publish_dataset_scenario(
         self, dataset: dict[str, Any], scenario: dict[str, Any], *,
@@ -686,8 +754,44 @@ class ResourceStore:
         """Publish an immutable dataset, scenario, and optional audit in one transaction."""
         return self._pair_publisher(dataset, scenario, publication)
 
+    def publish_workflow(self, workflow: dict[str, Any]) -> dict[str, Any]:
+        """发布一个不可变 WorkflowVersion。
 
-def _build(builder, publisher_builder) -> ResourceStore:
+        版本仓库只接受已发布内容：draft 在契约层就被拒绝；同版本同内容幂等，
+        同版本异内容抛 ResourceConflictError（由 repository.put 保证）。
+        """
+        return self.workflows.put(deepcopy(workflow))
+
+    def publish_fixture(self, fixture: dict[str, Any]) -> dict[str, Any]:
+        """发布一个不可变 FixtureSpec 版本（同内容幂等、异内容冲突）。"""
+        return self.fixtures.put(deepcopy(fixture))
+
+    def publish_skill(self, skill: dict[str, Any]) -> dict[str, Any]:
+        """发布/弃用一个 SkillVersion（与 motte_skill.publish_skill 同一保证）。
+
+        这里不再允许绕过校验直接 put：
+
+        * 非空资源清单必须有内容存储（content_store）并逐字节核验 hash/size；
+        * 依赖必须固定版本，配置 dependency_resolver 时还要能解析到该版本；
+        * 只有 published→deprecated 这一种受控转换允许写回（且只改生命周期与
+          弃用元数据），其余内容变化一律冲突。
+        """
+        from motte_skill.versions import SkillVersionConflict
+        from motte_skill.versions import publish_skill as publish_skill_version
+
+        try:
+            return publish_skill_version(
+                self.skills,
+                deepcopy(skill),
+                resource_store=self.content_store,
+                dependency_resolver=self.dependency_resolver,
+            )
+        except SkillVersionConflict as error:
+            raise ResourceConflictError(str(error)) from error
+
+
+def _build(builder, publisher_builder, *, content_store: Any = None,
+           dependency_resolver: Any = None) -> ResourceStore:
     providers = builder(*RESOURCE_TABLES["providers"])
     models = builder(*RESOURCE_TABLES["models"])
     price_tables = builder(*RESOURCE_TABLES["price_tables"])
@@ -696,6 +800,9 @@ def _build(builder, publisher_builder) -> ResourceStore:
     publications = builder(*RESOURCE_TABLES["publications"])
     runtimes = builder(*RESOURCE_TABLES["runtimes"])
     runtime_profiles = builder(*RESOURCE_TABLES["runtime_profiles"])
+    workflows = builder(*RESOURCE_TABLES["workflows"])
+    fixtures = builder(*RESOURCE_TABLES["fixtures"])
+    skills = builder(*RESOURCE_TABLES["skills"])
     return ResourceStore(
         providers=providers,
         models=models,
@@ -705,11 +812,18 @@ def _build(builder, publisher_builder) -> ResourceStore:
         publications=publications,
         runtimes=runtimes,
         runtime_profiles=runtime_profiles,
+        workflows=workflows,
+        fixtures=fixtures,
+        skills=skills,
         _pair_publisher=publisher_builder(datasets, scenarios, publications),
+        content_store=content_store,
+        dependency_resolver=dependency_resolver,
     )
 
 
-def SQLiteResourceStore(path: str | Path) -> ResourceStore:
+def SQLiteResourceStore(
+    path: str | Path, *, content_store: Any = None, dependency_resolver: Any = None,
+) -> ResourceStore:
     path = str(path)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -717,21 +831,28 @@ def SQLiteResourceStore(path: str | Path) -> ResourceStore:
         return _SQLiteResourceRepository(path, table, keys)
 
     return _build(
-        builder, lambda _datasets, _scenarios, _publications: _sqlite_pair_publisher(path)
+        builder, lambda _datasets, _scenarios, _publications: _sqlite_pair_publisher(path),
+        content_store=content_store, dependency_resolver=dependency_resolver,
     )
 
 
-def PostgresResourceStore(dsn: str) -> ResourceStore:
+def PostgresResourceStore(
+    dsn: str, *, content_store: Any = None, dependency_resolver: Any = None,
+) -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _PgResourceRepository(dsn, table, keys)
 
     return _build(
-        builder, lambda _datasets, _scenarios, _publications: _postgres_pair_publisher(dsn)
+        builder, lambda _datasets, _scenarios, _publications: _postgres_pair_publisher(dsn),
+        content_store=content_store, dependency_resolver=dependency_resolver,
     )
 
 
-def InMemoryResourceStore() -> ResourceStore:
+def InMemoryResourceStore(
+    *, content_store: Any = None, dependency_resolver: Any = None,
+) -> ResourceStore:
     def builder(table: str, keys: tuple[str, ...]):
         return _InMemoryResourceRepository(keys, table)
 
-    return _build(builder, _memory_pair_publisher)
+    return _build(builder, _memory_pair_publisher, content_store=content_store,
+                  dependency_resolver=dependency_resolver)

@@ -30,6 +30,16 @@ ALLOWED_COMPARISON_FACTORS: frozenset[str] = frozenset({
     # 一致，政策显式允许时才可作为变量（M4 review R16）。
     "runtime",
     "intervention",
+    # M5：Workflow / Fixture / Skill / Judge / rubric / 校准版本 / 预算政策
+    # 都是实验条件。默认必须一致；只有政策显式允许时才可作为变量，且
+    # Skill 归因还要求预算政策可比（见 motte_eval.comparison）。
+    "workflow",
+    "fixture",
+    "skill",
+    "judge",
+    "rubric",
+    "calibration",
+    "budget_policy",
 })
 
 

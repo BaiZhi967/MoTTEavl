@@ -288,7 +288,8 @@ class RunService:
             if cancelled is not None:
                 return cancelled
             self._append_scoring_pass(
-                run_id, scores, source="initial", final_status="completed"
+                run_id, scores, source="initial",
+                final_status=self._with_stop_uncertainty(run, results, "completed"),
             )
         except Exception as error:
             return self._fail_or_quarantine(run_id, error)
@@ -1095,6 +1096,12 @@ class RunService:
         )
         if interventions is None:
             interventions = intervention_summary(self, run_id)
+            if not interventions.get("count"):
+                # 没有任何人工介入时不能留下一个"看起来发生过干预"的条件 hash：
+                # 消费者（motte_eval.comparison 的 Skill 归因判定）把非空
+                # condition_hash 读成"可能有人工介入"，从而阻断纯 Skill 归因。
+                # 零介入是**已知事实**，用 None 表达，而不是空列表的 hash。
+                interventions = {**interventions, "condition_hash": None}
         manifest_bytes = json.dumps(
             run.get("manifest") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
@@ -1351,6 +1358,13 @@ class RunService:
                 for score in scores:
                     self._emit(run_id, "score", score)
             return scores
+        if self._scenario_shaped(run):
+            # M5-T05：Scenario Run 的评分输入是执行器冻结的 FrozenObservation
+            # （R6）。评分只读冻结证据与它声明的产物；普通离线 rescore 走同一条
+            # 路径，因此天然复用同一份证据、不碰业务工具与模型。
+            from .scenario_backend import scenario_scores
+
+            return scenario_scores(run, results)
         scores: list[dict[str, Any]] = []
         for entry in results:
             if "expected" in entry:
@@ -1359,6 +1373,33 @@ class RunService:
                 if emit_events:
                     self._emit(run_id, "score", {"case_id": entry["case_id"], "passed": passed})
         return scores
+
+    @staticmethod
+    def _scenario_shaped(run: dict[str, Any]) -> bool:
+        """这份 Run 是否由 scenario@1 逐步骤驱动（决定评分装配路径）。"""
+        execution = ((run.get("manifest") or {}).get("execution") or {})
+        return (
+            isinstance(execution, dict)
+            and execution.get("backend_id") == "scenario"
+            and (run.get("manifest") or {}).get("workflow_snapshot") is not None
+        )
+
+    def _with_stop_uncertainty(
+        self, run: dict[str, Any], results: list[dict[str, Any]], default: str,
+    ) -> str:
+        """任何 Case 停止未确认 → needs_review，否则保持 ``default``。
+
+        M5 全局约束：未知停止 = needs_review，现场保留、不自动重放。只改 Run 级
+        终态：Case 证据、清理结论与评分行都不在这里改写；取消由
+        ``_honor_cancellation`` 在落终态前优先处理，绝不覆盖 cancelled。
+        """
+        if not self._scenario_shaped(run):
+            return default
+        from .scenario_backend import stop_unconfirmed
+
+        if any(stop_unconfirmed(row.get("result")) for row in results):
+            return "needs_review"
+        return default
 
     def _begin_case_attempt(
         self, run: dict[str, Any], case_id: str, *, trial_id: str | None = None,
@@ -1840,7 +1881,9 @@ class RunService:
         rows = self.store.case_runs.list_for_run(run_id)
         errors = [row["result"]["error"] for row in rows
                   if isinstance(row.get("result"), dict) and row["result"].get("error")]
-        final_status = "failed" if errors else "completed"
+        final_status = self._with_stop_uncertainty(
+            run, rows, "failed" if errors else "completed",
+        )
         try:
             scores = self._score_results(run_id, rows, False)
             cancelled = self._honor_cancellation(run_id)

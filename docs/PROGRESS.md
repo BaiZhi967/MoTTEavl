@@ -6,6 +6,8 @@
 
 当前里程碑更新（2026-09-21）：M4 实现与修复已按用户要求快进合入并推送主干，合入点 `adf468a`，完整 Linux/PG CI 通过；真实模型验收仍为 `live_pending`。当前事实见 [M4 复核记录](verification/M4-completion-review-2026-09-21.md)。M5 可从此主干开始开发，使用 [详细计划](superpowers/plans/2026-09-21-m5-execution.md) 和 [开发提示词](prompts/M5-development-agent.md)。下列早期 Task 状态保留为历史记录。
 
+M5 进行中（2026-09-21，分支 codex/m5-scenarios-skills-judges）：Workflow/Fixture/Skill/Judge 契约与版本资源、受限条件与旧 DSL 只读转换、有界场景引擎与受控进程真实停止、Scenario 装配器与目标 adapter、Skill 注入与权限交集、三臂对照计划、独立 Judge 契约与持久 ScoringJob、API/CLI/Web 资源链路均已落地并各有独立提交。**尚未完成**：T10 校准（软件在途；≥30 条真实人工样本在本环境不存在，保持 not_run）、WorkerLoop/RunService/API 的 ScoringJob 接线、Judge 路由、Skill 发布入口、scenario scoring 投影（SCENARIO_BACKEND_AVAILABLE 仍为 False）、真实 PostgreSQL 与完整门禁。逐目标/逐验收证据见 [M5 验证记录](verification/M5.md)。
+
 | Task | 内容 | 状态 | Commit | 验证 |
 |---|---|---|---|---|
 | 1 | 工作区、依赖、Compose、CI | ✅ | `2f8e15c`（含基础提交） | `uv run pytest tests/test_workspace_health.py -q`（1 passed）；Compose config 通过 |

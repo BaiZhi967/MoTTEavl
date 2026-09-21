@@ -746,6 +746,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/judges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Judge Submit */
+        post: operations["judge_submit_api_v1_judges_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judges/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Judge Preflight */
+        post: operations["judge_preflight_api_v1_judges_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judges/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Judge Get */
+        get: operations["judge_get_api_v1_judges__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judges/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Judge Cancel
+         * @description 幂等取消：已发出的请求只中断，绝不宣称未计费。
+         */
+        post: operations["judge_cancel_api_v1_judges__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/models": {
         parameters: {
             query?: never;
@@ -1134,6 +1205,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/judge-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Judge History
+         * @description 评分历史读取：零模型调用，不领取、不触发任何作业。
+         */
+        get: operations["judge_history_api_v1_runs__run_id__judge_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/messages": {
         parameters: {
             query?: never;
@@ -1437,6 +1528,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scenario-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Scenario Targets
+         * @description 可用 scenario target 及其**真实**能力；注册表为空即明确不可用，不猜测。
+         */
+        get: operations["list_scenario_targets_api_v1_scenario_targets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scenarios": {
         parameters: {
             query?: never;
@@ -1486,6 +1597,154 @@ export interface paths {
         /** Register Skill */
         post: operations["register_skill_api_v1_skills_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Skill Document
+         * @description 纯静态校验：契约、kind 分型、entrypoint 形状与依赖 pin；不发布、不执行。
+         *
+         *     只声明 static 作用域：内容寻址的资源字节核验属于 executable fixture
+         *     作用域（需要内容存储），本响应明确 resource_bytes_verified=False，
+         *     不把读 manifest 谎称为已执行（M5-A10）。
+         */
+        post: operations["validate_skill_document_api_v1_skills_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skill Versions
+         * @description 已发布 Skill 版本目录：只读仓库，零模型调用、零执行。
+         */
+        get: operations["list_skill_versions_api_v1_skills_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/{skill_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill Version */
+        get: operations["get_skill_version_api_v1_skills__skill_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workflows
+         * @description 已发布 Workflow 版本目录：只读仓库，零模型调用、零执行（M5-G21/A18）。
+         */
+        get: operations["list_workflows_api_v1_workflows_get"];
+        put?: never;
+        /**
+         * Publish Workflow
+         * @description 发布不可变 Workflow 版本：同内容幂等，同版本异内容 409。
+         *
+         *     校验与预检共用 _workflow_publication_record：草稿在契约层被拒绝，
+         *     内容 hash 由服务端固定，客户端提交不一致的 hash 立即拒绝。
+         */
+        post: operations["publish_workflow_api_v1_workflows_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/legacy-conversion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Convert Legacy Workflow
+         * @description 旧 DSL 只读转换报告：诊断 + 映射 + publishable + runs_executed。
+         *
+         *     只解析、不发布、不执行任何步骤（M5-T01；runs_executed 恒为 0）。
+         */
+        post: operations["convert_legacy_workflow_api_v1_workflows_legacy_conversion_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Workflow Document
+         * @description 纯预检：编译 Workflow 文档并返回逐字段错误；不发布、不执行、零模型调用。
+         */
+        post: operations["validate_workflow_document_api_v1_workflows_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_id}/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workflow */
+        get: operations["get_workflow_api_v1_workflows__workflow_id___version__get"];
+        put?: never;
+        post?: never;
+        /** Delete Workflow */
+        delete: operations["delete_workflow_api_v1_workflows__workflow_id___version__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1919,6 +2178,305 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * JudgeAuthorisationRequest
+         * @description 显式付费授权；purpose 由服务端固定为 judge。
+         */
+        JudgeAuthorisationRequest: {
+            /** Actor */
+            actor: string;
+            /**
+             * Authorised
+             * @default false
+             */
+            authorised: boolean;
+            /** Hard Cost Cap Usd */
+            hard_cost_cap_usd?: number | null;
+            /** Max Calls */
+            max_calls: number;
+            /** Max Total Tokens */
+            max_total_tokens?: number | null;
+        };
+        /**
+         * JudgeBudgetRequest
+         * @description Judge 预算请求；价格已知性与价格版本由服务端解析，客户端不能声明。
+         */
+        JudgeBudgetRequest: {
+            /** Hard Cost Cap Usd */
+            hard_cost_cap_usd?: number | null;
+            /** Max Calls */
+            max_calls: number;
+            /**
+             * Max Completion Tokens
+             * @default 0
+             */
+            max_completion_tokens: number;
+            /**
+             * Max Prompt Tokens
+             * @default 0
+             */
+            max_prompt_tokens: number;
+        };
+        /**
+         * JudgeCancelView
+         * @description 幂等取消结果：已发出的请求只中断，不宣称未计费。
+         */
+        JudgeCancelView: {
+            /** Billed Calls */
+            billed_calls?: number | null;
+            /** In Flight */
+            in_flight?: boolean | null;
+            job: components["schemas"]["JudgeJobView"];
+            /** Note */
+            note?: string | null;
+            /** Outcome */
+            outcome: string;
+            /** Receipt */
+            receipt?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** JudgeJobListResponse */
+        JudgeJobListResponse: {
+            /** Items */
+            items: components["schemas"]["JudgeJobView"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * JudgeJobView
+         * @description 持久 ScoringJob 的公共视图；输入原文与响应正文不在这里。
+         */
+        JudgeJobView: {
+            /**
+             * Attempted Calls
+             * @default 0
+             */
+            attempted_calls: number;
+            /**
+             * Billed Calls
+             * @default 0
+             */
+            billed_calls: number;
+            /** Cancellation */
+            cancellation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Cost Total Usd */
+            cost_total_usd?: number | null;
+            /** Created At */
+            created_at: string;
+            /** Failure */
+            failure?: {
+                [key: string]: unknown;
+            } | null;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Job Id */
+            job_id: string;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256: string;
+            /** Mode */
+            mode: string;
+            /** Owner */
+            owner: {
+                [key: string]: unknown;
+            };
+            /** Preflight */
+            preflight?: {
+                [key: string]: unknown;
+            } | null;
+            /** Provider Snapshot */
+            provider_snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** Publish Outcome */
+            publish_outcome?: string | null;
+            /** Publish Policy */
+            publish_policy: string;
+            /** Published */
+            published?: boolean | null;
+            /** Receipt */
+            receipt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Repeats */
+            repeats: number;
+            /** Request Key */
+            request_key: string;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Reused */
+            reused?: boolean | null;
+            /** Revision */
+            revision: number;
+            /** Run Id */
+            run_id: string;
+            /** Status */
+            status: string;
+            /** Terminal */
+            terminal: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * JudgePreflightRequest
+         * @description 零费用预检：不落作业、不构造 Provider、不调用模型。
+         */
+        JudgePreflightRequest: {
+            authorisation?: components["schemas"]["JudgeAuthorisationRequest"] | null;
+            /** Case Ids */
+            case_ids?: string[];
+            /**
+             * Mode
+             * @default single
+             * @enum {string}
+             */
+            mode: "single" | "pairwise";
+            /** Presentation Orders */
+            presentation_orders?: string[][];
+            /** Price Table Version */
+            price_table_version?: string | null;
+            /**
+             * Publish Policy
+             * @default all_scored
+             * @enum {string}
+             */
+            publish_policy: "all_scored" | "allow_non_scored";
+            /**
+             * Repeats
+             * @default 1
+             */
+            repeats: number;
+            /** Run Id */
+            run_id: string;
+            /** Source Pass Id */
+            source_pass_id?: string | null;
+            spec: components["schemas"]["JudgeSpecRequest"];
+        };
+        /**
+         * JudgePreflightView
+         * @description 预检结果 + 服务端冻结的 Provider 身份（非秘密）。
+         */
+        JudgePreflightView: {
+            /** Authorised */
+            authorised: boolean;
+            /** Budget Executable */
+            budget_executable: boolean;
+            /**
+             * Executed
+             * @default false
+             * @constant
+             */
+            executed: false;
+            /** Hard Monetary Cap */
+            hard_monetary_cap: boolean;
+            /** Max Calls */
+            max_calls: number;
+            /** Mode */
+            mode: string;
+            /** Model */
+            model: string;
+            /** Model Resource Id */
+            model_resource_id?: string | null;
+            /** Orderings */
+            orderings: number;
+            /** Provider Factory Available */
+            provider_factory_available: boolean;
+            /** Provider Snapshot */
+            provider_snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Purpose
+             * @default judge
+             * @constant
+             */
+            purpose: "judge";
+            /** Reasons */
+            reasons?: string[];
+            /** Repeats */
+            repeats: number;
+            /** Sample Count */
+            sample_count: number;
+            /** Spec Sha256 */
+            spec_sha256: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * JudgeSpecRequest
+         * @description Judge 配置请求；model 是**已发布的 ModelProfile id**，不是线路模型名。
+         *
+         *     服务端在提交期解析它并冻结 adapter / endpoint / 线路模型 / 价格版本；
+         *     客户端不能提交估算 token 数或价格覆盖。
+         */
+        JudgeSpecRequest: {
+            budget: components["schemas"]["JudgeBudgetRequest"];
+            /** Calibration Version */
+            calibration_version?: string | null;
+            /** Criteria */
+            criteria?: string[];
+            /** Input Selector */
+            input_selector?: {
+                [key: string]: unknown;
+            } | null;
+            /** Judge Profile Id */
+            judge_profile_id: string;
+            /** Missing Evidence Policy */
+            missing_evidence_policy?: ("insufficient_evidence" | "not_applicable" | "fail") | null;
+            /** Model */
+            model: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Version */
+            rubric_version: string;
+        };
+        /**
+         * JudgeSubmitRequest
+         * @description 持久提交：request_key 是幂等键，内容 fingerprint 与它分离。
+         */
+        JudgeSubmitRequest: {
+            authorisation?: components["schemas"]["JudgeAuthorisationRequest"] | null;
+            /** Case Ids */
+            case_ids?: string[];
+            /**
+             * Mode
+             * @default single
+             * @enum {string}
+             */
+            mode: "single" | "pairwise";
+            /** Presentation Orders */
+            presentation_orders?: string[][];
+            /** Price Table Version */
+            price_table_version?: string | null;
+            /**
+             * Publish Policy
+             * @default all_scored
+             * @enum {string}
+             */
+            publish_policy: "all_scored" | "allow_non_scored";
+            /**
+             * Repeats
+             * @default 1
+             */
+            repeats: number;
+            /** Request Key */
+            request_key: string;
+            /** Run Id */
+            run_id: string;
+            /** Source Pass Id */
+            source_pass_id?: string | null;
+            spec: components["schemas"]["JudgeSpecRequest"];
+        };
         /** ReplayCase */
         ReplayCase: {
             /** Expected */
@@ -2287,6 +2845,37 @@ export interface components {
             /** Terminal At */
             terminal_at?: string | null;
         };
+        /** ScenarioTargetListResponse */
+        ScenarioTargetListResponse: {
+            /** Available */
+            available: boolean;
+            /** Items */
+            items?: components["schemas"]["ScenarioTargetSummary"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * ScenarioTargetSummary
+         * @description 一个注册目标的能力声明；available=False 表示只有声明、不可执行。
+         */
+        ScenarioTargetSummary: {
+            /** Available */
+            available: boolean;
+            /** Evidence */
+            evidence?: string[];
+            /** Interrupt */
+            interrupt?: boolean | null;
+            /** Kind */
+            kind: string;
+            /** Multi Turn */
+            multi_turn?: boolean | null;
+            /** Skill Injection */
+            skill_injection?: boolean | null;
+            /** Tool Modes */
+            tool_modes?: string[];
+            /** Tools */
+            tools?: string[];
+        };
         /** Score */
         Score: {
             /** Attempted */
@@ -2366,9 +2955,109 @@ export interface components {
         /** ScoringPassListResponse */
         ScoringPassListResponse: {
             /** Items */
-            items: components["schemas"]["ScoringPass"][];
+            items: components["schemas"]["ScoringPassView"][];
             /** Total */
             total: number;
+        };
+        /**
+         * ScoringPassView
+         * @description ScoringPass 契约 + M5 Judge 身份（purpose / job_id / judge / interventions）。
+         *
+         *     契约模型是 extra="forbid" 且没有这些字段：直接用契约序列化会把 R3 的统一
+         *     pass 身份（rubric / spec / calibration / owner / save_policy）丢掉，甚至让
+         *     Judge pass 的历史读取直接 500。公共读取必须看到完整身份。
+         */
+        ScoringPassView: {
+            /** Created At */
+            created_at?: string | null;
+            /** Id */
+            id: string;
+            /** Job Id */
+            job_id?: string | null;
+            /** Judge */
+            judge?: {
+                [key: string]: unknown;
+            } | null;
+            /** Previous Pass Id */
+            previous_pass_id?: string | null;
+            /** Purpose */
+            purpose?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Scores */
+            scores?: {
+                [key: string]: unknown;
+            }[];
+            /** Source */
+            source?: string | null;
+            /** Source Run Revision */
+            source_run_revision?: number | null;
+            /** Source Snapshot Hash */
+            source_snapshot_hash?: string | null;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * SkillValidationResponse
+         * @description Skill 纯静态校验结果。
+         *
+         *     validation_scope 只有 static：不运行入口、不执行 fixture、不调用模型；
+         *     resource_bytes_verified=False 表示内容寻址的资源字节核验属于另一个作用域，
+         *     不能把读 manifest 说成已执行（M5-A10）。
+         */
+        SkillValidationResponse: {
+            /** Content Hash */
+            content_hash: string;
+            /** Defaulted Fields */
+            defaulted_fields?: string[];
+            /** Dependency Refs */
+            dependency_refs?: {
+                [key: string]: unknown;
+            }[];
+            /** Executable */
+            executable: boolean;
+            /** Executed */
+            executed: boolean;
+            /** Fixture Refs */
+            fixture_refs?: {
+                [key: string]: unknown;
+            }[];
+            /** Kind */
+            kind: string;
+            /** Lifecycle */
+            lifecycle: string;
+            /** Ok */
+            ok: boolean;
+            /** Ref */
+            ref: string;
+            /** Requested Permissions */
+            requested_permissions?: {
+                [key: string]: unknown;
+            };
+            /** Resource Bytes Verified */
+            resource_bytes_verified: boolean;
+            /** Resource Paths */
+            resource_paths?: string[];
+            /** Schema Version */
+            schema_version: number;
+            /** Skill Id */
+            skill_id: string;
+            /**
+             * Validation Scope
+             * @default static
+             * @constant
+             */
+            validation_scope: "static";
+            /** Version */
+            version: string;
         };
         /** SourceArtifact */
         SourceArtifact: {
@@ -2567,6 +3256,102 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * WorkflowConversionResponse
+         * @description 旧 DSL 只读转换报告：不发布、不执行（runs_executed 恒为 0）。
+         */
+        WorkflowConversionResponse: {
+            /** Blocking Codes */
+            blocking_codes?: string[];
+            /** Candidate */
+            candidate?: {
+                [key: string]: unknown;
+            } | null;
+            /** Diagnostics */
+            diagnostics?: components["schemas"]["WorkflowDiagnostic"][];
+            /** Executed */
+            executed: boolean;
+            /** Fixture Draft */
+            fixture_draft: {
+                [key: string]: unknown;
+            };
+            /** Mapping */
+            mapping?: {
+                [key: string]: unknown;
+            }[];
+            /** Publishable */
+            publishable: boolean;
+            /** Published */
+            published: boolean;
+            /** Runs Executed */
+            runs_executed: number;
+            /** Source */
+            source?: {
+                [key: string]: unknown;
+            };
+            /** Workflow Draft */
+            workflow_draft: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * WorkflowDiagnostic
+         * @description 一条转换诊断：稳定 code + 严重度 + 旧 DSL 路径 + 可读原因。
+         */
+        WorkflowDiagnostic: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Path */
+            path: string;
+            /** Severity */
+            severity: string;
+        };
+        /**
+         * WorkflowValidationResponse
+         * @description Workflow 纯预检结果：结构、条件、预算与目标要求都可编译时才 ok。
+         *
+         *     executed 恒为 False：预检不发布版本、不创建 Run、不调用模型。
+         */
+        WorkflowValidationResponse: {
+            /** Condition Count */
+            condition_count: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Defaulted Fields */
+            defaulted_fields?: string[];
+            /** Executed */
+            executed: boolean;
+            /** Fixture Refs */
+            fixture_refs?: {
+                [key: string]: unknown;
+            }[];
+            /** Limits */
+            limits: {
+                [key: string]: unknown;
+            };
+            /** Ok */
+            ok: boolean;
+            /** Publishable */
+            publishable: boolean;
+            /** Ref */
+            ref: string;
+            /** Schema Version */
+            schema_version: number;
+            /** Step Count */
+            step_count: number;
+            /** Target Requirements */
+            target_requirements: {
+                [key: string]: unknown;
+            };
+            /** Top Level Step Ids */
+            top_level_step_ids?: string[];
+            /** Version */
+            version: string;
+            /** Workflow Id */
+            workflow_id: string;
         };
     };
     responses: never;
@@ -3859,6 +4644,138 @@ export interface operations {
             };
         };
     };
+    judge_submit_api_v1_judges_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JudgeSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeJobView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    judge_preflight_api_v1_judges_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JudgePreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgePreflightView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    judge_get_api_v1_judges__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeJobView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    judge_cancel_api_v1_judges__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CancelRunRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeCancelView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_items_api_v1_models_get: {
         parameters: {
             query?: never;
@@ -4718,6 +5635,37 @@ export interface operations {
             };
         };
     };
+    judge_history_api_v1_runs__run_id__judge_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeJobListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     send_run_message_api_v1_runs__run_id__messages_post: {
         parameters: {
             query?: never;
@@ -5244,6 +6192,26 @@ export interface operations {
             };
         };
     };
+    list_scenario_targets_api_v1_scenario_targets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioTargetListResponse"];
+                };
+            };
+        };
+    };
     list_items_api_v1_scenarios_get: {
         parameters: {
             query?: never;
@@ -5400,6 +6368,282 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_skill_document_api_v1_skills_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skill_versions_api_v1_skills_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_skill_version_api_v1_skills__skill_id__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workflows_api_v1_workflows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    publish_workflow_api_v1_workflows_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    convert_legacy_workflow_api_v1_workflows_legacy_conversion_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowConversionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_workflow_document_api_v1_workflows_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_api_v1_workflows__workflow_id___version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_workflow_api_v1_workflows__workflow_id___version__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

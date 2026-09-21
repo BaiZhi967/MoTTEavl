@@ -15,6 +15,7 @@ dependencies = [
   "motte-storage",
   "motte-cli",
   "motte-benchmark-runtime",
+  "motte-scenario-runtime",
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
   "uvicorn>=0.30,<1",
@@ -51,6 +52,7 @@ motte-trace = {workspace = true}
 motte-storage = {workspace = true}
 motte-cli = {workspace = true}
 motte-benchmark-runtime = {workspace = true}
+motte-scenario-runtime = {workspace = true}
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -71,6 +73,7 @@ pythonpath = [
   "packages/trace",
   "packages/storage",
   "packages/benchmark-runtime",
+  "packages/scenario-runtime",
 ]
 
 [tool.ruff]

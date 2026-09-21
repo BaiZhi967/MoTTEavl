@@ -143,10 +143,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // 结构化错误原样上抛（code/message/details）：页面不猜含义、也不吞掉身份。
     const error = payload?.error;
     if (error && typeof error === "object") {
+      // 结构化拒绝原样上抛：details 之外，服务端还会把逐字段错误放在
+      // error.fields（field/code/message）、允许取值放在 error.allowed —— 一并折叠进
+      // details，页面才能逐字段显示，而不是只剩一句 message。
       throw new ApiRequestError(response.status, {
         code: typeof error.code === "string" ? error.code : null,
         message: typeof error.message === "string" ? error.message : null,
-        details: error.details && typeof error.details === "object" ? error.details : null,
+        details: {
+          ...(error.details && typeof error.details === "object" ? error.details : {}),
+          ...(Array.isArray(error.fields) ? { fields: error.fields } : {}),
+          ...(Array.isArray(error.allowed) ? { allowed: error.allowed } : {}),
+        },
       });
     }
     throw new ApiRequestError(response.status, {
@@ -747,6 +754,8 @@ export interface ComparisonReportView {
   reasons: string[];
   metric_eligibility: Record<string, boolean>;
   case_diff: { added: string[]; removed: string[]; changed: string[] };
+  /** 政策显式允许的差异（典型是 model / skill）；记录以便「允许」本身可审计。 */
+  allowed_differences?: string[];
 }
 
 /** 门禁结论（gate-lite@2）：页面照实渲染 rules / metric_id，不自己下结论。 */
@@ -1078,4 +1087,469 @@ export const getRunTrialArtifact = (runId: string, trialId: string, artifactId: 
   request<TerminalBenchArtifactContent>(
     `/api/v1/runs/${runId}/trials/${encodeURIComponent(trialId)}`
     + `/artifacts/${encodeArtifactPath(artifactId)}`,
+  );
+
+// ---------------------------------------------------------------------------
+// M5：场景 Workflow / Skill / Judge 资源（M5-T11）
+//
+// 采用 M5 计划第 10 节的拟议路由组（/api/v1/workflows、/api/v1/skills 的
+// validate/test 子路径、/api/v1/judges）。服务端尚未注册的端点会返回 404，
+// 页面统一按「能力不可用」如实渲染（src/components/capability.tsx）：入口保留、
+// 明确禁用并给出原因，不伪造结果、也不静默隐藏。响应缺字段一律按「未知」处理。
+// ---------------------------------------------------------------------------
+
+export interface WorkflowStepRecord {
+  step_id: string;
+  kind: string;
+  timeout_sec?: number | null;
+  failure_policy?: string | null;
+  /** invoke_fixture_tool 步骤的受控工具模式（real / mock / replay / deny）。 */
+  tool_mode?: string | null;
+  label?: string | null;
+  [key: string]: unknown;
+}
+
+export interface WorkflowVersionRecord {
+  workflow_id: string;
+  version: string;
+  schema_version?: number | null;
+  description?: string | null;
+  lifecycle?: string | null;
+  published_at?: string | null;
+  content_hash?: string | null;
+  fixture_refs?: Array<Record<string, unknown>>;
+  target_requirements?: Record<string, unknown> | null;
+  steps?: WorkflowStepRecord[];
+  completion_assertions?: Array<Record<string, unknown>>;
+  limits?: Record<string, unknown> | null;
+  failure_policy?: string | null;
+}
+
+/** 校验问题：locator 是字段路径（如 limits.max_turns、steps[0].kind）。 */
+export interface ValidationIssue {
+  locator: string;
+  code: string;
+  message: string;
+}
+
+/** 只读校验报告：不发布、不建 Run、不产生模型调用与费用。 */
+export interface WorkflowValidationReport {
+  ok: boolean;
+  /** 逐字段问题；被服务端 4xx 拒绝时来自 error.fields，通过时为空数组。 */
+  errors: ValidationIssue[];
+  warnings?: ValidationIssue[];
+  workflow_id?: string | null;
+  version?: string | null;
+  content_hash?: string | null;
+  /** 服务端预检字段：publishable / executed 恒为可发布的预检语义。 */
+  publishable?: boolean | null;
+  executed?: boolean | null;
+  ref?: string | null;
+  step_count?: number | null;
+  condition_count?: number | null;
+  defaulted_fields?: string[];
+}
+
+/** 服务端成功响应形状（POST /workflows/validate）。 */
+export interface WorkflowPreflightResponse {
+  ok: boolean;
+  publishable?: boolean | null;
+  executed?: boolean | null;
+  workflow_id?: string | null;
+  version?: string | null;
+  ref?: string | null;
+  content_hash?: string | null;
+  step_count?: number | null;
+  condition_count?: number | null;
+  defaulted_fields?: string[];
+}
+
+/**
+ * 结构化校验拒绝（HTTP 422 等）→ 逐字段问题。
+ * 服务端用 `error.fields`（field/code/message）表达契约错误；没有 fields 时
+ * 退化为一份文档级问题。非校验类错误返回 null，页面照常显示真实错误。
+ */
+export function validationIssuesFromError(error: unknown, fallbackLocator = "workflow"): ValidationIssue[] | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status !== 422 && error.status !== 400) return null;
+  const raw = (error.details as Record<string, any> | undefined)?.fields;
+  const fields = Array.isArray(raw) ? raw : [];
+  if (fields.length === 0) {
+    return [{
+      locator: fallbackLocator,
+      code: error.code ?? "INVALID",
+      message: error.message,
+    }];
+  }
+  return fields.map((field: any) => ({
+    locator: String(field?.field ?? field?.locator ?? fallbackLocator),
+    code: String(field?.code ?? "INVALID"),
+    message: String(field?.message ?? "服务端未给出字段说明"),
+  }));
+}
+
+export const getWorkflows = () =>
+  request<{ items: WorkflowVersionRecord[]; total: number }>("/api/v1/workflows");
+
+export const getWorkflow = (workflowId: string, version: string) =>
+  request<WorkflowVersionRecord>(
+    `/api/v1/workflows/${encodeURIComponent(workflowId)}/${encodeURIComponent(version)}`,
+  );
+
+/** 只读校验：草案 JSON 原样送出；成功响应规范化为报告，4xx 由页面用 validationIssuesFromError 展开。 */
+export const validateWorkflow = async (draft: Record<string, unknown>): Promise<WorkflowValidationReport> => {
+  const response = await request<WorkflowPreflightResponse>("/api/v1/workflows/validate", jsonBody(draft));
+  return {
+    ok: response.ok === true,
+    errors: [],
+    warnings: [],
+    workflow_id: response.workflow_id ?? null,
+    version: response.version ?? null,
+    content_hash: response.content_hash ?? null,
+    publishable: response.publishable ?? null,
+    executed: response.executed ?? null,
+    ref: response.ref ?? null,
+    step_count: response.step_count ?? null,
+    condition_count: response.condition_count ?? null,
+    defaulted_fields: response.defaulted_fields ?? [],
+  };
+};
+
+/** 发布一个 Workflow 版本；内容相同时服务端按幂等策略返回原记录或冲突。 */
+export const publishWorkflow = (draft: Record<string, unknown>) =>
+  request<WorkflowVersionRecord>("/api/v1/workflows", jsonBody(draft));
+
+/** 单步断言结果：locator / op 由服务端登记，页面只照实显示。 */
+export interface ScenarioAssertionState {
+  locator?: string | null;
+  path?: string | null;
+  op?: string | null;
+  passed?: boolean | null;
+  value?: unknown;
+  reason?: string | null;
+}
+
+export interface ScenarioStepState {
+  step_id: string;
+  kind?: string | null;
+  index?: number | null;
+  seq?: number | null;
+  /** 步骤状态；服务端未给出时页面显示「未知」，不推断成功。 */
+  status?: string | null;
+  tool_mode?: string | null;
+  timeout_sec?: number | null;
+  duration_ms?: number | null;
+  attempts?: number | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  checkpoint?: { label?: string | null; frozen?: boolean | null; state_hash?: string | null } | null;
+  assertions?: ScenarioAssertionState[];
+  error?: { code?: string | null; message?: string | null } | null;
+  detail?: string | null;
+  result?: unknown;
+  /** true = 服务端明确标记该步结果未知；不得当作成功。 */
+  unknown?: boolean | null;
+}
+
+export interface ScenarioFixtureState {
+  fixture_id: string;
+  version?: number | null;
+  kind?: string | null;
+  owner?: string | null;
+  isolated?: boolean | null;
+  prepare_error?: { code?: string | null; message?: string | null } | null;
+  snapshot?: { complete?: boolean | null; ref?: string | null } | null;
+  cleanup?: { status?: string | null; residual?: string[]; error?: string | null } | null;
+}
+
+export interface ScenarioRunStepsView {
+  run_id: string;
+  status?: string | null;
+  workflow?: { workflow_id?: string | null; version?: string | null; content_hash?: string | null } | null;
+  steps: ScenarioStepState[];
+  fixtures?: ScenarioFixtureState[];
+  unknown?: boolean | null;
+}
+
+/** 场景 Run 的逐步证据（步骤 / checkpoint / fixture 隔离与清理）。 */
+export const getScenarioRunSteps = (runId: string) =>
+  request<ScenarioRunStepsView>(`/api/v1/runs/${encodeURIComponent(runId)}/steps`);
+
+export type SkillKind = "instruction" | "instruction_with_resources" | "executable" | string;
+
+export interface SkillResourceRecord {
+  path: string;
+  sha256?: string | null;
+  size_bytes?: number | null;
+  media_type?: string | null;
+}
+
+export interface SkillCheckView {
+  id?: string | null;
+  locator?: string | null;
+  passed?: boolean | null;
+  message?: string | null;
+}
+
+/** 单个验证范围的结果：status 只认服务端登记值，未知字符串按原样显示。 */
+export interface SkillVerificationScopeView {
+  status?: string | null;
+  scope?: string | null;
+  ran_at?: string | null;
+  checks?: SkillCheckView[];
+  /** 能力不可用 / 未运行的原因；禁用入口必须显示它。 */
+  reason?: string | null;
+  /** fixture / 行为测试返回的既有 Run 与评分批次引用。 */
+  run_id?: string | null;
+  pass_id?: string | null;
+  conditions?: Record<string, unknown> | null;
+}
+
+export interface SkillVerificationView {
+  /** 静态校验：manifest / 资源哈希 / schema / 依赖固定 / 权限声明。 */
+  static?: SkillVerificationScopeView | null;
+  /** executable fixture：受控入口的输入输出与副作用。 */
+  executable_fixture?: SkillVerificationScopeView | null;
+  /** 固定 Agent / 模型 / 任务下的行为测试。 */
+  behaviour?: SkillVerificationScopeView | null;
+}
+
+export interface SkillVersionRecord {
+  /** 服务端可能用 skill_id 或 name 作为资源标识；两者都缺时页面显示未知。 */
+  skill_id?: string | null;
+  name?: string | null;
+  version: string;
+  kind: SkillKind;
+  description?: string | null;
+  lifecycle?: string | null;
+  content_hash?: string | null;
+  instruction_ref?: string | null;
+  resource_manifest?: SkillResourceRecord[];
+  dependency_refs?: Array<{ name?: string | null; version?: string | null; digest?: string | null }>;
+  requested_permissions?: Record<string, unknown> | string[];
+  input_schema?: unknown;
+  output_schema?: unknown;
+  fixture_refs?: Array<Record<string, unknown>>;
+  injection_mode?: string | null;
+  entrypoint?: { interpreter?: string | null; argv?: string[]; [key: string]: unknown } | null;
+  verification?: SkillVerificationView | null;
+}
+
+/** 已发布 SkillVersion 目录（M5）：/api/v1/skills 是 v0 内存注册表，版本资源走 versions 子资源。 */
+export const getSkills = () =>
+  request<{ items: SkillVersionRecord[]; total: number }>("/api/v1/skills/versions");
+
+export const getSkill = (skillId: string, version: string) =>
+  request<SkillVersionRecord>(
+    `/api/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`,
+  );
+
+/**
+ * 静态校验（只读）：请求体是 Skill 文档本身，不运行入口、不执行 fixture、
+ * 零模型调用。服务端明确 validation_scope="static" 且 resource_bytes_verified=false
+ * —— 资源字节核验属于 executable fixture 作用域，不能把它说成已执行（M5-A10）。
+ */
+export interface SkillValidationResult {
+  ok: boolean;
+  executed?: boolean | null;
+  validation_scope?: string | null;
+  resource_bytes_verified?: boolean | null;
+  skill_id?: string | null;
+  version?: string | null;
+  ref?: string | null;
+  kind?: string | null;
+  lifecycle?: string | null;
+  content_hash?: string | null;
+  executable?: boolean | null;
+  dependency_refs?: Array<Record<string, unknown>>;
+  resource_paths?: string[];
+  fixture_refs?: Array<Record<string, unknown>>;
+  requested_permissions?: Record<string, unknown>;
+  defaulted_fields?: string[];
+}
+
+export const validateSkill = (document: Record<string, unknown>) =>
+  request<SkillValidationResult>("/api/v1/skills/validate", jsonBody(document));
+
+/** executable fixture：返回既有 Run 引用，不新建第二套执行对象。 */
+export const testSkillFixture = (body: { skill_id: string; version: string; fixture_id?: string }) =>
+  request<SkillVerificationScopeView>("/api/v1/skills/fixture-tests", jsonBody(body));
+
+/** 固定 Agent / 模型 / 任务的行为测试：条件必须显式给出。 */
+export const testSkillBehaviour = (body: {
+  skill_id: string; version: string; agent_id: string; model: string; case_ids?: string[];
+}) => request<SkillVerificationScopeView>("/api/v1/skills/behaviour-tests", jsonBody(body));
+
+export interface JudgeCostView {
+  /** 已报道成本（USD）；未知时必须是 null，不得填 0。 */
+  reported_usd?: number | null;
+  estimated_usd?: number | null;
+  currency?: string | null;
+  known_calls?: number | null;
+  unknown_calls?: number | null;
+  unknown_cost?: boolean | null;
+  price_table_version?: string | null;
+}
+
+export interface JudgeCriterionView {
+  id: string;
+  description?: string | null;
+  scale?: string | null;
+  weight?: number | null;
+}
+
+export interface JudgeRubricView {
+  rubric_id: string;
+  version: string;
+  content_sha256?: string | null;
+  scale?: string | null;
+  criteria?: JudgeCriterionView[];
+  missing_evidence_policy?: string | null;
+}
+
+export interface JudgeCalibrationView {
+  /** calibrated / experimental / not_run / unavailable；未知字符串按原样显示。 */
+  status?: string | null;
+  calibration_version?: string | null;
+  samples?: number | null;
+  human_reviewed?: number | null;
+  required_samples?: number | null;
+  policy?: Record<string, unknown> | null;
+  disagreements?: Array<{ criterion?: string | null; metric?: string | null; value?: number | null; basis?: string | null }>;
+  position_swap?: Record<string, unknown> | null;
+  repeat_stability?: Record<string, unknown> | null;
+  reasons?: string[];
+  /** true = 只有合成 fixture 标签，不构成人类质量真值。 */
+  synthetic_only?: boolean | null;
+  calibrated_at?: string | null;
+}
+
+export interface JudgeSpecView {
+  judge_id: string;
+  version: string;
+  lifecycle?: string | null;
+  /** Judge 固定 profile 的模型（独立于 subject 模型）。 */
+  model?: string | null;
+  provider?: string | null;
+  spec_sha256?: string | null;
+  /** 允许的用途（mode）清单，付费提交的用途选项来自这里。 */
+  modes?: string[];
+  budget?: {
+    max_calls?: number | null;
+    max_prompt_tokens?: number | null;
+    max_completion_tokens?: number | null;
+    max_total_tokens?: number | null;
+    hard_cost_cap_usd?: number | null;
+  } | null;
+  evidence?: {
+    selector?: Record<string, unknown> | null;
+    case_ids?: string[];
+    observation_refs?: string[];
+    missing_policy?: string | null;
+  } | null;
+  rubric?: JudgeRubricView | null;
+  calibration?: JudgeCalibrationView | null;
+  cost?: JudgeCostView | null;
+}
+
+/** Judge 预检（只读）：返回将调用的 profile、最大次数与费用是否可估计。 */
+export interface JudgePreflightView {
+  mode?: string | null;
+  model?: string | null;
+  spec_sha256?: string | null;
+  sample_count?: number | null;
+  repeats?: number | null;
+  orderings?: number | null;
+  max_calls?: number | null;
+  token_ceiling?: {
+    prompt?: number | null; completion?: number | null; total?: number | null;
+    budget_prompt?: number | null; budget_completion?: number | null;
+  } | null;
+  price_coverage?: {
+    known?: boolean | null;
+    price_table_version?: string | null;
+    input_per_million?: number | null;
+    output_per_million?: number | null;
+    estimated_cost_usd?: number | null;
+  } | null;
+  authorised?: boolean | null;
+  budget_executable?: boolean | null;
+  hard_monetary_cap?: boolean | null;
+  reasons?: string[];
+  authorisation?: Record<string, unknown> | null;
+}
+
+export interface JudgePreflightRequest {
+  judge_id: string;
+  version: string;
+  /** 用途（judge profile 声明的 mode）。 */
+  purpose: string;
+  run_id?: string;
+  source_pass_id?: string;
+  sample_count: number;
+  repeats?: number;
+  case_ids?: string[];
+}
+
+export interface JudgeAuthorisationRequest {
+  authorised: true;
+  purpose: string;
+  max_calls: number;
+  max_total_tokens?: number | null;
+  hard_cost_cap_usd?: number | null;
+}
+
+export interface JudgeSubmitRequest extends JudgePreflightRequest {
+  /** 显式授权：没有它服务端必须零调用。 */
+  authorisation: JudgeAuthorisationRequest;
+}
+
+export interface JudgeJobRecord {
+  job_id: string;
+  status: string;
+  judge_id?: string | null;
+  version?: string | null;
+  purpose?: string | null;
+  model?: string | null;
+  run_id?: string | null;
+  scoring_pass_id?: string | null;
+  created_at?: string | null;
+  max_calls?: number | null;
+  calls_made?: number | null;
+  cost?: JudgeCostView | null;
+  cancellation?: { requested_at?: string | null; state?: string | null } | null;
+  reasons?: string[];
+  error?: { code?: string | null; message?: string | null } | null;
+}
+
+export const getJudges = () =>
+  request<{ items: JudgeSpecView[]; total: number }>("/api/v1/judges");
+
+export const getJudge = (judgeId: string, version?: string) =>
+  request<JudgeSpecView>(
+    `/api/v1/judges/${encodeURIComponent(judgeId)}${version ? `?version=${encodeURIComponent(version)}` : ""}`,
+  );
+
+/** 校准报告（只读，零模型调用）。 */
+export const getJudgeCalibration = (judgeId: string, version?: string) =>
+  request<JudgeCalibrationView>(
+    `/api/v1/judges/${encodeURIComponent(judgeId)}/calibration${version ? `?version=${encodeURIComponent(version)}` : ""}`,
+  );
+
+/** 只读预检：只算预算与费用覆盖，不发送任何 Judge 调用。 */
+export const preflightJudge = (body: JudgePreflightRequest) =>
+  request<JudgePreflightView>("/api/v1/judges/preflight", jsonBody(body));
+
+/** 付费提交：仅在操作员显式确认后调用；成功后返回同一 ScoringJob / pass 引用。 */
+export const submitJudgeJob = (body: JudgeSubmitRequest) =>
+  request<JudgeJobRecord>("/api/v1/judges/jobs", jsonBody(body));
+
+export const getJudgeJob = (jobId: string) =>
+  request<JudgeJobRecord>(`/api/v1/judges/jobs/${encodeURIComponent(jobId)}`);
+
+/** 幂等取消：重复取消返回同一状态，不影响已完成的评分批次。 */
+export const cancelJudgeJob = (jobId: string) =>
+  request<JudgeJobRecord>(
+    `/api/v1/judges/jobs/${encodeURIComponent(jobId)}/cancel`,
+    jsonBody({}),
   );

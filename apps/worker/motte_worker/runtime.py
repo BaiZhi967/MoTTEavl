@@ -1,6 +1,16 @@
 """Worker 调度循环：从持久化存储抢占 queued Run 并执行。
 
 默认 loop 模式只依赖 SQLite（本地开发零外部服务）；celery 模式见 celery_app.py。
+
+M5-R8：Judge 作业与普通 Run 共用这一个循环、这一把执行锁：
+
+* 恢复：Run 恢复之后调用 ScoringJobService.recover_interrupted()（prepared 回队列、
+  dispatching 标不确定，绝不自动重发付费调用）；
+* 领取顺序：每一轮**先**领取至多一个 Judge 作业，**再**领取一个 Run。两类队列
+  在同一轮都推进，因此任何一类都不会因为另一类持续入队而永远得不到调度；
+  显式指定 run_id 时只领取那个 Run。
+* 执行：Judge Provider 由提交期冻结的快照构造（FrozenProviderFactory），
+  执行期只解析非秘密的凭据引用。
 """
 from __future__ import annotations
 
@@ -12,10 +22,14 @@ from typing import Any
 from motte_sdk.dispatcher import RunDispatcher
 from motte_sdk.execution_backends import backend_for, build_execution_handle, legacy_execution
 from motte_sdk.execution_lock import worker_execution_lock
+from motte_sdk.scoring_jobs import FrozenProviderFactory, ScoringJobService
 from motte_sdk.service import RunService
 from motte_storage.integrity import RunConflictError
 
 from .reporting import WorkerReporter
+
+#: "未指定"哨兵：显式传 None 表示关闭 Judge 领取（只跑普通 Run）。
+_UNSET: Any = object()
 
 
 def provider_for_run(run: dict[str, Any]):
@@ -30,12 +44,21 @@ def provider_for_run(run: dict[str, Any]):
 class WorkerLoop:
     def __init__(
         self, service: RunService, reporter: WorkerReporter | None = None, *,
-        execution_lock_held: bool = False,
+        execution_lock_held: bool = False, scoring_jobs: Any = _UNSET,
+        judge_provider_factory: Any = _UNSET,
     ) -> None:
         self.service = service
         self.dispatcher = RunDispatcher(service)
         self.reporter = reporter or WorkerReporter()
         self._execution_lock_held = execution_lock_held
+        if scoring_jobs is _UNSET:
+            factory = (
+                FrozenProviderFactory() if judge_provider_factory is _UNSET
+                else judge_provider_factory
+            )
+            scoring_jobs = ScoringJobService(service.store, provider_factory=factory)
+        #: None 表示显式关闭 Judge 领取；默认是与其他 Worker 状态共存的持久服务。
+        self.scoring_jobs = scoring_jobs
         # Worker 与 API/CLI 从同一受控配置加载外部 Job adapter（review R01）：
         # 未配置时 adapter 不注册，外部 Run 在分派层 RUNNER_NOT_CONNECTED。
         from motte_benchmark.runner_config import ensure_builtin_adapters
@@ -177,6 +200,11 @@ class WorkerLoop:
                     run_id=run["id"],
                     reason="indeterminate_external_call",
                 )
+        if self.scoring_jobs is not None:
+            # Judge 作业的恢复与 Run 恢复同锁同轮：prepared（无发送证据）回队列，
+            # dispatching（可能已发出）标不确定且绝不自动重发。
+            for job_id in self.scoring_jobs.recover_interrupted():
+                self.reporter.emit("judge_job_recovered", job_id=job_id)
         requeued = store.runs.requeue_interrupted()
         for run_id in requeued:
             self.reporter.emit("run_requeued", run_id=run_id, reason="worker_restart")
@@ -194,9 +222,14 @@ class WorkerLoop:
             return self._claim_and_execute_unlocked(run_id)
 
     def _claim_and_execute_unlocked(self, run_id: str | None = None) -> dict | None:
+        # 领取顺序：先至多一个 Judge 作业，再一个 Run。显式 run_id 时只领取该 Run。
+        judge_result = None
+        if run_id is None and self.scoring_jobs is not None:
+            judge_result = self._claim_judge_job()
         claimed = self.dispatcher.claim(run_id)
         if claimed is None:
-            return None
+            # 没有 Run 可领时，Judge 作业的结果就是这一轮做的工作（--once 依赖它）。
+            return judge_result
         run_id = claimed["id"]
         self.reporter.emit(
             "run_claimed",
@@ -207,6 +240,28 @@ class WorkerLoop:
         result = self.dispatcher.execute_claimed(claimed)
         self._report_finished(result)
         return result
+
+    def _claim_judge_job(self) -> dict[str, Any] | None:
+        """领取并执行至多一个 Judge 作业；失败只上报，不让整个循环停摆。"""
+        try:
+            outcome = self.scoring_jobs.claim_and_run()
+        except Exception as error:  # noqa: BLE001 - 作业仍留在持久状态，由恢复兜底
+            self.reporter.emit(
+                "judge_job_failed",
+                error_class=type(error).__name__,
+                message=str(error)[:300],
+            )
+            return None
+        if outcome is None:
+            return None
+        self.reporter.emit(
+            "judge_job_finished",
+            job_id=outcome.get("job_id"),
+            status=outcome.get("status"),
+            billed_calls=outcome.get("billed_calls"),
+            publish_outcome=outcome.get("publish_outcome"),
+        )
+        return outcome
 
     def _report_finished(self, result: dict[str, Any]) -> None:
         cases = result.get("cases") or []

@@ -58,9 +58,15 @@ class ExecutionBackendSpec:
 _SPECS: dict[tuple[str, str], ExecutionBackendSpec] = {}
 
 
-def register_backend(spec: ExecutionBackendSpec) -> ExecutionBackendSpec:
+def register_backend(
+    spec: ExecutionBackendSpec, *, replace: bool = False
+) -> ExecutionBackendSpec:
+    """注册 backend；replace=True 用于把同一 id@version 从不可用改为可用。
+
+    默认仍然拒绝重复注册：静默覆盖会让两个实现的语义混淆。
+    """
     key = (spec.id, spec.version)
-    if key in _SPECS:
+    if key in _SPECS and not replace:
         raise ValueError(f"execution backend already registered: {spec.id}@{spec.version}")
     _SPECS[key] = spec
     return spec
@@ -134,6 +140,10 @@ def resolve_execution(
     """
     resolved = deepcopy(manifest)
     requested = resolved.get("execution")
+    if resolved.get("workflow") is not None:
+        # M5：逐步骤 Scenario 由 scenario backend 派发；内层 target runtime 是
+        # 另一个身份，不允许借 execution 字段改选 backend。
+        return _resolve_scenario_execution(resolved, requested)
     runtime_fields = [
         name for name in ("agent", "skills", "harness", "pi")
         if resolved.get(name)
@@ -211,6 +221,43 @@ def resolve_execution(
     version = str(requested.get("backend_version") or "1")
     spec = backend_for(str(backend_id or ""), version)
     requested_mode = requested.get("execution_mode")
+    if requested_mode is not None and requested_mode != spec.execution_mode:
+        raise ExecutionBackendError(
+            "EXECUTION_MODE_CONFLICT",
+            f"execution backend {spec.id}@{spec.version} dispatches in "
+            f"{spec.execution_mode} mode, not {requested_mode}",
+        )
+    descriptor = {
+        "backend_id": spec.id,
+        "backend_version": spec.version,
+        "capabilities": dict(spec.capabilities),
+        "execution_mode": spec.execution_mode,
+    }
+    resolved["execution"] = descriptor
+    spec.validate(resolved)
+    return resolved
+
+
+def _resolve_scenario_execution(
+    resolved: dict[str, Any], requested: Any,
+) -> dict[str, Any]:
+    """逐步骤 Scenario 的 backend 解析：外层身份固定为 scenario@1。"""
+    if requested is not None:
+        if not isinstance(requested, dict):
+            raise ExecutionBackendError(
+                "EXECUTION_BACKEND_INVALID", "manifest.execution must be an object"
+            )
+        declared = requested.get("backend_id")
+        if declared not in (None, "scenario"):
+            raise ExecutionBackendError(
+                "EXECUTION_BACKEND_CONFLICT",
+                "workflow runs are dispatched by the scenario backend, not "
+                + str(declared)
+                + "; the target runtime belongs in manifest.runtime",
+            )
+    version = str((requested or {}).get("backend_version") or "1")
+    spec = backend_for("scenario", version)
+    requested_mode = (requested or {}).get("execution_mode")
     if requested_mode is not None and requested_mode != spec.execution_mode:
         raise ExecutionBackendError(
             "EXECUTION_MODE_CONFLICT",
@@ -603,5 +650,14 @@ try:
     from .runtime_backends import install_runtime_backends as _install_runtime_backends
 
     _install_runtime_backends()
+except ImportError:
+    pass
+
+# M5：安装 scenario backend 注册（逐步骤 Scenario，M5-T05）。
+try:
+    from .scenario_backend import install_scenario_backend as _install_scenario_backend
+
+    # 可用性由 scenario_backend.SCENARIO_BACKEND_AVAILABLE 决定（唯一事实源）。
+    _install_scenario_backend()
 except ImportError:
     pass
