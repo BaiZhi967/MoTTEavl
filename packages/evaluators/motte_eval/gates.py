@@ -493,8 +493,11 @@ def evaluate_gate_policy(
                         f"samples {denominator} < required {rule.min_samples}"
                     )
             if problems:
-                finish(rule, "insufficient", "; ".join(problems),
-                       decision=GateDecision.INSUFFICIENT_EVIDENCE)
+                if rule.missing_policy == "diagnostic_skip":
+                    finish(rule, "skipped_diagnostic", "; ".join(problems))
+                else:
+                    finish(rule, "insufficient", "; ".join(problems),
+                           decision=GateDecision.INSUFFICIENT_EVIDENCE)
             else:
                 finish(rule, "pass",
                        f"coverage {coverage} and samples {denominator} satisfy minimums")
@@ -519,12 +522,16 @@ def evaluate_gate_policy(
                     parts.append("failed: " + ",".join(failures))
                 if insufficient:
                     parts.append("unknown/missing: " + ",".join(insufficient))
-                finish(
-                    rule, "fail" if failures else "insufficient",
-                    "critical cases " + "; ".join(parts),
-                    decision=GateDecision.QUALITY_FAIL if failures
-                    else GateDecision.INSUFFICIENT_EVIDENCE,
-                )
+                if not failures and rule.missing_policy == "diagnostic_skip":
+                    finish(rule, "skipped_diagnostic",
+                           "critical cases " + "; ".join(parts))
+                else:
+                    finish(
+                        rule, "fail" if failures else "insufficient",
+                        "critical cases " + "; ".join(parts),
+                        decision=GateDecision.QUALITY_FAIL if failures
+                        else GateDecision.INSUFFICIENT_EVIDENCE,
+                    )
             else:
                 finish(rule, "pass",
                        "all critical cases passed: " + ",".join(rule.critical_case_ids))
