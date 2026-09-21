@@ -156,6 +156,28 @@ def _verify_saved_observation(run_id: str, case_id: str, raw: Any) -> dict[str, 
     return raw
 
 
+def _saved_observation_candidates(result: Any) -> list[dict]:
+    """一次 Run 保存的冻结证据可能放在两个键之一。
+
+    Scenario Run 把评分用的 FrozenObservation 放在 frozen_observation，人读的
+    observation 是 workflow-observation@1（docs/operations/scenarios.md 4.4）；
+    agent / CLI / Pi / Inspect 路径直接写 observation；基准路径两者都不写。
+    顺序是"先契约证据、后人读投影"，先成功的那个胜出。
+
+    验收 F-06：旧实现只读 observation，于是 Scenario Run 提交 Judge 一律
+    JUDGE_EVIDENCE_INVALID（17 条 FrozenObservation 校验错），基准 Run 一律
+    JUDGE_EVIDENCE_MISSING——公共入口对任何 Run 都拒收。
+    """
+    if not isinstance(result, dict):
+        return []
+    candidates = []
+    for key in ("frozen_observation", "observation"):
+        value = result.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    return candidates
+
+
 def resolve_saved_observations(
     store: Any, run_id: str, case_ids: Any = None,
 ) -> dict[str, dict[str, Any]]:
@@ -184,17 +206,25 @@ def resolve_saved_observations(
                 "JUDGE_EVIDENCE_MISSING", f"case is not part of the saved run: {case_id}"
             )
         row = store.case_runs.get(run_id, case_id)
-        raw = None
-        if isinstance(row, dict):
-            result = row.get("result")
-            if isinstance(result, dict):
-                raw = result.get("observation")
-        if not isinstance(raw, dict):
+        result = row.get("result") if isinstance(row, dict) else None
+        candidates = _saved_observation_candidates(result)
+        if not candidates:
             raise JudgeEvidenceError(
                 "JUDGE_EVIDENCE_MISSING",
                 f"no saved observation for case: {case_id}",
             )
-        resolved[case_id] = _verify_saved_observation(run_id, case_id, raw)
+        # 逐个候选校验，第一个通过契约与归属检查的胜出。全部不合格时抛出第一个
+        # 错误（保留可诊断的契约报错），仍然零调用、零发布。
+        failure: JudgeEvidenceError | None = None
+        for raw in candidates:
+            try:
+                resolved[case_id] = _verify_saved_observation(run_id, case_id, raw)
+            except JudgeEvidenceError as error:
+                failure = failure or error
+                continue
+            break
+        else:
+            raise failure
     return resolved
 
 
