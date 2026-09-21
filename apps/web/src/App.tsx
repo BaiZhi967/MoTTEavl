@@ -1,7 +1,18 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
-import { ActivityIcon, PlugIcon, PuzzlePieceIcon, StackIcon } from "@phosphor-icons/react";
+import {
+  ActivityIcon,
+  FlowArrowIcon,
+  MagicWandIcon,
+  PlugIcon,
+  PuzzlePieceIcon,
+  ScalesIcon,
+  StackIcon,
+} from "@phosphor-icons/react";
 import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
+import { JudgesPage } from "./pages/judges/JudgesPage";
+import { ScenarioRunStepsPage, ScenarioWorkflowsPage } from "./evalTypes/scenario/ScenarioPages";
+import { SkillComparePage, SkillValidationPage } from "./evalTypes/skill/SkillPages";
 import { EVAL_SUITES } from "./evalTypes/registry";
 import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
 import { CevalCases } from "./evalTypes/ceval/CevalPages";
@@ -41,6 +52,9 @@ const GENERAL_NAV = [
   { to: "/runs", label: "运行", icon: StackIcon },
   { to: "/providers", label: "Provider 与模型", icon: PlugIcon },
   { to: "/harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
+  { to: "/scenario", label: "场景 Workflow", icon: FlowArrowIcon },
+  { to: "/skill", label: "Skill 校验", icon: MagicWandIcon },
+  { to: "/judges", label: "Judge 校准", icon: ScalesIcon },
 ] as const;
 
 export default function App() {
@@ -77,6 +91,11 @@ export default function App() {
           <Route path="/runs" element={<RunsOverviewPage />} />
           <Route path="/providers" element={<ProvidersPage />} />
           <Route path="/harnesses" element={<HarnessesPage />} />
+          <Route path="/scenario" element={<ScenarioWorkflowsPage />} />
+          <Route path="/scenario/runs/:runId" element={<ScenarioRunStepsPage />} />
+          <Route path="/skill" element={<SkillValidationPage />} />
+          <Route path="/skill/compare" element={<SkillComparePage />} />
+          <Route path="/judges" element={<JudgesPage />} />
           <Route path="/agent-tasks" element={<AgentOperate />} />
           <Route path="/runtimes" element={<HarnessOperate />} />
           <Route path="/runtimes/monitor" element={<HarnessMonitor />} />

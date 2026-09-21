@@ -42,6 +42,7 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | `--text-faint` | `#A8A7A3` | 序号、占位、空状态 |
 | `--ink` | `#111111` | 主按钮实底、active 强调 |
 | `--ink-hover` | `#333333` | 主按钮 hover |
+| `--text-on-ink` | `#FFFFFF` | `--ink` 实底上的文字（主按钮） |
 
 ### 2.2 语义色（全站唯一的彩色，低饱和粉彩）
 
@@ -95,8 +96,23 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | `failed` | error |
 | `unsupported`、`profile_stale`、`needs_review` | warning（环境 / 配置或调用结果不确定，需人工处理） |
 
+M5 追加的非 Run 状态（同表登记，`scope` 标明归属，运行总览的过滤下拉只列 `scope: "run"`）：
+
+| 状态 | 语气 | scope | 含义 |
+|---|---|---|---|
+| `pending` | neutral | step | 步骤待执行 |
+| `skipped` | neutral | step | 步骤已跳过 |
+| `unknown` | warning | step | 结果未知（服务端没有结论，不得当作成功） |
+| `cleanup_failed` | error | step | fixture 清理失败 |
+| `passed` | success | resource | 校验 / 验证范围通过 |
+| `not_run` | neutral | resource | 未运行（不是通过） |
+| `unavailable` | warning | resource | 能力不可用 |
+| `calibrated` | success | resource | Judge 已校准，可用于正式阻断 Gate |
+| `experimental` | warning | resource | Judge 实验性，不进入正式阻断 Gate |
+
 规则：新增状态时先在 `statusMeta.ts` 的 `STATUS_META` 登记语气与中文标签，
 徽章、时间线、过滤选项自动继承。**禁止在任何组件里手写状态颜色。**
+非 Run 状态必须写 `scope`，避免污染运行总览的状态过滤。
 
 ## 4. 组件规范
 
@@ -140,6 +156,12 @@ token 与本文冲突时，以本文为准并立即修正 token。
 | 指标卡 | `.metric-cards` / `.metric-card`：flex 换行、内容居中、26px mono 数值、12px 次色标签；success / error 语气只染数值色；指标语气跟随运行整体状态，仅 completed 用 success，失败/取消等终态降为 neutral |
 | 钻取行 | `.drill-detail`：3px 左语气条 + `--bg-subtle` 底、6px 圆角右侧；字段前缀用 `.field-label` |
 | 对比页 | 模型列 × 指标行表格沿用通用表格规范；`.compare-case-list` 逐题下钻用 link 按钮 + `.drill-detail` |
+| 能力不可用提示 | `.notice`：3px 左 warning 语气条 + `--bg-subtle` 底、13px 次色；说明「端点未注册 / 能力关闭 / 入口禁用原因」。只读说明（零费用、只读历史）用 `.notice-info`（info 语气条）。能力缺失时入口保留并禁用 + 就地原因，禁止静默隐藏，也禁止伪造结果 |
+| 分段切换（Tabs） | `.tabs-list`（inline-flex、1px 边框 6px 圆角、`--bg-subtle` 底）+ `.tabs-trigger`（13px 次色，active 白底主文字色 500 字重）；用于同一份草案的文本 / Schema 两种编辑视图 |
+| 场景 Workflow 页面 | 左侧版本清单（`.list-panel`，`workflow_id@version` mono + lifecycle 徽章）+ 右侧编辑器（`.wide-panel`）：Tabs 切换文本（JSON，mono textarea）与 Schema 字段，二者编辑同一份草案；逐字段错误就地在字段下方（`.hint.fail`，`data-testid="field-error-<locator>"`）并附完整 `.failure-list`；「校验（只读）」不发布不建 Run，「发布版本」在未通过校验或文本已改动时禁用并说明原因 |
+| 场景 Run 步骤页 | 步骤表（#/step_id/类型/状态/工具模式/断言/耗时/详情），展开行用 `.drill-detail` 显示 checkpoint、断言明细、错误与结果；未知结果、未隔离、清理失败必须显式显示（未知不计入成功）；fixture 分节单列隔离 / 快照 / 清理证据；步骤明细端点不可用时保留运行自身状态并说明能力不可用 |
+| Skill 页面 | 三种验证范围（静态校验 / executable fixture / 固定 Agent 行为测试）平铺为三行表格，逐行给出「能证明 / 不能证明 / 状态 / 操作」；无受控入口或未固定 Agent 与模型时该行禁用并就地给出原因。三臂对照页（`/skill/compare`）按条件行 × 臂列输出条件差异、Skill token 开销、工具调用次数与报道 / 估算 / 未知成本，缺证据一律「未知」不填 0 |
+| Judge 页面 | 左侧清单（`judge_id@version` + 校准状态徽章）+ 右侧详情（证据 / rubric / 校准状态 / 独立成本四节，`.embed-title` 分节不套卡）。付费提交独占 `.form-panel`：必须显示用途、模型、样本数、最大调用次数、已知 / 未知费用与预算，先「读取预检（只读，零调用）」再显式确认 Switch 才可提交；GET 历史、切换 pass、刷新零调用零费用（`.notice-info` 明示），迟到响应不得覆盖新 pass |
 
 ## 5. 图标
 
@@ -173,3 +195,12 @@ M4 交互控制区复用现有 panel、kv、表格、hint/error 与按钮样式�
 3. 修改现有界面：走 `redesign-existing-projects` 流程（先审计 → 列问题 → 增量改，不重写）。
 4. 审美争议以 `minimalist-ui` 协议为准裁决。
 5. 完成后必须跑：`pnpm --dir apps/web test` 与 `pnpm --dir apps/web build`（CI 同款门禁）。
+
+### 8.1 M5 资源与结果页面（T11）
+
+场景、Skill、Judge 三组页面共用同一条实现约定：资源与结果只从既有 API 客户端模块取值；
+服务端尚未注册的端点（404/405/501）统一渲染为「能力不可用」——入口保留、明确禁用并给出原因，
+既不静默隐藏也不伪造结果；缺字段一律显示「未知」，不填 0。付费 Judge 提交与发布等写操作
+只在操作员显式动作后发生，失败保留表单内容，迟到响应按请求序号丢弃，不得覆盖新的
+Run / Case / pass / Skill / 版本选择。步骤状态、校验状态与校准状态的中文标签与语气
+一律取自 STATUS_META（第 3 节已登记 M5 追加状态）。

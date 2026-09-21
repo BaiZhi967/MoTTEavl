@@ -1,5 +1,19 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import css from "../src/index.css?raw";
+
+// vitest 在 apps/web 下运行（pnpm --dir apps/web test），src 是相对工作目录的固定位置
+const SRC_DIR = resolve(process.cwd(), "src");
+
+function walk(dir: string, collected: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, collected);
+    else collected.push(full);
+  }
+  return collected;
+}
 
 /* 全局 CSS 完整性：这些断言对应审计报告里"一处代码坏，全站跟着坏"的缺陷，
  * 防止工具类重复定义、全局规则缺失等问题回归。 */
@@ -40,5 +54,22 @@ describe("全局样式完整性", () => {
   it("主按钮由 .primary 语义类驱动", () => {
     expect(css).toContain("button.primary {");
     expect(css).not.toContain('button[type="submit"]');
+  });
+
+  it("token 纪律：组件与脚本不直接写十六进制色值（唯一来源是 :root）", () => {
+    const offenders: string[] = [];
+    for (const file of walk(SRC_DIR)) {
+      if (!/\.(ts|tsx)$/.test(file)) continue;
+      const matches = readFileSync(file, "utf8").match(/#[0-9a-fA-F]{3,8}\b/g);
+      if (matches) offenders.push(file.replace(SRC_DIR, "src") + " → " + matches.join(", "));
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("M5 能力提示与分段切换样式已登记（DESIGN.md 第 4 节）", () => {
+    expect(css).toContain(".notice {");
+    expect(css).toContain(".notice-info {");
+    expect(css).toContain(".tabs-list {");
+    expect(css).toContain(".tabs-trigger {");
   });
 });
