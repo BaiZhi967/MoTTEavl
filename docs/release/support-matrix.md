@@ -46,15 +46,15 @@
 
 | 操作 | 状态 | 证据 |
 |---|---|---|
-| SDK 安装（clean venv/wheel） | 待回填 | tests/packaging/test_clean_install.py |
+| SDK 安装（clean venv/wheel） | tested | tests/packaging/test_clean_install.py 8 passed（e4d54bd，主审复跑同结果；CI packaging job 合并后补链接） |
 | SDK 调用（Run/事件/报告/比较/Gate/导出） | 待回填 | tests/sdk/test_client_contract.py、test_wait_and_events.py |
 | CLI local/server 双模式 | 待回填 | tests/cli/test_remote_parity.py |
 | pytest 门禁读取 | 待回填 | tests/sdk/test_pytest_and_exports.py |
-| 历史导入 dry-run/apply/resume/rollback | 待回填 | tests/migration/** |
-| 备份/恢复（SQLite） | 待回填 | tests/integration/test_backup_restore_consistency.py |
+| 历史导入 dry-run/apply/resume/rollback（合成来源） | tested | tests/migration 19 passed/1 Windows-symlink skip（148e26a，主审复跑同结果）；真实旧导出 not_run |
+| 备份/恢复（SQLite） | tested | tests/integration/test_backup_restore_consistency.py + tests/storage/test_maintenance.py 14 passed/1 PG skip（ec9be0a，主审复跑同结果） |
 | 备份/恢复（PostgreSQL） | not_run | 无本机 PG；CI 未见 pg_dump 断言（如实登记） |
-| GC/retention | 待回填 | tests/security/test_gc_retention.py |
-| 升级/回退演练 | 待回填 | tests/integration/test_release_smoke.py |
+| GC/retention | tested | tests/security/test_gc_retention.py 4 passed（8c8cf3d）；trace DB 行裁剪 not_implemented（无事件时间戳，plan 如实报告） |
+| 升级/回退演练（SQLite） | tested | tests/integration/test_release_smoke.py 4 passed（含旧形状升级、备份恢复路径、冻结退出码）；PG 降级阻断 not_run（无 DSN） |
 | Docker Compose build/up | blocked | 本机无 docker；仅 compose config 通过 |
 | 旧平台切换 | not_run | 需单独授权（docs/release/cutover.md） |
 
