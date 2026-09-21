@@ -7,11 +7,18 @@
   顶层 testsuite 记录 decision 与退出码摘要；CI 阻断由退出码 + JUnit 状态共同
   表达（协议 §7）。
 - M7 只能在同一版本扩展（testsuite 属性/附加 file），不重写 exporter 主权。
+  M7-T04 的 v1 内扩展：testsuite 新增 ``policy_id``/``policy_version`` 属性、
+  ``write_gate_export`` 平行文件写出（gate-export.json + gate-export.xml）。
+  decision→exit_code/JUnit 映射保持不变，不重算分数，零模型/Judge/Runner 调用。
 - 只消费已求值结果：零模型/Judge/Runner 调用，无状态修改。
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Mapping
 
 from motte_contracts.gates import DECISION_EXIT_CODES, GateDecision, GateResult
@@ -89,6 +96,9 @@ def result_to_junit(result: GateResult | Mapping[str, Any]) -> str:
             "name": "motte-gate:"
             + str(payload.get("policy_id", "unknown")) + "@"
             + str(payload.get("policy_version", "unknown")),
+            # M7-T04 v1 内扩展：testsuite 直接携带政策身份（协议 §4 允许）。
+            "policy_id": str(payload.get("policy_id", "unknown")),
+            "policy_version": str(payload.get("policy_version", "unknown")),
             "tests": str(len(rules)),
             "failures": str(
                 sum(1 for rule in rules if rule.get("status") == "fail")
@@ -167,3 +177,56 @@ def comparison_to_json(view: Mapping[str, Any]) -> dict[str, Any]:
         "case_diff": dict(view.get("case_diff") or {}),
         "allowed_differences": list(view.get("allowed_differences") or ()),
     }
+
+
+def _stable_json_line(payload: Mapping[str, Any]) -> str:
+    """确定性的 JSON 文本（排序键、UTF-8、尾随换行），供 sha256 稳定。"""
+    return json.dumps(
+        dict(payload), ensure_ascii=False, sort_keys=True, indent=2
+    ) + "\n"
+
+
+#: ``formats`` 兞际支持的取值 → 输出文件名。
+_EXPORT_FILES: dict[str, str] = {
+    "json": "gate-export.json",
+    "junit": "gate-export.xml",
+}
+
+
+def write_gate_export(
+    result: GateResult | Mapping[str, Any],
+    *,
+    out_dir: str | os.PathLike[str],
+    formats: tuple[str, ...] | list[str] = ("json", "junit"),
+) -> dict[str, dict[str, str]]:
+    """把一个已求值的 GateResult 写成平行导出文件（M7-T04，v1 内扩展）。
+
+    - ``gate-export.json``（``result_to_json`` 内容）与
+      ``gate-export.xml``（``result_to_junit`` 内容，与 CLI 落盘字节一致）；
+    - 纯函数：只消费传入结果，零模型/Judge/Runner 调用、零网络、零状态修改；
+    - 返回 ``{"paths": {format: 绝对路径}, "sha256s": {format: hex}}``；
+      同一输入重复写出内容字节稳定，故 sha256 稳定。
+    不新建 exporter 版本、不改变 decision→exit_code/JUnit 映射（协议 §4）。
+    """
+    contents: dict[str, str] = {
+        "json": _stable_json_line(result_to_json(result)),
+        "junit": result_to_junit(result) + "\n",
+    }
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, str] = {}
+    sha256s: dict[str, str] = {}
+    for fmt in formats:
+        if fmt not in _EXPORT_FILES:
+            known = ",".join(sorted(_EXPORT_FILES))
+            raise ValueError(f"unknown gate export format: {fmt!r} (known: {known})")
+        path = target / _EXPORT_FILES[fmt]
+        # write_bytes 而非 write_text：Windows 文本模式会做 \n→\r\n 换行翻译，
+        # 破坏"内容字节 == sha256 输入"的稳定性。
+        path.write_bytes(contents[fmt].encode("utf-8"))
+        resolved = str(path.resolve())
+        paths[fmt] = resolved
+        sha256s[fmt] = hashlib.sha256(
+            contents[fmt].encode("utf-8")
+        ).hexdigest()
+    return {"paths": paths, "sha256s": sha256s}
