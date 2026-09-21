@@ -25,6 +25,7 @@ var/datasets/
 
 # M5/M6 手工验收与差异核对产物（脚本、证据、临时数据库）
 var/m5-accept/
+var/m6-accept/
 var/m5-verify/
 
 # Scenario 运行时 fixture（由服务生成，不是源码测试 fixture）
