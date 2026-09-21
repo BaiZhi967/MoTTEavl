@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -49,7 +50,7 @@ from motte_eval.rubrics import (
     policy_for,
     validate_policy,
 )
-from motte_storage.run_store import SQLiteRunStore
+from motte_storage.run_store import InMemoryRunStore, SQLiteRunStore
 
 RUBRIC_ID = "answer-quality"
 RUBRIC_VERSION = "1"
@@ -724,6 +725,14 @@ class _CasRepo:
         return attribute
 
 
+@pytest.fixture(params=["sqlite", "memory"])
+def revision_store(request, tmp_path):
+    """人工修订的 CAS 语义在 Memory 与 SQLite 上必须一致。"""
+    if request.param == "sqlite":
+        return SQLiteRunStore(tmp_path / "runs.db")
+    return InMemoryRunStore()
+
+
 def interleaved_store(store, trigger):
     """把一次竞争修订插进 CAS 窗口的正中间。"""
     hook = _ReadHook(trigger)
@@ -747,8 +756,8 @@ def revision_request(actor: str, *, source: str = "pass-source") -> ManualRevisi
     )
 
 
-def test_competing_revisions_share_one_cas_window_and_only_one_wins(tmp_path):
-    store = SQLiteRunStore(tmp_path / "runs.db")
+def test_competing_revisions_share_one_cas_window_and_only_one_wins(revision_store):
+    store = revision_store
     make_run_and_pass(store)
 
     def competing() -> None:
@@ -784,8 +793,8 @@ def test_competing_revisions_share_one_cas_window_and_only_one_wins(tmp_path):
     assert [row["passed"] for row in source["scores"]] == [True, True, False]
 
 
-def test_manual_revision_keeps_the_source_pass_and_baseline_untouched(tmp_path):
-    store = SQLiteRunStore(tmp_path / "runs.db")
+def test_manual_revision_keeps_the_source_pass_and_baseline_untouched(revision_store):
+    store = revision_store
     make_run_and_pass(store)
     before = store.scoring_passes.get("pass-source")
     rows_before = store.score_sets.list_for_pass("pass-source")
@@ -914,6 +923,67 @@ def test_policy_thresholds_enter_the_report_and_qualification_hash():
         judge_spec_sha256="sha256:" + "0" * 64, rubric_id=RUBRIC_ID,
         rubric_version=RUBRIC_VERSION, model="judge-model", calibration_version="1",
     ) is None
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOTTE_PG_DSN"),
+    reason="set MOTTE_PG_DSN to run the PostgreSQL manual-revision CAS test",
+)
+def test_postgres_manual_revision_cas_matches_memory_and_sqlite():
+    from motte_storage.migrations import upgrade
+    from motte_storage.postgres import create_postgres_run_store
+
+    dsn = os.environ["MOTTE_PG_DSN"]
+    upgrade(dsn)
+    store = create_postgres_run_store(dsn)
+    run_id = f"run-pg-cas-{os.getpid()}"
+    store.runs.create({
+        "id": run_id, "schema_version": 2, "revision": 1,
+        "scenario_version": "replay@1", "status": "completed",
+        "manifest": {}, "requested_manifest": {}, "case_ids": ["case-1"],
+        "created_at": "2026-09-21T00:00:00+00:00",
+        "updated_at": "2026-09-21T00:00:00+00:00",
+    }, event={"run_id": run_id, "type": "queued", "status": "completed"})
+    scores = [{
+        "case_id": "case-1", "metric_id": "task_completion",
+        "evaluator_id": "agent-deterministic", "evaluator_version": "1",
+        "metric_status": "scored", "value": 1.0, "passed": True, "denominator": True,
+        "details": {},
+    }]
+    run = store.runs.get(run_id)
+    source_id = f"pass-pg-source-{os.getpid()}"
+    store.scoring_passes.append(
+        {
+            "id": source_id, "run_id": run_id, "scorer_id": "agent-deterministic",
+            "scorer_version": "1", "created_at": "2026-09-21T00:00:00+00:00",
+            "source": "initial", "summary": {"scores": 1}, "scores": scores,
+        },
+        scores, expected_run_revision=run["revision"], expected_run_status="completed",
+    )
+
+    def request(actor: str) -> ManualRevisionRequest:
+        return ManualRevisionRequest(
+            run_id=run_id, source_pass_id=source_id, actor=actor, reason="pg cas",
+            changes=[ManualScoreChange(
+                case_id="case-1", metric_id="task_completion", passed=False,
+            )],
+            expected_current_pass_id=source_id,
+        )
+
+    first_id = f"pass-pg-rev-a-{os.getpid()}"
+    apply_manual_revision_to_store(
+        store, request("operator-a"), revision_id=first_id,
+        created_at="2026-09-21T01:00:00+00:00",
+    )
+    winner = f"pass-pg-rev-b-{os.getpid()}"
+    with pytest.raises(ManualRevisionConflict):
+        apply_manual_revision_to_store(
+            store, request("operator-b"), revision_id=winner,
+            created_at="2026-09-21T02:00:00+00:00",
+        )
+    assert store.runs.get(run_id)["current_scoring_pass_id"] == first_id
+    assert store.scoring_passes.get(winner) is None
+    assert store.score_sets.list_for_pass(winner) == []
 
 
 def test_qualification_is_read_through_the_real_published_pass(tmp_path):
