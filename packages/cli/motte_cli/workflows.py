@@ -215,7 +215,17 @@ def conversion_report(
 
 
 def scenario_targets() -> list[dict[str, Any]]:
-    """已注册 target 及其真实能力；注册表为空即返回空列表（不猜测能力）。"""
+    """已注册 target 及其真实能力；注册表为空即返回空列表（不猜测能力）。
+
+    验收 F-09：内置 target adapter 是 motte_sdk.scenario_backend 的导入副作用
+    （与 API / Worker 同一条注册路径）。以前这里只 import describe_targets，于是
+    同一个 CLI 里 scenario targets 报「没有注册的 target」、而 scenario run 却能
+    创建 Run——列子命令必须装配同一个注册入口，不能自成一个更空的世界。
+    """
+    try:  # pragma: no cover - motte-agent 缺失时该目标保持不可用
+        import motte_sdk.scenario_backend  # noqa: F401
+    except ImportError:
+        pass
     from motte_scenario.targets import describe_targets
 
     return describe_targets()

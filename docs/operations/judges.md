@@ -39,6 +39,39 @@ API 进程即使持有 `FrozenProviderFactory` 也从不 dispatch；领取与执
 `WorkerLoop` 的执行锁内发生。`submit()` 在 `provider_factory is None` 时仍然**明确拒绝**
 （API 映射为 503 `JUDGE_PROVIDER_UNAVAILABLE`），不产出永远无法执行的作业。
 
+### 0.1 公共请求形状（照抄即用）
+
+公共入口接受的**不是**库内 JudgeSpec 的序列化。直接提交 JudgeSpec.model_dump()
+会得到 422 extra_forbidden（mode / profile_sha256 / prompt_id / spec_sha256 /
+budget.price_known / budget.price_table_version / schema_version 都由服务端解析）。
+正确形状（apps/api/app/schemas.py 的 JudgeSubmissionBase）：
+
+    {
+      "run_id": "run-...",
+      "mode": "single",
+      "spec": {
+        "judge_profile_id": "acc-judge-profile",
+        "model": "deepseek-v4.1-flash",
+        "rubric_id": "answer-quality",
+        "rubric_version": "1",
+        "criteria": ["task_completion", "constraint_adherence", "evidence_grounding"],
+        "budget": {"max_calls": 1}
+      },
+      "case_ids": [],
+      "authorisation": {"authorised": true, "actor": "operator", "max_calls": 1},
+      "publish_policy": "all_scored",
+      "repeats": 1,
+      "request_key": "optional-idempotency-key"
+    }
+
+* model 是**已发布的 ModelProfile id**，不是线路模型名；服务端据此冻结 Provider 快照。
+* criteria 省略时取 rubric 的全部判据；rubric 的必选判据不能被省略。
+* 预检与提交共用同一形状；提交额外要求 request_key（或 CLI 的 --request-key）。
+* 证据由服务端解析：subject Run 的冻结证据取自 result.frozen_observation（Scenario
+  Run）或 result.observation（agent / CLI / Pi / Inspect）；客户端不能提交计数或原文。
+* 校验失败在提交期返回具名 code 且零调用、零发布（JUDGE_EVIDENCE_MISSING /
+  JUDGE_EVIDENCE_INVALID / JUDGE_BUDGET_NOT_EXECUTABLE / JUDGE_MODE_UNSUPPORTED）。
+
 ## 1. 调用计划与预算（R2 固定）
 
 - `ScoringJobService.submit()` 先编译**唯一冻结计划** `plans`，每项含

@@ -433,3 +433,20 @@ def test_cli_scenario_targets_emits_stable_json(capsys):
     assert by_kind[PROBE_KIND]["available"] is False
     assert by_kind[PROBE_KIND]["tool_modes"] == ["real", "mock"]
     assert probe.sessions_opened == 0
+
+
+def test_cli_scenario_targets_lists_the_builtin_agent_like_the_api(capsys):
+    """验收 F-09：列子命令装配与 API 同一套内置注册，不能自成一个更空的世界。
+
+    旧实现只 import describe_targets，于是同一个 CLI 里 targets 报「没有注册的
+    target」、而 scenario run 却能创建 Run（它经由 resolve 间接导入了注册入口）。
+    """
+    code, out, err = _run_cli(capsys, ["scenario", "targets", "--json"])
+    assert code == 0, err
+    cli_kinds = {item["kind"] for item in json.loads(out)["items"]}
+
+    api_body = _api_client().get("/api/v1/scenario-targets").json()
+    api_kinds = {item["kind"] for item in api_body["items"]}
+
+    assert "builtin-agent" in cli_kinds
+    assert cli_kinds == api_kinds
