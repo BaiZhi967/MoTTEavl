@@ -17,6 +17,7 @@ members = [
     "motte-harness",
     "motte-provider",
     "motte-sandbox",
+    "motte-scenario-runtime",
     "motte-sdk",
     "motte-skill",
     "motte-storage",
@@ -910,6 +911,17 @@ version = "0.1.0"
 source = { editable = "packages/sandbox" }
 
 [[package]]
+name = "motte-scenario-runtime"
+version = "0.1.0"
+source = { editable = "packages/scenario-runtime" }
+dependencies = [
+    { name = "motte-contracts" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "motte-contracts", editable = "packages/contracts" }]
+
+[[package]]
 name = "motte-sdk"
 version = "0.1.0"
 source = { editable = "packages/sdk-python" }
@@ -948,6 +960,7 @@ dependencies = [
     { name = "motte-harness" },
     { name = "motte-provider" },
     { name = "motte-sandbox" },
+    { name = "motte-scenario-runtime" },
     { name = "motte-sdk" },
     { name = "motte-skill" },
     { name = "motte-storage" },
@@ -982,6 +995,7 @@ requires-dist = [
     { name = "motte-harness", editable = "packages/harness-runtime" },
     { name = "motte-provider", editable = "packages/provider-runtime" },
     { name = "motte-sandbox", editable = "packages/sandbox" },
+    { name = "motte-scenario-runtime", editable = "packages/scenario-runtime" },
     { name = "motte-sdk", editable = "packages/sdk-python" },
     { name = "motte-skill", editable = "packages/skill-runtime" },
     { name = "motte-storage", editable = "packages/storage" },

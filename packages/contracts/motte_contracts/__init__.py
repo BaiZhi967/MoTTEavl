@@ -2,6 +2,7 @@ __version__ = "0.1.0"
 from .messages import *
 from .model import *
 from .scenario import *
+from .workflow import *
 from .run import *
 from .external_job import *
 from .comparison import *

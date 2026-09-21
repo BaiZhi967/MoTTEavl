@@ -36,13 +36,18 @@ def test_alembic_revision_chain_is_linear_and_complete():
         "0006_external_jobs", "0007_benchmark_datasets", "0008_trials",
         "0009_runtime_resources",
         "0010_interactive_sessions",
+        "0011_workflow_resources",
     ]
     config = alembic_config("postgresql://user@localhost/db")
     assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)
     assert "postgresql+psycopg://" in config.get_main_option("sqlalchemy.url")
 
 
-@pytest.mark.parametrize('filename', ['0009_runtime_resources.py', '0010_interactive_sessions.py'])
+@pytest.mark.parametrize('filename', [
+    '0009_runtime_resources.py',
+    '0010_interactive_sessions.py',
+    '0011_workflow_resources.py',
+])
 def test_runtime_migrations_share_idempotent_fixture_cleanup(filename):
     from alembic.migration import MigrationContext
     from alembic.operations import Operations

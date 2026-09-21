@@ -26,6 +26,8 @@ RESOURCE_TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
     "publications": ("resource_publications", ("id",)),
     "runtimes": ("runtime_versions", ("name", "version")),
     "runtime_profiles": ("runtime_profiles", ("name", "version")),
+    # M5-T01：Workflow 是独立于 Scenario 的版本资源，主键是 workflow_id+version。
+    "workflows": ("workflow_versions", ("workflow_id", "version")),
 }
 
 
@@ -39,7 +41,7 @@ class ResourceConflictError(ValueError):
 
 VERSIONED_TABLES = frozenset({
     "price_tables", "dataset_versions", "scenario_versions", "resource_publications",
-    "runtime_versions", "runtime_profiles",
+    "runtime_versions", "runtime_profiles", "workflow_versions",
 })
 
 
@@ -153,6 +155,14 @@ def _validate_publication(record: dict[str, Any]) -> None:
 
 def _validate_managed(table: str, record: dict[str, Any]) -> None:
     """Keep managed suite schema checks independent of version immutability."""
+    if table == "workflow_versions":
+        from motte_contracts.workflow import WorkflowVersion, workflow_content_hash
+
+        workflow = WorkflowVersion.model_validate(record)
+        # 已发布 Workflow 的内容 hash 必须自洽，否则拒绝入库（M5-T01）。
+        if workflow.content_hash is not None and workflow.content_hash != workflow_content_hash(workflow):
+            raise ValueError("workflow content_hash does not match its content")
+        return
     if table == "resource_publications":
         _validate_publication(record)
         return
@@ -677,6 +687,7 @@ class ResourceStore:
     publications: Any
     runtimes: Any
     runtime_profiles: Any
+    workflows: Any
     _pair_publisher: PairPublisher
 
     def publish_dataset_scenario(
@@ -685,6 +696,14 @@ class ResourceStore:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Publish an immutable dataset, scenario, and optional audit in one transaction."""
         return self._pair_publisher(dataset, scenario, publication)
+
+    def publish_workflow(self, workflow: dict[str, Any]) -> dict[str, Any]:
+        """发布一个不可变 WorkflowVersion。
+
+        版本仓库只接受已发布内容：draft 在契约层就被拒绝；同版本同内容幂等，
+        同版本异内容抛 ResourceConflictError（由 repository.put 保证）。
+        """
+        return self.workflows.put(deepcopy(workflow))
 
 
 def _build(builder, publisher_builder) -> ResourceStore:
@@ -696,6 +715,7 @@ def _build(builder, publisher_builder) -> ResourceStore:
     publications = builder(*RESOURCE_TABLES["publications"])
     runtimes = builder(*RESOURCE_TABLES["runtimes"])
     runtime_profiles = builder(*RESOURCE_TABLES["runtime_profiles"])
+    workflows = builder(*RESOURCE_TABLES["workflows"])
     return ResourceStore(
         providers=providers,
         models=models,
@@ -705,6 +725,7 @@ def _build(builder, publisher_builder) -> ResourceStore:
         publications=publications,
         runtimes=runtimes,
         runtime_profiles=runtime_profiles,
+        workflows=workflows,
         _pair_publisher=publisher_builder(datasets, scenarios, publications),
     )
 
