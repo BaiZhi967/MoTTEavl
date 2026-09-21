@@ -125,6 +125,216 @@ def _runtime_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+#: 场景 Run 的实验条件（顶层字段）→ 阻断码。这些字段在 benchmark Run 里
+#: 位于 external_benchmark.profile，由 _PROFILE_INVARIANTS 统一覆盖。
+_SCENARIO_TOP_LEVEL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("tools", "TOOLS_CHANGED"),
+    ("tool_policy", "TOOLS_CHANGED"),
+    ("timeouts", "TIMEOUTS_CHANGED"),
+    ("limits", "LIMITS_CHANGED"),
+    ("retries", "RETRIES_CHANGED"),
+    ("environment", "ENVIRONMENT_CHANGED"),
+    ("credentials", "CREDENTIALS_CHANGED"),
+)
+
+#: M5：Skill 归因只有在预算政策可比时才成立。
+COMPARABLE_BUDGET_POLICIES: tuple[str, ...] = ("same-total-budget", "same-execution-budget")
+
+
+def _workflow_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """Workflow 身份：固定引用 + 内容 hash + fixture 固定版本集合。"""
+    snapshot = manifest.get("workflow_snapshot")
+    reference = manifest.get("workflow")
+    fixtures = manifest.get("fixture_snapshot")
+    if isinstance(snapshot, dict) and snapshot:
+        identity = {
+            "ref": snapshot.get("ref") or reference,
+            "content_hash": snapshot.get("content_hash"),
+            "schema_version": snapshot.get("schema_version"),
+            "step_ids": list(snapshot.get("step_ids") or []),
+            "limits": snapshot.get("limits"),
+            "failure_policy": snapshot.get("failure_policy"),
+        }
+    elif isinstance(reference, str):
+        identity = {"ref": reference, "content_hash": None, "schema_version": None,
+                    "step_ids": [], "limits": None, "failure_policy": None}
+    else:
+        return None
+    if isinstance(fixtures, dict):
+        identity["fixtures"] = sorted(
+            f"{key}:{(record or {}).get('content_hash')}"
+            for key, record in fixtures.items()
+        )
+    else:
+        identity["fixtures"] = None
+    return identity
+
+
+def _skill_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """Skill 臂身份：声明的技能引用、版本化快照以及对照臂 ID。
+
+    只记录"选中了 Skill"不够：版本与内容 hash 也是身份的一部分，顺序改变
+    同样改变 hash（M5-G11/G13）。
+    """
+    skills = manifest.get("skills")
+    snapshot = manifest.get("skill_snapshot")
+    arm = manifest.get("skill_arm")
+    if not skills and not snapshot and not arm:
+        return None
+    return {
+        "arm": arm,
+        "refs": list(skills or []),
+        "snapshot": snapshot if isinstance(snapshot, dict) else None,
+    }
+
+
+def _budget_policy(manifest: dict[str, Any]) -> Any:
+    budget = manifest.get("budget")
+    if not isinstance(budget, dict):
+        return None
+    policy = budget.get("policy")
+    return policy if policy is not None else budget.get("comparison_policy")
+
+
+def _scoring_provenance(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """所选 pass 的评分来源（Judge/rubric/校准/输入选择），不是当前 Judge 设置。
+
+    历史缺字段保持 unknown；绝不从当前配置补齐（M5-T09c 第 12 条）。
+    """
+    provenance = manifest.get("scoring_provenance")
+    return provenance if isinstance(provenance, dict) else None
+
+
+def _compare_m5_invariants(
+    baseline_manifest: dict[str, Any],
+    candidate_manifest: dict[str, Any],
+    policy: ComparisonPolicy,
+) -> tuple[list[str], list[str]]:
+    """M5 实验条件判定：Workflow / Fixture / Skill / 评分来源 / 预算政策。"""
+    reasons: list[str] = []
+    allowed: list[str] = []
+    allowed_factors = set(policy.allowed_factors)
+
+    base_workflow = _workflow_identity(baseline_manifest)
+    cand_workflow = _workflow_identity(candidate_manifest)
+    if (base_workflow is None) != (cand_workflow is None):
+        reasons.append(
+            f"IDENTITY_MISSING:workflow: {base_workflow!r} vs {cand_workflow!r}"
+        )
+    elif base_workflow is not None and base_workflow != cand_workflow:
+        if "workflow" in allowed_factors:
+            allowed.append(
+                f"ALLOWED_FACTOR:workflow: {base_workflow.get('ref')!r} "
+                f"-> {cand_workflow.get('ref')!r}"
+            )
+        else:
+            reasons.append(
+                f"WORKFLOW_CHANGED:workflow: {base_workflow!r} -> {cand_workflow!r}"
+            )
+    if base_workflow is not None and cand_workflow is not None:
+        if base_workflow.get("fixtures") != cand_workflow.get("fixtures"):
+            if "fixture" in allowed_factors:
+                allowed.append("ALLOWED_FACTOR:fixture: fixture content hashes differ")
+            else:
+                reasons.append(
+                    "FIXTURE_CHANGED:fixture: "
+                    f"{base_workflow.get('fixtures')!r} -> {cand_workflow.get('fixtures')!r}"
+                )
+
+    base_skill = _skill_identity(baseline_manifest)
+    cand_skill = _skill_identity(candidate_manifest)
+    skill_differs = base_skill != cand_skill
+    if skill_differs and (base_skill is None or cand_skill is None):
+        reasons.append(
+            f"IDENTITY_MISSING:skill: {base_skill!r} vs {cand_skill!r}"
+        )
+    elif skill_differs:
+        if "skill" in allowed_factors:
+            allowed.append(
+                f"ALLOWED_FACTOR:skill: {(base_skill or {}).get('arm')!r} "
+                f"-> {(cand_skill or {}).get('arm')!r}"
+            )
+        else:
+            reasons.append(
+                f"SKILL_CHANGED:skill: {(base_skill or {}).get('arm')!r} "
+                f"-> {(cand_skill or {}).get('arm')!r}"
+            )
+
+    base_policy_value = _budget_policy(baseline_manifest)
+    cand_policy_value = _budget_policy(candidate_manifest)
+    if base_policy_value != cand_policy_value:
+        if "budget_policy" in allowed_factors:
+            allowed.append(
+                f"ALLOWED_FACTOR:budget_policy: {base_policy_value!r} -> {cand_policy_value!r}"
+            )
+        else:
+            reasons.append(
+                f"BUDGET_POLICY_CHANGED:budget_policy: {base_policy_value!r} "
+                f"-> {cand_policy_value!r}"
+            )
+    if skill_differs and not reasons:
+        # Skill 归因的前提：预算政策可比，且没有人工介入。否则差异不能只归因
+        # 于 Skill（M5-A12）。
+        if base_policy_value not in COMPARABLE_BUDGET_POLICIES:
+            reasons.append(
+                "SKILL_ATTRIBUTION_UNSAFE:budget_policy: skill arms must declare one of "
+                + ", ".join(COMPARABLE_BUDGET_POLICIES)
+            )
+        interventions = (
+            baseline_manifest.get("interventions") or candidate_manifest.get("interventions") or {}
+        )
+        if interventions.get("possible") or interventions.get("condition_hash"):
+            reasons.append(
+                "SKILL_ATTRIBUTION_UNSAFE:intervention: manual intervention makes a pure "
+                "skill attribution invalid"
+            )
+
+    # 场景 Run 的实验条件放在 manifest 顶层（benchmark Run 放在
+    # external_benchmark.profile，由 _PROFILE_INVARIANTS 覆盖）。只在一侧确实
+    # 是场景 Run 时比对顶层字段，避免对 benchmark Run 重复报告。
+    if base_workflow is not None or cand_workflow is not None:
+        for field, code in _SCENARIO_TOP_LEVEL_FIELDS:
+            base_value = baseline_manifest.get(field)
+            cand_value = candidate_manifest.get(field)
+            if base_value == cand_value:
+                continue
+            if (base_value is None) != (cand_value is None):
+                reasons.append(
+                    f"IDENTITY_MISSING:{field}: {base_value!r} vs {cand_value!r}"
+                )
+                continue
+            detail = f"{code}:{field}: {base_value!r} -> {cand_value!r}"
+            if field in allowed_factors:
+                allowed.append("ALLOWED_FACTOR:" + detail)
+            else:
+                reasons.append(detail)
+
+    base_provenance = _scoring_provenance(baseline_manifest)
+    cand_provenance = _scoring_provenance(candidate_manifest)
+    if (base_provenance is None) != (cand_provenance is None):
+        reasons.append(
+            f"IDENTITY_MISSING:scoring_provenance: {base_provenance!r} vs {cand_provenance!r}"
+        )
+    elif base_provenance is not None and base_provenance != cand_provenance:
+        for field, factor, code in (
+            ("judge_profile_id", "judge", "JUDGE_CHANGED"),
+            ("rubric_version", "rubric", "RUBRIC_CHANGED"),
+            ("calibration_version", "calibration", "CALIBRATION_CHANGED"),
+            ("input_selector", "judge", "JUDGE_INPUT_CHANGED"),
+        ):
+            if base_provenance.get(field) == cand_provenance.get(field):
+                continue
+            detail = (
+                f"{code}:{field}: {base_provenance.get(field)!r} "
+                f"-> {cand_provenance.get(field)!r}"
+            )
+            if factor in allowed_factors:
+                allowed.append("ALLOWED_FACTOR:" + detail)
+            else:
+                reasons.append(detail)
+    return reasons, allowed
+
+
 def _compare_invariants(
     baseline_manifest: dict[str, Any],
     candidate_manifest: dict[str, Any],
@@ -250,6 +460,12 @@ def compare_run_reports(
         baseline_manifest, candidate_manifest, policy,
     )
     reasons.extend(invariance_reasons)
+    # M5：Workflow / Fixture / Skill / 评分来源 / 预算政策也是实验条件。
+    m5_reasons, m5_allowed = _compare_m5_invariants(
+        baseline_manifest, candidate_manifest, policy,
+    )
+    reasons.extend(m5_reasons)
+    allowed_differences = [*allowed_differences, *m5_allowed]
 
     base_cases = _case_ids(baseline_manifest)
     cand_cases = _case_ids(candidate_manifest)

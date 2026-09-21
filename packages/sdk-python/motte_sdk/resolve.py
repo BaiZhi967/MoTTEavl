@@ -30,6 +30,11 @@ _SECRET_KEYS = {
 }
 _NORMALIZED_SECRET_KEYS = {re.sub(r"[-_]", "", key.lower()) for key in _SECRET_KEYS}
 
+#: M5：这些键由创建期生成并冻结；客户端提交即拒绝（SNAPSHOT_RESERVED）。
+_RESERVED_WORKFLOW_KEYS = frozenset({
+    "workflow_snapshot", "target_snapshot", "fixture_snapshot",
+})
+
 
 class ManifestResolutionError(ValueError):
     """结构化解析失败；code 供 API/CLI 映射为用户可见错误。"""
@@ -61,6 +66,7 @@ def resolve_manifest(
     resolved = deepcopy(manifest or {})
     provider_ref = resolved.get("provider")
     model_ref = resolved.get("model")
+    workflow_snapshot = _resolve_workflow_reference(resolved, resources)
     runtime_snapshot = _resolve_runtime_reference(resolved, resources)
 
     if provider_ref is not None and not isinstance(provider_ref, (str, dict)):
@@ -116,6 +122,15 @@ def resolve_manifest(
         resolved["provider"] = effective
 
     snapshots: dict[str, Any] = {}
+    if workflow_snapshot is not None:
+        # 逐步骤 Scenario：Workflow 快照 + 目标能力要求 + Fixture 固定版本全部
+        # 在创建期冻结，客户端不能伪造（M5-G01/G07）。
+        snapshots["workflow"] = workflow_snapshot["snapshot"]
+        resolved["workflow_snapshot"] = workflow_snapshot["snapshot"]
+        resolved["workflow"] = workflow_snapshot["ref"]
+        resolved["target_snapshot"] = workflow_snapshot["target"]
+        if workflow_snapshot["fixtures"]:
+            resolved["fixture_snapshot"] = workflow_snapshot["fixtures"]
     if runtime_snapshot is not None:
         snapshots["runtime_version"] = runtime_snapshot["snapshot"]
         resolved["runtime_snapshot"] = runtime_snapshot["snapshot"]
@@ -147,6 +162,61 @@ def resolve_manifest(
     if snapshots:
         resolved["resource_snapshots"] = snapshots
     return resolved
+
+
+def _resolve_workflow_reference(
+    resolved: dict[str, Any], resources: Any
+) -> dict[str, Any] | None:
+    """把 manifest.workflow 引用展开为已发布的固定快照。
+
+    没有 workflow 键时返回 None，原有 provider/runtime 路径不受影响。引用
+    必须是已发布版本：draft / 缺失 / 越权都在创建期拒绝，运行期不再解析。
+    """
+    reference = resolved.get("workflow")
+    if reference is None:
+        return None
+    if not isinstance(reference, str):
+        raise ManifestResolutionError(
+            "WORKFLOW_REF_INVALID", "manifest.workflow must be a name@version string"
+        )
+    from motte_scenario.compiler import WorkflowResolutionError, resolve_workflow_ref
+
+    try:
+        compiled = resolve_workflow_ref(reference, resources)
+    except WorkflowResolutionError as error:
+        raise ManifestResolutionError(error.code, str(error)) from error
+    fixtures: dict[str, Any] = {}
+    store = getattr(resources, "fixtures", None)
+    for fixture_ref in compiled.fixture_refs:
+        spec = (
+            store.get(fixture_ref.fixture_id, str(fixture_ref.version))
+            if store is not None else None
+        )
+        key = f"{fixture_ref.fixture_id}@{fixture_ref.version}"
+        if spec is None:
+            raise ManifestResolutionError(
+                "WORKFLOW_FIXTURE_MISSING",
+                f"workflow {reference} references unpublished fixture {key}",
+            )
+        leaked = find_secret_paths(spec)
+        if leaked:
+            raise ManifestResolutionError(
+                "CREDENTIALS_REJECTED",
+                f"fixture {key} contains credential fields: {', '.join(leaked)}",
+            )
+        fixtures[key] = {
+            "fixture_id": fixture_ref.fixture_id,
+            "version": str(fixture_ref.version),
+            "kind": fixture_ref.kind,
+            "content_hash": spec.get("content_hash"),
+            "record": deepcopy(spec),
+        }
+    return {
+        "ref": reference,
+        "snapshot": compiled.snapshot,
+        "target": compiled.target_requirements.model_dump(mode="json"),
+        "fixtures": fixtures,
+    }
 
 
 def _resolve_runtime_reference(
@@ -268,6 +338,13 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
         )
     if contract_suites.RESERVED_KEYS.intersection(manifest):
         raise ManifestResolutionError("SNAPSHOT_RESERVED", "benchmark snapshots are generated at creation")
+    reserved_workflow = _RESERVED_WORKFLOW_KEYS.intersection(manifest)
+    if reserved_workflow:
+        raise ManifestResolutionError(
+            "SNAPSHOT_RESERVED",
+            "workflow/fixture/target snapshots are generated at creation: "
+            + ", ".join(sorted(reserved_workflow)),
+        )
     name, sep, version = scenario_version.rpartition("@")
     scenario = resources.scenarios.get(name, version) if sep else None
     managed = False

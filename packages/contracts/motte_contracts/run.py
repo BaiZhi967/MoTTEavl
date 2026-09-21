@@ -99,6 +99,15 @@ class ResolvedManifest(Contract):
     skills: list[str] = Field(default_factory=list)
     harness: str | None = None
     sandbox: dict[str, Any] | None = None
+    # M5：Scenario 逐步骤驱动。workflow 是**请求引用**（name@version）；
+    # workflow_snapshot / target_snapshot / fixture_snapshot 是创建期生成的
+    # 保留快照，客户端提交这些键一律拒绝（见 motte_sdk.resolve）。
+    workflow: str | None = None
+    workflow_snapshot: dict[str, Any] | None = None
+    target_snapshot: dict[str, Any] | None = None
+    fixture_snapshot: dict[str, dict[str, Any]] | None = None
+    # M5-T08：Skill 对照臂身份（no-skill / skill-v1 / skill-v2 之一）。
+    skill_arm: str | None = None
     # M4：外部 runtime 驱动的 Run（pi-agent / claude-cli / codex-cli …）
     runtime: str | None = None
     runtime_profile: dict[str, Any] | None = None
