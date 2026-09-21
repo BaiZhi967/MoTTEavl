@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .identity import canonical_json_bytes
 from .messages import Contract
@@ -35,8 +35,14 @@ __all__ = [
     "TerminationReason",
     "TerminationRecord",
     "ToolCallRecord",
+    "WORKFLOW_EVIDENCE_SCHEMA_VERSION",
+    "WorkflowActionLog",
+    "WorkflowActionRecord",
+    "WorkflowEvidenceOwner",
+    "WorkflowEvidenceRef",
     "WorkspaceSnapshot",
     "observation_evidence_hash",
+    "workflow_schema_digest",
 ]
 
 
@@ -173,6 +179,107 @@ class ProcessRecord(Contract):
     status: Literal["exited", "signalled", "unknown"] = "unknown"
 
 
+WORKFLOW_EVIDENCE_SCHEMA_VERSION = 1
+
+
+class WorkflowEvidenceOwner(Contract):
+    """Ownership identity of one frozen workflow evidence artifact (M5-T04).
+
+    Evidence is only valid for the Case/Run/attempt that produced it. This
+    contract deliberately does NOT enforce equality with the enclosing
+    observation: assembling a foreign reference must stay representable so
+    the scoring reader can refuse it explicitly (reason
+    foreign_evidence_refused) instead of a mis-assembled observation
+    silently becoming unconstructible.
+    """
+
+    run_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    attempt_id: str | None = None
+    fixture_id: str | None = None
+
+
+class WorkflowActionRecord(Contract):
+    """One observed business action/event in an ordered workflow action log."""
+
+    seq: int = Field(ge=1, strict=True)
+    step: int = Field(ge=1, strict=True)
+    action: str = Field(min_length=1)
+    target: str | None = None
+    status: Literal["succeeded", "failed", "denied"] = "succeeded"
+    call_id: str | None = None
+    detail: str | None = None
+
+
+class WorkflowActionLog(Contract):
+    """Frozen ordered business action log: the payload of action_log evidence."""
+
+    actions: list[WorkflowActionRecord] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def ordered_sequences(self) -> WorkflowActionLog:
+        sequences = [record.seq for record in self.actions]
+        if len(sequences) != len(set(sequences)):
+            raise ValueError("workflow action log seq values must be unique")
+        if sequences != sorted(sequences):
+            raise ValueError("workflow action log must be ordered by seq")
+        return self
+
+
+def workflow_schema_digest(schema: Any) -> str:
+    """Plain sha256 binding of a workflow evidence payload schema."""
+    return hashlib.sha256(canonical_json_bytes(schema)).hexdigest()
+
+
+class WorkflowEvidenceRef(Contract):
+    """Versioned workflow evidence boundary: Artifact + content hash + schema +
+    owner + step.
+
+    A checkpoint reference is usable only when every binding agrees: the
+    referenced artifact bytes hash to artifact_sha256, the decoded payload
+    validates against payload_schema, whose own digest is schema_sha256, and
+    owner/step record where the frozen evidence came from. Scoring resolves a
+    reference exclusively through the observation that declares it (by
+    evidence_id) and never reads a live fixture database, so a foreign or
+    corrupted reference is refused rather than repaired.
+    """
+
+    schema_version: Literal[1] = 1
+    evidence_id: str = Field(min_length=1)
+    evidence_kind: Literal["state", "action_log"]
+    owner: WorkflowEvidenceOwner
+    step: int = Field(ge=1, strict=True)
+    artifact_id: str  # safe relative path inside the artifact store
+    artifact_sha256: str  # plain hex digest of the frozen artifact bytes
+    media_type: str | None = None
+    schema_id: str = Field(min_length=1)
+    payload_schema: dict[str, Any] = Field(default_factory=dict)
+    schema_sha256: str
+    complete: bool = False
+    monitored_scope: tuple[str, ...] = ()
+    recorded_at: datetime | None = None
+
+    @field_validator("artifact_id")
+    @classmethod
+    def safe_artifact_id(cls, value: str) -> str:
+        return validate_safe_relative_path(value)
+
+    @field_validator("artifact_sha256", "schema_sha256")
+    @classmethod
+    def digest_shape(cls, value: str) -> str:
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError(
+                "workflow evidence hashes must be 64-char lowercase hex digests"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def schema_binding(self) -> WorkflowEvidenceRef:
+        if workflow_schema_digest(self.payload_schema) != self.schema_sha256:
+            raise ValueError("payload_schema does not match schema_sha256")
+        return self
+
+
 class FrozenObservation(Contract):
     """Frozen per-case scoring input produced after termination.
 
@@ -197,6 +304,10 @@ class FrozenObservation(Contract):
     processes: list[ProcessRecord] = Field(default_factory=list)
     evidence_hash: str
     recorded_at: datetime | None = None
+    # M5: workflow evidence (state checkpoints / action logs) this case declares
+    # as its own. Empty for non-scenario observations; the scoring reader refuses
+    # entries whose owner does not match this observation.
+    workflow_evidence: list[WorkflowEvidenceRef] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def hash_shape(self) -> FrozenObservation:
