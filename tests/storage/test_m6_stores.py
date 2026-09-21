@@ -144,6 +144,20 @@ def m6(request: pytest.FixtureRequest, tmp_path: Path) -> M6Stores:
     from motte_storage.pg_m6 import PgBaselineStore, PgExperiments, PgGateStore
 
     dsn = request.getfixturevalue("pg_dsn")
+    # module 级共享库 + 固定测试 ID：每个用例前置清空 M6 表（DELETE 的表名
+    # 无法参数化，逐条内联字面量），杜绝 CI 真实 PG 上的跨用例串扰。
+    import psycopg
+
+    with psycopg.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM experiment_specs")
+            cursor.execute("DELETE FROM experiment_cells")
+            cursor.execute("DELETE FROM gate_policies")
+            cursor.execute("DELETE FROM gate_results")
+            cursor.execute("DELETE FROM m6_baselines")
+            cursor.execute("DELETE FROM default_baselines")
+            cursor.execute("DELETE FROM default_baseline_history")
+        connection.commit()
     return M6Stores(
         backend,
         PgExperiments(dsn),
