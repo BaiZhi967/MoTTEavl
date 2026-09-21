@@ -47,9 +47,9 @@
 | 操作 | 状态 | 证据 |
 |---|---|---|
 | SDK 安装（clean venv/wheel） | tested | tests/packaging/test_clean_install.py 8 passed（e4d54bd，主审复跑同结果；CI packaging job 合并后补链接） |
-| SDK 调用（Run/事件/报告/比较/Gate/导出） | 待回填 | tests/sdk/test_client_contract.py、test_wait_and_events.py |
-| CLI local/server 双模式 | 待回填 | tests/cli/test_remote_parity.py |
-| pytest 门禁读取 | 待回填 | tests/sdk/test_pytest_and_exports.py |
+| SDK 调用（Run/事件/报告/比较/Gate/导出） | tested | tests/sdk/test_client_contract.py + test_wait_and_events.py 27 passed（8389659/1db0a54，主审复跑同结果；内存幂等修复 133a2d5 附回归测试） |
+| CLI local/server 双模式 | tested | tests/cli 97 passed 含 test_remote_parity.py 18 项（c4da983，主审复跑同结果；A04 断连零本地副作用）。tests/cli/test_terminalbench_cli.py 2 项为基线同样失败的 Windows O_DIRECTORY 环境族，非 M7 引入 |
+| pytest 门禁读取 | tested | tests/sdk/test_pytest_and_exports.py 26 passed（287a3ca，主审复跑同结果；普通 pytest 零模型/零 Run 有网络 monkeypatch 反证） |
 | 历史导入 dry-run/apply/resume/rollback（合成来源） | tested | tests/migration 19 passed/1 Windows-symlink skip（148e26a，主审复跑同结果）；真实旧导出 not_run |
 | 备份/恢复（SQLite） | tested | tests/integration/test_backup_restore_consistency.py + tests/storage/test_maintenance.py 14 passed/1 PG skip（ec9be0a，主审复跑同结果） |
 | 备份/恢复（PostgreSQL） | not_run | 无本机 PG；CI 未见 pg_dump 断言（如实登记） |
