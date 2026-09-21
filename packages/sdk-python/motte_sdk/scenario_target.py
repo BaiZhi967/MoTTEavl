@@ -48,11 +48,20 @@ class BuiltinTargetSession:
         return {"state": session.state, "session_id": session.session_id}
 
     def send(self, message: str, *, deadline: float | None = None) -> dict[str, Any]:
+        """执行一个 turn；deadline 是单调时钟上的**绝对执行期限**。
+
+        剩余期限直接交给运行时执行（模型调用与工具执行都在它之内），返回后再
+        复核一次：期限已过或运行时报告 per_call_timeout 时，先真正中断，再
+        如实报告本轮超时与停止确认结果。
+        """
         started = self._time.monotonic()
-        outcome = self._runtime.send(message)
+        outcome = self._runtime.send(message, deadline=deadline)
+        reason = outcome.get("termination_reason")
         overshoot = deadline is not None and self._time.monotonic() > deadline
-        if overshoot and outcome.get("termination_reason") == "final_answer":
-            # 一步跨越了期限：先真正中断，再如实报告本轮超时。
+        timed_out = reason == "per_call_timeout" or (
+            overshoot and reason in (None, "final_answer")
+        )
+        if timed_out:
             stop = self.interrupt("send_deadline")
             return {
                 "output": None, "termination_reason": "per_call_timeout",
@@ -61,23 +70,38 @@ class BuiltinTargetSession:
             }
         return {
             "output": outcome.get("final_output"),
-            "termination_reason": outcome.get("termination_reason"),
+            "termination_reason": reason,
             "detail": outcome.get("termination_detail"),
             "turn": outcome.get("turn"),
         }
 
     def observe(self) -> dict[str, Any]:
+        """运行时观察快照：runtime 返回的是**扁平** session 字段（F16）。
+
+        这里把它投影成 TargetPort 的稳定形状，不再假装存在嵌套 session。
+        """
         observed = self._runtime.observe()
         return {
-            "session": observed.get("session"),
-            "turns": (observed.get("session") or {}).get("turns"),
+            "session_id": observed.get("session_id"),
+            "state": observed.get("state"),
+            "begun": observed.get("begun"),
+            "closed": observed.get("closed"),
+            "cancelled": observed.get("cancelled"),
+            "turns": observed.get("turns"),
+            "steps": observed.get("steps"),
+            "tool_calls": observed.get("tool_calls"),
+            "termination_reason": observed.get("termination_reason"),
+            "termination_detail": observed.get("termination_detail"),
+            "final_output": observed.get("final_output"),
             "budget": observed.get("budget"),
+            "usage": observed.get("usage"),
         }
 
     def interrupt(self, reason: str) -> dict[str, Any]:
+        """请求中断并**按事实**报告停止确认：只有已观测到 terminated/closed 才算确认。"""
         self._runtime.interrupt()
         observed = self.observe()
-        state = (observed.get("session") or {}).get("state")
+        state = observed.get("state")
         return {
             "reason": reason, "confirmed": state in {"terminated", "closed"},
             "state": state,
@@ -85,7 +109,7 @@ class BuiltinTargetSession:
 
     def close(self) -> dict[str, Any]:
         self._runtime.close()
-        return {"state": (self.observe().get("session") or {}).get("state")}
+        return {"state": self.observe().get("state")}
 
 
 def open_builtin_session(context: Mapping[str, Any]) -> BuiltinTargetSession:

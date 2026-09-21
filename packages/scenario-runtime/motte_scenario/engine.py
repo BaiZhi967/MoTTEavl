@@ -10,7 +10,10 @@
 * 正常 final answer 只结束**当前 turn**，session 回到可 send 状态；只有
   Workflow 完成、显式 close、取消、不可恢复错误或 Case 预算耗尽才结束。
 * 失败政策 stop_case 立即停止业务；continue_for_evidence 只允许继续只读
-  检查与清理，后续有副作用的动作被记为 skipped，不再次下单/改文件。
+  检查与清理，后续有副作用的动作被记为 skipped，不再次下单/改文件。全局
+  `WorkflowVersion.failure_policy` 与步骤声明取并集：步骤可以额外声明继续
+  取证，但不能把全局的 continue_for_evidence 降级（冻结快照里契约默认值
+  `stop_case` 与显式声明不可区分，取更严格的一方）。
 * 断言求值走受限条件编译器；缺失字段是明确错误（不是 false）。
 """
 from __future__ import annotations
@@ -39,6 +42,19 @@ STEP_SKIPPED = "skipped"
 
 #: 产生业务副作用的步骤类型：进入 evidence-only 模式后不再执行。
 SIDE_EFFECT_KINDS = frozenset({"invoke_fixture_tool", "trigger_fixture_event"})
+
+#: 失败政策取值（与 WorkflowVersion / StepSpec 的 Literal 一致）。
+FAILURE_STOP_CASE = "stop_case"
+FAILURE_CONTINUE_FOR_EVIDENCE = "continue_for_evidence"
+
+
+def _workflow_failure_policy(workflow: Any) -> str:
+    """读取已编译 Workflow 的**全局**失败政策（冻结快照里的那一份）。"""
+    version = getattr(workflow, "workflow", None)
+    policy = getattr(version, "failure_policy", None)
+    if policy is None:
+        policy = getattr(workflow, "failure_policy", None)
+    return policy if policy == FAILURE_CONTINUE_FOR_EVIDENCE else FAILURE_STOP_CASE
 
 
 class EngineError(RuntimeError):
@@ -172,6 +188,8 @@ class WorkflowEngine:
         self.workflow = workflow
         self.fixture = fixture
         self.target = target
+        #: 全局失败政策：步骤没有（或无法证明）显式覆盖时以它为准。
+        self.failure_policy = _workflow_failure_policy(workflow)
         limits = workflow.limits
         self.max_total_steps = int(limits.max_total_steps)
         self.max_turns = int(limits.max_turns)
@@ -406,12 +424,24 @@ class WorkflowEngine:
             depth=depth,
         ))
 
+    def effective_failure_policy(self, step: Any) -> str:
+        """一步失败后的处理政策：步骤声明与全局声明的并集。
+
+        步骤显式声明 continue_for_evidence 时继续取证；全局声明
+        continue_for_evidence 时同样继续——契约把步骤默认值写成 stop_case，
+        冻结快照无法区分"显式 stop_case"与"契约默认值"，因此不允许用步骤
+        默认值悄悄取消全局政策（继续取证本身只开放只读检查，不会放大权限）。
+        """
+        if getattr(step, "failure_policy", None) == FAILURE_CONTINUE_FOR_EVIDENCE:
+            return FAILURE_CONTINUE_FOR_EVIDENCE
+        return self.failure_policy
+
     def _handle_failure(self, step: Any, detail: str | None) -> None:
         if self._terminal is not None:
             # 分派内部已经给出了更精确的终局（例如停止未确认 → needs_review），
             # 通用失败路径不得把它降级成普通失败。
             return
-        if getattr(step, "failure_policy", "stop_case") == "continue_for_evidence":
+        if self.effective_failure_policy(step) == FAILURE_CONTINUE_FOR_EVIDENCE:
             if not self._evidence_only:
                 self._evidence_only = True
                 self._evidence_only_reason = (
@@ -429,7 +459,7 @@ class WorkflowEngine:
         if kind == "send_message":
             return self._dispatch_send(step, deadline)
         if kind == "invoke_fixture_tool":
-            return self._dispatch_tool(step)
+            return self._dispatch_tool(step, deadline)
         if kind == "assert":
             assertions, satisfied = self._evaluate(step.assertions)
             return (
@@ -444,7 +474,7 @@ class WorkflowEngine:
         if kind == "loop":
             return self._dispatch_loop(step, depth)
         if kind == "trigger_fixture_event":
-            return self._dispatch_event(step)
+            return self._dispatch_event(step, deadline)
         raise EngineError("WORKFLOW_STEP_UNSUPPORTED", f"unsupported step kind {kind!r}")
 
     def _dispatch_send(
@@ -480,6 +510,11 @@ class WorkflowEngine:
         reason = result.get("termination_reason")
         if reason == "per_call_timeout" or result.get("timeout") is True:
             return self._timeout_outcome(step)
+        # TargetPort 没有自带期限强制时（或实现忽略了 deadline），返回后同样
+        # 复核期限：越过期限的一轮不能算成功（F05）。
+        overrun = self._deadline_overrun(step, deadline)
+        if overrun is not None:
+            return STEP_FAILED, overrun, []
         if reason in ("max_steps", "max_tool_calls", "wall_time", "token_limit", "cost_limit"):
             return STEP_FAILED, f"target budget stop: {reason}", []
         if reason == "cancelled":
@@ -521,9 +556,17 @@ class WorkflowEngine:
         return self._interrupt
 
     def _dispatch_tool(
-        self, step: Any,
+        self, step: Any, deadline: float,
     ) -> tuple[str, str | None, list[dict[str, Any]]]:
-        if self.remaining_seconds() <= 0:
+        """受控工具的分派边界：分派前核验期限，返回后复核期限（F05）。
+
+        工具是进程内调用，无法中途抢断；因此"返回后复核"不是用来替代期限，
+        而是保证**越过期限的副作用不会被记成成功**：动作确实发生了，如实写入
+        工具结果，但这一步失败，Workflow 不可能 completed。
+        """
+        if self._now() >= deadline:
+            self._emit("step_deadline_expired", step_id=step.step_id, kind=step.kind,
+                       phase="pre_dispatch", remaining_sec=self.remaining_seconds())
             return self._timeout_outcome(step)
         self.tool_calls += 1
         self._emit("fixture_tool_call", step_id=step.step_id, tool=step.tool,
@@ -531,10 +574,36 @@ class WorkflowEngine:
         result = self.fixture.invoke_tool(step.tool, step.arguments, step.tool_mode)
         self.tool_results[step.step_id] = result
         self.step_results[step.step_id] = {"status": "succeeded", "result": result}
+        overrun = self._deadline_overrun(step, deadline)
+        if overrun is not None:
+            return STEP_FAILED, overrun, []
         assertions, satisfied = self._evaluate(step.assertions)
         if not satisfied:
             return STEP_FAILED, "assertion failed after fixture tool", assertions
         return STEP_SUCCEEDED, None, assertions
+
+    def _deadline_overrun(self, step: Any, deadline: float) -> str | None:
+        """动作返回后复核期限；越过期限返回具名失败原因，否则 None。
+
+        全局 wall_time 同时耗尽时终局是 budget_exceeded（与分派前的预算检查
+        同一语义）；只有步骤自己的期限被越过时，终局由失败政策决定。
+        """
+        overrun_sec = self._now() - deadline
+        if overrun_sec <= 0:
+            return None
+        self._emit("step_deadline_exceeded", step_id=step.step_id, kind=step.kind,
+                   phase="post_action", overrun_sec=round(overrun_sec, 6))
+        if self._now() >= self._deadline:
+            self._terminal = (
+                STATUS_BUDGET_EXCEEDED,
+                f"wall_time_sec={self.wall_time_sec} exhausted during step "
+                f"{step.step_id!r}",
+            )
+            return self._terminal[1]
+        return (
+            f"step {step.step_id!r} exceeded its deadline "
+            f"({round(overrun_sec, 6)}s over); the workflow must not report success"
+        )
 
     def _dispatch_checkpoint(
         self, step: Any,
@@ -596,12 +665,19 @@ class WorkflowEngine:
         return STEP_SUCCEEDED, None, outcome_records
 
     def _dispatch_event(
-        self, step: Any,
+        self, step: Any, deadline: float,
     ) -> tuple[str, str | None, list[dict[str, Any]]]:
+        if self._now() >= deadline:
+            self._emit("step_deadline_expired", step_id=step.step_id, kind=step.kind,
+                       phase="pre_dispatch", remaining_sec=self.remaining_seconds())
+            return self._timeout_outcome(step)
         result = self.fixture.apply_event(step.event, step.payload)
         self.step_results[step.step_id] = {"status": "succeeded", "event": step.event}
         visible = result if isinstance(result, (str, int, float, bool, type(None))) else None
         self._emit("fixture_event", step_id=step.step_id, event=step.event, result=visible)
+        overrun = self._deadline_overrun(step, deadline)
+        if overrun is not None:
+            return STEP_FAILED, overrun, []
         assertions, satisfied = self._evaluate(step.assertions)
         if not satisfied:
             return STEP_FAILED, "assertion failed after fixture event", assertions

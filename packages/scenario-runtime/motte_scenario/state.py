@@ -523,13 +523,52 @@ def snapshot_state(
 # -------------------------------------------------------- 目标可见投影
 
 
+def project_visible_value(value: Any) -> Any:
+    """递归投影一个 JSON 值：任何层级的隐藏键都整键剔除。
+
+    只过滤顶层是不够的（F07）：`{"order": {"gold": ...}}` 这类嵌套真值会随
+    可见字段一起进入 Target 的工具结果、checkpoint 与 observation。字典按键
+    剔除、列表逐项递归，标量原样返回；映射结果保持普通 dict，序列变成 list
+    （JSON 形状保持一致，canonical 序列化不受影响）。
+    """
+    if isinstance(value, Mapping):
+        return {
+            str(key): project_visible_value(item)
+            for key, item in value.items()
+            if not is_hidden_field(key)
+        }
+    if isinstance(value, (list, tuple)):
+        return [project_visible_value(item) for item in value]
+    return value
+
+
+def hidden_field_paths(value: Any, *, prefix: str = "") -> list[str]:
+    """递归找出**仍然存在**的隐藏键路径（防御性检查，正常应恒为空）。
+
+    投影之后仍在的隐藏键说明有一条可见数据通道没有按同一规则过滤；给出
+    具体路径（`order.gold` / `items[0].checker_truth`）便于定位与取证。
+    """
+    found: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if is_hidden_field(key):
+                found.append(path)
+            found.extend(hidden_field_paths(item, prefix=path))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found.extend(hidden_field_paths(item, prefix=f"{prefix}[{index}]"))
+    return found
+
+
 def minimal_visible_fields(
     payload: Mapping[str, Any], *, allowed: Sequence[str] | None = None
 ) -> dict[str, Any]:
-    """业务工具结果的最小可见投影：隐藏字段永远不出现。
+    """业务工具结果的最小可见投影：隐藏字段（含嵌套）永远不出现。
 
     allowed 是平台作者声明的白名单（顺序即输出顺序）；即使它错误地写了隐藏
-    字段名，这里也不会带出真值（纵深防御，契约层另有拒绝）。
+    字段名，这里也不会带出真值（纵深防御，契约层另有拒绝）。白名单只约束
+    顶层字段，值的内部一律递归投影。
     """
     if not isinstance(payload, Mapping):
         raise ValueError("payload must be a mapping")
@@ -538,7 +577,7 @@ def minimal_visible_fields(
     for key in keys:
         if key not in payload or is_hidden_field(key):
             continue
-        visible[str(key)] = payload[key]
+        visible[str(key)] = project_visible_value(payload[key])
     return visible
 
 
@@ -716,11 +755,13 @@ __all__ = [
     "FixtureInstance",
     "PrivateTruth",
     "StateSnapshot",
+    "hidden_field_paths",
     "is_hidden_field",
     "is_link_path",
     "list_sqlite_tables",
     "minimal_visible_fields",
     "owner_token_digest",
+    "project_visible_value",
     "read_json_state",
     "snapshot_sqlite_state",
     "snapshot_state",

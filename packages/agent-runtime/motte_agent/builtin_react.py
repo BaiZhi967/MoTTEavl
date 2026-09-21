@@ -12,6 +12,9 @@
 单次调用期限 / 可观察 token 与 cost）每轮与每次调用前检查，停止原因具体化。
 - 单次调用期限在运行时以线程期限强制：到期即停止循环（终止原因
   per_call_timeout）；被放弃的底层调用由 Provider 传输超时兜底。
+- `send(..., deadline=...)` 传入的**绝对单调时钟期限**覆盖整轮（含模型调用与
+  工具执行）：期限已过就不再发模型请求，模型响应过期就不再执行工具。
+  one-shot 的 `run` / `run_agent` 不传期限，行为与期限支持之前逐字段一致。
 - ``max_output_tokens`` 预算直接进入 ModelRequest（Provider 侧再约束上限）。
 - ``AgentFatalError``（副作用后证据边界失败）不被当作工具错误回灌，直接中止。
 ``run(prompt)`` 保留 M0 兼容返回；新链路使用 ``run_agent`` 拿完整结果。
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from typing import Any, Callable
 
 from motte_contracts.messages import Message, ModelRequest
@@ -81,6 +85,7 @@ class BuiltinReActRuntime(AgentRuntime):
         should_cancel: Callable[[], bool] | None = None,
         declared_tools: tuple[str, ...] | None = None,
         per_call_self_enforced: bool = False,
+        now: Callable[[], float] | None = None,
     ) -> None:
         if mode not in PROMPT_VERSIONS:
             raise ValueError(f"unsupported agent mode: {mode!r}")
@@ -102,6 +107,10 @@ class BuiltinReActRuntime(AgentRuntime):
         # complete 已自带单次调用期限强制（executor 包装层，R3 #1）：期限、线程与
         # 调用日志结算都在主流程内完成，运行时不再二次套线程。
         self._per_call_self_enforced = per_call_self_enforced
+        #: 单调时钟来源：期限判定只用它（测试可注入可控时钟，不靠等待时长）。
+        self._now: Callable[[], float] = now or time.monotonic
+        #: 当前 turn 的绝对期限；one-shot 入口不设置（None = 无期限）。
+        self._turn_deadline: float | None = None
         # M5-T03a：会话状态（messages / 已执行 call_id / budget / event seq）
         # 归 BuiltinSession 所有；运行时只持有当前 case 的容器引用，不保存任何
         # 跨 case 共享的可变默认值。
@@ -144,13 +153,17 @@ class BuiltinReActRuntime(AgentRuntime):
         self._last_call_stop = None
         return session
 
-    def send(self, prompt: str) -> dict[str, Any]:
+    def send(self, prompt: str, *, deadline: float | None = None) -> dict[str, Any]:
         """执行一个 turn：可含多次模型/工具迭代，正常 final answer 结束本 turn。
 
         返回 one-shot 结果的超集：``steps`` 是本次 turn 消耗的步数（累计值在
         ``session`` 视图与 ``observe()`` 中），``events`` 是本次 turn 的事件，
         ``messages`` 是**会话完整历史**（即模型实际看到的上下文）。
         会话未 begin / 已关闭 / 已终止时抛 ``SessionStateError``。
+
+        deadline 是单调时钟上的**绝对期限**（None = 不限）：期限一到停止本
+        turn（终止原因 per_call_timeout），且期限之后产生的模型响应不再触发
+        任何工具执行。
         """
         session = self._session
         if session is None:
@@ -162,12 +175,20 @@ class BuiltinReActRuntime(AgentRuntime):
             )
         if not isinstance(prompt, str):
             raise ValueError("send() prompt must be a string")
+        if deadline is not None and (
+            isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+        ):
+            raise ValueError("send() deadline must be a monotonic timestamp")
         start = len(session.events)
+        previous = self._turn_deadline
+        self._turn_deadline = None if deadline is None else float(deadline)
         try:
             outcome = self._run_turn(session, prompt)
         except BaseException as error:  # noqa: BLE001 - 异常后会话不得保持可发送
             session.mark_failed(error)
             raise
+        finally:
+            self._turn_deadline = previous
         outcome["events"] = list(session.events[start:])
         outcome["turn"] = session.turns
         outcome["session"] = session.view()
@@ -296,6 +317,11 @@ class BuiltinReActRuntime(AgentRuntime):
                     if self._cancelled():
                         termination_reason = "cancelled"
                         break
+                    expired = self._turn_deadline_expired(step)
+                    if expired is not None:
+                        # 期限之后到达的响应不得再执行任何工具（含写入）
+                        termination_reason, detail = expired
+                        break
                     stop = self._run_native_tool_call(session, call, step)
                     if stop is not None:
                         termination_reason, detail = stop, "stopped during tool calls"
@@ -332,6 +358,11 @@ class BuiltinReActRuntime(AgentRuntime):
                 termination_reason = "cancelled"
                 detail = "cancelled between model response and tool execution"
                 break
+            expired = self._turn_deadline_expired(step)
+            if expired is not None:
+                # 期限之后到达的响应不得再执行任何工具（含写入）
+                termination_reason, detail = expired
+                break
             stop = self._run_legacy_tool(session, decision, step)
             if stop is not None:
                 termination_reason, detail = stop, "stopped during tool call"
@@ -359,7 +390,28 @@ class BuiltinReActRuntime(AgentRuntime):
             "prompt_version": PROMPT_VERSIONS[self.mode],
         }
 
-    # ---------------------------------------------------------------- 内部
+    # ---------------------------------------------------------------- 期限
+
+    def _effective_call_deadline(self) -> float | None:
+        """本次模型调用的有效期限：单次调用配置与 turn 期限取更早者。"""
+        deadline = self.budget.per_call_deadline(now=self._now())
+        if self._turn_deadline is not None:
+            deadline = (
+                self._turn_deadline if deadline is None
+                else min(deadline, self._turn_deadline)
+            )
+        return deadline
+
+    def _turn_deadline_expired(self, step: int) -> tuple[str, str] | None:
+        """turn 期限是否已过；已过则给出与 per_call_timeout 一致的停止原因。"""
+        if self._turn_deadline is None or self._now() < self._turn_deadline:
+            return None
+        self._record(
+            "turn_deadline_exceeded", step=step, phase="before_tool",
+            deadline=self._turn_deadline,
+        )
+        self.budget.per_call_timeout_enforced = True
+        return "per_call_timeout", "turn deadline exceeded before tool execution"
 
     def _call_model(self, context: list[Message], step: int) -> dict[str, Any] | None:
         request = ModelRequest(
@@ -396,16 +448,18 @@ class BuiltinReActRuntime(AgentRuntime):
         from .errors import ProviderCallTimeout
 
         if self._per_call_self_enforced:
+            if self._turn_deadline is not None and self._now() >= self._turn_deadline:
+                self._record_timeout(step)
+                return None
             try:
                 return self._complete(request)
             except ProviderCallTimeout:
                 self._record_timeout(step)
                 return None
 
-        deadline = self.budget.per_call_deadline()
+        deadline = self._effective_call_deadline()
         if deadline is None:
             return self._complete(request)
-        import time as _time
 
         box: dict[str, Any] = {}
 
@@ -415,9 +469,13 @@ class BuiltinReActRuntime(AgentRuntime):
             except BaseException as error:  # noqa: BLE001 - 线程边界内原样传递
                 box["error"] = error
 
+        remaining = deadline - self._now()
+        if remaining <= 0:
+            # 期限在分派前就已耗尽：一次模型请求都不发。
+            self._record_timeout(step)
+            return None
         thread = threading.Thread(target=runner, daemon=True, name="agent-model-call")
         thread.start()
-        remaining = deadline - _time.monotonic()
         thread.join(timeout=max(0.0, remaining))
         if thread.is_alive():
             self._record_timeout(step)

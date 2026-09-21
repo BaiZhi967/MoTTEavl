@@ -654,6 +654,77 @@ def test_private_truth_is_not_visible_to_the_target(runtime):
     ) == {"order_id": "order-1"}
 
 
+def test_nested_hidden_truth_never_reaches_the_target_visible_projection(runtime):
+    """F07：dict / list 里的嵌套 gold 也必须被剔除，而不是只过滤顶层。"""
+    spec = json_spec(
+        initial_data={
+            "order": {"id": "order-1", "status": "active", "gold": "nested-secret"},
+            "line_items": [
+                {"sku": "a", "gold": "list-secret"},
+                {"sku": "b", "checker_truth": {"status": "cancelled"}},
+            ],
+            "expected_total": {"amount": 10},
+            "_checker_truth": {"status": "cancelled"},
+        },
+        visible_fields=("order", "line_items"),
+    )
+    instance = prepare(runtime, spec, owner_token="owner-a")
+
+    state = runtime.visible_state(instance, owner_token="owner-a")
+    assert state == {
+        "order": {"id": "order-1", "status": "active"},
+        "line_items": [{"sku": "a"}, {"sku": "b"}],
+    }
+    assert "secret" not in json.dumps(state, ensure_ascii=False)
+    assert "gold" not in json.dumps(state, ensure_ascii=False)
+    assert "checker" not in json.dumps(state, ensure_ascii=False)
+
+    result = runtime.visible_tool_result(instance, owner_token="owner-a", tool="orders.get")
+    assert result == state
+    assert "secret" not in json.dumps(result, ensure_ascii=False)
+
+    # 没有白名单时同样递归投影：隐藏键连同其内容一起消失
+    unprojected = prepare(
+        runtime,
+        json_spec(
+            initial_data={
+                "order": {"status": "active", "gold": "secret"},
+                "rows": [[{"id": "o1", "gold": "deep"}]],
+            },
+            visible_fields=(),  # 没有白名单：全部业务字段仍然递归投影
+        ),
+        case_id="case-nested",
+        owner_token="owner-a",
+    )
+    nested = runtime.visible_state(unprojected, owner_token="owner-a")
+    assert nested == {"order": {"status": "active"}, "rows": [[{"id": "o1"}]]}
+
+
+def test_minimal_visible_fields_projects_containers_consistently():
+    payload = {
+        "order": {"status": "active", "gold": "secret"},
+        "items": [{"sku": "a", "expected_status": "cancelled"}, {"sku": "b"}],
+        "counts": {"nested": {"checker": {"truth": 1}, "n": 2}},
+        "_checker_truth": "cancelled",
+    }
+    assert minimal_visible_fields(payload) == {
+        "order": {"status": "active"},
+        "items": [{"sku": "a"}, {"sku": "b"}],
+        "counts": {"nested": {"n": 2}},
+    }
+    assert minimal_visible_fields(payload, allowed=("order", "items")) == {
+        "order": {"status": "active"},
+        "items": [{"sku": "a"}, {"sku": "b"}],
+    }
+    # 白名单写错隐藏字段名也不会带出真值
+    assert minimal_visible_fields(
+        payload, allowed=("order", "gold", "_checker_truth")
+    ) == {"order": {"status": "active"}}
+    # 非映射入参仍然是明确错误
+    with pytest.raises(ValueError):
+        minimal_visible_fields(["not", "a", "mapping"])
+
+
 def test_cleanup_removes_only_owned_resources(runtime):
     shared = runtime.anchor / "shared"
     shared.mkdir(parents=True)
