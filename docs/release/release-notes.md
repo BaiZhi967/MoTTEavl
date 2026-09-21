@@ -1,6 +1,6 @@
 # MoTTEavl Release Notes — M7（SDK、历史迁移、备份恢复与发布）
 
-> 状态：draft → RC 信息在最终门禁后回填。版本命名 `0.1.0-m7-rc1`（语义化前缀），
+> 状态：**RC 冻结**（离线门禁全绿后）。版本命名 `0.1.0-m7-rc1`（语义化前缀），
 > 正式 `stable_supported` 以支持矩阵证据为准，不因本文件发布而自动成立。
 
 ## M7 变更总览
@@ -55,10 +55,10 @@
 
 | 项 | 值 |
 |---|---|
-| RC commit | <最终门禁后回填> |
-| uv.lock | <回填 sha256 前 16> |
+| RC commit | `b5a024e`（M7 分支 tip；merge commit 见 M7.md §9） |
+| uv.lock | sha256:4136e441069f253e |
 | wheels | `make wheels` → dist/（6 包，大小见构建日志） |
-| Web dist | `pnpm --dir apps/web build` |
+| Web dist | `pnpm --dir apps/web build`（本机通过，CI 同命令） |
 | Docker image | motteavl:local（本机未构建，CI/发布环境回填） |
 | Alembic head | 0015_m7_platform_tables |
 | OpenAPI | api/openapi.json（make openapi-check 无漂移） |
