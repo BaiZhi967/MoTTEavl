@@ -1,4 +1,4 @@
-.PHONY: install test lint audit replay worker web-build web-test compose-config check dev clean
+.PHONY: install test lint audit replay worker web-build web-test compose-config check dev clean wheels
 
 # 统一开发入口；与 CI 使用完全相同的命令（见 .github/workflows/ci.yml）
 
@@ -52,3 +52,13 @@ dev:
 clean:
 	rm -rf .pytest_cache .ruff_cache
 	find . -type d -name __pycache__ -not -path './node_modules/*' -not -path './.venv/*' -exec rm -rf {} +
+
+# 交付 wheel（protocol §8）：SDK/API 侧闭包的六个包，落 dist/（.gitignore 已忽略）。
+# 构建命令与 uv.lock 固定记录进 release notes；clean venv 安装测试见 tests/packaging/。
+wheels:
+	uv build --out-dir dist packages/contracts
+	uv build --out-dir dist packages/sdk-python
+	uv build --out-dir dist packages/storage
+	uv build --out-dir dist packages/cli
+	uv build --out-dir dist packages/evaluators
+	uv build --out-dir dist packages/trace

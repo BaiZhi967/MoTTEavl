@@ -862,6 +862,16 @@ requires-dist = [{ name = "pyyaml", specifier = ">=6,<7" }]
 name = "motte-cli"
 version = "0.1.0"
 source = { editable = "packages/cli" }
+dependencies = [
+    { name = "motte-sdk" },
+    { name = "motte-storage" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "motte-sdk", editable = "packages/sdk-python" },
+    { name = "motte-storage", editable = "packages/storage" },
+]
 
 [[package]]
 name = "motte-contracts"
@@ -884,10 +894,14 @@ version = "0.1.0"
 source = { editable = "packages/evaluators" }
 dependencies = [
     { name = "jsonschema" },
+    { name = "motte-contracts" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "jsonschema", specifier = ">=4.23,<5" }]
+requires-dist = [
+    { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "motte-contracts", editable = "packages/contracts" },
+]
 
 [[package]]
 name = "motte-harness"
@@ -925,6 +939,29 @@ requires-dist = [{ name = "motte-contracts", editable = "packages/contracts" }]
 name = "motte-sdk"
 version = "0.1.0"
 source = { editable = "packages/sdk-python" }
+dependencies = [
+    { name = "httpx" },
+    { name = "motte-contracts" },
+]
+
+[package.optional-dependencies]
+pytest = [
+    { name = "pytest" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115,<1" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "motte-contracts", editable = "packages/contracts" },
+    { name = "pytest", marker = "extra == 'pytest'", specifier = ">=9" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30,<1" },
+]
+provides-extras = ["pytest", "server"]
 
 [[package]]
 name = "motte-skill"
@@ -935,6 +972,21 @@ source = { editable = "packages/skill-runtime" }
 name = "motte-storage"
 version = "0.1.0"
 source = { editable = "packages/storage" }
+dependencies = [
+    { name = "motte-contracts" },
+]
+
+[package.optional-dependencies]
+postgresql = [
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "motte-contracts", editable = "packages/contracts" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgresql'", specifier = ">=3" },
+]
+provides-extras = ["postgresql"]
 
 [[package]]
 name = "motte-trace"

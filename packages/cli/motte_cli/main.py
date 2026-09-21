@@ -700,10 +700,16 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
     replay.add_argument("--json", action="store_true")
 
-    from motte_provider.config import smoke_kinds
+    try:
+        from motte_provider.config import smoke_kinds
+        smoke_kind_hint = ", ".join(smoke_kinds())
+    except ModuleNotFoundError:
+        # 干净安装（protocol §8：cli 闭包 = sdk + storage）下 provider 不在场，
+        # --help 不应因此失败；真正执行 live-smoke 时命令处理器会再按需导入。
+        smoke_kind_hint = "需安装 motte-provider"
 
     smoke = sub.add_parser("live-smoke", help="显式发起一次真实 Provider 调用（会产生费用）")
-    smoke.add_argument("--provider", required=True, help=f"provider kind：{', '.join(smoke_kinds())}（连字符拼写兼容）")
+    smoke.add_argument("--provider", required=True, help=f"provider kind：{smoke_kind_hint}（连字符拼写兼容）")
     smoke.add_argument("--model", required=True)
     smoke.add_argument("--base-url", required=True)
     smoke.add_argument("--credentials", default=None, help="凭据文件 profile 名（~/.motte/credentials.toml），优先于环境变量")
