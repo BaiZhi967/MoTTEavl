@@ -72,6 +72,8 @@ def workflow_manifest(**overrides):
                               "content_hash": "sha256:" + "2" * 64},
         },
         "agent": "builtin-agent@1",
+        "agent_config": {"mode": "legacy-json", "budget": {"max_steps": 4}},
+        "provider": {"kind": "openai-compatible", "model": "test-model"},
     }
     payload.update(overrides)
     return payload

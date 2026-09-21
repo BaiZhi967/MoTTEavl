@@ -370,7 +370,10 @@ class WorkflowEngine:
         except ConditionError as error:
             status, detail = STEP_FAILED, f"{error.code}: {error}"
         except Exception as error:  # noqa: BLE001 - 业务动作异常如实记为失败
-            status, detail = STEP_FAILED, f"{type(error).__name__}: {error}"
+            # 结构化错误码必须活着进入证据：上层需要按码分流，而不是解析文本。
+            code = getattr(error, "code", None)
+            prefix = code if isinstance(code, str) and code else type(error).__name__
+            status, detail = STEP_FAILED, f"{prefix}: {error}"
         duration_ms = round((self._now() - started) * 1000, 3)
         self._record(seq, step, status, depth, detail, assertions, duration_ms)
         self._emit(

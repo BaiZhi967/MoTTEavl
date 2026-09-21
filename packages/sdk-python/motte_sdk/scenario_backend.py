@@ -34,30 +34,13 @@ SCENARIO_CAPABILITIES: dict[str, bool] = {
 
 
 def target_kind_of(manifest: dict[str, Any]) -> str:
-    """解析目标身份：runtime 名字，或内置 Agent 的 builtin-agent。
+    """解析目标身份；实现只有一份（motte_scenario.target_identity）。"""
+    from motte_scenario.target_identity import TargetIdentityError, target_kind_of as _kind
 
-    两种声明同时出现是配置冲突（不允许猜）；都没有时明确失败。
-    """
-    runtime = manifest.get("runtime")
-    agent = manifest.get("agent")
-    if runtime and agent:
-        raise ExecutionBackendError(
-            "SCENARIO_TARGET_AMBIGUOUS",
-            "a scenario run declares both manifest.runtime and manifest.agent",
-        )
-    if runtime:
-        name = str(runtime).partition("@")[0]
-        if not name:
-            raise ExecutionBackendError(
-                "SCENARIO_TARGET_INVALID", f"runtime reference is not name@version: {runtime!r}"
-            )
-        return name
-    if agent:
-        return str(agent).partition("@")[0]
-    raise ExecutionBackendError(
-        "SCENARIO_TARGET_REQUIRED",
-        "scenario runs require a target: manifest.runtime or manifest.agent",
-    )
+    try:
+        return _kind(manifest)
+    except TargetIdentityError as error:
+        raise ExecutionBackendError(error.code, str(error)) from error
 
 
 def validate_scenario_manifest(manifest: dict[str, Any]) -> None:
@@ -105,10 +88,35 @@ def validate_scenario_manifest(manifest: dict[str, Any]) -> None:
         require_capabilities(target, capabilities)
     except TargetCapabilityError as error:
         raise ExecutionBackendError(error.code, str(error)) from error
+    if kind == "builtin-agent":
+        _validate_builtin_agent_target(manifest)
+
+
+def _validate_builtin_agent_target(manifest: dict[str, Any]) -> None:
+    """内置 Agent 目标的最小配置：模式受支持、模型路径已解析。"""
+    from motte_contracts.agent_tasks import AGENT_MODES
+
+    config = manifest.get("agent_config")
+    if not isinstance(config, dict):
+        raise ExecutionBackendError(
+            "SCENARIO_TARGET_CONFIG_REQUIRED",
+            "builtin-agent scenario runs require manifest.agent_config",
+        )
+    mode = config.get("mode")
+    if mode not in AGENT_MODES:
+        raise ExecutionBackendError(
+            "SCENARIO_TARGET_MODE_UNSUPPORTED",
+            "agent mode must be one of " + ", ".join(AGENT_MODES) + f"; got {mode!r}",
+        )
+    if not isinstance(manifest.get("provider"), dict):
+        raise ExecutionBackendError(
+            "SCENARIO_TARGET_PROVIDER_REQUIRED",
+            "builtin-agent scenario runs require a resolved provider snapshot",
+        )
 
 
 def _build_scenario(run: dict[str, Any]) -> ExecutionHandle:
-    from motte_scenario.engine import ScenarioCaseExecutor
+    from motte_scenario.executor import ScenarioCaseExecutor
 
     executor = ScenarioCaseExecutor(run)
 
@@ -155,5 +163,13 @@ def install_scenario_backend(*, available: bool | None = None) -> ExecutionBacke
 #: 必须明确 unavailable：创建期就返回 EXECUTION_BACKEND_UNAVAILABLE，而不是
 #: 让 Run 进入分派后才失败，也绝不静默改选 replay/direct-llm。
 SCENARIO_BACKEND_AVAILABLE = False
+
+# 内置 Agent 目标 adapter 与 backend 一起安装：目标不可用时创建期就拒绝。
+try:
+    from .scenario_target import install_builtin_target_adapter as _install_builtin_target
+
+    _install_builtin_target()
+except ImportError:  # pragma: no cover - motte-agent 缺失时保持目标不可用
+    pass
 
 install_scenario_backend(available=SCENARIO_BACKEND_AVAILABLE)
