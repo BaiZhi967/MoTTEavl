@@ -7,7 +7,11 @@
 ## SQLite：一致备份（M7 推荐）
 
 ```
-# Python API（CLI --consistent 接线随 T03 批次提供；当前先经 Python 调用）
+# CLI（M7-T03 起接线；--consistent = 一致备份，flag-less 保持 legacy 在线备份）
+motte backup --consistent --target var/backups --db var/runs.db \
+    --artifacts-root var/artifacts
+
+# Python API
 uv run python - <<'PY'
 from motte_storage.factory import create_run_store
 from motte_storage.maintenance import consistent_backup
@@ -32,6 +36,12 @@ PY
 ## SQLite：staging 恢复（M7 推荐）
 
 ```
+# CLI（M7-T03 起接线；--staging 恢复到全新目录，不触碰线上库）
+motte restore --source var/backups --staging var/staging-restore --db var/runs.db
+motte restore-guard status --db var/staging-restore/runs.db   # 守卫只读检查
+motte restore-guard clear --yes --db var/staging-restore/runs.db  # 显式解除
+
+# Python API
 uv run python - <<'PY'
 from motte_storage.maintenance import restore_staging, clear_restore_guard
 report = restore_staging("var/backups", "var/staging-restore")
@@ -67,11 +77,16 @@ tar -czf artifacts-$(date +%Y%m%d).tgz var/artifacts/
 
 ## Artifact 清理 / GC（M7）
 
-TTL 清理（旧入口，仅按 mtime）与 M7 GC 并存；M7 GC 见
-`motte_storage.gc`：默认 dry-run（`plan_gc`），apply（`apply_gc(confirm=True)`）
+TTL 清理（旧入口，仅按 mtime；CLI `cleanup-artifacts` 保留）与 M7 GC 并存；
+M7 GC 见 `motte_storage.gc`：默认 dry-run（`plan_gc`），apply（`apply_gc(confirm=True)`）
 在维护屏障内执行，被引用/被 pin（needs_review、imported、baseline 引用）/
 导入审计工件永不删除，每次删除写 tombstone（`motte_gc_tombstones`）保留
-hash/bytes/原因/时间。CLI `gc plan/apply` 接线随 T03 批次提供。
+hash/bytes/原因/时间。CLI `gc plan/apply` 自 M7-T03 起接线：
+
+```
+motte gc plan --artifacts-root var/artifacts --ttl-days 90 --db var/runs.db
+motte gc apply --confirm --artifacts-root var/artifacts --db var/runs.db
+```
 
 演练：`uv run pytest -q tests/storage/test_maintenance.py
 tests/integration/test_backup_restore_consistency.py tests/security/test_gc_retention.py`。
