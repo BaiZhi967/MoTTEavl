@@ -572,6 +572,11 @@ class ExperimentService:
                 run_id = cell.get("run_id")
                 if run_id and self._cancel_owned_run(run_id, reason):
                     cancelled_runs.append(run_id)
+                # 自有 Run 已取消（或已是终态）：cell 状态同步为 cancelled，
+                # 让实验进度如实反映"该单元不再会产生结果"。
+                if run_id:
+                    self.store.experiments.cancel_allocated_cell(cell_id)
+                    cancelled_cells.append(cell_id)
         cells = self.store.experiments.list_cells(experiment_id, resolved_version)
         return {
             "experiment_id": experiment_id,

@@ -1,0 +1,23 @@
+{
+  "experiment_id": "m6-accept-experiment-3",
+  "version": "1",
+  "created": true,
+  "allocated": 1,
+  "skipped_existing": 0,
+  "failed": [],
+  "cells": [
+    {
+      "cell_id": "sha256:4aee7a542e534ec37f6f3a2267682f9bd7e005a93e0ff0081c84eaf6ad2b3dd4",
+      "experiment_id": "m6-accept-experiment-3",
+      "experiment_version": "1",
+      "repeat_index": 0,
+      "factor_assignment": {
+        "model_profile": "m6-cli-model"
+      },
+      "allocation_status": "allocated",
+      "run_id": "run-exp-4aee7a542e534ec37f6f3a22",
+      "superseding_run_ids": [],
+      "failure_reason": null
+    }
+  ]
+}

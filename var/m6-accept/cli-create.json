@@ -1,0 +1,28 @@
+{
+  "experiment_id": "m6-accept-experiment",
+  "version": "1",
+  "created": true,
+  "allocated": 0,
+  "skipped_existing": 0,
+  "failed": [
+    {
+      "cell_id": "sha256:e60f2a6fef6f971d4d438858cf2169ff707e1b543e55b54acfe546babfd5a6d4",
+      "reason": "ExperimentError: RUN_CONFIG_INVALID: max_output_tokens exceeds model ceiling 512"
+    }
+  ],
+  "cells": [
+    {
+      "cell_id": "sha256:e60f2a6fef6f971d4d438858cf2169ff707e1b543e55b54acfe546babfd5a6d4",
+      "experiment_id": "m6-accept-experiment",
+      "experiment_version": "1",
+      "repeat_index": 0,
+      "factor_assignment": {
+        "model_profile": "m6-cli-model"
+      },
+      "allocation_status": "failed",
+      "run_id": null,
+      "superseding_run_ids": [],
+      "failure_reason": "RUN_CONFIG_INVALID: max_output_tokens exceeds model ceiling 512"
+    }
+  ]
+}

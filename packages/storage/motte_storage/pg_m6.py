@@ -225,6 +225,18 @@ class PgExperiments:
             return False
         return outcome["reset"]
 
+
+    def cancel_allocated_cell(self, cell_id: str) -> dict[str, Any]:
+        """实验层专用：allocated → cancelled（Run 已由本实验取消）。"""
+        def mutate(cell: dict[str, Any]) -> None:
+            if cell.get("allocation_status") != "allocated":
+                raise ValueError(
+                    "cell " + cell_id + " is " + repr(cell.get("allocation_status"))
+                    + ", expected 'allocated'"
+                )
+            cell["allocation_status"] = "cancelled"
+        return self._mutate_cell(cell_id, mutate)
+
     def record_superseding(self, cell_id: str, run_id: str) -> dict[str, Any]:
         def mutate(cell: dict[str, Any]) -> None:
             superseding = list(cell.get("superseding_run_ids") or ())

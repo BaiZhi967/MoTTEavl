@@ -359,7 +359,10 @@ def test_cancel_scopes_to_own_experiment() -> None:
         )
     )
     result = service.cancel("exp-a", reason="operator stopped it")
-    assert result["cancelled_cells"] == [cells_a[1]["cell_id"]]
+    # 自有 Run 取消后，已分配的 cell 状态联动为 cancelled（不再产生结果）。
+    assert set(result["cancelled_cells"]) == {
+        cells_a[0]["cell_id"], cells_a[1]["cell_id"],
+    }
     assert result["cancelled_runs"] == [owned_run]
     assert store.runs.get(owned_run)["status"] == "cancelled"
     assert store.experiments.get_cell(cells_a[1]["cell_id"])["allocation_status"] == "cancelled"
@@ -368,8 +371,8 @@ def test_cancel_scopes_to_own_experiment() -> None:
     assert b_cell["allocation_status"] == "allocated"
     assert store.runs.get(b_cell["run_id"])["status"] == "queued"
     progress = result["progress"]
-    assert progress["cancelled"] == 1
-    assert service.status("exp-a")["progress"]["allocated"] == 1
+    assert progress["cancelled"] == 2
+    assert service.status("exp-a")["progress"]["allocated"] == 0
 
 
 def test_cancel_allocating_cell_with_existing_run() -> None:
