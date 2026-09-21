@@ -10,6 +10,8 @@
 
 M5 后续开发入口：[2026-09-21 详细执行计划](../superpowers/plans/2026-09-21-m5-execution.md)、[开工交接](../superpowers/plans/2026-09-21-m5-kickoff.md)、[开发 Agent 完整提示词](../prompts/M5-development-agent.md)。计划状态与实际验收记录分开维护。
 
+M6 开发入口：[2026-09-21 权威执行计划](../superpowers/plans/2026-09-21-m6-execution.md)、[开工交接](../superpowers/plans/2026-09-21-m6-kickoff.md)、[开发 Agent 完整提示词](../prompts/M6-development-agent.md)。M6 当前仍为 planned；以 `docs/verification/M6.md` 的 current summary 和实际证据为准。
+
 后续执行细化（2026-09-19）：[M1–M7 开发执行总计划](../superpowers/plans/2026-09-19-m1-m7/README.md)已按更新后的代码基线编排逐包任务、依赖、文件触点、测试反例、完整覆盖表与阶段 review；[计划审阅记录](../superpowers/plans/2026-09-19-m1-m7/REVIEW.md)说明当前实现差异和规划验证。本次范围仅为详细计划与计划 review，不改变以下功能目标的待实施状态。
 
 M3 开工交接（2026-09-20）：[当前详细任务安排](../superpowers/plans/2026-09-20-m3-kickoff.md)及[开发 Agent 提示词](../prompts/M3-development-agent.md)。实现状态与证据边界以各阶段验证记录为准，原规划基线不代表最新代码状态。
