@@ -150,13 +150,16 @@ price_table_version / price_table_sha256 / price_table / transport / frozen_at
 
 ## 6. 已知阻断与未验收项
 
-- **跨包阻断（R9）**：多指标 Judge pass 走 `POST /api/v1/gates` 会抛未处理的
-  `ValueError: attempted 3 exceeds selected 1`（3 条指标 ScoreSet 行被当成 3 个
-  attempted case）。位置：`motte_eval/coverage.py:31`，由
-  `motte_sdk/comparisons.py:376`（`candidate_summary`，attempted 在 `:355` 按 ScoreSet
-  行数计）经 `:430`（`evaluate_gate`）调用。`coverage.py` / `comparisons.py` 不在 R8
-  范围，未修、未绕行：`tests/api/test_judge_flow.py` 用运行时 `pytest.xfail` 精确记录
-  该失败，只有同一错误才被标 xfail。
+- **多指标 Gate 覆盖（已修复，commit 8055516）**：多指标 Judge pass 走
+  `POST /api/v1/gates` 曾抛未处理的 `ValueError: attempted 3 exceeds selected 1`
+  （3 条指标 ScoreSet 行被当成 3 个 attempted case）。修复在调用方
+  `motte_sdk/comparisons.py`：`denominator=False` 的行不计入分母，attempted 按
+  **distinct case_id** 计，且一个 Case 只有在其全部计入分母的指标都通过时才算通过
+  （与 `goal-achieved` 的合取一致，accuracy 保持比例 <= 1）。
+  `motte_eval/coverage.py` 有意不改：它的 "attempted 超过 selected" 拒绝是正确的
+  不变量，之前是调用方在说谎。`tests/api/test_judge_flow.py` 的 xfail 钉已移除，
+  改为真实断言，并保留两个真实拒绝反例（覆盖不足 0.5、以及三条指标中一条失败
+  => accuracy=0.0 且 Gate 拒绝）。
 - pairwise 的公共提交、校准作业的公共提交、校准报告 API 均未接线（库内路径可用）。
 - 真实付费调用未发生（本环境无授权）；真实至少 30 条人工复核校准资料仍缺；
   真实 PostgreSQL 未验证。
