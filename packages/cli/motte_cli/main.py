@@ -662,6 +662,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "--published-at", dest="published_at",
         help="发布时刻（只用于生成候选引用；缺省取当前 UTC）",
     )
+    skill = sub.add_parser(
+        "skill", help="Skill 版本资源：发布 / 列表（与 API 同一校验；不执行入口）",
+    )
+    skill_sub = skill.add_subparsers(dest="skill_command", required=True)
+    sk_publish = skill_sub.add_parser(
+        "publish", help="发布不可变 SkillVersion（同内容幂等、异内容冲突）",
+    )
+    sk_publish.add_argument("file", help="SkillVersion JSON 文件")
+    sk_publish.add_argument("--json", action="store_true")
+    sk_publish.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    sk_list = skill_sub.add_parser("list", help="列出已发布 Skill 版本（只读）")
+    sk_list.add_argument("--json", action="store_true")
+    sk_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
     fixture = sub.add_parser(
         "fixture", help="Fixture 版本资源：发布 / 列表（与 API 同一校验；不执行 fixture）",
     )
@@ -1512,7 +1526,57 @@ def _resources(args):
     from motte_storage.factory import create_resource_store
     from motte_storage.resource_store import SQLiteResourceStore
 
-    return SQLiteResourceStore(args.db) if args.db else create_resource_store()
+    from motte_storage.factory import default_content_store
+
+    if args.db:
+        # 与 create_resource_store() 同一装配：API 与 Worker 必须指向同一个内容目录
+        return SQLiteResourceStore(args.db, content_store=default_content_store())
+    return create_resource_store()
+
+
+def _skill_command(args) -> int:
+    """skill publish/list：与 API 同一契约、同一 content_hash。
+
+    发布只写不可变版本资源；不执行入口、不注入、不创建 Run、不调用模型。
+    """
+    from motte_cli import skills as sk
+    from motte_storage.resource_store import ResourceConflictError
+
+    command = args.skill_command
+    if command == "list":
+        items = _resources(args).skills.list()
+        if getattr(args, "json", False):
+            print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+            return 0
+        if not items:
+            print("（没有已发布的 Skill 版本）")
+        for item in items:
+            print(
+                f"  {item.get('skill_id')}@{item.get('version')}  "
+                f"kind={item.get('kind')} hash={item.get('content_hash')}"
+            )
+        return 0
+
+    if command == "publish":
+        try:
+            document = sk.load_document(args.file)
+            stored = sk.publish_skill(_resources(args), document)
+        except sk.SkillDocumentError as error:
+            return _error(error.code, str(error), **({"fields": error.fields} if error.fields else {}))
+        except ResourceConflictError as error:
+            return _error("RESOURCE_CONFLICT", str(error))
+        except ValueError as error:
+            return _error(type(error).__name__.upper(), str(error))
+        if getattr(args, "json", False):
+            print(json.dumps(stored, ensure_ascii=False))
+        else:
+            print(
+                f"published {stored.get('skill_id')}@{stored.get('version')} "
+                f"kind={stored.get('kind')} content_hash={stored.get('content_hash')}"
+            )
+        return 0
+
+    return _error("CONTRACT_INVALID", f"unknown skill command: {command}")
 
 
 def _fixture_command(args) -> int:
@@ -1877,6 +1941,8 @@ def main(argv=None):
     if args.command == "judge":
         return _judge_command(args)
 
+    if args.command == "skill":
+        return _skill_command(args)
     if args.command == "fixture":
         return _fixture_command(args)
     if args.command == "workflow":

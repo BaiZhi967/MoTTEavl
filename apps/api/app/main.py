@@ -282,6 +282,25 @@ def _fixture_publication_record(
     return {**fixture.model_dump(mode="json"), "content_hash": computed}, defaulted, None
 
 
+def _error_code_for(error: Exception) -> str:
+    """把领域异常映射成稳定错误码：优先看显式 code，否则用类名的 SCREAMING_SNAKE。
+
+    领域异常里的 code 是库内 snake_case（例如 skill_resource_store_required）。
+    公共错误体统一用 SCREAMING_SNAKE（与 JUDGE_EVIDENCE_MISSING /
+    WORKFLOW_FIXTURE_MISSING 同一套词汇），所以这里只改对外拼写，不改库内取值。
+    """
+    explicit = getattr(error, "code", None)
+    if isinstance(explicit, str) and explicit:
+        return explicit.upper()
+    name = type(error).__name__
+    out: list[str] = []
+    for index, char in enumerate(name):
+        if char.isupper() and index and not name[index - 1].isupper():
+            out.append("_")
+        out.append(char.upper())
+    return "".join(out) or "CONTRACT_INVALID"
+
+
 def _dataset_summary(record: dict[str, Any]) -> dict[str, Any]:
     """Project immutable identity and governance without returning large case payloads."""
     evaluation = record.get("eval") if isinstance(record.get("eval"), dict) else {}
@@ -1995,6 +2014,68 @@ def create_app(
         """已发布 Skill 版本目录：只读仓库，零模型调用、零执行。"""
         items = resources.skills.list()
         return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/skills/versions", status_code=201)
+    def publish_skill_version(body: dict):
+        """发布不可变 SkillVersion：同内容幂等，同版本异内容 409。
+
+        验收 F-05：以前没有发布入口（旧注释说"API 进程尚未接内容存储"，但
+        create_resource_store() 早已装配 default_content_store()），于是 Skill
+        的注入与三臂对照在产品面完全不可达。校验规则与 /api/v1/skills/validate
+        同源：内容 hash 由服务端固定，客户端提交不一致的 hash 立即拒绝；草稿、
+        未固定依赖与凭证字段都在这里被具名拒绝。
+        """
+        if not isinstance(body, dict):
+            return _error_json(422, "CONTRACT_INVALID", "skill body must be an object")
+        managed = sorted(set(body).intersection({"_deleted"}))
+        if managed:
+            return _error_json(
+                422, "SERVER_MANAGED_FIELD",
+                f"server-managed fields are not accepted: {managed}",
+            )
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
+        from motte_skill.versions import (
+            SkillContentHashMismatch,
+            SkillVersion,
+            skill_content_hash,
+            verify_dependency_refs,
+        )
+        from pydantic import ValidationError
+
+        candidate = deepcopy(body)
+        if candidate.get("lifecycle", "published") == "draft":
+            return _error_json(
+                422, "SKILL_NOT_PUBLISHED",
+                "only published skill versions can be stored; a draft has no identity to freeze",
+            )
+        if not candidate.get("published_at"):
+            candidate["published_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        try:
+            skill = SkillVersion.model_validate(candidate)
+        except ValidationError as error:
+            return _error_json(
+                422, "SKILL_INVALID",
+                f"skill document is not a valid version: {error.error_count()} field error(s)",
+                fields=_contract_field_errors(error),
+            )
+        try:
+            verify_dependency_refs(skill.dependency_refs)
+            content_hash = skill_content_hash(skill)
+            if skill.content_hash is not None and skill.content_hash != content_hash:
+                raise SkillContentHashMismatch("skill content_hash does not match its content")
+        except (SkillContentHashMismatch, ValueError) as error:
+            return _error_json(422, "SKILL_INVALID", str(error))
+        record = {**skill.model_dump(mode="json"), "content_hash": content_hash}
+        try:
+            return resources.publish_skill(record)
+        except ResourceConflictError:
+            raise
+        except ValueError as error:
+            # 内容存储缺字节、资源 hash 漂移、依赖未固定/不可解析都是具名拒绝；
+            # 类名就是稳定 code（SkillResourceMissing -> SKILL_RESOURCE_MISSING）。
+            return _error_json(422, _error_code_for(error), str(error))
 
     @application.get("/api/v1/skills/{skill_id}/versions/{version}")
     def get_skill_version(skill_id: str, version: str):
