@@ -288,7 +288,8 @@ class RunService:
             if cancelled is not None:
                 return cancelled
             self._append_scoring_pass(
-                run_id, scores, source="initial", final_status="completed"
+                run_id, scores, source="initial",
+                final_status=self._with_stop_uncertainty(run, results, "completed"),
             )
         except Exception as error:
             return self._fail_or_quarantine(run_id, error)
@@ -1383,6 +1384,23 @@ class RunService:
             and (run.get("manifest") or {}).get("workflow_snapshot") is not None
         )
 
+    def _with_stop_uncertainty(
+        self, run: dict[str, Any], results: list[dict[str, Any]], default: str,
+    ) -> str:
+        """任何 Case 停止未确认 → needs_review，否则保持 ``default``。
+
+        M5 全局约束：未知停止 = needs_review，现场保留、不自动重放。只改 Run 级
+        终态：Case 证据、清理结论与评分行都不在这里改写；取消由
+        ``_honor_cancellation`` 在落终态前优先处理，绝不覆盖 cancelled。
+        """
+        if not self._scenario_shaped(run):
+            return default
+        from .scenario_backend import stop_unconfirmed
+
+        if any(stop_unconfirmed(row.get("result")) for row in results):
+            return "needs_review"
+        return default
+
     def _begin_case_attempt(
         self, run: dict[str, Any], case_id: str, *, trial_id: str | None = None,
     ) -> dict[str, Any]:
@@ -1863,7 +1881,9 @@ class RunService:
         rows = self.store.case_runs.list_for_run(run_id)
         errors = [row["result"]["error"] for row in rows
                   if isinstance(row.get("result"), dict) and row["result"].get("error")]
-        final_status = "failed" if errors else "completed"
+        final_status = self._with_stop_uncertainty(
+            run, rows, "failed" if errors else "completed",
+        )
         try:
             scores = self._score_results(run_id, rows, False)
             cancelled = self._honor_cancellation(run_id)

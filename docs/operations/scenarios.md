@@ -5,7 +5,8 @@
 评分入口 → 报告 → 离线 rescore（tests/integration/test_scenario_run_backend.py、
 tests/integration/test_business_regression_slice.py）。SCENARIO_BACKEND_AVAILABLE=True；
 创建期仍然具名拒绝不满足能力的配置，显式 install_scenario_backend(available=False)
-可以关闭新执行，不静默改选其他 backend。
+可以关闭新执行，不静默改选其他 backend。R9 收口后停止未确认的 Case 会让 Run 也以
+needs_review 收尾（见 5.1）。
 
 ## 1. 对象与身份
 
@@ -153,11 +154,29 @@ checkpoint 仍可取证（空状态）。创建期与执行期共用同一个判
 （`motte_scenario.executor.workflow_requires_fixture`），因此 Run 不会被"先接受、
 执行时才说缺 primary binding"。
 
-## 5. 已知缺口
+## 5. Run 级终态与已知缺口
 
-1. 公开执行只覆盖公共路径已交付的部分：needs_review 的 Case 会让 Run 以
-   completed + insufficient 评分收尾（现场保留、不自动重放），Run 级
-   needs_review 转换留给后续收口。
-2. 生产环境仍需按 fixture 登记真实业务工具实现；未登记的工具/事件具名拒绝，
+### 5.1 停止未确认 → Run 级 needs_review（R9 收口）
+
+全局约束「未知停止为 needs_review，保留现场、不自动重放」现在落实到 Run 级：
+
+- 判据是 Case 结果里的执行事实（``motte_sdk.scenario_backend.stop_unconfirmed``）：
+  ``scenario.needs_review=true`` / ``scenario.status="needs_review"`` 或
+  ``scenario.interrupt.confirmed=false``。任何 Case 命中，Run 就以
+  **needs_review** 收尾（``RunService._with_stop_uncertainty``），普通 Worker
+  不再领取，绝不自动重放。
+- 该转换只改 Run 级终态：Case 结果、冻结 Observation、被保留的 fixture
+  （interrupted 清理记录仍在）与 insufficient 评分行都保持原样，不伪造 pass。
+- 普通业务失败（目标/断言失败、工具具名拒绝，停止已确认）不升级成
+  needs_review：执行出错仍是 failed；目标失败是**质量**事实，由 Gate 判定
+  （M6-A17），既有 completed 结算不变。
+- 取消优先：取消请求在落终态前被 ``_honor_cancellation`` 消费，Run 停在
+  cancelled，即使某个 Case 已标记 needs_review。
+- 回归：``tests/integration/test_scenario_run_backend.py`` 的 Run 级终态四条
+  （needs_review / 执行失败仍 failed / 业务失败不升级 / 取消优先）。
+
+### 5.2 其余缺口
+
+1. 生产环境仍需按 fixture 登记真实业务工具实现；未登记的工具/事件具名拒绝，
    不伪造成功。
-3. Skill 注入与三臂对照（T07/T08）不在本包范围内。
+2. Skill 注入与三臂对照（T07/T08）不在本包范围内。

@@ -783,3 +783,160 @@ def test_fixture_less_message_workflow_agrees_between_creation_and_execution(
     )
     assert refused.status_code == 422, refused.text
     assert refused.json()["error"]["code"] == "SCENARIO_FIXTURE_REQUIRED"
+
+
+# ----------------------------------------------------------- Run 级终态（M5 全局约束）
+
+
+def unconfirmed_stop_workflow() -> dict:
+    """步骤期限极短、目标自报超时且无法确认已停止的 Workflow。"""
+    return workflow_body(steps=[
+        {"step_id": "request", "kind": "send_message", "message": "请取消订单 order-1",
+         "timeout_sec": 0.02},
+        {"step_id": "final-check", "kind": "checkpoint", "assertions": [
+            {"op": "eq", "path": "state.order.status", "value": "cancelled"},
+        ]},
+    ])
+
+
+def test_run_settles_needs_review_when_a_case_stop_cannot_be_confirmed(
+    environment, targets, tools,
+):
+    """停止未确认：Case 是 needs_review 时 Run 必须以 needs_review 收尾。
+
+    M5 全局约束（docs/operations/scenarios.md 5.1）：未知停止 = needs_review，
+    现场保留、不自动重放。Case 证据、被保留的 fixture 与 insufficient 评分
+    都保持原样，只有 Run 级终态升级；普通 Worker 不再领取该 Run。
+    """
+    targets.set_behavior("slow-unconfirmed")
+    publish_order_scenario(
+        environment.client, environment.resources, workflow=unconfirmed_stop_workflow(),
+        metrics=[no_refund_metric(), order_cancelled_metric()],
+    )
+    created = create_order_run(environment.client)
+    run_id = created.json()["id"]
+
+    settled = run_worker(environment.app, run_id)
+    assert settled["status"] == "needs_review", settled
+    view = environment.client.get(f"/api/v1/runs/{run_id}").json()
+    assert view["status"] == "needs_review"
+    assert view["finished_at"]  # 终态：已归档，不是还在跑的 Run
+    assert environment.store.events.list_for_run(run_id)[-1]["type"] == "needs_review"
+
+    # Case 级事实不被 Run 级转换改写：needs_review 结果、保留现场与不完整证据。
+    envelope = case_row(environment, run_id)["result"]
+    assert envelope["scenario"]["status"] == "needs_review"
+    assert envelope["scenario"]["needs_review"] is True
+    assert envelope["scenario"]["interrupt"] == {
+        "reason": "step_timeout:request", "confirmed": False,
+    }
+    assert envelope["cleanup"] and envelope["cleanup"][0]["interrupted"] is True
+    frozen = envelope["frozen_observation"]
+    assert frozen["coverage"]["complete"] is False
+    assert frozen["termination"]["reason"] == "per_call_timeout"
+
+    # 评分仍是不足证据：Run 升级绝不伪造 pass。
+    scores = scores_by_metric(view)
+    assert scores["no-refund"]["metric_status"] == "insufficient_evidence"
+    assert scores["no-refund"]["reason"] == "action_log_incomplete"
+    assert scores["no-refund"]["passed"] is None
+    assert view["scoring_pass"]["summary"]["passed"] == 0
+
+    # 不自动重放：needs_review 是终态，普通 Worker 轮询不会再次领取。
+    worker = WorkerLoop(
+        environment.app.state.run_service, reporter=WorkerReporter(enabled=False),
+    )
+    assert worker.claim_and_execute() is None
+    assert len(targets.sessions) == 1
+    assert environment.client.get(f"/api/v1/runs/{run_id}").json()["status"] == "needs_review"
+
+
+def test_an_execution_failure_with_a_confirmed_stop_still_settles_failed(
+    environment, targets, tools,
+):
+    """无停止不确定性的执行失败仍是 failed，绝不升级成 needs_review。"""
+    exploding_kind = "r9a-exploding-agent"
+
+    def open_exploding_session(_context):  # noqa: ANN001 - adapter 协议
+        raise RuntimeError("target process could not start")
+
+    register_target_adapter(TargetAdapter(
+        kind=exploding_kind,
+        capabilities=lambda _manifest: TargetCapabilities(
+            kind=exploding_kind, multi_turn=True, tool_modes=("real",), tools=(),
+            interrupt=True, evidence=("events",),
+        ),
+        open_session=open_exploding_session,
+    ), replace=True)
+    try:
+        publish_order_scenario(
+            environment.client, environment.resources,
+            workflow=workflow_body(target_requirements={
+                "multi_turn": True, "min_turns": 1, "required_tools": [],
+                "tool_modes": ["real"], "interrupt": True, "evidence": ["events"],
+            }),
+            metrics=[no_refund_metric()],
+        )
+        created = create_order_run(environment.client, agent=exploding_kind)
+        assert created.status_code == 202, created.text
+        run_id = created.json()["id"]
+        settled = run_worker(environment.app, run_id)
+    finally:
+        unregister_target_adapter(exploding_kind)
+
+    assert settled["status"] == "failed", settled
+    view = environment.client.get(f"/api/v1/runs/{run_id}").json()
+    assert view["status"] == "failed"
+    assert view["error"]["type"] == "RuntimeError"
+    # 失败证据里没有 needs_review：这不是停止不确定，不能被升级。
+    assert environment.store.events.list_for_run(run_id)[-1]["type"] == "failed"
+
+
+def test_a_failed_workflow_without_stop_uncertainty_is_not_needs_review(
+    environment, targets, tools,
+):
+    """业务失败（停止已确认）不升级：Case failed，Run 保持既有 completed 结算。
+
+    M6-A17：目标失败是**质量**事实（由 Gate 判定），不是执行失败；既有终态
+    规则（无 error → completed）不变。这里防的是把任何 Case failed 都误升级
+    成 needs_review。
+    """
+    targets.set_behavior("cancel-without-confirmation")
+    publish_order_scenario(
+        environment.client, environment.resources,
+        workflow=workflow_body(failure_policy="continue_for_evidence"),
+        metrics=[no_refund_metric(), order_cancelled_metric()],
+    )
+    created = create_order_run(environment.client)
+    run_id = created.json()["id"]
+    settled = run_worker(environment.app, run_id)
+
+    envelope = case_row(environment, run_id)["result"]
+    assert envelope["scenario"]["status"] == "failed"
+    assert envelope["scenario"]["needs_review"] is False
+    assert settled["status"] == "completed", settled
+    assert environment.client.get(f"/api/v1/runs/{run_id}").json()["status"] == "completed"
+
+
+def test_cancellation_wins_over_an_unconfirmed_stop(environment, targets, tools):
+    """取消优先：Case 是 needs_review 时 Run 仍必须停在 cancelled。"""
+    targets.set_behavior("slow-unconfirmed")
+    publish_order_scenario(
+        environment.client, environment.resources, workflow=unconfirmed_stop_workflow(),
+        metrics=[no_refund_metric(), order_cancelled_metric()],
+    )
+    created = create_order_run(environment.client)
+    run_id = created.json()["id"]
+
+    def cancel_at_case_finished(progress):  # noqa: ANN001 - 进程观察者协议
+        if progress.get("event") == "case_finished":
+            environment.service.cancel(run_id, reason="operator request")
+
+    environment.service.add_progress_observer(cancel_at_case_finished)
+    settled = run_worker(environment.app, run_id)
+
+    assert settled["status"] == "cancelled", settled
+    view = environment.client.get(f"/api/v1/runs/{run_id}").json()
+    assert view["status"] == "cancelled"
+    # Case 自己的 needs_review 证据仍在，但 Run 终态是 cancelled。
+    assert case_row(environment, run_id)["result"]["scenario"]["status"] == "needs_review"

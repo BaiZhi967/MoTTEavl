@@ -227,6 +227,31 @@ def _build_scenario(run: dict[str, Any]) -> ExecutionHandle:
     )
 
 
+# ---------------------------------------------------------------- 终态判定
+
+
+def stop_unconfirmed(result: Any) -> bool:
+    """Case 结果是否报告"停止未确认"（M5 全局约束）。
+
+    执行器把停止确定性冻结在 Case 结果里：``scenario.needs_review``、
+    ``scenario.status == "needs_review"`` 或
+    ``scenario.interrupt.confirmed is False``。Run 级终态据此升级为
+    needs_review（现场保留、不自动重放），但**不改写** Case 证据、被保留的
+    fixture 或不足证据的评分行。
+    """
+    if not isinstance(result, Mapping):
+        return False
+    scenario = result.get("scenario")
+    if not isinstance(scenario, Mapping):
+        return False
+    if scenario.get("needs_review") is True:
+        return True
+    if scenario.get("status") == "needs_review":
+        return True
+    interrupt = scenario.get("interrupt")
+    return isinstance(interrupt, Mapping) and interrupt.get("confirmed") is False
+
+
 # ---------------------------------------------------------------- 评分装配
 
 #: 缺失证据时使用的稳定原因码（只产生 insufficient_evidence，绝不伪造 pass）。
