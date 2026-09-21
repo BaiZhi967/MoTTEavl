@@ -24,6 +24,10 @@ def test_builtin_backend_registry_is_explicit_and_versioned():
         ("external-benchmark", "1"),
         ("pi-agent", "1"),
         ("replay", "1"),
+        # M5-T05：逐步骤 Scenario 是**外层**执行 backend（scenario@1），内层 target
+        # 身份（builtin-agent / pi-agent / ...）单独冻结在 manifest 里。它必须出现
+        # 在这份显式清单中，才能保证没有 backend 是隐式注册进来的。
+        ("scenario", "1"),
     ]
     assert backend_for("replay", "1").capabilities["safe_to_repeat"] is True
 
