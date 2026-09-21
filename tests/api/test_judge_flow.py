@@ -7,8 +7,9 @@
 * provider factory 不可用时**明确拒绝**提交，且不留下任何作业；
 * GET / 历史 / 取消零模型调用，取消幂等；
 * Invocation 的 purpose / owner / job / pass 身份在存储、API 与报告中一致；
-* 多指标 Judge pass 走 evaluate_gate 的跨包阻断（coverage.py）在本文件里被
-  精确记录，不做静默绕行（见文件末尾的 xfail）。
+* 多指标 Judge pass 的 Gate 跨包口径（R9 修复）：覆盖与质量按 Case 计并与
+  motte_eval 的 ``denominator`` 口径一致——同一 Case 的多条指标行不冒充多个
+  attempted case；覆盖不足的反例仍然必须拒绝。
 """
 from __future__ import annotations
 
@@ -59,6 +60,18 @@ class ScriptedProvider:
             "response_id": f"resp-{len(self.calls)}",
             "metering": {"attempts": 1},
         }
+
+
+class OneCriterionFailingProvider(ScriptedProvider):
+    """三条准则都判了，但有一条明确失败：Case 级合取必须据此判该 Case 未通过。"""
+
+    def complete(self, request):  # noqa: ANN001 - 协议方法
+        response = super().complete(request)
+        answer = json.loads(response["content"])
+        answer["criteria"][1] = {
+            **answer["criteria"][1], "passed": False, "reason": "constraint broken",
+        }
+        return {**response, "content": json.dumps(answer)}
 
 
 class RecordingFactory:
@@ -409,13 +422,17 @@ def test_get_and_history_of_an_unknown_job_are_404(tmp_path):
 
 # ==================================================================== 跨包阻断
 
-def test_gate_on_a_multi_metric_judge_pass_is_not_blocked_by_case_coverage(tmp_path):
-    """多指标 Judge pass 的 gate 不应被"3 个 ScoreSet 行 vs 1 个 case"误判。
+POLICY_FOR_ONE_CASE = {
+    "metric": "accuracy", "op": "gte", "threshold": 0.5, "required_coverage": 1.0,
+}
 
-    这是 R4 标记的**跨包**阻断：motte_eval/coverage.py 把 3 行 ScoreSet 当成
-    3 个 attempted case，于是 ComparisonService.candidate_summary 对 1 个 case 的
-    Run 抛出 ValueError("attempted 3 exceeds selected 1")。coverage.py /
-    comparisons.py 不在 R8 的改动范围，这里只精确记录，不静默绕行。
+
+def test_gate_on_a_multi_metric_judge_pass_is_not_blocked_by_case_coverage(tmp_path):
+    """多指标 Judge pass 的 gate 不再被"3 个 ScoreSet 行 vs 1 个 case"误判。
+
+    R9 修复：候选覆盖与质量按 **Case** 计，并与 motte_eval 的 denominator 口径
+    一致——同一 Case 的 3 条指标行只算一个 attempted case，因此 1 个 case 的 Run
+    不会抛出 ValueError("attempted 3 exceeds selected 1")。
     """
     store, resources, provider, _api_factory, client = environment(tmp_path)
     client.post("/api/v1/judges", json=submit_body())
@@ -425,14 +442,94 @@ def test_gate_on_a_multi_metric_judge_pass_is_not_blocked_by_case_coverage(tmp_p
         store.runs.get("run-1")["current_scoring_pass_id"]
     )
     assert len(scores) == 3  # 一个 case 的三条指标行
+    assert all(score["denominator"] is True for score in scores)
 
-    try:
-        response = client.post(
-            "/api/v1/gates",
-            json={"run_id": "run-1", "policy": {"min_pass_rate": 0.5}},
-        )
-    except ValueError as error:
-        if "exceeds selected" not in str(error):
-            raise
-        pytest.xfail(f"R9 coverage blocker: {error}")
-    assert response.status_code in (200, 422)
+    response = client.post(
+        "/api/v1/gates",
+        json={"run_id": "run-1", "policy": {"min_pass_rate": 0.5}},
+    )
+    assert response.status_code == 200, response.text
+
+    coverage = client.post(
+        "/api/v1/gates",
+        json={"run_id": "run-1", "policy": dict(POLICY_FOR_ONE_CASE)},
+    )
+    assert coverage.status_code == 200, coverage.text
+    body = coverage.json()
+    summary = body["coverage_summary"]
+    assert summary["selected"] == 1
+    assert summary["attempted"] == 1  # 3 条指标行 ≠ 3 个 case
+    assert summary["not_attempted"] == 0
+    assert summary["coverage"] == 1.0
+    # 三条准则全部通过 = 该 Case 通过；accuracy 是 Case 口径的 ratio，不会超过 1。
+    assert summary["metric_values"]["accuracy"] == 1.0
+    assert body["passed"] is True, body["rules"]
+
+
+def test_gate_quality_is_a_per_case_conjunction_not_a_metric_row_count(tmp_path):
+    """一条准则失败 = 该 Case 未通过：accuracy 不会超过 1，也不会被多行抬分。"""
+    provider = OneCriterionFailingProvider()
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    resources = InMemoryResourceStore()
+    seed_model(resources)
+    make_run(store)
+    client = TestClient(create_app(
+        store, resource_store=resources,
+        judge_provider_factory=RecordingFactory(provider),
+    ))
+    client.post("/api/v1/judges", json=submit_body())
+    worker = run_worker(store, provider)
+    assert worker.claim_and_execute()["status"] == "completed"
+    assert len(store.score_sets.list_for_pass(
+        store.runs.get("run-1")["current_scoring_pass_id"]
+    )) == 3
+
+    response = client.post(
+        "/api/v1/gates",
+        json={"run_id": "run-1", "policy": dict(POLICY_FOR_ONE_CASE)},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    summary = body["coverage_summary"]
+    assert summary["attempted"] == 1
+    assert summary["metric_values"]["accuracy"] == 0.0
+    assert body["passed"] is False
+    threshold = next(rule for rule in body["rules"] if rule["id"] == "metric_threshold")
+    assert threshold["passed"] is False
+    assert "accuracy=0.0 (ratio) not gte 0.5" in threshold["reason"]
+
+
+def test_gate_still_refuses_when_multi_metric_case_coverage_is_incomplete(tmp_path):
+    """覆盖不足仍然拒绝：两条 case 只判了一条，多指标行不能把缺的 case 补上。"""
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    resources = InMemoryResourceStore()
+    seed_model(resources)
+    make_run(store, case_ids=("case-1", "case-2"), saved=("case-1",))
+    provider = ScriptedProvider()
+    client = TestClient(create_app(
+        store, resource_store=resources,
+        judge_provider_factory=RecordingFactory(provider),
+    ))
+    client.post("/api/v1/judges", json=submit_body())
+    worker = run_worker(store, provider)
+    assert worker.claim_and_execute()["status"] == "completed"
+    scores = store.score_sets.list_for_pass(
+        store.runs.get("run-1")["current_scoring_pass_id"]
+    )
+    assert len(scores) == 3  # 已判的 case-1 的三条指标行
+
+    response = client.post(
+        "/api/v1/gates",
+        json={"run_id": "run-1", "policy": dict(POLICY_FOR_ONE_CASE)},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    summary = body["coverage_summary"]
+    assert summary["selected"] == 2
+    assert summary["attempted"] == 1
+    assert summary["not_attempted"] == 1
+    assert summary["coverage"] == 0.5
+    assert body["passed"] is False
+    rules = {rule["id"]: rule for rule in body["rules"]}
+    assert rules["coverage"]["passed"] is False
+    assert "coverage 0.5 < required 1.0" in rules["coverage"]["reason"]

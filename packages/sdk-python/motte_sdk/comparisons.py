@@ -14,6 +14,14 @@ review R12 修复：
 - Gate 需要终态 Run；baseline 可引用不可变快照（baselines store）而非
   只能是活 Run；
 - 输出记录所用 RunReportRef（run + scoring_pass + 证据 hash）。
+
+review R9 修复：
+
+- 无冻结 aggregate 时，``candidate_summary`` 的覆盖与质量按 **Case** 计，
+  并与 ``motte_eval`` 的 ``denominator`` 口径一致：多指标 pass 的同一 Case
+  只算一个 attempted case，非分母行不占分母，全部入分母行都通过才算通过；
+  不再把 3 条指标行当成 3 个 attempted case 而抛
+  ``ValueError: attempted N exceeds selected M``。
 """
 from __future__ import annotations
 
@@ -75,6 +83,37 @@ def _trial_row_counts(scores: list[dict[str, Any]]) -> tuple[int, int, int, int]
     valid = [row for row in rows if row.get("denominator") is True]
     passed = [row for row in valid if row.get("passed") is True]
     return len(rows), len(valid), len(passed), len(rows) - len(valid)
+
+
+def _case_row_counts(scores: list[dict[str, Any]]) -> tuple[int, int]:
+    """ScoreSet 行 → (attempted cases, passed cases)：与 motte_eval 分母口径一致。
+
+    覆盖和质量都按 **Case** 计，而不是按指标行计（review R9）：
+
+    - ``denominator=False`` 的非分母行（insufficient_evidence /
+      evaluator_error / not_applicable）不占分母，也不参与 Case 判定；
+    - 一个 Case 的多条指标行只算**一个** attempted case（按 case_id 去重）；
+    - 一个 Case 只有在**它的全部入分母行都通过**时才算通过。这正是
+      ``motte_eval.workflow.goal-achieved`` 的合取口径（任一分量确认失败
+      即整题失败），也保证注册指标 ``accuracy``（unit=ratio、分母
+      selected_cases）不会超过 1；
+    - 缺 ``denominator`` 的历史单指标行按"有 passed 即入分母"读取：该字段
+      是后加的，旧行不能因此掉出分母。
+    """
+    attempted: set[str] = set()
+    failed: set[str] = set()
+    for score in scores:
+        if score.get("denominator") is False:
+            continue
+        case_id = score.get("case_id")
+        if not isinstance(case_id, str) or not case_id:
+            continue
+        if score.get("passed") is None:
+            continue
+        attempted.add(case_id)
+        if score.get("passed") is not True:
+            failed.add(case_id)
+    return len(attempted), len(attempted - failed)
 
 
 def _terminal_bench_summary(
@@ -351,10 +390,7 @@ class ComparisonService:
             scores = self.store.score_sets.list_for_pass(
                 str(record.get("id")),
             ) if self.store.score_sets is not None else []
-            correct = sum(1 for score in scores if score.get("passed") is True)
-            attempted = sum(
-                1 for score in scores if score.get("passed") is not None
-            )
+            attempted, correct = _case_row_counts(scores)
             expectations = (run.get("manifest") or {}).get("case_expectations")
             if isinstance(expectations, dict) and expectations:
                 unscored = any(
