@@ -40,8 +40,9 @@ T09 给出的接线面是：WorkerLoop 里构造 ScoringJobService、恢复时�
 recover_interrupted()、无 Run 可领时调 claim_and_run()。已核实两个事实：
 
 1. `ScoringJobService(store, *, provider_factory=None, artifact_reader=None)` 的
-   provider_factory 是可选的，缺省时作业仍可提交/领取/恢复，但**无法真正调用
-   Judge 模型**——"能用但空转"不算接线完成。
+   provider_factory 参数虽然可选，但 **submit() 在 provider_factory 为 None 时明确
+   拒绝提交**（本文件早先写成"仍可提交、只会空转"是错的，审查 F19 已更正）。
+   这条保护必须保留：不能为了方便接线而取消它，否则会产出永远无法执行的作业。
 2. `RunService.__init__` 只持有 `store`，**没有资源仓库**（model profile /
    provider connection / price table）。因此 Worker 侧今天拿不到按 JudgeSpec
    固定模型解析连接的入口，写不出正确的 provider_factory。
