@@ -157,6 +157,66 @@ def _next_revision(record: dict[str, Any], expected_revision: int) -> dict[str, 
     return validate_scoring_job(updated)
 
 
+def _reserve_call_allowance(current: dict[str, Any], call: dict[str, Any]) -> None:
+    """dispatch 前的原子额度核对（在同一个事务里）。
+
+    已发出但未结算的调用占用额度；同一个 call_id 绝不重发。job 声明了额度却
+    没有预留信息、或预留超过冻结额度时，在发出任何动作之前拒绝。
+    """
+    call_id = call.get("call_id")
+    if not isinstance(call_id, str) or not call_id:
+        raise ScoringJobError("a judge call requires a call_id")
+    calls = current.get("calls") or []
+    if any(item.get("call_id") == call_id for item in calls):
+        raise ScoringJobError(
+            f"judge call was already dispatched and is never resent: {call_id}"
+        )
+    allowance = current.get("allowance")
+    if not isinstance(allowance, dict):
+        return
+    reservation = call.get("reservation")
+    if not isinstance(reservation, dict):
+        raise ScoringJobError(
+            f"judge call {call_id} carries no reservation while the job "
+            "declares a frozen allowance"
+        )
+    if len(calls) + 1 > int(allowance.get("max_calls") or 0):
+        raise ScoringJobError(
+            "judge call exceeds the frozen allowance: max_calls"
+        )
+
+    def total(key: str) -> int:
+        return sum(
+            int((item.get("reservation") or {}).get(key) or 0) for item in calls
+        )
+
+    prompt = total("prompt_tokens") + int(reservation.get("prompt_tokens") or 0)
+    if prompt > int(allowance.get("max_prompt_tokens") or 0):
+        raise ScoringJobError(
+            "judge call exceeds the frozen allowance: max_prompt_tokens"
+        )
+    completion = total("completion_tokens") + int(
+        reservation.get("completion_tokens") or 0
+    )
+    if completion > int(allowance.get("max_completion_tokens") or 0):
+        raise ScoringJobError(
+            "judge call exceeds the frozen allowance: max_completion_tokens"
+        )
+    max_cost = allowance.get("max_cost_usd")
+    if max_cost is None:
+        return
+    costs = [*(item.get("reservation") or {} for item in calls), reservation]
+    if any(item.get("cost_usd") is None for item in costs):
+        raise ScoringJobError(
+            "judge call cost is unknown: a job with a monetary allowance "
+            "cannot reserve an unknown cost"
+        )
+    if sum(float(item["cost_usd"]) for item in costs) > float(max_cost) + 1e-12:
+        raise ScoringJobError(
+            "judge call exceeds the frozen allowance: max_cost_usd"
+        )
+
+
 def _assert_transition(current: str, target: str) -> None:
     if target not in JOB_TRANSITIONS.get(current, set()):
         raise ScoringJobError(f"invalid scoring job transition: {current} -> {target}")
@@ -320,6 +380,7 @@ class SQLiteScoringJobs:
                 )
             if (current.get("cancellation") or {}).get("requested"):
                 raise ScoringJobError("job cancellation was requested before dispatch")
+            _reserve_call_allowance(current, call)
             created = create_invocation_in_transaction(connection, invocation)
             dispatched = transition_invocation_in_transaction(
                 connection, created["id"], expected_revision=created["revision"],
@@ -820,6 +881,7 @@ class MemoryScoringJobs:
                 )
             if (current.get("cancellation") or {}).get("requested"):
                 raise ScoringJobError("job cancellation was requested before dispatch")
+            _reserve_call_allowance(current, call)
             invocations = self._store.invocations
             created = invocations.create(invocation)
             dispatched = invocations.transition(
@@ -1327,6 +1389,7 @@ class PostgresScoringJobs:
                     raise ScoringJobError(
                         "job cancellation was requested before dispatch"
                     )
+                _reserve_call_allowance(current, call)
                 created = create_invocation_pg(cursor, invocation)
                 dispatched = transition_invocation_pg(
                     cursor, created["id"], expected_revision=created["revision"],

@@ -608,3 +608,156 @@ def test_deepcopy_isolation_between_reads(store):
     snapshot["status"] = "completed"
     assert jobs.get("sjob-1")["status"] == "queued"
     assert deepcopy(snapshot) is not jobs.get("sjob-1")
+
+
+# ---------------------------------------------------------------- R2：调用计划与额度
+
+ALLOWANCE = {
+    "max_calls": 2,
+    "max_prompt_tokens": 100,
+    "max_completion_tokens": 50,
+    "max_cost_usd": 0.01,
+}
+
+
+def reservation(prompt: int, completion: int, cost: float) -> dict:
+    return {
+        "prompt_tokens": prompt, "completion_tokens": completion, "cost_usd": cost,
+    }
+
+
+def planned_job(*, job_id: str = "sjob-1", request_key: str = REQUEST_KEY) -> dict:
+    record = job_record(job_id=job_id, request_key=request_key)
+    record["allowance"] = dict(ALLOWANCE)
+    record["plans"] = [
+        {
+            "call_id": f"call-{index + 1}", "case_id": "case-1", "mode": "single",
+            "repeat_index": 0, "presentation_order": [],
+            "input_sha256": "sha256:" + "b" * 64,
+            "reservation": reservation(40, 20, 0.004),
+        }
+        for index in range(2)
+    ]
+    return record
+
+
+def test_begin_call_reserves_allowance_and_never_repeats_a_call(store):
+    make_run(store)
+    jobs = jobs_for(store)
+    jobs.submit(planned_job())
+    claimed = jobs.claim("sjob-1")
+    first = jobs.begin_call(
+        "sjob-1", expected_revision=claimed["revision"],
+        invocation=invocation_record("call-1"),
+        call={
+            "call_id": "call-1", "case_id": "case-1", "mode": "single",
+            "reservation": reservation(40, 20, 0.004),
+        },
+    )
+    assert first["calls"][0]["reservation"] == reservation(40, 20, 0.004)
+
+    # 同一个 call_id 绝不重复 dispatch（否则就是重复付费）。
+    with pytest.raises(ScoringJobError, match="already dispatched"):
+        jobs.begin_call(
+            "sjob-1", expected_revision=first["revision"],
+            invocation=invocation_record("call-1"),
+            call={
+                "call_id": "call-1", "case_id": "case-1", "mode": "single",
+                "reservation": reservation(40, 20, 0.004),
+            },
+        )
+    assert len(jobs.get("sjob-1")["calls"]) == 1
+
+    # 已 dispatch 未结算的调用占用额度：token 超额在发出前被拒绝。
+    with pytest.raises(ScoringJobError, match="allowance"):
+        jobs.begin_call(
+            "sjob-1", expected_revision=jobs.get("sjob-1")["revision"],
+            invocation=invocation_record("call-2"),
+            call={
+                "call_id": "call-2", "case_id": "case-1", "mode": "single",
+                "reservation": reservation(80, 20, 0.004),
+            },
+        )
+    # 金额超额同样在发出前被拒绝。
+    with pytest.raises(ScoringJobError, match="allowance"):
+        jobs.begin_call(
+            "sjob-1", expected_revision=jobs.get("sjob-1")["revision"],
+            invocation=invocation_record("call-2"),
+            call={
+                "call_id": "call-2", "case_id": "case-1", "mode": "single",
+                "reservation": reservation(10, 5, 0.02),
+            },
+        )
+    assert len(jobs.get("sjob-1")["calls"]) == 1
+    assert store.invocations.get("inv-call-2") is None
+
+    # 在剩余额度内的第二个调用可以发出。
+    second = jobs.begin_call(
+        "sjob-1", expected_revision=jobs.get("sjob-1")["revision"],
+        invocation=invocation_record("call-2"),
+        call={
+            "call_id": "call-2", "case_id": "case-1", "mode": "single",
+            "reservation": reservation(40, 20, 0.004),
+        },
+    )
+    assert [item["call_id"] for item in second["calls"]] == ["call-1", "call-2"]
+
+    # 第三个调用超出 max_calls 的额度。
+    jobs.settle_call(
+        "sjob-1", expected_revision=second["revision"], call_id="call-1",
+        outcome="succeeded", result_summary={}, job_status="dispatching",
+    )
+    with pytest.raises(ScoringJobError, match="allowance"):
+        jobs.begin_call(
+            "sjob-1", expected_revision=jobs.get("sjob-1")["revision"],
+            invocation=invocation_record("call-3"),
+            call={
+                "call_id": "call-3", "case_id": "case-1", "mode": "single",
+                "reservation": reservation(1, 1, 0.0001),
+            },
+        )
+
+
+def test_plans_and_remaining_allowance_survive_a_sqlite_restart(tmp_path):
+    path = tmp_path / "runs.db"
+    store = SQLiteRunStore(path)
+    make_run(store)
+    jobs = jobs_for(store)
+    jobs.submit(planned_job())
+    claimed = jobs.claim("sjob-1")
+    jobs.begin_call(
+        "sjob-1", expected_revision=claimed["revision"],
+        invocation=invocation_record("call-1"),
+        call={
+            "call_id": "call-1", "case_id": "case-1", "mode": "single",
+            "reservation": reservation(40, 20, 0.004),
+        },
+    )
+
+    reopened = SQLiteRunStore(path)
+    reopened_jobs = jobs_for(reopened)
+    stored = reopened_jobs.get("sjob-1")
+    assert [plan["call_id"] for plan in stored["plans"]] == ["call-1", "call-2"]
+    assert stored["allowance"] == ALLOWANCE
+    assert stored["calls"][0]["reservation"] == reservation(40, 20, 0.004)
+
+    # 重启后剩余额度仍然按已 dispatch 的调用扣减。
+    with pytest.raises(ScoringJobError, match="allowance"):
+        reopened_jobs.begin_call(
+            "sjob-1", expected_revision=stored["revision"],
+            invocation=invocation_record("call-2"),
+            call={
+                "call_id": "call-2", "case_id": "case-1", "mode": "single",
+                "reservation": reservation(80, 20, 0.004),
+            },
+        )
+    allowed = reopened_jobs.begin_call(
+        "sjob-1", expected_revision=stored["revision"],
+        invocation=invocation_record("call-2"),
+        call={
+            "call_id": "call-2", "case_id": "case-1", "mode": "single",
+            "reservation": reservation(40, 20, 0.004),
+        },
+    )
+    assert [item["call_id"] for item in allowed["calls"]] == ["call-1", "call-2"]
+

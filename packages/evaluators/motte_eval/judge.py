@@ -68,6 +68,7 @@ __all__ = [
     "build_judge_spec",
     "build_pairwise_input",
     "canonical_evidence_token",
+    "declared_output_ceiling",
     "judge_job_fingerprint",
     "judge_metrics",
     "judge_spec_sha256",
@@ -79,6 +80,8 @@ __all__ = [
     "parse_pairwise_output",
     "preference_value",
     "preflight_judge",
+    "price_view",
+    "prompt_token_upper_bound",
     "render_judge_prompt",
     "scan_candidate_content",
 ]
@@ -868,18 +871,52 @@ def render_judge_prompt(
     )
 
 
+def prompt_token_upper_bound(
+    spec: JudgeSpec, bundle: JudgeInputBundle | JudgePairwiseInput,
+) -> int:
+    """真实渲染请求的 prompt token 上界（可证明，不是估算）。
+
+    字节级 BPE 词表里每个 token 至少覆盖一个 UTF-8 字节，因此 prompt 的
+    UTF-8 字节数是 token 数的上界。调用方只有在能证明这一条时才可以用它做
+    硬承诺；否则必须拒绝硬预算请求（见 preflight_judge 的 bound_provable）。
+    """
+    return len(render_judge_prompt(spec, bundle).encode("utf-8"))
+
+
+def declared_output_ceiling(spec: JudgeSpec) -> int | None:
+    """冻结 spec 里显式声明的单次输出上限；没有就是无法证明输出上界。"""
+    value = spec.parameters.get("max_output_tokens")
+    if type(value) is not int or value <= 0:
+        return None
+    return value
+
+
 def build_judge_request(
     spec: JudgeSpec,
     bundle: JudgeInputBundle | JudgePairwiseInput,
+    *,
+    max_output_tokens: int | None = None,
 ) -> ModelRequest:
-    """构造 Judge 请求：无工具、无网络能力，只有固定的 prompt 与温度参数。"""
+    """构造 Judge 请求：无工具、无网络能力，只有固定的 prompt 与温度参数。
+
+    max_output_tokens 是执行层按剩余预算收紧后的显式上限；省略时使用冻结 spec
+    声明的参数。收紧只会让请求更小，绝不会放大冻结配置。
+    """
     prompt = render_judge_prompt(spec, bundle)
+    declared = spec.parameters.get("max_output_tokens")
+    if max_output_tokens is not None:
+        if type(max_output_tokens) is not int or max_output_tokens <= 0:
+            raise JudgeSpecError("max_output_tokens override must be a positive integer")
+        if isinstance(declared, int) and not isinstance(declared, bool):
+            max_output_tokens = min(max_output_tokens, declared)
+    else:
+        max_output_tokens = declared
     payload = {
         "model": spec.model,
         "messages": [Message(role="user", content=prompt)],
         "tools": [],
         "temperature": spec.parameters.get("temperature"),
-        "max_output_tokens": spec.parameters.get("max_output_tokens"),
+        "max_output_tokens": max_output_tokens,
         "seed": spec.parameters.get("seed"),
         "metadata": {
             "purpose": JUDGE_PURPOSE,
@@ -1539,10 +1576,12 @@ class JudgePreflight(Contract):
     repeats: int = Field(ge=1)
     orderings: int = Field(ge=1)
     max_calls: int = Field(ge=0)
-    token_ceiling: dict[str, int]
+    token_ceiling: dict[str, Any]
     price_coverage: dict[str, Any]
     authorised: bool
     budget_executable: bool
+    #: 只有在「价格已知 + prompt 与输出上界都可证明 + 估算费用不超过声明的上限」
+    #: 同时成立时才为 True：估算本身绝不冒充硬上限。
     hard_monetary_cap: bool
     reasons: list[str] = Field(default_factory=list)
     authorisation: dict[str, Any] | None = None
@@ -1550,6 +1589,11 @@ class JudgePreflight(Contract):
     @property
     def zero_calls_guaranteed(self) -> bool:
         return not self.budget_executable
+
+
+def price_view(price_table: Any | None) -> dict[str, Any]:
+    """价格快照的可计算视图；未知价格一律 known=False，绝不补 0 冒充已知。"""
+    return _price_view(price_table)
 
 
 def _price_view(price_table: Any | None) -> dict[str, Any]:
@@ -1584,8 +1628,21 @@ def preflight_judge(
     price_table: Any | None = None,
     estimated_prompt_tokens: int = 0,
     estimated_completion_tokens: int = 0,
+    max_calls: int | None = None,
+    prompt_token_upper_bound: int | None = None,
+    output_token_ceiling: int | None = None,
+    output_bound_provable: bool = True,
 ) -> JudgePreflight:
-    """零费用预检：不解析 rubric 之外的任何东西，也不产生任何调用。"""
+    """零费用预检：不解析 rubric 之外的任何东西，也不产生任何调用。
+
+    - max_calls 由调用方给出**实际冻结计划**的长度；省略时才用
+      sample_count x repeats x orderings。两者绝不允许是两个不同公式。
+    - prompt_token_upper_bound 是从真实渲染请求算出的可证明上界；
+      只有它存在（或调用方给出正的 prompt 估算）且输出上限可证明时，
+      才允许声明金额硬上限。
+    - output_token_ceiling 是执行层要把请求收紧到的单次输出上限；省略时回落到
+      冻结 spec 声明的 max_output_tokens。
+    """
     if mode is None:
         mode = spec.mode
     if mode not in JUDGE_MODES:
@@ -1602,6 +1659,24 @@ def preflight_judge(
         raise JudgeSpecError("sample_count must be a positive integer")
     if type(repeats) is not int or repeats < 1:
         raise JudgeSpecError("repeats must be a positive integer")
+    if max_calls is None:
+        requested_calls = sample_count * repeats * orderings
+    elif type(max_calls) is not int or max_calls < 1:
+        raise JudgeSpecError("max_calls must be a positive integer when provided")
+    else:
+        # 调用方给出的是实际冻结调用计划的长度：预检绝不用第二个公式算调用数。
+        requested_calls = max_calls
+    if not output_bound_provable:
+        # Provider 不强制执行输出上限：无论请求里写了什么都不能当作硬上界。
+        output_token_ceiling = None
+    elif output_token_ceiling is None:
+        output_token_ceiling = declared_output_ceiling(spec)
+    elif type(output_token_ceiling) is not int or output_token_ceiling <= 0:
+        raise JudgeSpecError("output_token_ceiling must be a positive integer")
+    if prompt_token_upper_bound is not None and (
+        type(prompt_token_upper_bound) is not int or prompt_token_upper_bound < 0
+    ):
+        raise JudgeSpecError("prompt_token_upper_bound must be a non-negative integer")
 
     auth: JudgeAuthorisation | None
     if authorisation is None:
@@ -1611,9 +1686,17 @@ def preflight_judge(
     else:
         auth = JudgeAuthorisation.model_validate(authorisation)
 
-    requested_calls = sample_count * repeats * orderings
-    prompt_tokens = max(0, int(estimated_prompt_tokens)) * requested_calls
-    completion_tokens = max(0, int(estimated_completion_tokens)) * requested_calls
+    # 真实渲染请求给出的上界优先于调用者填的估算：估算只能更保守，不能更低。
+    prompt_tokens = max(
+        max(0, int(estimated_prompt_tokens)) * requested_calls,
+        max(0, int(prompt_token_upper_bound or 0)),
+    )
+    declared_completion = max(0, int(estimated_completion_tokens)) * requested_calls
+    completion_tokens = (
+        max(declared_completion, output_token_ceiling * requested_calls)
+        if output_token_ceiling is not None
+        else declared_completion
+    )
     price = _price_view(price_table)
     reasons: list[str] = []
 
@@ -1673,13 +1756,48 @@ def preflight_judge(
     ):
         within_budget = False
 
-    hard_monetary_cap = bool(
-        price["known"]
-        and (
-            (auth is not None and auth.hard_cost_cap_usd is not None)
-            or spec.budget.hard_cost_cap_usd is not None
+    declared_caps = [
+        cap
+        for cap in (
+            auth.hard_cost_cap_usd if auth is not None else None,
+            spec.budget.hard_cost_cap_usd,
         )
+        if cap is not None
+    ]
+    if spec.budget.hard_cost_cap_usd is not None:
+        if not price["known"]:
+            reasons.append(
+                "judge budget declares a USD hard cap but the price is unknown"
+            )
+            within_budget = False
+        elif estimated_cost is None or estimated_cost > spec.budget.hard_cost_cap_usd:
+            reasons.append(
+                "estimated cost exceeds the judge budget hard cost cap "
+                f"({estimated_cost} > {spec.budget.hard_cost_cap_usd})"
+            )
+            within_budget = False
+
+    # 硬承诺的前提：价格已知、prompt 与输出上界都可证明、估算不超过声明上限。
+    # 少任何一条都只能叫做估算，不能声称可执行的金额硬上限。
+    bound_provable = bool(
+        price["known"]
+        and prompt_tokens > 0
+        and output_token_ceiling is not None
+        and output_bound_provable
     )
+    hard_monetary_cap = bool(
+        declared_caps
+        and bound_provable
+        and estimated_cost is not None
+        and estimated_cost <= min(declared_caps)
+    )
+    if declared_caps and not bound_provable:
+        reasons.append(
+            "a USD hard cap cannot be guaranteed without a provable prompt bound "
+            "and a declared output ceiling"
+        )
+        within_budget = False
+
     budget_executable = bool(authorised and within_budget)
     if not budget_executable and reasons:
         reasons.append("budget is not executable: no calls will be issued")
@@ -1699,6 +1817,13 @@ def preflight_judge(
             "total": prompt_tokens + completion_tokens,
             "budget_prompt": spec.budget.max_prompt_tokens,
             "budget_completion": spec.budget.max_completion_tokens,
+            "prompt_bound_source": (
+                "rendered_request_utf8_bytes"
+                if prompt_token_upper_bound is not None
+                else "caller_estimate"
+            ),
+            "output_ceiling": output_token_ceiling,
+            "bound_provable": bound_provable,
         },
         price_coverage={
             "known": price["known"],
@@ -1729,8 +1854,14 @@ def judge_job_fingerprint(
     repeats: int = 1,
     presentation_order: list[str] | None = None,
     calibration_version: str | None = None,
+    plans: list[dict[str, Any]] | None = None,
 ) -> str:
-    """请求内容 fingerprint（与幂等键分离）；换序会产生不同 fingerprint。"""
+    """请求内容 fingerprint（与幂等键分离）；换序会产生不同 fingerprint。
+
+    plans 是提交时冻结的唯一调用计划：每个 pair/order/repeat 的 call_id 与
+    input_sha256 都进入身份。计划存在时它是权威来源，不依赖 sample_count 之类
+    的推导公式。
+    """
     if mode not in JUDGE_MODES:
         raise JudgeSpecError(f"unknown judge mode: {mode!r}")
     if publish_policy not in PUBLISH_POLICIES:
@@ -1752,5 +1883,22 @@ def judge_job_fingerprint(
         "publish_policy": publish_policy,
         "repeats": repeats,
         "presentation_order": list(presentation_order) if presentation_order else None,
+        "plans": (
+            [
+                {
+                    "call_id": plan.get("call_id"),
+                    "case_id": plan.get("case_id"),
+                    "mode": plan.get("mode"),
+                    "repeat_index": plan.get("repeat_index"),
+                    "presentation_order": list(plan.get("presentation_order") or []),
+                    "input_sha256": plan.get("input_sha256"),
+                    "budget_sha256": plan.get("budget_sha256"),
+                    "output_tokens": plan.get("output_tokens"),
+                }
+                for plan in plans
+            ]
+            if plans is not None
+            else None
+        ),
     }
     return canonical_sha256(payload)

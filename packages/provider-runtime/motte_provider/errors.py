@@ -70,3 +70,28 @@ def classify_exception(error: Exception) -> str:
     return getattr(error, "error_class", None) or (
         "network" if isinstance(error, (TimeoutError, OSError)) else "unknown"
     )
+
+
+#: dispatch 之后无法证明「请求未被处理」的错误类别：结果与计费都保持不确定。
+#: server / server_error 是真实的 5xx 分类（classify_status(500) == "server"）。
+INDETERMINATE_ERROR_CLASSES = (
+    "network", "timeout", "protocol", "connection", "transport", "server",
+    "server_error", "rate_limit",
+)
+
+#: 明确在生成之前被提供方拒绝的类别：可以确定未被处理，也就不计费。
+NOT_BILLED_ERROR_CLASSES = ("auth", "client")
+
+
+def is_indeterminate_error(error: object) -> bool:
+    """已 dispatch 的调用失败后，是否必须保留不确定计费／结果。
+
+    只有明确在生成前被拒绝的类别（auth/client）可以确定未计费；其余类别
+    ——包括分类未知的异常——都无法证明请求没有被处理，所以按不确定处理，
+    绝不自动重发、也绝不声称 billable=false。
+    """
+    error_class = getattr(error, "error_class", None) or type(error).__name__
+    normalized = str(error_class).strip().lower()
+    if normalized in NOT_BILLED_ERROR_CLASSES:
+        return False
+    return True

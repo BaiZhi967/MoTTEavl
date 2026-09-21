@@ -378,7 +378,9 @@ def test_preflight_without_authorisation_permits_zero_calls():
 
 
 def test_preflight_unknown_price_never_claims_a_precise_hard_cap():
-    judge = spec()
+    # 硬上限只有在「输出上限可证明」时才成立；这里显式声明一个输出上限，
+    # 让下面的金额断言检验真实语义而不是调用者填的估算。
+    judge = spec(parameters={"max_output_tokens": 100})
     auth = {
         "authorised": True, "actor": "operator", "max_calls": 10, "max_total_tokens": 20_000,
     }
@@ -402,6 +404,19 @@ def test_preflight_unknown_price_never_claims_a_precise_hard_cap():
     assert known.price_coverage["known"] is True
     assert known.price_coverage["estimated_cost_usd"] == pytest.approx(0.0014)
     assert known.hard_monetary_cap is True
+    assert known.token_ceiling["bound_provable"] is True
+    assert known.token_ceiling["output_ceiling"] == 100
+
+    # 没有输出上限时同样的价格与上限也不能声明硬上限，只能拒绝硬预算请求。
+    unbounded = spec()
+    unprovable = preflight_judge(
+        unbounded, sample_count=2,
+        authorisation={**auth, "hard_cost_cap_usd": 1.0}, price_table=price,
+        estimated_prompt_tokens=500, estimated_completion_tokens=100,
+    )
+    assert unprovable.hard_monetary_cap is False
+    assert unprovable.budget_executable is False
+    assert any("hard cap" in reason for reason in unprovable.reasons)
 
     # 价格未知时不得声明美元硬上限。
     with pytest.raises(ValueError, match="hard cap"):
@@ -571,6 +586,7 @@ from motte_contracts.identity import canonical_sha256  # noqa: E402
 from motte_eval.judge import (  # noqa: E402
     JudgeAuthorisation,
     JudgeBudgetError,
+    JudgeError,
     JudgeNotAuthorised,
     JudgeSpec,
 )
@@ -679,7 +695,8 @@ def single_request(
     authorised: bool = True,
     publish_policy: str = "all_scored", observations: dict | None = None,
     spec: JudgeSpec | None = None, calibration_job_id: str | None = None,
-    sample_ids: dict | None = None,
+    sample_ids: dict | None = None, repeats: int = 1,
+    price_table: dict | None = None,
 ) -> ScoringJobRequest:
     case_ids = case_ids or ["case-1"]
     observations = observations or {
@@ -694,6 +711,8 @@ def single_request(
         "observations": observations,
         "authorisation": auth if auth is not None else authorisation(),
         "publish_policy": publish_policy,
+        "repeats": repeats,
+        "price_table": price_table,
     }
     if not authorised:
         payload["authorisation"] = None
@@ -933,7 +952,13 @@ def test_crash_windows_are_each_covered(tmp_path):
             "owner": {"kind": "subject", "run_id": "run-1", "case_id": "case-1"},
             "model": "judge-model", "request_summary": {},
         },
-        call={"call_id": "call-1", "case_id": "case-1", "mode": "single"},
+        call={
+            "call_id": "call-1", "case_id": "case-1", "mode": "single",
+            # 冻结计划里每个调用都带预留额度；手工构造的调用同样必须声明。
+            "reservation": {
+                "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": None,
+            },
+        },
     )
     assert service.recover_interrupted() == [second["job_id"]]
     indeterminate = service.jobs.get(second["job_id"])
@@ -960,7 +985,13 @@ def test_crash_windows_are_each_covered(tmp_path):
             "owner": {"kind": "subject", "run_id": "run-1", "case_id": "case-1"},
             "model": "judge-model", "request_summary": {},
         },
-        call={"call_id": "call-1", "case_id": "case-1", "mode": "single"},
+        call={
+            "call_id": "call-1", "case_id": "case-1", "mode": "single",
+            # 冻结计划里每个调用都带预留额度；手工构造的调用同样必须声明。
+            "reservation": {
+                "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": None,
+            },
+        },
     )
     service.jobs.settle_call(
         third["job_id"],
@@ -997,7 +1028,13 @@ def test_interrupted_publish_transaction_is_all_or_nothing(tmp_path, monkeypatch
             "owner": {"kind": "subject", "run_id": "run-1", "case_id": "case-1"},
             "model": "judge-model", "request_summary": {},
         },
-        call={"call_id": "call-1", "case_id": "case-1", "mode": "single"},
+        call={
+            "call_id": "call-1", "case_id": "case-1", "mode": "single",
+            # 冻结计划里每个调用都带预留额度；手工构造的调用同样必须声明。
+            "reservation": {
+                "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": None,
+            },
+        },
     )
     settled = service.jobs.settle_call(
         submitted["job_id"],
@@ -1212,4 +1249,328 @@ def test_offline_rescore_and_history_reads_do_not_claim_jobs(tmp_path):
     service.get(submitted["job_id"])
     assert provider.calls == []
     assert service.jobs.get(submitted["job_id"])["status"] == "queued"
+
+# ==================================================================== R2 计划与预算
+# F01/F02/F17：预检必须等于冻结调用计划；硬上限只在可证明时声明；dispatch 后
+# 无法证明未处理的失败保留不确定计费/结果。
+
+from motte_provider.errors import ProviderHTTPError  # noqa: E402
+
+PRICE = {"version": "price-1", "input_per_million": 1.0, "output_per_million": 2.0}
+PAIR_CRITERIA = ("no_instruction_override", "no_tool_escalation", "output_shape_respected")
+
+
+def priced_spec(*, hard_cost_cap_usd: float | None = None, max_completion_tokens: int = 4_000,
+                **overrides) -> JudgeSpec:
+    """价格已知的冻结 spec：可选金额硬上限与逐次输出额度。"""
+    budget: dict = {
+        "max_calls": 8,
+        "max_prompt_tokens": 200_000,
+        "max_completion_tokens": max_completion_tokens,
+        "price_known": True,
+        "price_table_version": "price-1",
+    }
+    if hard_cost_cap_usd is not None:
+        budget["hard_cost_cap_usd"] = hard_cost_cap_usd
+    budget.update(overrides.pop("budget", {}))
+    return spec_default(budget=budget, **overrides)
+
+
+def pairwise_answer() -> str:
+    return json.dumps({
+        "winner": "A",
+        "criteria": [
+            {"criterion_id": criterion_id, "preference": "A", "reason": "r"}
+            for criterion_id in PAIR_CRITERIA
+        ],
+    })
+
+
+def pairwise_request(
+    request_key: str, pairs: list, orders: list, *,
+    auth: JudgeAuthorisation | None = None,
+) -> ScoringJobRequest:
+    return ScoringJobRequest.model_validate({
+        "request_key": request_key,
+        "judge_spec": pair_spec(),
+        "mode": "pairwise",
+        "run_id": "run-1",
+        "pairwise_pairs": [pair.model_dump(mode="json") for pair in pairs],
+        "presentation_orders": orders,
+        "authorisation": (auth or authorisation(max_calls=4)).model_dump(mode="json"),
+    })
+
+
+def plan_identity(job: dict) -> str:
+    """冻结计划的身份摘要：只看每个调用的稳定字段。"""
+    return canonical_sha256([
+        {
+            key: plan.get(key)
+            for key in (
+                "call_id", "case_id", "mode", "repeat_index",
+                "presentation_order", "input_sha256", "budget_sha256",
+            )
+        }
+        for plan in job["plans"]
+    ])
+
+
+def test_zero_token_and_zero_usd_authorisation_issue_zero_calls(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    # 显式授权 0 token：请求本身需要正额度，必须拒绝且一个调用都不发。
+    with pytest.raises(JudgeBudgetError):
+        service.submit(single_request(
+            auth=authorisation(max_calls=1, max_total_tokens=0), price_table=PRICE,
+        ))
+    assert provider.calls == []
+    assert service.list_for_run("run-1") == []
+
+    # 显式授权 0 美元：价格已知 + 估算费用 > 0，同样拒绝。
+    with pytest.raises(JudgeBudgetError):
+        service.submit(single_request(
+            request_key="req-usd",
+            auth=authorisation(max_calls=1, hard_cost_cap_usd=0.0),
+            price_table=PRICE,
+        ))
+    assert provider.calls == []
+    assert service.list_for_run("run-1") == []
+
+
+def test_spec_cost_cap_of_zero_is_not_executable_and_not_a_hard_cap(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    capped = priced_spec(
+        hard_cost_cap_usd=0.0, parameters={"max_output_tokens": 500},
+    )
+    preflight = preflight_judge(
+        capped, sample_count=1, authorisation=authorisation(max_calls=1),
+        price_table=PRICE, estimated_prompt_tokens=1_000,
+        estimated_completion_tokens=500,
+    )
+    assert preflight.price_coverage["estimated_cost_usd"] > 0
+    assert preflight.budget_executable is False
+    assert preflight.hard_monetary_cap is False
+    assert any("hard cost cap" in reason for reason in preflight.reasons)
+
+    with pytest.raises(JudgeBudgetError):
+        service.submit(single_request(
+            request_key="capped", spec=capped, price_table=PRICE,
+            auth=authorisation(max_calls=1),
+        ))
+    assert provider.calls == []
+    assert service.list_for_run("run-1") == []
+
+
+def test_hard_cost_cap_requires_a_provable_output_ceiling(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    # 没有 output 上限 → 无法证明费用上界：明确拒绝硬预算请求。
+    unbounded = priced_spec(max_completion_tokens=0)
+    with pytest.raises(JudgeBudgetError):
+        service.submit(single_request(
+            spec=unbounded, price_table=PRICE,
+            auth=authorisation(max_calls=1, hard_cost_cap_usd=1.0),
+        ))
+    assert provider.calls == []
+    assert service.list_for_run("run-1") == []
+
+    # 有逐次额度 → 预约被写进真实请求参数，硬上限才成立。
+    submitted = service.submit(single_request(
+        request_key="capped", spec=priced_spec(), price_table=PRICE,
+        auth=authorisation(max_calls=1, hard_cost_cap_usd=1.0),
+    ))
+    assert submitted["preflight"]["hard_monetary_cap"] is True
+    assert submitted["plans"][0]["reservation"]["completion_tokens"] == 4_000
+    result = service.claim_and_run()
+    assert result["status"] == "completed"
+    assert provider.calls[0].max_output_tokens == 4_000
+
+
+def test_pairwise_plan_uses_each_pairs_own_order_and_matches_preflight(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    first = build_pairwise_input(
+        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
+        candidate_b=candidate("cand-b", "answer B", "20"),
+    )
+    second = build_pairwise_input(
+        task_ref="case-2", candidate_a=candidate("cand-a", "answer A", "10"),
+        candidate_b=candidate("cand-b", "answer B", "20"),
+    )
+    provider = ScriptedProvider([pairwise_answer()])
+    service = judge_service(store, provider)
+
+    submitted = service.submit(pairwise_request(
+        "pair-own-order", [first, second], [],
+        auth=authorisation(max_calls=2),
+    ))
+    # 两个 pair、各自一个顺序、一次重复 → 恰好两次调用，不能笛卡尔扩展成四次。
+    assert submitted["preflight"]["max_calls"] == 2
+    assert len(submitted["plans"]) == 2
+    result = service.claim_and_run()
+    assert result["status"] == "completed"
+    assert len(provider.calls) == 2
+    assert len(store.invocations.list_for_job(submitted["job_id"])) == 2
+    assert result["receipt"]["billed_calls"] == 2
+
+
+def test_repeats_produce_independent_calls_and_evidence(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    answers = [
+        json.dumps({
+            "criteria": [
+                {"criterion_id": "task_completion", "passed": True, "reason": f"run {index}",
+                 "evidence": ["event:12"]},
+                {"criterion_id": "constraint_adherence", "passed": True, "reason": "ok",
+                 "evidence": ["event:12"]},
+                {"criterion_id": "evidence_grounding", "passed": False, "reason": "weak",
+                 "evidence": ["event:12"]},
+            ],
+        })
+        for index in range(3)
+    ]
+    provider = ScriptedProvider(answers)
+    service = judge_service(store, provider)
+
+    submitted = service.submit(single_request(
+        repeats=3, auth=authorisation(max_calls=3),
+    ))
+    assert submitted["preflight"]["max_calls"] == 3
+    assert len(submitted["plans"]) == 3
+    assert sorted(plan["repeat_index"] for plan in submitted["plans"]) == [0, 1, 2]
+    assert len({plan["call_id"] for plan in submitted["plans"]}) == 3
+
+    result = service.claim_and_run()
+    assert result["status"] == "completed"
+    assert len(provider.calls) == 3
+    rows = store.score_sets.list_for_pass(result["receipt"]["scoring_pass_id"])
+    assert len(rows) == 9
+    assert {row["trial_id"] for row in rows} == {"call-1", "call-2", "call-3"}
+    stored_pass = store.scoring_passes.get(result["receipt"]["scoring_pass_id"])
+    assert len(stored_pass["judge"]["calls"]) == 3
+    assert result["receipt"]["cost"]["total_usd"] == pytest.approx(0.0075)
+
+
+def test_plan_identity_covers_order_repeat_input_and_budget(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    service = judge_service(store, ScriptedProvider([json.dumps(JUDGE_ANSWER)]))
+
+    base = service.submit(single_request(request_key="k-base"))
+    repeated = service.submit(single_request(
+        request_key="k-repeat", repeats=2, auth=authorisation(max_calls=2),
+    ))
+    budget = service.submit(single_request(
+        request_key="k-budget", spec=spec_default(budget={"max_calls": 7}),
+    ))
+    other_input = service.submit(single_request(
+        request_key="k-input", observations={"case-1": observation(final_output="beta")},
+    ))
+    assert len(service.jobs.get(base["job_id"])["plans"]) == 1
+    assert len(service.jobs.get(repeated["job_id"])["plans"]) == 2
+
+    fingerprints = {
+        base["fingerprint"], repeated["fingerprint"], budget["fingerprint"],
+        other_input["fingerprint"],
+    }
+    assert len(fingerprints) == 4
+    digests = {
+        plan_identity(service.jobs.get(job["job_id"]))
+        for job in (base, repeated, budget, other_input)
+    }
+    assert len(digests) == 4
+
+    pair = build_pairwise_input(
+        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
+        candidate_b=candidate("cand-b", "answer B", "20"),
+    )
+    forward = service.submit(pairwise_request(
+        "k-fwd", [pair], [["cand-a", "cand-b"]],
+    ))
+    reverse = service.submit(pairwise_request(
+        "k-rev", [pair], [["cand-b", "cand-a"]],
+    ))
+    assert forward["fingerprint"] != reverse["fingerprint"]
+    forward_job = service.jobs.get(forward["job_id"])
+    reverse_job = service.jobs.get(reverse["job_id"])
+    assert forward_job["plans"][0]["presentation_order"] == ["cand-a", "cand-b"]
+    assert reverse_job["plans"][0]["presentation_order"] == ["cand-b", "cand-a"]
+    assert forward_job["plans"][0]["input_sha256"] != (
+        reverse_job["plans"][0]["input_sha256"]
+    )
+    assert plan_identity(forward_job) != plan_identity(reverse_job)
+
+
+def test_post_dispatch_server_error_is_indeterminate_and_never_unbilled(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    provider = ScriptedProvider(
+        [json.dumps(JUDGE_ANSWER)],
+        fail_with=ProviderHTTPError("upstream exploded", status=500),
+    )
+    service = judge_service(store, provider)
+    submitted = service.submit(single_request(
+        spec=priced_spec(), price_table=PRICE, auth=authorisation(max_calls=1),
+    ))
+    assert service.jobs.get(submitted["job_id"])["cost_total_usd"] == 0.0
+
+    result = service.claim_and_run()
+    assert len(provider.calls) == 1
+    assert result["status"] == "indeterminate"
+    assert result["failure"]["code"] == "CALL_OUTCOME_INDETERMINATE"
+    call = result["calls"][0]
+    assert call["outcome"] == "indeterminate"
+    invocation = store.invocations.get(call["invocation_id"])
+    assert invocation["outcome"] == "indeterminate"
+    # 已 dispatch 的 500 不能证明未被处理：不能记成确定不计费。
+    assert invocation["result_summary"]["billable"] is None
+    # 未知计费保持未知，不能补 0。
+    assert service.jobs.get(submitted["job_id"])["cost_total_usd"] is None
+    # 不自动重发、不发布 pass。
+    assert service.claim_and_run() is None
+    assert store.scoring_passes.list_for_run("run-1") == []
+    assert len(provider.calls) == 1
+
+
+def test_preflight_get_history_and_cancel_never_reach_the_provider(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    submitted = service.submit(single_request(auth=authorisation(max_calls=2)))
+    assert provider.calls == []  # 预检只读，不产生调用
+    assert service.get(submitted["job_id"])["job_id"] == submitted["job_id"]
+    assert service.get_by_request_key("req-1")["job_id"] == submitted["job_id"]
+    assert [job["job_id"] for job in service.list_for_run("run-1")] == [
+        submitted["job_id"]
+    ]
+    assert service.history("run-1")["jobs"][0]["job_id"] == submitted["job_id"]
+    assert provider.calls == []
+    assert service.cancel(submitted["job_id"], actor="operator", reason="stop")[
+        "outcome"
+    ] == "cancelled"
+    assert provider.calls == []
+    assert store.scoring_passes.list_for_run("run-1") == []
+
+
+def test_submit_still_refuses_without_a_provider_factory(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    service = ScoringJobService(store, provider_factory=None)
+    with pytest.raises(JudgeError, match="provider factory"):
+        service.submit(single_request())
+    assert service.list_for_run("run-1") == []
+
 

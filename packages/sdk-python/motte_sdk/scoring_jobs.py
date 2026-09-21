@@ -43,13 +43,17 @@ from motte_eval.judge import (
     JudgeSpec,
     build_judge_input,
     build_judge_request,
+    declared_output_ceiling,
     judge_job_fingerprint,
     judge_metrics,
     pairwise_metrics,
     parse_judge_output,
     parse_pairwise_output,
     preflight_judge,
+    price_view,
+    prompt_token_upper_bound,
 )
+from motte_provider.errors import is_indeterminate_error
 from motte_eval.observation import metric_result_to_score
 from motte_storage.integrity import RunConflictError
 from motte_storage.scoring_jobs import (
@@ -71,9 +75,8 @@ __all__ = [
     "default_artifact_reader",
 ]
 
-_INDETERMINATE_ERROR_CLASSES = (
-    "network", "timeout", "protocol", "connection", "transport", "server_error",
-)
+#: 一次调用的 usage 累计维度；任一已结算调用缺失就整项保持未知。
+_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
 
 
 def default_artifact_reader(root: str | None = None) -> Callable[[str], bytes | None]:
@@ -92,10 +95,23 @@ def default_artifact_reader(root: str | None = None) -> Callable[[str], bytes | 
 
 
 class JudgeProviderPolicy(Contract):
-    """Judge Provider 的付费安全策略；默认关闭一切自动重试。"""
+    """Judge Provider 的付费安全策略；默认关闭一切自动重试。
+
+    token 硬承诺来自两个可证明的 Provider 能力：
+    - prompt_token_bound：能否给出 prompt 的 token 上界。冻结请求的 UTF-8
+      字节数就是字节级 BPE 词表的 token 上界；None 表示无法证明。
+    - enforces_output_limit：Provider 是否真会按请求里的 max_output_tokens
+      截断输出；只有它成立时输出才是可证明的上界。
+    任一能力缺失时，任何金额硬上限请求都在提交期被拒绝，而不是把估算
+    叫做硬上限。
+    """
 
     automatic_model_retries: bool = False
     max_calls_per_job: int = Field(default=32, ge=1)
+    prompt_token_bound: Literal["rendered_request_utf8_bytes"] | None = (
+        "rendered_request_utf8_bytes"
+    )
+    enforces_output_limit: bool = True
 
     @model_validator(mode="after")
     def never_rebills(self) -> "JudgeProviderPolicy":
@@ -184,6 +200,44 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _accumulate_cost(
+    calls: list[dict[str, Any]] | None, current_cost: float | None,
+) -> float | None:
+    """累计已结算调用的实际费用；任一次费用未知 → 总额保持未知，绝不补 0。"""
+    settled = [
+        item.get("cost_usd")
+        for item in calls or []
+        if item.get("status") == "settled"
+        and item.get("outcome") in {"succeeded", "indeterminate"}
+    ]
+    if any(cost is None for cost in settled) or current_cost is None:
+        return None
+    return round(sum(float(cost) for cost in settled) + float(current_cost), 8)
+
+
+def _accumulate_usage(
+    calls: list[dict[str, Any]] | None, current_usage: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """累计已结算调用的实际 usage；任一维度缺失就整项保持未知。"""
+    settled = [
+        item.get("usage") or {}
+        for item in calls or []
+        if item.get("status") == "settled" and item.get("outcome") == "succeeded"
+    ]
+    usages = [*settled, current_usage or {}]
+    totals: dict[str, Any] = {}
+    for key in _USAGE_KEYS:
+        values = [entry.get(key) for entry in usages]
+        totals[key] = (
+            sum(int(value) for value in values)
+            if values and all(
+                type(value) is int and value >= 0 for value in values
+            )
+            else None
+        )
+    return totals
+
+
 class ScoringJobService:
     """ScoringJob 的提交、领取、执行、取消与发布。"""
 
@@ -226,16 +280,27 @@ class ScoringJobService:
     def submit(self, request: ScoringJobRequest) -> dict[str, Any]:
         spec = request.judge_spec
         inputs, plans = self._prepare_inputs(request)
+        # 先编译完整请求计划，再算预算与 fingerprint：预检的调用数就是计划长度，
+        # 不存在第二个公式。
+        plans = self._freeze_plans(spec, inputs, plans, request.price_table)
+        allowance = self._allowance(plans)
         preflight = preflight_judge(
             spec,
             mode=request.mode,
             sample_count=request.sample_count,
             repeats=request.repeats,
             orderings=request.orderings,
+            max_calls=len(plans),
             authorisation=request.authorisation,
             price_table=request.price_table,
             estimated_prompt_tokens=request.estimated_prompt_tokens,
             estimated_completion_tokens=request.estimated_completion_tokens,
+            prompt_token_upper_bound=(
+                allowance["max_prompt_tokens"]
+                if self.policy.prompt_token_bound else None
+            ),
+            output_token_ceiling=plans[0].get("output_tokens") if plans else None,
+            output_bound_provable=self.policy.enforces_output_limit,
         )
         if not preflight.authorised:
             raise JudgeNotAuthorised(
@@ -280,6 +345,7 @@ class ScoringJobService:
                 else None
             ),
             calibration_version=spec.calibration_version,
+            plans=plans,
         )
         job_id = new_job_id()
         reserved_pass_id = new_reserved_pass_id()
@@ -312,10 +378,15 @@ class ScoringJobService:
             ),
             "calibration_version": spec.calibration_version,
             "inputs": {key: value.model_dump(mode="json") for key, value in inputs.items()},
+            # 冻结的唯一调用计划：call_id / owner / mode / repeat_index /
+            # presentation_order / input_sha256 每项各有一份，执行只消费这一份。
             "plans": plans,
+            "allowance": allowance,
             "input_digests": {
                 plan["case_id"]: plan["input_sha256"] for plan in plans
             },
+            "price_table": deepcopy(request.price_table),
+            "usage_total": None,
             "calls": [],
             "cost_total_usd": 0.0 if preflight.price_coverage["known"] else None,
             "price_coverage": deepcopy(preflight.price_coverage),
@@ -362,16 +433,34 @@ class ScoringJobService:
                 raise ScoringJobError(f"scoring job disappeared: {job['job_id']}")
             if (latest.get("cancellation") or {}).get("requested"):
                 return self._finalize_cancellation(latest)
+            existing = next(
+                (
+                    item for item in latest.get("calls") or []
+                    if item.get("call_id") == plan["call_id"]
+                ),
+                None,
+            )
+            if existing is not None:
+                # 已经 dispatch 过的调用绝不重发：已结算的跳过，未结算的保留不确定。
+                if existing.get("status") == "dispatching":
+                    return self._call_indeterminate(
+                        latest, plan,
+                        "a dispatched judge call was never settled; it is never resent",
+                    )
+                continue
             request = self._request_for(current, plan)
             invocation = self._invocation_record(current, plan)
             call = {
                 "call_id": plan["call_id"],
                 "case_id": plan["case_id"],
                 "mode": plan["mode"],
+                "repeat_index": plan.get("repeat_index", 0),
                 "candidate_ids": plan.get("candidate_ids") or [],
                 "presentation_order": plan.get("presentation_order") or [],
                 "input_sha256": plan["input_sha256"],
                 "ordinal": index + 1,
+                # dispatch 前原子预留额度：已发出未结算的调用占用这份额度。
+                "reservation": deepcopy(plan.get("reservation")),
             }
             current = self.jobs.begin_call(
                 current["job_id"], expected_revision=current["revision"],
@@ -390,9 +479,6 @@ class ScoringJobService:
                 )
             if latest["status"] != "dispatching":
                 return self._finalize_cancellation(latest)
-            total = sum(
-                item.get("cost_usd") or 0.0 for item in latest.get("calls") or []
-            ) + (summary.get("cost_usd") or 0.0)
             last_call = index == len(job["plans"]) - 1
             current = self.jobs.settle_call(
                 latest["job_id"], expected_revision=latest["revision"],
@@ -400,8 +486,12 @@ class ScoringJobService:
                 result_summary=summary,
                 job_status="settled" if last_call else "dispatching",
                 job_changes={
-                    "cost_total_usd": total if summary.get("cost_usd") is not None
-                    else latest.get("cost_total_usd"),
+                    "cost_total_usd": _accumulate_cost(
+                        latest.get("calls"), summary.get("cost_usd"),
+                    ),
+                    "usage_total": _accumulate_usage(
+                        latest.get("calls"), summary.get("usage"),
+                    ),
                     "returns": (latest.get("returns") or 0) + 1,
                 },
             )
@@ -456,17 +546,21 @@ class ScoringJobService:
     def _prepare_inputs(
         self, request: ScoringJobRequest,
     ) -> tuple[dict[str, JudgeInputBundle], list[dict[str, Any]]]:
+        """编译唯一的调用计划：每个 pair/order/repeat 各有一个稳定 call_id。
+
+        - 显式 presentation_orders 才做换序扩展；未显式给出时每个 pair 只按
+          自己的 presentation_order 评一次，绝不笛卡尔扩展成 N x N 次调用。
+        - repeats 每个重复都是一次独立调用：有自己的 call_id、repeat_index 与
+          账本条目，因此也有自己的 ScoreSet 行（trial_id = call_id）。
+        """
         if request.mode == "pairwise":
             plans: list[dict[str, Any]] = []
-            orders: list[list[str]] = request.presentation_orders or []
-            if not orders:
-                orders = [
-                    list(pair.presentation_order) for pair in request.pairwise_pairs
-                ]
+            explicit = [list(order) for order in request.presentation_orders]
             index = 0
             for pair in request.pairwise_pairs:
+                orders = explicit or [list(pair.presentation_order)]
                 for order in orders:
-                    if sorted(order) != sorted(pair.presentation_order):
+                    if len(order) != 2 or sorted(order) != sorted(pair.presentation_order):
                         raise JudgeInputError(
                             "presentation order must permute the same candidate pair"
                         )
@@ -481,46 +575,143 @@ class ScoringJobService:
                             "presentation_order": list(order),
                         }),
                     })
-                    index += 1
-                    plans.append({
-                        "call_id": f"call-{index}",
-                        "case_id": reordered.task_ref,
-                        "mode": "pairwise",
-                        "pair_id": reordered.pair_id,
-                        "candidate_ids": [
-                            reordered.candidate_a.candidate.candidate_id,
-                            reordered.candidate_b.candidate.candidate_id,
-                        ],
-                        "presentation_order": list(order),
-                        "input_sha256": reordered.input_sha256,
-                        "pair": reordered.model_dump(mode="json"),
-                    })
+                    for repeat_index in range(request.repeats):
+                        index += 1
+                        plans.append({
+                            "call_id": f"call-{index}",
+                            "case_id": reordered.task_ref,
+                            "mode": "pairwise",
+                            "pair_id": reordered.pair_id,
+                            "repeat_index": repeat_index,
+                            "candidate_ids": [
+                                reordered.candidate_a.candidate.candidate_id,
+                                reordered.candidate_b.candidate.candidate_id,
+                            ],
+                            "presentation_order": list(order),
+                            "input_sha256": reordered.input_sha256,
+                            "pair": reordered.model_dump(mode="json"),
+                        })
+            if not plans:
+                raise JudgeInputError("pairwise scoring job requires at least one plan")
             return {}, plans
 
         inputs: dict[str, JudgeInputBundle] = {}
         plans = []
-        for index, (case_id, observation) in enumerate(request.observations.items()):
+        index = 0
+        for case_id, observation in request.observations.items():
             bundle = build_judge_input(
                 request.judge_spec, observation,
                 artifact_reader=self._artifact_reader,
             )
             inputs[case_id] = bundle
-            plans.append({
-                "call_id": f"call-{index + 1}",
-                "case_id": case_id,
-                "mode": "single",
-                "observation_id": bundle.observation_id,
-                "input_sha256": bundle.input_sha256,
-            })
+            for repeat_index in range(request.repeats):
+                index += 1
+                plans.append({
+                    "call_id": f"call-{index}",
+                    "case_id": case_id,
+                    "mode": "single",
+                    "repeat_index": repeat_index,
+                    "presentation_order": [],
+                    "observation_id": bundle.observation_id,
+                    "input_sha256": bundle.input_sha256,
+                })
         return inputs, plans
+
+    # ------------------------------------------------------------- 内部：预算
+    def _output_ceiling(self, spec: JudgeSpec, calls: int) -> int | None:
+        """单次调用的输出上限：冻结参数与预算额度的较小值。
+
+        没有可执行的上限（spec 没声明、预算没有 completion 额度，或 Provider
+        不强制执行该参数）时返回 None：此时任何金额硬上限都不可证明。
+        """
+        if not self.policy.enforces_output_limit:
+            return None
+        candidates: list[int] = []
+        declared = declared_output_ceiling(spec)
+        if declared is not None:
+            candidates.append(declared)
+        if spec.budget.max_completion_tokens > 0 and calls > 0:
+            candidates.append(max(1, spec.budget.max_completion_tokens // calls))
+        if not candidates:
+            return None
+        return min(candidates)
+
+    def _freeze_plans(
+        self,
+        spec: JudgeSpec,
+        inputs: dict[str, JudgeInputBundle],
+        plans: list[dict[str, Any]],
+        price_table: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """把每个调用要预留的额度写进冻结计划（真实渲染请求的可证明上界）。"""
+        ceiling = self._output_ceiling(spec, len(plans))
+        price = price_view(price_table)
+        frozen: list[dict[str, Any]] = []
+        for plan in plans:
+            bundle = self._bundle_for(spec, inputs, plan)
+            prompt_tokens = (
+                prompt_token_upper_bound(spec, bundle)
+                if self.policy.prompt_token_bound else 0
+            )
+            cost = None
+            if price["known"]:
+                cost = round(
+                    (
+                        prompt_tokens * float(price["input_per_million"] or 0.0)
+                        + (ceiling or 0) * float(price["output_per_million"] or 0.0)
+                    ) / 1_000_000,
+                    8,
+                )
+            frozen.append({
+                **plan,
+                "budget_sha256": canonical_sha256(spec.budget.model_dump(mode="json")),
+                "output_tokens": ceiling,
+                "prompt_tokens_upper_bound": prompt_tokens,
+                "reservation": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": ceiling or 0,
+                    "cost_usd": cost,
+                },
+            })
+        return frozen
+
+    def _bundle_for(
+        self,
+        spec: JudgeSpec,
+        inputs: dict[str, JudgeInputBundle],
+        plan: dict[str, Any],
+    ) -> JudgeInputBundle | JudgePairwiseInput:
+        if plan["mode"] == "pairwise":
+            return JudgePairwiseInput.model_validate(plan["pair"])
+        return inputs[plan["case_id"]]
+
+    def _allowance(self, plans: list[dict[str, Any]]) -> dict[str, Any]:
+        """提交期冻结的额度：每次 dispatch 都从这个总额度里原子扣除。"""
+        reservations = [plan.get("reservation") or {} for plan in plans]
+        costs = [item.get("cost_usd") for item in reservations]
+        return {
+            "max_calls": len(plans),
+            "max_prompt_tokens": sum(
+                int(item.get("prompt_tokens") or 0) for item in reservations
+            ),
+            "max_completion_tokens": sum(
+                int(item.get("completion_tokens") or 0) for item in reservations
+            ),
+            "max_cost_usd": (
+                round(sum(float(cost) for cost in costs), 8)
+                if costs and all(cost is not None for cost in costs)
+                else None
+            ),
+        }
 
     def _request_for(self, job: dict[str, Any], plan: dict[str, Any]) -> Any:
         spec = JudgeSpec.model_validate(job["judge_spec"])
+        ceiling = plan.get("output_tokens")
         if plan["mode"] == "pairwise":
             pair = JudgePairwiseInput.model_validate(plan["pair"])
-            return build_judge_request(spec, pair)
+            return build_judge_request(spec, pair, max_output_tokens=ceiling)
         bundle = JudgeInputBundle.model_validate(job["inputs"][plan["case_id"]])
-        return build_judge_request(spec, bundle)
+        return build_judge_request(spec, bundle, max_output_tokens=ceiling)
 
     def _invocation_record(
         self, job: dict[str, Any], plan: dict[str, Any],
@@ -568,6 +759,9 @@ class ScoringJobService:
                 "input_sha256": plan["input_sha256"],
                 "presentation_order": plan.get("presentation_order") or [],
                 "candidate_ids": plan.get("candidate_ids") or [],
+                "repeat_index": plan.get("repeat_index", 0),
+                "output_tokens": plan.get("output_tokens"),
+                "reservation": deepcopy(plan.get("reservation")),
                 "price_table_version": (
                     job["budget"].get("price_table_version")
                 ),
@@ -610,8 +804,9 @@ class ScoringJobService:
     def _call_failed(
         self, job: dict[str, Any], plan: dict[str, Any], error: Exception,
     ) -> dict[str, Any]:
+        """已 dispatch 的调用失败：与 Provider 的唯一错误分类共用判定。"""
         error_class = getattr(error, "error_class", None) or type(error).__name__
-        indeterminate = str(error_class).lower() in _INDETERMINATE_ERROR_CLASSES
+        indeterminate = is_indeterminate_error(error)
         outcome = "indeterminate" if indeterminate else "failed"
         summary = {
             "error_class": error_class,
@@ -628,13 +823,26 @@ class ScoringJobService:
             "call_id": plan["call_id"],
             "error_class": error_class,
         }
+        changes: dict[str, Any] = {"failure": failure}
+        if indeterminate:
+            # 无法证明请求未被处理：费用保持未知，绝不补 0 或宣称未计费。
+            changes["cost_total_usd"] = None
         updated = self.jobs.settle_call(
             job["job_id"], expected_revision=job["revision"],
             call_id=plan["call_id"], outcome=outcome, result_summary=summary,
             job_status="indeterminate" if indeterminate else "failed",
-            job_changes={"failure": failure},
+            job_changes=changes,
         )
         return job_view(updated)
+
+    def _call_indeterminate(
+        self, job: dict[str, Any], plan: dict[str, Any], message: str,
+    ) -> dict[str, Any]:
+        """已 dispatch 但未结算：不重发，标不确定。"""
+        return self._call_failed(
+            job, plan,
+            JudgeError(message, code="CALL_OUTCOME_INDETERMINATE"),
+        )
 
     def _finalize_cancellation(self, job: dict[str, Any]) -> dict[str, Any]:
         """兑现取消请求：已发出的调用保留在账本里，只是不再发布新 pass。"""
@@ -766,6 +974,20 @@ class ScoringJobService:
                 **spec.as_summary(),
                 "mode": job["mode"],
                 "input_digests": deepcopy(job.get("input_digests") or {}),
+                # 每个冻结调用的证据身份：重复/换序的多次评分各自保留一行。
+                "calls": [
+                    {
+                        "call_id": plan["call_id"],
+                        "case_id": plan["case_id"],
+                        "repeat_index": plan.get("repeat_index", 0),
+                        "presentation_order": list(plan.get("presentation_order") or []),
+                        "input_sha256": plan["input_sha256"],
+                    }
+                    for plan in job["plans"]
+                ],
+                # 保存政策：重复评分逐行追加（trial_id = call_id），后一次运行
+                # 只能产生新 pass 并保留 previous_pass_id，绝不覆盖已有评分。
+                "save_policy": "append_pass_append_trials",
                 "publish_policy": job["publish_policy"],
                 "owner": deepcopy(job["owner"]),
                 "source_pass_id": job.get("source_pass_id"),
