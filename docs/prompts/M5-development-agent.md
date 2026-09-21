@@ -12,7 +12,7 @@
 2. `docs/roadmap/M5-scenarios-skills-and-judges.md` 全文，包括非编号章节。
 3. `docs/superpowers/plans/2026-09-21-m5-execution.md`：本次详细执行卡、接口事实、22 个目标及 18 个验收映射。
 4. `docs/superpowers/plans/2026-09-21-m5-kickoff.md`：基线和开工顺序。
-5. `docs/verification/M4.md` 与实际 M4 修复/验收记录；核实已合入接口、能力及尚未验证的环境。
+5. `docs/verification/M4-completion-review-2026-09-21.md`（本轮实际验收入口）与 `docs/verification/M4.md`（历史记录）；核实已合入接口、能力及尚未验证的环境。若 M4 尚未满足验收和主干合入条件，先完成只读准备并说明阻断，不把开发分支冒称已交付主干。
 6. 涉及 Web 时先读 `apps/web/DESIGN.md`，按根 AGENTS.md 路由设计技能。旧 `2026-09-19-m1-m7/M5.md` 只作历史规划补充，不覆盖本次细化。
 
 先检查当前代码与计划是否一致，输出实际模块映射、依赖、文件所有权和短执行顺序，然后立即执行，不停在计划层。计划中的拟新增 API 不是已有事实；同职责模块已经存在则扩展，不创建第二套。

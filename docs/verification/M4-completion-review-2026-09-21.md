@@ -1,6 +1,6 @@
 # M4 完成复核记录
 
-状态：整改与最终验证中。分支 `codex/m4-pi-external-harnesses`，本轮起始提交 `57227fae9b670a22193b6e86467679fb99c4c390`。本文是当前状态入口；[前一轮记录](M4.md)中的历史能力边界不作为本轮最终结论。
+状态：**implementation_complete / live_pending**。本轮代码修复、独立复审和 Linux/PG 完整 CI 已通过；真实模型验收未执行，main 尚未合并。分支 `codex/m4-pi-external-harnesses`，已验证代码提交 `270bfadcb7c23097cb49e6817cde22db039462ee`，本轮起始提交 `57227fae9b670a22193b6e86467679fb99c4c390`。本文是当前状态入口；[前一轮记录](M4.md)中的历史能力边界不作为本轮最终结论。
 
 本轮要求包含全部 T01–T11；不能用 batch 闭环代替 T10/T11，也不能用离线 fake 或本地 HTTP stub 代替真实模型验收。M5 仅编写计划与交接提示词，没有实施。
 
@@ -27,7 +27,7 @@
 | G04 | T04/T06/T07/T10 | CaseAttempt/session/workspace 隔离、实际身份冻结；历史不复用 |
 | G06/G07 | T02/T06/T07 | 受控 native config/auth、候选 hash 与 partial/strict；完整原生加载观测未知 |
 | G08/G13 | T03/T06/T07 | 原生字段解析、未知保持未知、终态/计量/类型反例 |
-| G09/G10/G11 | T05 | 有界 supervisor、Windows Job、停止未知隔离、session CAS/恢复；POSIX 最终 CI 待验 |
+| G09/G10/G11 | T05 | 有界 supervisor、Windows Job、停止未知隔离、session CAS/恢复；Linux/PG 最终完整 CI 通过 |
 | G12 | T04/T06/T07 | 沿用 FrozenObservation/Artifact/ScoringPass，退出成功不等于质量通过 |
 | G14 | T08 | 中央比较 Runtime 条件、模型单因子和工具政策 |
 | G15 | T08 | API/CLI/Web 配置与证据，独立 retry 子 Run，历史可读 |
@@ -40,12 +40,12 @@
 | A01 | runtime preflight/gate、native_configuration | 实际认证成功/失败 live |
 | A02/A03 | pi_real_adapter、pi_run_backend | 外部模型小任务 |
 | A04 | native_configuration | 原生加载清单保持 partial，不冒充完全可复现 |
-| A05/A06 | supervised_process、supervisor_safety | POSIX CI |
+| A05/A06 | supervised_process、supervisor_safety | POSIX 已纳入最终 Python 全量，完整 CI 通过 |
 | A07/A10 | batch_parser_boundaries、cli_run_backend、pi_http_provider | 真实 CLI 流样本 |
-| A08/A09 | supervisor_safety、session_concurrency、runtime_recovery、appserver_worker | POSIX/PG 与真实模型取消 |
+| A08/A09 | supervisor_safety、session_concurrency、runtime_recovery、appserver_worker | POSIX/PG 已测；真实模型取消待验 |
 | A11/A12 | interactive_commands、command_delivery、intervention_comparison、RuntimeCommands | 真实模型审批/人工干预 |
 | A13 | native_configuration、appserver_worker、Pi sandbox tests | 原生工具限制不提升为平台强制 |
-| A14 | inspect_v2_identity、parser/raw evidence 与评分历史 | 固定版本真实捕获仍待补 |
+| A14 | inspect_v2_identity、parser/raw evidence 与评分历史 | 已取得 Inspect 0.3.266 原生 runner 日志（官方 mock 模型）；原文导入/幂等/零执行收据通过，不算模型 live |
 | A15 | external_runtime_slice、runtime registry tests | 无新增外部前置 |
 
 ## 本轮实际验证
@@ -56,7 +56,7 @@
 |---|---|
 | Web 全量 test（2026-09-21） | 17 文件、239 测试通过 |
 | Web build | 通过；保留既有 bundle 大小提示 |
-| ruff check . | 通过（最终提交前再核对） |
+| ruff check . | 本地及最终 Linux CI 通过 |
 | mypy packages/contracts | 26 源文件通过 |
 | make openapi | 已导出 API 并重生成 TS |
 | 固定 Codex 原生零模型探针 | 0.155.1 initialize + initialized + thread/start 成功；返回 readOnly/networkAccess=false/on-request。空凭据、未发送 turn/start；关闭后 residual_pids=[]、truncated=false。只证明协议握手，不算 live 小任务 |
@@ -69,18 +69,26 @@
 | Windows make check | exit 2；283 failed / 1639 passed / 52 skipped / 1 deselected，323.88 秒。失败用例集合与本轮初始修复快照完全一致；不能写作全绿。最后 Git filter/不完整配置反例另以 11 项定向集补验 |
 | Linux/PG 首次完整 make check | CI 35554874385：1943 passed / 29 skipped / 1 deselected，4 failed / 11 errors。迁移清理接口、固定历史 HEAD 测试、schema 换行哈希、禁止写入证据聚合/旧预期已定位修复，需重跑确认；该次不是全绿 |
 | 首次 CI 修复定向验证 | 禁止写入、schema、CLI catalog：19 passed；迁移与存储相关：28 passed / 17 skipped（本机没有 PG）；ruff check . 通过。PG 与 Linux 最终结果以下次 CI 为准 |
+| Linux/PG 第二轮 CI（af2adc4） | 35555547703：Python 1962 passed / 29 skipped / 1 deselected，340.31 秒；独立 Web job 通过。make check 后续 Web 测试有 1 条异步时序失败，等待 Trial 按钮的修复后本机 Web 239 passed / build 通过；完整 gate 需重跑 |
+| Inspect 固定版真实原生捕获 | inspect-ai 0.3.266，EvalLog v2、2 samples、24546 bytes，SHA256 9dec3bb4c91175688bd5f93e066232da81cfdc321999a6753c2febb756479aea。真实 runner + 官方 mockllm；SQLite 导入 completed、原字节冻结、同 Run/pass 幂等、0 CaseAttempt。零外部模型请求 |
+| live 执行卡零调用复核 | 独立 reviewer 用真实 API/临时 SQLite 验证导入 201、四后端请求 202 queued、13 组预算通过；禁止 spawn、未启动 Worker、0 CaseAttempt。只证明请求可执行，不证明 live 通过 |
+| **最终完整 CI（270bfad）** | [35556224363](https://github.com/BaiZhi967/MoTTEavl/actions/runs/35556224363) 全绿：Linux/Python 3.12/PostgreSQL 16，Python **1963 passed / 29 skipped / 1 deselected**（224.28 秒）；Web **17 文件 / 239 passed**。make check、构建、Pi bridge 测试、Compose config、pip-audit、Web audit、Trivy 配置扫描及 OpenAPI/TS 漂移门均通过；skip 和 live 不算通过 |
 | 真实模型 live | 未执行；未获得本次具体 runtime/model/凭据引用与费用上限 |
 
 独立审查涵盖 Pi、公共契约/比较、Harness、产品、Inspect、命令 UI 和 M5 计划。最后一轮额外发现 Pi 未确认停止、parser lifecycle/类型、未知计量、native config/auth、app-server 事件身份/过期提案/错误脱敏，均要求反例验证后复审。最终报告须更新新发现的关闭情况，不以早期通过覆盖新发现。
 
 ## 合入条件与未完成项
 
-1. 最终独立复审关闭全部阻断发现；提交记录与测试快照对应。
-2. Linux + PostgreSQL CI 的完整 make check、audit、生成契约检查通过；本机缺 Docker/WSL 不替代这些证据。
+1. **已满足**：最终独立复审关闭本轮全部阻断发现；CI 修复、异步 Web 测试和原生 Inspect 收据增量亦独立复审通过。
+2. **已满足**：Linux + PostgreSQL CI 的完整 make check、audit、生成契约检查通过；本机 Windows 的失败记录仍保留，不用 Linux 结果冒充 Windows 全绿。
 3. G16/T09 真实小任务需明确后端、模型、凭据引用与调用/费用上限，分别记录 Pi/Claude/Codex 及 app-server 的 live 来源。不得读取或使用操作者已有登录态推定授权。
 4. 用户要求“全部 M4 完成后合并主干”；在上述验收未完成时不宣称全部完成或已满足该合入条件。M5 文档可先准备，实际 M4 主干 SHA 只在真实合并后登记。
 
+真实模型执行范围、参数、收据字段和待补配置见 [M4 live 验收执行卡](../operations/m4-live-acceptance.md)。该卡是可审阅的执行方案，不是调用授权或验收通过记录。
+
 本轮已提交并推送开发分支：`aa63cf2`（M4 修复）、`1389fa0`（M5 计划）、`543614e`（同步 main）、`78f372a`（修复主干测试对开发机目录的依赖，27 项通过）。这不是向 main 合入。首次 Linux/PG 完整 CI：[35554874385](https://github.com/BaiZhi967/MoTTEavl/actions/runs/35554874385)，Web 通过、Python make check 失败，以上如实记录。
+
+后续 `af2adc4` 修复首轮 CI 的迁移/证据/哈希及 CLI catalog 版本问题；`270bfad` 补原生 Inspect 收据、修复 Web 测试等待条件并移除未使用的过期兼容版本常量。最终通过记录对应 `270bfad`；之后的验收状态和 M5 交接文档更新不修改产品逻辑。原始采集脚本保留 CRLF 字节，Git whitespace 规则单独标记 `cr-at-eol`，不改写来源以消除格式提示。
 
 固定 Windows x64 二进制静态核对收据：Claude 2.1.278 SHA256 `006ea5c8638f67f10a5ae66bb232fd267c9f6af294e3f03f4cfcf1fd3f2cced8`；Codex 0.155.1 SHA256 `eba0f32c976667cb9298efafd98513e823eeda7b576a03ec658bb8be8d336316`。均安装于忽略的专项工具目录，未替换主机已有 CLI。
 
