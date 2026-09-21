@@ -1,89 +1,70 @@
 """MoTTEavl evaluator package.
 
-API 保持既有模块路径不变；这里只做加法式 re-export，方便调用方从一个入口取得
-M5 的 Judge / rubric / 校准契约。
+这里刻意**不**在包导入时加载 Judge / rubric 依赖：motte_eval._regex_worker
+会在 spawn 出来的子进程里被重新导入，子进程必须保持 stdlib-only（见该模块
+文档）。因此 re-export 采用 PEP 562 的惰性属性：from motte_eval import JudgeSpec
+仍然可用，而 import motte_eval 只付一次字典查找的代价。
 """
-from .judge import (
-    JUDGE_PURPOSE,
-    JudgeAuthorisation,
-    JudgeBudget,
-    JudgeCandidateInput,
-    JudgeCandidateRef,
-    JudgeError,
-    JudgeInputBundle,
-    JudgeInputError,
-    JudgeInputSelector,
-    JudgeNotAuthorised,
-    JudgeOutcome,
-    JudgePairwiseInput,
-    JudgePreflight,
-    JudgeSpec,
-    JudgeSpecError,
-    build_judge_input,
-    build_judge_request,
-    build_judge_spec,
-    build_pairwise_input,
-    judge_job_fingerprint,
-    judge_metrics,
-    judge_spec_sha256,
-    pairwise_metrics,
-    parse_judge_output,
-    parse_pairwise_output,
-    preflight_judge,
-    scan_candidate_content,
-)
-from .rubrics import (
-    CalibrationPolicy,
-    Criterion,
-    Rubric,
-    RubricError,
-    available_rubrics,
-    build_rubric,
-    get_rubric,
-    policy_for,
-    validate_policy,
-)
+from __future__ import annotations
 
-from . import workflow as workflow  # noqa: E402 - M5-T04 指标在导入时注册
+from importlib import import_module
+from typing import Any
 
 __version__ = "0.1.0"
 
-__all__ = [
-    "CalibrationPolicy",
-    "Criterion",
-    "JUDGE_PURPOSE",
-    "JudgeAuthorisation",
-    "JudgeBudget",
-    "JudgeCandidateInput",
-    "JudgeCandidateRef",
-    "JudgeError",
-    "JudgeInputBundle",
-    "JudgeInputError",
-    "JudgeInputSelector",
-    "JudgeNotAuthorised",
-    "JudgeOutcome",
-    "JudgePairwiseInput",
-    "JudgePreflight",
-    "JudgeSpec",
-    "JudgeSpecError",
-    "Rubric",
-    "RubricError",
-    "available_rubrics",
-    "build_judge_input",
-    "build_judge_request",
-    "build_judge_spec",
-    "build_pairwise_input",
-    "build_rubric",
-    "get_rubric",
-    "judge_job_fingerprint",
-    "judge_metrics",
-    "judge_spec_sha256",
-    "pairwise_metrics",
-    "parse_judge_output",
-    "parse_pairwise_output",
-    "policy_for",
-    "preflight_judge",
-    "scan_candidate_content",
-    "validate_policy",
-    "workflow",
-]
+#: 惰性 re-export 表：公开名 -> 定义它的子模块。
+_LAZY_EXPORTS: dict[str, str] = {
+    "CalibrationPolicy": ".rubrics",
+    "Criterion": ".rubrics",
+    "JUDGE_PURPOSE": ".judge",
+    "JudgeAuthorisation": ".judge",
+    "JudgeBudget": ".judge",
+    "JudgeBudgetError": ".judge",
+    "JudgeCandidateInput": ".judge",
+    "JudgeCandidateRef": ".judge",
+    "JudgeError": ".judge",
+    "JudgeInputBundle": ".judge",
+    "JudgeInputError": ".judge",
+    "JudgeInputSelector": ".judge",
+    "JudgeNotAuthorised": ".judge",
+    "JudgeOutcome": ".judge",
+    "JudgePairwiseInput": ".judge",
+    "JudgePairwiseOutcome": ".judge",
+    "JudgePreflight": ".judge",
+    "JudgeSpec": ".judge",
+    "JudgeSpecError": ".judge",
+    "Rubric": ".rubrics",
+    "RubricError": ".rubrics",
+    "available_rubrics": ".rubrics",
+    "build_judge_input": ".judge",
+    "build_judge_request": ".judge",
+    "build_judge_spec": ".judge",
+    "build_pairwise_input": ".judge",
+    "build_rubric": ".rubrics",
+    "get_rubric": ".rubrics",
+    "judge_job_fingerprint": ".judge",
+    "judge_metrics": ".judge",
+    "judge_spec_sha256": ".judge",
+    "pairwise_metrics": ".judge",
+    "parse_judge_output": ".judge",
+    "parse_pairwise_output": ".judge",
+    "policy_for": ".rubrics",
+    "preflight_judge": ".judge",
+    "scan_candidate_content": ".judge",
+    "validate_policy": ".rubrics",
+}
+
+__all__ = sorted(_LAZY_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY_EXPORTS})
