@@ -10,9 +10,18 @@
 流程步骤**不是**子 Run，也**不是**伪 Trial：一个 CaseAttempt 装配一个
 FixtureInstance + 一个 TargetSession + 一个引擎实例，共用既有 service attach
 的事件、调用日志、取消与 Artifact 通道。
+
+评分装配（R6）：执行器冻结的 FrozenObservation 是唯一评分输入。本模块把
+motte_eval.workflow 已注册的过程指标（state-equals / state-delta /
+no-side-effect / goal-achieved / response-policy）接进既有评分入口
+（RunService._score_results）：指标配置在创建期从已发布 Scenario 的 evaluator
+声明冻结进 manifest.resource_snapshots.workflow_evaluator，评分期只读冻结证据与
+它声明的产物，不碰业务工具、不调模型。归属不符或证据缺失只产生
+insufficient_evidence，绝不发布 pass。
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .execution_backends import (
@@ -31,6 +40,9 @@ SCENARIO_CAPABILITIES: dict[str, bool] = {
     "safe_to_repeat": False,
     "multi_turn": True,
 }
+
+#: 创建期冻结的 workflow evaluator 快照在 manifest 里的位置。
+WORKFLOW_EVALUATOR_SNAPSHOT_KEY = "workflow_evaluator"
 
 
 def target_kind_of(manifest: dict[str, Any]) -> str:
@@ -64,20 +76,27 @@ def validate_scenario_manifest(manifest: dict[str, Any]) -> None:
         )
     # 先校验冻结输入的形状，再校验目标能力：配置错误应当先报出来，能力不足
     # 是另一类错误（错误码不同，客户端可以分别处理）。
-    # 只有 Workflow 真的声明了 fixture_refs 时才要求固定 Fixture：没有 Fixture
-    # 的流程（纯消息 + 断言）不该被一条空快照规则永久挡在创建之外。
+    # fixture 需求只有一个判断来源（motte_scenario.executor.workflow_requires_fixture）：
+    # 没有 fixture 的流程（纯消息 + 断言）不该被一条空快照规则挡在创建之外，
+    # 而声明了 fixture 引用或 fixture 工具/事件步骤的流程在创建期就必须有固定
+    # Fixture——不能先接受、执行时才说缺 primary binding（R6 第 5 条）。
+    from motte_scenario.executor import workflow_requires_fixture
+
     declared_fixtures = snapshot.get("fixture_refs") or []
     fixtures = manifest.get("fixture_snapshot")
-    if declared_fixtures and (not isinstance(fixtures, dict) or not fixtures):
-        raise ExecutionBackendError(
-            "SCENARIO_FIXTURE_REQUIRED",
-            "scenario runs require pinned fixture snapshots for every declared fixture_ref",
-        )
+    if workflow_requires_fixture(snapshot):
+        if not isinstance(fixtures, dict) or not fixtures:
+            reason = (
+                "scenario runs require pinned fixture snapshots for every declared fixture_ref"
+                if declared_fixtures else
+                "this workflow declares fixture tool/event steps and needs a pinned fixture"
+            )
+            raise ExecutionBackendError("SCENARIO_FIXTURE_REQUIRED", reason)
     for key, record in (fixtures or {}).items():
         if not isinstance(record, dict) or not record.get("content_hash"):
             raise ExecutionBackendError(
                 "SCENARIO_FIXTURE_INVALID",
-                f"fixture snapshot {key} is missing a pinned content hash",
+                "fixture snapshot " + str(key) + " is missing a pinned content hash",
             )
     kind = target_kind_of(manifest)
     from motte_scenario.targets import (
@@ -109,7 +128,7 @@ def _validate_builtin_agent_target(manifest: dict[str, Any]) -> None:
     if mode not in AGENT_MODES:
         raise ExecutionBackendError(
             "SCENARIO_TARGET_MODE_UNSUPPORTED",
-            "agent mode must be one of " + ", ".join(AGENT_MODES) + f"; got {mode!r}",
+            "agent mode must be one of " + ", ".join(AGENT_MODES) + "; got " + repr(mode),
         )
     if not isinstance(manifest.get("provider"), dict):
         raise ExecutionBackendError(
@@ -118,10 +137,83 @@ def _validate_builtin_agent_target(manifest: dict[str, Any]) -> None:
         )
 
 
+# ---------------------------------------------------------------- 工具实现注册表
+
+#: 进程级业务工具实现表：fixture_id -> {handlers/mock_handlers/replay_records/events}。
+#: 策略（允许的工具、模式、初态）由已发布且冻结的资源决定；这里只登记"谁来实现"，
+#: 与 target adapter 注册表同一层语义。未登记即具名拒绝，绝不回退真实 handler。
+_SCENARIO_TOOLS: dict[str, dict[str, dict[str, Any]]] = {}
+
+
+def register_scenario_tools(
+    fixture_id: str,
+    *,
+    handlers: Mapping[str, Callable[..., Any]] | None = None,
+    mock_handlers: Mapping[str, Callable[..., Any]] | None = None,
+    replay_records: Mapping[str, Mapping[str, Any]] | None = None,
+    event_handlers: Mapping[str, Callable[..., Any]] | None = None,
+) -> None:
+    """登记一个 fixture 的业务工具实现（real / mock / replay 三种来源各自持有）。"""
+    if not isinstance(fixture_id, str) or not fixture_id:
+        raise ValueError("fixture_id must be a nonempty string")
+    _SCENARIO_TOOLS[fixture_id] = {
+        "handlers": dict(handlers or {}),
+        "mock_handlers": dict(mock_handlers or {}),
+        "replay_records": {
+            str(key): dict(value) for key, value in (replay_records or {}).items()
+        },
+        "event_handlers": dict(event_handlers or {}),
+    }
+
+
+def unregister_scenario_tools(fixture_id: str) -> None:
+    _SCENARIO_TOOLS.pop(fixture_id, None)
+
+
+def registered_scenario_fixtures() -> tuple[str, ...]:
+    return tuple(sorted(_SCENARIO_TOOLS))
+
+
+def _sources_for(snapshot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """按冻结的 fixture 快照汇总工具来源；两个 fixture 声明同名工具即具名拒绝。"""
+    merged: dict[str, dict[str, Any]] = {
+        "handlers": {}, "mock_handlers": {}, "replay_records": {}, "event_handlers": {},
+    }
+    for key, record in sorted((snapshot or {}).items()):
+        fixture_id = str((record or {}).get("fixture_id") or str(key).partition("@")[0])
+        source = _SCENARIO_TOOLS.get(fixture_id, {})
+        for bucket in ("handlers", "mock_handlers", "event_handlers"):
+            for name, implementation in (source.get(bucket) or {}).items():
+                existing = merged[bucket].get(name)
+                if existing is not None and existing is not implementation:
+                    raise ExecutionBackendError(
+                        "SCENARIO_TOOL_HANDLER_CONFLICT",
+                        "fixture tool " + repr(name) + " is implemented by more than one fixture",
+                    )
+                merged[bucket][name] = implementation
+        for name, record_value in (source.get("replay_records") or {}).items():
+            existing = merged["replay_records"].get(name)
+            if existing is not None and existing != record_value:
+                raise ExecutionBackendError(
+                    "SCENARIO_TOOL_HANDLER_CONFLICT",
+                    "fixture tool " + repr(name) + " has conflicting frozen replay records",
+                )
+            merged["replay_records"][name] = dict(record_value)
+    return merged
+
+
 def _build_scenario(run: dict[str, Any]) -> ExecutionHandle:
     from motte_scenario.executor import ScenarioCaseExecutor
 
-    executor = ScenarioCaseExecutor(run)
+    manifest = run.get("manifest") or {}
+    sources = _sources_for(manifest.get("fixture_snapshot") or {})
+    executor = ScenarioCaseExecutor(
+        run,
+        tool_handlers=sources["handlers"],
+        mock_handlers=sources["mock_handlers"],
+        replay_records=sources["replay_records"],
+        event_handlers=sources["event_handlers"],
+    )
 
     def attach(service: Any, run_id: str) -> None:
         executor.bind_service(service)
@@ -133,6 +225,143 @@ def _build_scenario(run: dict[str, Any]) -> ExecutionHandle:
         capabilities=dict(SCENARIO_CAPABILITIES),
         attach=attach,
     )
+
+
+# ---------------------------------------------------------------- 评分装配
+
+#: 缺失证据时使用的稳定原因码（只产生 insufficient_evidence，绝不伪造 pass）。
+OBSERVATION_MISSING = "observation_missing"
+OBSERVATION_INVALID = "observation_invalid"
+OBSERVATION_HASH_MISMATCH = "observation_hash_mismatch"
+OBSERVATION_RUN_MISMATCH = "observation_run_mismatch"
+OBSERVATION_CASE_MISMATCH = "observation_case_mismatch"
+FOREIGN_EVIDENCE_REFUSED = "foreign_evidence_refused"
+
+
+class ScenarioScoringError(RuntimeError):
+    """冻结的评分配置本身不可用：宁可让 Run 失败，也不发布未经校验的评分。"""
+
+
+def workflow_evaluator_snapshot(run: Mapping[str, Any]) -> dict[str, Any] | None:
+    """已冻结的 workflow evaluator 快照（创建期生成，运行期不再解析资源）。"""
+    manifest = run.get("manifest") or {}
+    snapshots = manifest.get("resource_snapshots") if isinstance(manifest, Mapping) else None
+    spec = (snapshots or {}).get(WORKFLOW_EVALUATOR_SNAPSHOT_KEY)
+    return dict(spec) if isinstance(spec, Mapping) else None
+
+
+def _artifact_reader() -> Any:
+    import os
+
+    from motte_storage.artifacts import ArtifactStore
+
+    return ArtifactStore(os.environ.get("ARTIFACT_ROOT", "var/artifacts")).read_bytes
+
+
+def _gap_metric(metric: Mapping[str, Any], reason: str) -> Any:
+    """证据缺口行：insufficient_evidence，不占分母，不带 passed。"""
+    from motte_contracts.evaluation import MetricResult, MetricStatus
+    from motte_eval.observation import EVALUATOR_ID, EVALUATOR_VERSION
+
+    return MetricResult(
+        metric_id=str(metric["metric_id"]),
+        status=MetricStatus.insufficient_evidence,
+        evaluator_id=EVALUATOR_ID,
+        evaluator_version=EVALUATOR_VERSION,
+        reason=reason,
+        denominator=False,
+    )
+
+
+def _observation_problem(run: Mapping[str, Any], case_id: str, observation: Any) -> str | None:
+    """归属校验：任何一项不符即拒评（零调用、零 pass）。"""
+    from motte_contracts.evaluation import FrozenObservation, observation_evidence_hash
+
+    if not isinstance(observation, Mapping):
+        return OBSERVATION_MISSING
+    try:
+        frozen = FrozenObservation.model_validate(observation)
+    except Exception:  # noqa: BLE001 - 损坏的观察按缺证据处理
+        return OBSERVATION_INVALID
+    view = {
+        key: value for key, value in observation.items()
+        if key not in {"evidence_hash", "recorded_at"}
+    }
+    if observation_evidence_hash(view) != observation.get("evidence_hash"):
+        return OBSERVATION_HASH_MISMATCH
+    if frozen.run_id != run.get("id"):
+        return OBSERVATION_RUN_MISMATCH
+    if frozen.case_id != case_id:
+        return OBSERVATION_CASE_MISMATCH
+    for ref in frozen.workflow_evidence:
+        owner = ref.owner
+        if owner.run_id != frozen.run_id or owner.case_id != frozen.case_id:
+            return FOREIGN_EVIDENCE_REFUSED
+        if owner.attempt_id is not None and frozen.attempt_id is not None and (
+            owner.attempt_id != frozen.attempt_id
+        ):
+            return FOREIGN_EVIDENCE_REFUSED
+    return None
+
+
+def _scoring_metrics(run: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """冻结的指标配置；没有声明 evaluator 的 Run 不产生任何评分行。"""
+    spec = workflow_evaluator_snapshot(run)
+    if spec is None:
+        return None
+    from motte_eval import workflow as _workflow  # noqa: F401 - 注册 M5 过程指标
+    from motte_eval.observation import EvaluatorConfigError, normalize_evaluator_config
+
+    config = spec.get("config")
+    try:
+        normalized = normalize_evaluator_config(config)
+    except EvaluatorConfigError as error:
+        # 创建期已经校验过同一条配置；这里失败说明冻结内容被改写。
+        raise ScenarioScoringError(
+            "frozen workflow evaluator config is invalid: " + str(error)
+        ) from error
+    return list(normalized["metrics"])
+
+
+def scenario_scores(
+    run: Mapping[str, Any],
+    results: list[dict[str, Any]],
+    *,
+    artifact_reader: Callable[[str], bytes | None] | None = None,
+) -> list[dict[str, Any]]:
+    """用既有评分入口对 Scenario Run 的冻结证据评分（零模型、零业务工具调用）。
+
+    输入只有 Run 行与已持久化的 Case 行；每个 Case 的
+    result.frozen_observation 是唯一证据来源，rescore 因此天然复用同一份证据。
+    """
+    from motte_contracts.evaluation import FrozenObservation
+    from motte_eval import workflow as _workflow  # noqa: F401 - 注册 M5 过程指标
+    from motte_eval.observation import evaluate_observation, metric_result_to_score
+
+    metrics = _scoring_metrics(run)
+    if metrics is None:
+        return []
+    reader = artifact_reader if artifact_reader is not None else _artifact_reader()
+    selected = {str(case_id) for case_id in (run.get("case_ids") or [])}
+    scores: list[dict[str, Any]] = []
+    for row in results:
+        case_id = row.get("case_id") if isinstance(row, Mapping) else None
+        if not isinstance(case_id, str) or not case_id:
+            raise ValueError("scenario scoring requires a case_id on every result row")
+        if selected and case_id not in selected:
+            raise ValueError("result case_id is not selected: " + repr(case_id))
+        result = row.get("result") if isinstance(row, Mapping) else None
+        observation = result.get("frozen_observation") if isinstance(result, Mapping) else None
+        problem = _observation_problem(run, case_id, observation)
+        if problem is not None:
+            for metric in metrics:
+                scores.append(metric_result_to_score(_gap_metric(metric, problem), case_id))
+            continue
+        frozen = FrozenObservation.model_validate(observation)
+        evaluated = evaluate_observation(frozen, {"metrics": metrics}, artifact_reader=reader)
+        for metric in evaluated:
+            scores.append(metric_result_to_score(metric, case_id))
+    return scores
 
 
 def install_scenario_backend(*, available: bool | None = None) -> ExecutionBackendSpec:
@@ -160,12 +389,13 @@ def install_scenario_backend(*, available: bool | None = None) -> ExecutionBacke
 
 #: M5 执行状态开关。
 #:
-#: 契约、编译、条件、Fixture 生命周期与有界引擎（含受控进程目标）都已实现
-#: 并有测试；但把引擎接进既有 CaseAttempt/Observation/ScoringPass 纵向链路的
-#: ScenarioCaseExecutor **尚未交付**（M5-T05 未完成）。在它落地之前公开执行
-#: 必须明确 unavailable：创建期就返回 EXECUTION_BACKEND_UNAVAILABLE，而不是
-#: 让 Run 进入分派后才失败，也绝不静默改选 replay/direct-llm。
-SCENARIO_BACKEND_AVAILABLE = False
+#: 公共纵向链路已交付并有行为测试（tests/integration/test_scenario_run_backend.py：
+#: 公共 API 创建 → 持久 queued Run → 普通 WorkerLoop 领取 → 报告与评分 →
+#: 离线 rescore 复用冻结证据）。创建期仍然拒绝不满足能力的配置
+#: （目标未注册 / tool_modes 不满足 / fixture 缺失），绝不静默改选
+#: replay/direct-llm；显式 install_scenario_backend(available=False) 仍可用于
+#: 关闭新执行。
+SCENARIO_BACKEND_AVAILABLE = True
 
 # 内置 Agent 目标 adapter 与 backend 一起安装：目标不可用时创建期就拒绝。
 try:

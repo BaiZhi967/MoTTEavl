@@ -21,9 +21,16 @@ def _budget_config(manifest: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class BuiltinTargetSession:
-    """TargetPort 实现：begin / send / observe / interrupt / close。"""
+    """TargetPort 实现：begin / send / observe / interrupt / close。
 
-    def __init__(self, manifest: Mapping[str, Any], tools: Mapping[str, Any]) -> None:
+    on_event 把运行时的模型/工具调用边界事件交给执行器的调用账本（R6）：目标
+    自己看到的事件与平台侧证据是同一份事实，不在两处各记一套。
+    """
+
+    def __init__(
+        self, manifest: Mapping[str, Any], tools: Mapping[str, Any],
+        *, on_event: Any = None,
+    ) -> None:
         import time
 
         from motte_agent.builtin_react import BuiltinReActRuntime
@@ -41,6 +48,7 @@ class BuiltinTargetSession:
             model=(manifest.get("provider") or {}).get("model") or "scenario-target",
             mode=self.mode,
             budget=ExecutionBudget.from_config(_budget_config(manifest)),
+            event_sink=on_event if callable(on_event) else None,
         )
 
     def begin(self) -> dict[str, Any]:
@@ -113,7 +121,10 @@ class BuiltinTargetSession:
 
 
 def open_builtin_session(context: Mapping[str, Any]) -> BuiltinTargetSession:
-    return BuiltinTargetSession(context["manifest"], context.get("tools") or {})
+    return BuiltinTargetSession(
+        context["manifest"], context.get("tools") or {},
+        on_event=context.get("on_event"),
+    )
 
 
 def builtin_agent_capabilities(_manifest: Mapping[str, Any]) -> Any:

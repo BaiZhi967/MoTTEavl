@@ -1,13 +1,26 @@
-"""M5-T01/T05 完成门：可执行 backend 注册前必须明确 unavailable。
+"""M5-T01/T05/R6 完成门：scenario backend 的实际可用性与具名拒绝。
 
-契约、条件、Fixture 与引擎已实现，但把它们接进既有 CaseAttempt/Observation/
-ScoringPass 纵向链路的 ScenarioCaseExecutor 尚未交付。本用例锁定这个事实：
-创建期就具名拒绝，绝不静默改选 replay/direct-llm，也绝不让 Run 在分派后才失败。
+R6 之前这里锁定的是"公开执行关闭"这一事实（创建期 EXECUTION_BACKEND_UNAVAILABLE）。
+公共纵向链路交付后（真实证明见 tests/integration/test_scenario_run_backend.py：
+公共 API 创建 → 持久 queued Run → 普通 WorkerLoop 领取 → 报告与评分），本文件
+改为验证**实际可用性**：
+
+* scenario@1 已注册且 available=True，resolve_execution 解析出外层 backend 身份；
+* 目标能力不满足（未注册 / 多轮 / tool_modes / required_tools / evidence）仍在
+  创建期具名拒绝，绝不静默改选 replay/direct-llm；
+* 显式 install_scenario_backend(available=False) 仍然可以关闭新执行；
+* fixture 需求在创建期与执行期使用同一个判断（见 executor.workflow_requires_fixture）。
 """
 from __future__ import annotations
 
 import pytest
 
+from motte_scenario.targets import (
+    TargetAdapter,
+    TargetCapabilities,
+    register_target_adapter,
+    unregister_target_adapter,
+)
 from motte_sdk.execution_backends import (
     ExecutionBackendError,
     backend_for,
@@ -17,14 +30,9 @@ from motte_sdk.scenario_backend import (
     SCENARIO_BACKEND_AVAILABLE,
     SCENARIO_BACKEND_ID,
     SCENARIO_BACKEND_VERSION,
+    install_scenario_backend,
     target_kind_of,
     validate_scenario_manifest,
-)
-from motte_scenario.targets import (
-    TargetCapabilities,
-    TargetCapabilityError,
-    register_target_adapter,
-    unregister_target_adapter,
 )
 
 
@@ -47,9 +55,6 @@ def builtin_adapter():
     )
     yield adapter
     unregister_target_adapter("builtin-agent")
-
-
-from motte_scenario.targets import TargetAdapter  # noqa: E402
 
 
 def workflow_manifest(**overrides):
@@ -95,21 +100,39 @@ def test_scenario_runs_cannot_override_the_outer_backend():
     assert error.value.code == "EXECUTION_BACKEND_CONFLICT"
 
 
-def test_workflow_run_resolves_to_the_scenario_backend_identity(builtin_adapter):
-    """可用时解析出 scenario@1；不可用时创建期就拒绝（不能静默改选）。"""
+def test_scenario_backend_is_actually_available(builtin_adapter):
+    """R6：注册事实与实际可用性一致，解析出外层 backend 身份。"""
+    assert SCENARIO_BACKEND_AVAILABLE is True
+    spec = backend_for(SCENARIO_BACKEND_ID, SCENARIO_BACKEND_VERSION)
+    assert spec.available is True
+    assert spec.execution_mode == "sample"
+    assert spec.capabilities["multi_turn"] is True
+    # 带副作用、不可安全重放：崩溃恢复不得自动重跑（M5-G05）。
+    assert spec.capabilities["safe_to_repeat"] is False
+
     manifest = workflow_manifest()
     validate_scenario_manifest(manifest)
-    if SCENARIO_BACKEND_AVAILABLE:
-        resolved = resolve_execution("scenario@1", manifest, scenario={"mode": "scenario"})
-        assert resolved["execution"]["backend_id"] == SCENARIO_BACKEND_ID
-        assert resolved["execution"]["backend_version"] == SCENARIO_BACKEND_VERSION
-        # 内层目标身份单独保留，不与外层 backend 混作一个身份。
-        assert resolved["agent"] == "builtin-agent@1"
-        assert resolved["workflow"] == "order-cancel-confirmed@1"
-    else:
+    resolved = resolve_execution("scenario@1", manifest, scenario={"mode": "scenario"})
+    assert resolved["execution"]["backend_id"] == SCENARIO_BACKEND_ID
+    assert resolved["execution"]["backend_version"] == SCENARIO_BACKEND_VERSION
+    # 内层目标身份单独保留，不与外层 backend 混作一个身份。
+    assert resolved["agent"] == "builtin-agent@1"
+    assert resolved["workflow"] == "order-cancel-confirmed@1"
+
+
+def test_execution_can_still_be_explicitly_disabled(builtin_adapter):
+    """显式关闭新执行：创建期具名拒绝，绝不静默改选 replay/direct-llm。"""
+    try:
+        install_scenario_backend(available=False)
         with pytest.raises(ExecutionBackendError) as error:
-            resolve_execution("scenario@1", manifest, scenario={"mode": "scenario"})
+            backend_for(SCENARIO_BACKEND_ID, SCENARIO_BACKEND_VERSION)
         assert error.value.code == "EXECUTION_BACKEND_UNAVAILABLE"
+        with pytest.raises(ExecutionBackendError) as resolved:
+            resolve_execution("scenario@1", workflow_manifest(), scenario={"mode": "scenario"})
+        assert resolved.value.code == "EXECUTION_BACKEND_UNAVAILABLE"
+    finally:
+        install_scenario_backend(available=SCENARIO_BACKEND_AVAILABLE)
+    assert backend_for(SCENARIO_BACKEND_ID, SCENARIO_BACKEND_VERSION).available is True
 
 
 def test_missing_or_empty_snapshots_are_refused_at_creation(builtin_adapter):
@@ -137,20 +160,36 @@ def test_missing_or_empty_snapshots_are_refused_at_creation(builtin_adapter):
         })
 
 
-def test_execution_is_unavailable_until_the_vertical_chain_is_delivered(builtin_adapter):
-    """M5-T05 未交付：公开执行必须明确拒绝，不能静默改选其他 backend。"""
-    if not SCENARIO_BACKEND_AVAILABLE:
-        with pytest.raises(ExecutionBackendError) as error:
-            backend_for(SCENARIO_BACKEND_ID, SCENARIO_BACKEND_VERSION)
-        assert error.value.code == "EXECUTION_BACKEND_UNAVAILABLE"
-        with pytest.raises(ExecutionBackendError):
-            resolve_execution("scenario@1", workflow_manifest(), scenario={"mode": "scenario"})
-    else:  # pragma: no cover - 仅在 T05 交付后走到
-        spec = backend_for(SCENARIO_BACKEND_ID, SCENARIO_BACKEND_VERSION)
-        assert spec.available is True
+def test_fixture_requirement_agrees_between_creation_and_execution(builtin_adapter):
+    """声明 fixture 工具步骤却没有固定 Fixture：创建期就必须具名拒绝。"""
+    needs_fixture = workflow_manifest(fixture_snapshot=None)
+    needs_fixture["workflow_snapshot"] = {
+        **needs_fixture["workflow_snapshot"],
+        "steps": [
+            {"step_id": "call", "kind": "invoke_fixture_tool", "tool": "orders.cancel",
+             "arguments": {"order_id": "order-1"}},
+        ],
+    }
+    with pytest.raises(ExecutionBackendError) as error:
+        validate_scenario_manifest(needs_fixture)
+    assert error.value.code == "SCENARIO_FIXTURE_REQUIRED"
+    # 同一个判断来源（executor.workflow_requires_fixture）也把事件步骤算进去。
+    from motte_scenario.executor import workflow_requires_fixture
+
+    assert workflow_requires_fixture(needs_fixture["workflow_snapshot"]) is True
+    assert workflow_requires_fixture({
+        "steps": [{"step_id": "greet", "kind": "send_message", "message": "hi"}],
+    }) is False
+    assert workflow_requires_fixture({
+        "steps": [{"step_id": "loop", "kind": "loop", "max_iterations": 2, "body": [
+            {"step_id": "inner", "kind": "trigger_fixture_event", "event": "tick"},
+        ]}],
+    }) is True
 
 
-def test_capability_intersection_refuses_targets_that_cannot_serve_the_workflow(builtin_adapter):
+def test_capability_intersection_refuses_targets_that_cannot_serve_the_workflow(
+    builtin_adapter,
+):
     manifest = workflow_manifest(target_snapshot={
         "multi_turn": True, "min_turns": 2, "required_tools": ["orders.refund"],
         "tool_modes": ["real"], "interrupt": False, "skill_injection": False,

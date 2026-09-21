@@ -1351,6 +1351,13 @@ class RunService:
                 for score in scores:
                     self._emit(run_id, "score", score)
             return scores
+        if self._scenario_shaped(run):
+            # M5-T05：Scenario Run 的评分输入是执行器冻结的 FrozenObservation
+            # （R6）。评分只读冻结证据与它声明的产物；普通离线 rescore 走同一条
+            # 路径，因此天然复用同一份证据、不碰业务工具与模型。
+            from .scenario_backend import scenario_scores
+
+            return scenario_scores(run, results)
         scores: list[dict[str, Any]] = []
         for entry in results:
             if "expected" in entry:
@@ -1359,6 +1366,16 @@ class RunService:
                 if emit_events:
                     self._emit(run_id, "score", {"case_id": entry["case_id"], "passed": passed})
         return scores
+
+    @staticmethod
+    def _scenario_shaped(run: dict[str, Any]) -> bool:
+        """这份 Run 是否由 scenario@1 逐步骤驱动（决定评分装配路径）。"""
+        execution = ((run.get("manifest") or {}).get("execution") or {})
+        return (
+            isinstance(execution, dict)
+            and execution.get("backend_id") == "scenario"
+            and (run.get("manifest") or {}).get("workflow_snapshot") is not None
+        )
 
     def _begin_case_attempt(
         self, run: dict[str, Any], case_id: str, *, trial_id: str | None = None,

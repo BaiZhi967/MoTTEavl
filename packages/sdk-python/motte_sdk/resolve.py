@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -162,6 +163,73 @@ def resolve_manifest(
     if snapshots:
         resolved["resource_snapshots"] = snapshots
     return resolved
+
+
+#: 已发布 Scenario 的 evaluator 声明在 manifest 里的冻结位置。
+WORKFLOW_EVALUATOR_SNAPSHOT_KEY = "workflow_evaluator"
+
+
+def _freeze_workflow_evaluator(resolved: dict[str, Any], scenario: Any) -> None:
+    """把 Scenario 声明的 evaluator 与指标配置冻结进 manifest（服务端生成）。
+
+    指标配置在创建期就用既有 normalize_evaluator_config 校验：非法配置在这里
+    具名拒绝，而不是等到评分时才失败。冻结快照带内容 hash，评分只读它，
+    不再按可变名称重新解析资源（M5-T04/T05 的冻结身份要求）。
+    """
+    if not isinstance(scenario, Mapping):
+        return
+    spec = _workflow_evaluator_spec(scenario)
+    if spec is None:
+        return
+    snapshots = dict(resolved.get("resource_snapshots") or {})
+    snapshots[WORKFLOW_EVALUATOR_SNAPSHOT_KEY] = spec
+    resolved["resource_snapshots"] = snapshots
+    # 既有评分入口从 manifest.evaluation 读 scorer 身份；Scenario Run 没有
+    # benchmark 描述符，这里用 scenario 后端与冻结 evaluator 的真实身份填满
+    # EvaluationDescriptor，避免 pass 被记成 generic-v1。
+    resolved["evaluation"] = {
+        "benchmark_id": "scenario",
+        "benchmark_version": "1",
+        "adapter_id": "scenario",
+        "adapter_version": "1",
+        "scorer_id": spec["evaluator_id"],
+        "scorer_version": spec["version"],
+    }
+
+
+def _workflow_evaluator_spec(scenario: Mapping[str, Any]) -> dict[str, Any] | None:
+    evaluator = scenario.get("evaluator")
+    if evaluator is None:
+        return None
+    if not isinstance(evaluator, Mapping):
+        raise ManifestResolutionError(
+            "WORKFLOW_EVALUATOR_INVALID", "scenario.evaluator must be an object"
+        )
+    unknown = sorted(set(evaluator) - {"evaluator_id", "version", "config", "description"})
+    if unknown:
+        raise ManifestResolutionError(
+            "WORKFLOW_EVALUATOR_INVALID",
+            "unknown scenario.evaluator fields: " + ", ".join(unknown),
+        )
+    evaluator_id = evaluator.get("evaluator_id")
+    if not isinstance(evaluator_id, str) or not evaluator_id.strip():
+        raise ManifestResolutionError(
+            "WORKFLOW_EVALUATOR_INVALID", "scenario.evaluator requires a non-empty evaluator_id"
+        )
+    version = str(evaluator.get("version") or "1")
+    from motte_eval import workflow as _workflow  # noqa: F401 - 注册 M5 过程指标
+    from motte_eval.observation import EvaluatorConfigError, normalize_evaluator_config
+
+    try:
+        normalized = normalize_evaluator_config(evaluator.get("config"))
+    except EvaluatorConfigError as error:
+        raise ManifestResolutionError("WORKFLOW_EVALUATOR_INVALID", str(error)) from error
+    return {
+        "evaluator_id": evaluator_id,
+        "version": version,
+        "config": normalized,
+        "config_sha256": _content_hash(normalized),
+    }
 
 
 def _resolve_workflow_reference(
@@ -364,6 +432,17 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
                 "RUN_CONFIG_INVALID",
                 f"{CASE_SELECTION_KEY} is only supported for benchmark scenarios")
         resolved = resolve_manifest(manifest, resources)
+        if resolved.get("workflow_snapshot") is not None:
+            # Workflow Run 的 evaluator 身份与指标配置由服务端在创建期冻结：
+            # 客户端提交的 resource_snapshots / evaluation 一律拒绝。
+            forged = {"resource_snapshots", "evaluation"}.intersection(manifest)
+            if forged:
+                raise ManifestResolutionError(
+                    "SNAPSHOT_RESERVED",
+                    "workflow evaluator snapshots are generated at creation: "
+                    + ", ".join(sorted(forged)),
+                )
+            _freeze_workflow_evaluator(resolved, scenario)
         ids = list(case_ids or [])
         runtime_control = (resolved.get("runtime_snapshot") or {}).get("model_control")
         if managed:

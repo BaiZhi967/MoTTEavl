@@ -1,8 +1,11 @@
 # 场景（Scenario）运维说明（M5）
 
-状态：T01/T03b/T05/T07/T08 已实现并有测试；公开执行在纵向评分链路接通前
-保持关闭（SCENARIO_BACKEND_AVAILABLE=False），创建期返回
-EXECUTION_BACKEND_UNAVAILABLE，不静默改选其他 backend。
+状态：T01/T03b/T05/T07/T08 已实现并有测试；公开执行链路（R6）已闭环并有行为
+测试：公共 API 创建 → 持久 queued Run → 普通 WorkerLoop 领取 → 冻结证据 → 既有
+评分入口 → 报告 → 离线 rescore（tests/integration/test_scenario_run_backend.py、
+tests/integration/test_business_regression_slice.py）。SCENARIO_BACKEND_AVAILABLE=True；
+创建期仍然具名拒绝不满足能力的配置，显式 install_scenario_backend(available=False)
+可以关闭新执行，不静默改选其他 backend。
 
 ## 1. 对象与身份
 
@@ -11,6 +14,10 @@ EXECUTION_BACKEND_UNAVAILABLE，不静默改选其他 backend。
 - FixtureVersion：初始状态与允许工具，存储键 (fixture_id, version)。
 - 一个 Run 的 execution backend 是 scenario@1；内层 target（例如 builtin-agent@1
   或 pi-agent@1）是另一个身份，单独冻结在 manifest.agent / manifest.runtime。
+- 评分器身份也冻结：Scenario 资源里的 `evaluator` 声明在创建期写入
+  `manifest.resource_snapshots.workflow_evaluator`（带 config_sha256），并投影成
+  `manifest.evaluation`（scorer_id/scorer_version）。客户端提交 `resource_snapshots`
+  或 `evaluation` 一律 SNAPSHOT_RESERVED 拒绝。
 
 ## 2. 发布
 
@@ -61,6 +68,11 @@ uv run pytest -q tests/contract/test_workflow_spec.py tests/scenario
 | replay | `replay_records`（冻结记录 `{"result": ..., "state": ...}`，不重放业务动作） | `SCENARIO_TOOL_REPLAY_MISSING` |
 | deny | 无（直接拒绝） | `SCENARIO_TOOL_DENIED` |
 
+公共入口用 `motte_sdk.scenario_backend.register_scenario_tools(fixture_id, handlers=...,
+mock_handlers=..., replay_records=..., event_handlers=...)` 登记实现（与 target adapter
+同一层：策略由冻结资源决定，实现由部署登记）。没有登记的 fixture 工具在公共路径上
+具名拒绝；两个 fixture 声明同名工具且实现不同是 `SCENARIO_TOOL_HANDLER_CONFLICT`。
+
 目标自身的工具调用走同一个受控桥，mode 取自冻结的
 `manifest.target_snapshot.tool_modes`：声明里包含 real 才允许 real；只声明一个
 其他模式时整场用该模式；既没有 real 又不止一个模式时有效 mode 无法证明，
@@ -68,7 +80,7 @@ uv run pytest -q tests/contract/test_workflow_spec.py tests/scenario
 
 ### 4.3 失败政策与清理
 
-- 全局 `WorkflowVersion.failure_policy=continue_for_evidence` 现在被引擎消费：
+- 全局 `WorkflowVersion.failure_policy=continue_for_evidence` 被引擎消费：
   失败后只读步骤（assert / checkpoint）继续执行，写工具、事件与 send_message
   记为 skipped，终局仍是失败。步骤级 `continue_for_evidence` 仍然生效；步骤级
   `stop_case` 不能取消全局的继续取证（冻结快照里契约默认值与显式声明不可
@@ -81,9 +93,71 @@ uv run pytest -q tests/contract/test_workflow_spec.py tests/scenario
   第一个已成功实例也会被清理并留证；装配/执行抛错时原始异常带上
   `cleanups`（与 `__notes__`），原错误与清理结论都不丢。
 
+### 4.4 冻结 Observation 与评分装配（R6）
+
+执行结束前，执行器把证据物化成**既有契约** `FrozenObservation`，放在 Case 结果的
+`frozen_observation` 字段（人读的 `observation`（workflow-observation@1）不变）：
+
+- 每个 checkpoint 一个 `state` 证据：Artifact 字节 = 该 checkpoint 的可见业务状态，
+  带 owner(run/case/attempt/fixture)、step、artifact_sha256 与 payload_schema 摘要；
+- 一份有序业务动作日志 `action-log`（`action_log` 证据）：每次受控工具调用的
+  action/target/status/call_id/step，**包含被权限拒绝的尝试**（status=denied）；
+- `complete=false` 表示证据不完整（停止未确认 / needs_review），此时不允许任何
+  否定结论；
+- `coverage` / `tool_calls` / `event_refs` 与 `evidence_hash` 绑定同一份评分视图。
+
+评分走既有入口 `RunService._score_results`：scenario Run 由
+`motte_sdk.scenario_backend.scenario_scores` 组装指标并调用
+`motte_eval.observation.evaluate_observation`（`motte_eval.workflow` 的
+state-equals / state-delta / no-side-effect / goal-achieved / response-policy 在此注册）。
+评分前校验 Observation 的 evidence_hash 重算值、run/case 归属与每条 workflow_evidence
+的 owner；任何不符只产生 `insufficient_evidence` 行，零调用、零 pass。
+离线 rescore 读取同一份已持久化证据，不重开 Target、不调模型、不碰业务工具。
+
+指标配置来自 Scenario 资源的 `evaluator`：
+
+```json
+{
+  "name": "order-cancel", "version": "1",
+  "evaluator": {
+    "evaluator_id": "workflow-assertions", "version": "1",
+    "config": {"metrics": [
+      {"metric_id": "confirm-before-cancel", "kind": "response-policy",
+       "log": "action-log", "ordered": true,
+       "require": [{"action": "orders.get", "target": "order-1", "min_count": 1},
+                    {"action": "orders.cancel", "target": "order-1", "max_count": 1}]},
+      {"metric_id": "order-cancelled", "kind": "state-equals",
+       "checkpoint": "final-check", "path": "order.status", "expected": "cancelled"},
+      {"metric_id": "no-refund", "kind": "no-side-effect", "scope": ["actions"],
+       "log": "action-log", "forbid": [{"action": "orders.refund", "status": "succeeded"}]},
+      {"metric_id": "goal", "kind": "goal-achieved", "components": [
+        {"role": "final_state", "metric": {"metric_id": "g1", "kind": "state-equals",
+         "checkpoint": "final-check", "path": "order.status", "expected": "cancelled"}},
+        {"role": "process", "metric": {"metric_id": "g2", "kind": "response-policy",
+         "log": "action-log", "require": [{"action": "orders.cancel", "min_count": 1}]}}]}
+    ]}
+  }
+}
+```
+
+约定：checkpoint 证据 id 就是步骤 `step_id`；业务动作日志的 id 固定为 `action-log`，
+`monitored_scope=["business_actions"]`。配置在创建期用既有 `normalize_evaluator_config`
+校验（非法即 `WORKFLOW_EVALUATOR_INVALID`），冻结后评分不再解析资源；没有声明
+`evaluator` 的 Scenario 不产生任何评分行（不发明 pass）。
+
+### 4.5 无 fixture 的纯消息流程
+
+Workflow 没有 `fixture_refs`、也没有 `invoke_fixture_tool` / `trigger_fixture_event`
+步骤时不需要固定 Fixture：执行器使用空状态端口（目标拿不到任何业务工具），
+checkpoint 仍可取证（空状态）。创建期与执行期共用同一个判断
+（`motte_scenario.executor.workflow_requires_fixture`），因此 Run 不会被"先接受、
+执行时才说缺 primary binding"。
+
 ## 5. 已知缺口
 
-1. scoring 投影（Observation → ScoreSet/ScoringPass）尚未接通，因此公开执行保持关闭。
-2. 生产环境尚未注册 fixture 工具实现；未实现的工具/事件具名拒绝，不伪造成功。
-3. 平台侧 fixture 工具 step 与目标桥已按 real/mock/replay/deny 分派；mock 实现与
-   replay 记录由装配方显式提供，公开入口尚未接线（R6/R7）。
+1. 公开执行只覆盖公共路径已交付的部分：needs_review 的 Case 会让 Run 以
+   completed + insufficient 评分收尾（现场保留、不自动重放），Run 级
+   needs_review 转换留给后续收口。
+2. 生产环境仍需按 fixture 登记真实业务工具实现；未登记的工具/事件具名拒绝，
+   不伪造成功。
+3. Skill 注入与三臂对照（T07/T08）不在本包范围内。
