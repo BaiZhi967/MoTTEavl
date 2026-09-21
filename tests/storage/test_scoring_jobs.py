@@ -468,6 +468,38 @@ def test_job_view_reports_cost_and_terminal_state(store):
     assert cancelled["terminal"] is True
 
 
+def test_invocation_owner_union_is_validated_not_fabricated():
+    from motte_storage.invocations import validate_invocation
+
+    # subject owner 必须匹配真实 run/case（NOT NULL 约束保持不变）。
+    subject = validate_invocation(invocation_record())
+    assert subject["owner"]["kind"] == "subject"
+    assert subject["run_id"] == "run-1" and subject["case_id"] == "case-1"
+
+    # calibration owner 只能用显式命名空间，且必须是 judge 用途的 model 调用。
+    calibration = validate_invocation(invocation_record(
+        "cal", owner={"kind": "calibration", "calibration_job_id": "cjob-1",
+                      "sample_id": "s1"},
+    ))
+    assert calibration["run_id"] == "calibration:cjob-1"
+    assert calibration["case_id"] == "s1"
+
+    with pytest.raises(ValueError, match="namespaced owner reference"):
+        validate_invocation(invocation_record(
+            "bad", owner={"kind": "calibration", "calibration_job_id": "cjob-1",
+                          "sample_id": "s1"},
+        ) | {"run_id": "run-1"})
+    without_job = {
+        key: value for key, value in invocation_record().items() if key != "job_id"
+    }
+    with pytest.raises(ValueError, match="scoring job id"):
+        validate_invocation({**without_job, "purpose": "judge"})
+    with pytest.raises(ValueError, match="only judge invocations"):
+        validate_invocation(
+            {**invocation_record(), "purpose": "subject", "job_id": "sjob-1"}
+        )
+
+
 def test_unknown_backend_is_rejected():
     class Weird:
         pass
