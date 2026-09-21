@@ -28,9 +28,9 @@ def _dumps(payload: dict[str, Any]) -> str:
 
 
 def _validate(payload: dict[str, Any]) -> dict[str, Any]:
-    # 契约校验（extra=forbid）；失败原样抛出。
-    BaselineSnapshot.model_validate(payload)
-    return deepcopy(payload)
+    # 契约校验（extra=forbid）+ JSON 规范化（tuple→list）：memory 与
+    # sqlite/pg 落盘读回的形状一致，"同内容幂等"判定不受容器类型影响。
+    return BaselineSnapshot.model_validate(payload).model_dump(mode="json")
 
 
 class BaselineConflict(ValueError):

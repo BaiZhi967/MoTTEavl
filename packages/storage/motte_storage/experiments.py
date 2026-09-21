@@ -43,6 +43,8 @@ def _validate_spec(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_cell(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    payload.setdefault("allocation_status", "pending")
     for field in _CELL_FIELDS:
         value = payload.get(field)
         if not isinstance(value, str) or not value:

@@ -368,8 +368,8 @@ class PgBaselineStore:
     def put(self, payload: dict[str, Any]) -> dict[str, Any]:
         from motte_contracts.comparison import BaselineSnapshot
 
-        BaselineSnapshot.model_validate(payload)
-        snapshot = deepcopy(payload)
+        # 契约校验 + JSON 规范化（与 Memory/SQLite 同形状，幂等判定一致）。
+        snapshot = BaselineSnapshot.model_validate(payload).model_dump(mode="json")
         baseline_id = snapshot["baseline_id"]
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
