@@ -54,7 +54,14 @@ def builtin_adapter():
         replace=True,
     )
     yield adapter
-    unregister_target_adapter("builtin-agent")
+    # teardown 必须**恢复生产 adapter**，而不是简单注销：直接
+    # unregister_target_adapter("builtin-agent") 会把生产注册删掉并留给后续
+    # 测试，导致同会话内其它测试（例如三臂对照）创建 Run 时
+    # SCENARIO_TARGET_UNSUPPORTED。该泄漏由 tests/scenario +
+    # tests/integration/test_skill_ablation.py 的同会话组合暴露。
+    from motte_sdk.scenario_target import install_builtin_target_adapter
+
+    install_builtin_target_adapter()
 
 
 def workflow_manifest(**overrides):
