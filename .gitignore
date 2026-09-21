@@ -23,6 +23,13 @@ var/*.db-*
 # 测试集受控下载目录（官方数据集源文件）
 var/datasets/
 
+# M5/M6 手工验收与差异核对产物（脚本、证据、临时数据库）
+var/m5-accept/
+var/m5-verify/
+
+# Scenario 运行时 fixture（由服务生成，不是源码测试 fixture）
+var/scenario-fixtures/
+
 # 外部 Job 运行时状态（job-profile / runner-config / 完成标记）
 var/external-jobs/
 
