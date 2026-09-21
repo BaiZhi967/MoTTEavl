@@ -207,6 +207,21 @@ Provider 层重构（2026-09-15，全量测试 207 passed）：适配器注册�
 
 验证：`uv run pytest -q tests/runtime/test_worker_loop.py`（9 passed）、全量 `465+4` passed / 8 skipped、`uv run ruff check .` 与 `uv run mypy packages/contracts` 零问题。
 
+## make dev 热重载监听范围收敛（2026-09-20）
+
+现象：`make dev` 期间改动 `.worktree/` 里的文件也会让 API 进入重载，随后 API 长时间不再恢复。定位与修复：
+
+- 根因：未安装 `watchfiles` 时 uvicorn 使用 `StatReload`，其 `iter_py_files()` 对每个 reload 目录递归 `rglob("*.py")`；不显式指定目录时该目录就是进程工作目录（仓库根），于是 `.worktree/**` 全部进入监听范围——本机 12,591 个 `.py` 中有 8,317 个来自 `.worktree/`，单次扫描约 12–25 秒。`--reload-include` / `--reload-exclude` 无法收敛范围：uvicorn 明确提示这两个选项在缺少 `watchfiles` 时不生效（`supervisors/statreload.py` 启动即打 warning）。
+- 修改：`apps/dev.py` 新增 `RELOAD_DIRS = ("apps", "packages")` 与 `api_command()`，API 子进程改用显式 `--reload-dir` 启动，只监听它真正会 import 的目录（API 不引用 `apps/`、`packages/` 之外的仓库代码）。
+- 范围可调：`MOTTE_DEV_RELOAD_DIRS` 覆盖白名单（默认 `apps packages`），`MOTTE_DEV_RELOAD_EXCLUDE` 追加排除项；两者以空白、逗号或 `;` 分隔。典型用法是恢复"整仓监听但排掉 worktree"：`MOTTE_DEV_RELOAD_DIRS="." MOTTE_DEV_RELOAD_EXCLUDE=".worktree" make dev`。
+- 依赖：`uv add --dev watchfiles`（解析到 1.2.0）加入 dev 依赖组，uvicorn 因此从 `StatReload` 切到 `WatchFilesReload`，`--reload-exclude` 才真正生效；缺它时 uvicorn 只认 `--reload-dir`，`apps/dev.py` 会在启动 API 前自行打印提示（含安装命令与改用 `MOTTE_DEV_RELOAD_DIRS` 的建议），不再静默失效。
+- 排除项按绝对路径传递：uvicorn 的 `FileFilter` 把排除目录与 watcher 上报的**绝对**事件路径做 `in path.parents` 比较，相对路径（如 `.worktree`）会静默匹配不到任何东西。实测对比：相对形式下改 `.worktree/m4/apps/dev.py` 仍被侦测到（detects=1），绝对形式下为 0；两种情形下改 `apps/api/app/main.py` 都为 1（阳性对照，证明 watcher 存活）。`reload_watch()` 因此把"存在且为目录"的排除项解析为绝对路径，glob 模式原样透传。
+- 测试：`tests/test_dev.py::test_api_reload_scope_excludes_local_worktrees` 断言监听目录均存在、覆盖 `apps/` 与 `packages/`、且既不是仓库根也不包含 `.worktree/`；另有 `test_reload_scope_is_overridable_per_run`（两种分隔符、目录排除转绝对、glob 透传、默认值不变）、`test_directory_excludes_are_made_absolute`、`test_reload_exclude_defaults_to_nothing`、`test_excludes_warn_that_watchfiles_is_required`。
+
+验证（本机实测）：启动后 uvicorn 打印 `Will watch for changes in these directories: ['…\apps', '…\packages']`；改写 `.worktree/m4/apps/dev.py` 后 30 秒内 `detected changes` 计数保持 0、`/health` 持续 200、supervisor 存活；改写 `apps/api/app/main.py` 后 5 秒内即被侦测（旧配置下最坏要等一整轮扫描）。单次扫描从 12,591 个文件约 12–25 秒降到 189 个文件约 0.46 秒。装上 watchfiles 后默认配置复测：reloader 为 `WatchFiles`、无"选项无效"提示、`.worktree` 改动 0 次侦测而 `apps/` 改动 1 次；黑名单组合（`DIRS="."` + `EXCLUDE=".worktree"`）在相对与绝对两种写法下均为 0/1 的同一结果。`uv lock --check`、`make lint`（ruff + contracts mypy + compileall）、`uv run pytest -q tests/test_dev.py`（27 passed）全部通过；CI 用 `uv sync`（含 dev 组）安装，故 CI 与本机一致。
+
+遗留问题（与 `.worktree` 无关，本次未改）：Windows 上 uvicorn 0.53 的 `BaseReload.restart()` 用 `os.kill(child_pid, signal.CTRL_C_EVENT)` 通知子进程退出后 `process.join()` 等待。本机实测该 Ctrl+C 送不到目标子进程（同进程组与 `CREATE_NEW_PROCESS_GROUP` 两种布局都验证过，子进程均存活），于是**任何**被侦测到的改动都会停在 `Reloading...`：旧进程继续用旧代码返回 200，reloader 既不启动新 server 也不再扫描。关闭 `.worktree` 监听消除了绝大部分误触发，但正常改 `apps/` 代码仍会命中该缺陷，需要在 reload 策略上单独决策（升级 uvicorn / 让 supervisor 自己重启 API / 关闭 `--reload`）。
+
 ## 平台完整性加固（2026-09-18）
 
 本轮把 Run 执行、审计、资源快照、插件、API、Worker、Pi bridge 与 Web 合同收敛为可恢复的持久化边界：

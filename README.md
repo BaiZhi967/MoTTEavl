@@ -43,8 +43,31 @@ supervised child exiting stop the other server and return a nonzero status, with
 child output and diagnostics left visible. Ctrl-C stops only this launch's process
 trees (POSIX process groups / Windows Job Objects); Windows cleanup terminates those
 processes rather than promising graceful application shutdown. API reloads after
-initial startup may still briefly interrupt requests. No Worker or model calls are
+initial startup may still briefly interrupt requests. The API's reload watch is scoped
+with explicit `--reload-dir` flags to `apps/` and `packages/` — the directories the API
+actually imports. uvicorn's default watches every `*.py` file beneath its working
+directory (the repository root), so unrelated work in the sibling checkouts kept under
+`.worktree/` restarted the development API, and the fallback watcher walked thousands of
+files per scan. No Worker or model calls are
 started by this command. The combined launcher binds Web to `http://127.0.0.1:5173`.
+
+Change the watch scope for one run without editing code — both variables take a list
+separated by whitespace, commas, or `;`:
+
+| Variable | Example | Effect |
+|---|---|---|
+| `MOTTE_DEV_RELOAD_DIRS` | `MOTTE_DEV_RELOAD_DIRS="apps packages scripts" make dev` | Replaces the watched whitelist |
+| `MOTTE_DEV_RELOAD_EXCLUDE` | `MOTTE_DEV_RELOAD_EXCLUDE=".worktree var" make dev` | Drops matching paths from the watch |
+
+For the old whole-repository watch minus the local worktrees, combine them:
+`MOTTE_DEV_RELOAD_DIRS="." MOTTE_DEV_RELOAD_EXCLUDE=".worktree" make dev`. Exclusions need
+uvicorn's `watchfiles` watcher, which is a dev dependency here (`uv sync` installs it);
+without it uvicorn only understands `--reload-dir`, so the exclusions are dropped and
+`make dev` prints a note saying so before starting the API. An exclusion naming a
+directory is passed as an absolute path, because uvicorn matches exclude directories
+against the absolute paths its watcher reports. The default whitelist stays the cheaper
+choice: with the dependency present the watch is event-driven, and without it the fallback
+stat reloader then scans 189 files instead of 12,591.
 
 ## GSM8K benchmark (smoke / full)
 
