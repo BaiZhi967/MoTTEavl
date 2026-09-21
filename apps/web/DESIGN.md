@@ -110,6 +110,29 @@ M5 追加的非 Run 状态（同表登记，`scope` 标明归属，运行总览�
 | `calibrated` | success | resource | Judge 已校准，可用于正式阻断 Gate |
 | `experimental` | warning | resource | Judge 实验性，不进入正式阻断 Gate |
 
+M6 追加的非 Run 状态（实验 / 比较 / 基线 / 门禁页面，全部带 `scope`）：
+
+| 状态 | 语气 | scope | 含义 |
+|---|---|---|---|
+| `allocated` | success | experiment | Cell 已分配 initial Run |
+| `allocating` | info | experiment | Cell 分配进行中（崩溃恢复窗口） |
+| `comparable` | success | comparison | 报告可比 |
+| `partially_comparable` | warning | comparison | 部分可比（如仅费用未知，逐指标资格） |
+| `not_comparable` | error | comparison | 不可比（结构性条件变化未被政策允许） |
+| `formal` | success | baseline | 正式基线（可进正式门禁） |
+| `diagnostic` | warning | baseline | 诊断基线（证据不完整，不进正式门禁） |
+| `pass` | success | gate | 门禁通过 |
+| `quality_fail` | error | gate | 质量失败（CLI 退出码 1） |
+| `insufficient_evidence` | warning | gate | 证据不足（退出码 5） |
+| `execution_error` | warning | gate | 执行错误（退出码 3） |
+| `safety_block` | error | gate | 安全阻断（退出码 6） |
+| `draft` | info | gate | GatePolicy 草案 |
+| `published` | success | gate | GatePolicy 已发布（不可变） |
+| `deprecated` | neutral | gate | GatePolicy 已弃用（历史可读） |
+| `insufficient` | warning | rule | 规则证据不足（不是通过） |
+| `not_applicable` | neutral | rule | 规则不适用 |
+| `skipped_diagnostic` | neutral | rule | 规则被诊断跳过（整体不得显示为通过） |
+
 规则：新增状态时先在 `statusMeta.ts` 的 `STATUS_META` 登记语气与中文标签，
 徽章、时间线、过滤选项自动继承。**禁止在任何组件里手写状态颜色。**
 非 Run 状态必须写 `scope`，避免污染运行总览的状态过滤。

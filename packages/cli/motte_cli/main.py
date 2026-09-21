@@ -990,6 +990,132 @@ def _build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--older-than-days", type=float, required=True)
     cleanup.add_argument("--artifacts-root", default=None, help="artifact 根目录，默认 ARTIFACT_ROOT")
     cleanup.add_argument("--apply", action="store_true", help="真正删除（缺省仅报告）")
+
+    experiment = sub.add_parser(
+        "experiment",
+        help="M6 实验编排：预览 / 创建分配 / 状态 / 取消 / 单元重试（执行主权仍在 Worker）",
+    )
+    experiment_sub = experiment.add_subparsers(dest="experiment_command", required=True)
+    exp_preview = experiment_sub.add_parser(
+        "preview", help="纯预检：矩阵展开与护栏检查（零创建、零模型调用）",
+    )
+    exp_preview.add_argument("--spec", required=True, help="ExperimentSpec JSON 或 @文件")
+    exp_preview.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    exp_create = experiment_sub.add_parser(
+        "create", help="发布 spec（幂等）并为每 cell 分配恰好一个 initial Run",
+    )
+    exp_create.add_argument("--spec", required=True, help="ExperimentSpec JSON 或 @文件")
+    exp_create.add_argument("--request-key", dest="request_key", help="幂等键（同键异内容拒绝）")
+    exp_create.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    exp_status = experiment_sub.add_parser("status", help="读取实验状态与 cell 进度（只读）")
+    exp_status.add_argument("experiment_id")
+    exp_status.add_argument("--version", help="指定版本（省略取最新）")
+    exp_status.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    exp_cancel = experiment_sub.add_parser(
+        "cancel", help="取消实验（只作用于本实验拥有的 cell 与 Run）",
+    )
+    exp_cancel.add_argument("experiment_id")
+    exp_cancel.add_argument("--version", help="指定版本（省略取最新）")
+    exp_cancel.add_argument("--reason", default="operator request")
+    exp_cancel.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    exp_retry = experiment_sub.add_parser(
+        "retry-cell", help="显式重试：superseding 子 Run，原结果不消失",
+    )
+    exp_retry.add_argument("cell_id")
+    exp_retry.add_argument("--reason", default="operator retry")
+    exp_retry.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
+    compare = sub.add_parser(
+        "compare", help="M6 两份固定报告的三级可比性结论（只读，零 Provider/Judge 调用）",
+    )
+    compare.add_argument("--baseline", required=True, help="基线 run id")
+    compare.add_argument("--candidate", required=True, help="候选 run id")
+    compare.add_argument("--factors", default="model", help="允许因子，逗号分隔（默认 model）")
+    compare.add_argument("--baseline-pass", dest="baseline_pass",
+                         help="固定基线 scoring pass id（缺省 current）")
+    compare.add_argument("--candidate-pass", dest="candidate_pass",
+                         help="固定候选 scoring pass id（缺省 current）")
+    compare.add_argument("--json", dest="json_out", help="把比较 JSON 写入文件")
+    compare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
+    baseline = sub.add_parser(
+        "baseline", help="M6 BaselineSnapshot：创建 / 列表 / 默认指针（指针是 CAS 操作）",
+    )
+    baseline_sub = baseline.add_subparsers(dest="baseline_command", required=True)
+    bl_create = baseline_sub.add_parser(
+        "create", help="固定 RunReportRef 集合 → 不可变 baseline（引用不完整拒绝创建）",
+    )
+    bl_create.add_argument("--id", required=True, help="baseline_id")
+    bl_create.add_argument(
+        "--entries", required=True,
+        help='JSON 或 @文件：[{"cell_key"?, "run_id", "scoring_pass_id"}]',
+    )
+    bl_create.add_argument(
+        "--policy", help='比较政策 JSON 或 @文件（默认 {"allowed_factors": ["model"]}）',
+    )
+    bl_create.add_argument("--by", required=True, help="创建操作者（审计）")
+    bl_create.add_argument("--reason", required=True, help="创建原因（审计）")
+    bl_create.add_argument("--source-note", dest="source_note", help="来源备注（审计）")
+    bl_create.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    bl_list = baseline_sub.add_parser("list", help="列出 baseline 快照（只读）")
+    bl_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    bl_select = baseline_sub.add_parser("select", help="设置 scope 默认 baseline 指针（CAS）")
+    bl_select.add_argument("--scope", required=True)
+    bl_select.add_argument("--baseline", required=True, help="baseline_id")
+    bl_select.add_argument(
+        "--expected-current", dest="expected_current",
+        help="CAS 期望当前值（指针已存在时移动必须给出）",
+    )
+    bl_select.add_argument("--by", required=True, help="操作者（审计）")
+    bl_select.add_argument("--reason", required=True, help="原因（审计）")
+    bl_select.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    bl_default = baseline_sub.add_parser("default", help="读取 scope 当前默认 baseline 指针")
+    bl_default.add_argument("--scope", required=True)
+    bl_default.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
+    gate = sub.add_parser(
+        "gate", help="M6 版本化 Gate：政策发布 / 固定报告求值 / 结果读取与导出（零调用）",
+    )
+    gate_sub = gate.add_subparsers(dest="gate_command", required=True)
+    gate_publish = gate_sub.add_parser(
+        "policy-publish", help="发布不可变 GatePolicyVersion（同 id@version 同内容幂等）",
+    )
+    gate_publish.add_argument("--policy", required=True, help="GatePolicyVersion JSON 或 @文件")
+    gate_publish.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    gate_evaluate = gate_sub.add_parser(
+        "evaluate",
+        help="固定报告求值（只读）；退出码=决策映射（协议 §7）：pass=0 quality_fail=1 "
+             "execution_error=3 insufficient/not_comparable=5 safety_block=6",
+    )
+    gate_evaluate.add_argument("--policy", help="政策引用 id@version")
+    gate_evaluate.add_argument("--policy-id", dest="policy_id", help="政策 id（与 --version 连用）")
+    gate_evaluate.add_argument("--version", dest="policy_version", help="政策版本（与 --policy-id 连用）")
+    gate_evaluate.add_argument("--run", required=True, help="候选 run id（必须终态）")
+    gate_evaluate.add_argument("--pass", dest="scoring_pass",
+                               help="固定 scoring pass id（缺省 current）")
+    gate_evaluate.add_argument("--baseline", help="BaselineSnapshot id（基线比较）")
+    gate_evaluate.add_argument("--json", dest="json_out", help="把导出 JSON 写入文件")
+    gate_evaluate.add_argument("--junit", dest="junit_out", help="把 JUnit XML 写入文件")
+    gate_evaluate.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    gate_result = gate_sub.add_parser("result", help="读取一个 GateResult（只读）")
+    gate_result.add_argument("gate_result_id")
+    gate_result.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    gate_export = gate_sub.add_parser("export", help="导出 GateResult（exporter v1：json/junit）")
+    gate_export.add_argument("--result", required=True, help="gate_result_id")
+    gate_export.add_argument("--format", choices=("json", "junit"), default="json")
+    gate_export.add_argument("--out", help="写文件（缺省打印 stdout）")
+    gate_export.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
+    regression = sub.add_parser(
+        "regression", help="M6 两份固定报告的逐 case 回归分类（只读；added/removed 独立列出）",
+    )
+    regression.add_argument("--baseline", required=True, help="基线 run id")
+    regression.add_argument("--candidate", required=True, help="候选 run id")
+    regression.add_argument("--baseline-pass", dest="baseline_pass",
+                            help="固定基线 scoring pass id（缺省 current）")
+    regression.add_argument("--candidate-pass", dest="candidate_pass",
+                            help="固定候选 scoring pass id（缺省 current）")
+    regression.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     return parser
 
 
@@ -1913,6 +2039,349 @@ def _judge_command(args) -> int:
     return _error("CONTRACT_INVALID", f"unknown judge subcommand: {command}")
 
 
+# ------------------------------------------------------- M6：实验 / 比较 / 门禁
+
+
+def _m6_json(payload) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _write_text(path: str, content: str) -> None:
+    target = Path(path)
+    if target.parent != Path(""):
+        target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+
+def _m6_store(args):
+    from motte_storage.factory import create_run_store
+
+    return create_run_store(getattr(args, "db", None))
+
+
+def _comparison_service(args):
+    """与 API 同一装配：run store + baseline 仓库（只读消费）。"""
+    from motte_sdk.comparisons import ComparisonService
+
+    store = _m6_store(args)
+    return ComparisonService(store, baselines=getattr(store, "baselines", None))
+
+
+def _experiment_service(args):
+    from motte_sdk.experiments import ExperimentService
+    from motte_sdk.service import RunService
+
+    store = _m6_store(args)
+    # 与 API 同一装配：Cell 的 Run 走 prepare_run 解析链（需要资源仓库）。
+    return ExperimentService(store, RunService(store), resources=_resources(args))
+
+
+def _load_m6_document(raw: str, code: str, *, kind=dict):
+    """--spec/--policy/--entries 共用：@file 或内联 JSON + 顶层类型校验。"""
+    try:
+        document = _load_json(raw)
+    except (OSError, json.JSONDecodeError) as error:
+        return None, f"{code}: 输入不是可解析的 JSON：{error}"
+    if not isinstance(document, kind) or (
+        kind is dict and not document
+    ) or (kind is list and not document):
+        return None, f"{code}: 输入必须是{' JSON 对象' if kind is dict else '非空 JSON 数组'}"
+    return document, None
+
+
+def _experiment_command(args) -> int:
+    """experiment preview/create/status/cancel/retry-cell。
+
+    preview 纯只读（零创建零调用）；violations 非空按"请求不合法"族退出 2。
+    create 只发布 spec 并铺 cell/分配 Run，执行仍在 Worker 的执行锁内。
+    """
+    from pydantic import ValidationError
+
+    from motte_sdk.experiments import ExperimentError
+
+    command = args.experiment_command
+    if command not in ("preview", "create", "status", "cancel", "retry-cell"):
+        return _error("CONTRACT_INVALID", f"unknown experiment subcommand: {command}")
+
+    if command in ("preview", "create"):
+        document, usage_error = _load_m6_document(
+            args.spec, "EXPERIMENT_SPEC_INVALID",
+        )
+        if usage_error:
+            return _error("EXPERIMENT_SPEC_INVALID", usage_error)
+        service = _experiment_service(args)
+        try:
+            if command == "preview":
+                view = service.preview(document)
+            else:
+                outcome = service.create(
+                    document, request_key=getattr(args, "request_key", None),
+                )
+        except ValidationError as error:
+            return _error("EXPERIMENT_INVALID", str(error))
+        except ExperimentError as error:
+            return _error(error.code, error.message)
+        except ValueError as error:  # 存储层 cell/spec 内容冲突等
+            return _error("EXPERIMENT_INVALID", str(error))
+        if command == "preview":
+            print(_m6_json(view))
+            return 2 if view.get("violations") else 0
+        print(_m6_json({key: outcome.get(key) for key in (
+            "experiment_id", "version", "created", "allocated",
+            "skipped_existing", "failed", "cells",
+        )}))
+        return 0
+
+    service = _experiment_service(args)
+    try:
+        if command == "status":
+            view = service.status(args.experiment_id, getattr(args, "version", None))
+        elif command == "cancel":
+            view = service.cancel(
+                args.experiment_id, getattr(args, "version", None),
+                reason=args.reason,
+            )
+        else:
+            view = service.retry_cell(args.cell_id, reason=args.reason)
+    except ExperimentError as error:
+        return _error(error.code, error.message)
+    except ValueError as error:
+        return _error("EXPERIMENT_INVALID", str(error))
+    print(_m6_json(view))
+    return 0
+
+
+def _compare_command(args) -> int:
+    """compare：三级结论（comparable/partially/not_comparable），只读。
+
+    比较本身成功时退出 0；not_comparable 是"结论"不是崩溃，按协议 §7 退出 5。
+    """
+    from motte_sdk.comparisons import ComparisonError
+    from motte_sdk.export import comparison_to_json
+
+    factors = [item.strip() for item in (args.factors or "model").split(",") if item.strip()]
+    service = _comparison_service(args)
+    try:
+        result = service.compare(
+            args.baseline, args.candidate, allowed_factors=factors,
+            baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+        )
+    except KeyError as error:
+        return _error("RUN_NOT_FOUND", f"run not found: {error}")
+    except ComparisonError as error:
+        return _error(error.code, str(error))
+    except ValueError as error:  # 未知允许因子等政策错误
+        return _error("POLICY_INVALID", str(error))
+    payload = comparison_to_json({
+        "level": result.level.value,
+        "eligible": result.eligible,
+        "structural_reasons": list(result.structural_reasons),
+        "metric_reasons": list(result.metric_reasons),
+        "metric_eligibility": dict(result.metric_eligibility),
+        "case_diff": {key: list(value) for key, value in result.case_diff.items()},
+        "allowed_differences": list(result.allowed_differences),
+    })
+    # exporter 视图不含聚合 reasons；补上保持"全部事实"完整（协议 §6）。
+    payload["reasons"] = list(result.reasons)
+    if args.json_out:
+        _write_text(args.json_out, _m6_json(payload))
+    print(_m6_json(payload))
+    return 5 if result.level.value == "not_comparable" else 0
+
+
+def _baseline_command(args) -> int:
+    """baseline create/list/select/default：快照不可变，默认值是指针 CAS 操作。"""
+    from motte_storage.baseline_store import BaselineConflict
+    from motte_sdk.comparisons import ComparisonError
+
+    command = args.baseline_command
+    service = _comparison_service(args)
+
+    if command == "create":
+        entries, usage_error = _load_m6_document(args.entries, "ENTRIES_INVALID", kind=list)
+        if usage_error:
+            return _error("ENTRIES_INVALID", usage_error)
+        if any(not isinstance(item, dict) for item in entries):
+            return _error(
+                "ENTRIES_INVALID",
+                '--entries 每项必须是对象：{"cell_key"?, "run_id", "scoring_pass_id"}',
+            )
+        policy = {"allowed_factors": ["model"]}
+        if args.policy:
+            loaded, policy_error = _load_m6_document(
+                args.policy, "COMPARISON_POLICY_INVALID",
+            )
+            if policy_error:
+                return _error("COMPARISON_POLICY_INVALID", policy_error)
+            policy = loaded
+        try:
+            stored = service.create_baseline(
+                args.id, entries, policy=policy, created_by=args.by,
+                reason=args.reason, source_note=args.source_note,
+            )
+        except ComparisonError as error:
+            return _error(error.code, str(error))
+        except BaselineConflict as error:
+            return _error(error.code, str(error))
+        except ValueError as error:
+            return _error("CONTRACT_INVALID", str(error))
+        print(_m6_json(stored))
+        return 0
+
+    if command == "list":
+        items = service.list_baselines()
+        print(_m6_json({"items": items, "total": len(items)}))
+        return 0
+
+    if command == "select":
+        try:
+            pointer = service.set_default_baseline(
+                args.scope, args.baseline, updated_by=args.by, reason=args.reason,
+                expected_current=args.expected_current,
+            )
+        except ComparisonError as error:
+            return _error(error.code, str(error))
+        except BaselineConflict as error:
+            return _error(error.code, str(error))
+        except ValueError as error:
+            return _error("CONTRACT_INVALID", str(error))
+        print(_m6_json(pointer))
+        return 0
+
+    if command == "default":
+        print(_m6_json({
+            "scope": args.scope,
+            "pointer": service.get_default_baseline(args.scope),
+        }))
+        return 0
+
+    return _error("CONTRACT_INVALID", f"unknown baseline subcommand: {command}")
+
+
+def _gate_policy_ref(args) -> tuple[tuple[str, str], None] | tuple[None, str]:
+    """--policy id@version 或 --policy-id/--version → (policy_id, version)。"""
+    policy_ref = getattr(args, "policy", None)
+    policy_id = getattr(args, "policy_id", None)
+    policy_version = getattr(args, "policy_version", None)
+    if policy_ref:
+        if policy_id or policy_version:
+            return None, "--policy 与 --policy-id/--version 不能同时使用"
+        name, _, version = policy_ref.partition("@")
+        if not name or not version:
+            return None, "--policy 需要 id@version 形式（如 my-policy@1）"
+        return (name, version), None
+    if not policy_id or not policy_version:
+        return None, "需要 --policy id@version，或同时提供 --policy-id 与 --version"
+    return (policy_id, policy_version), None
+
+
+def _gate_command(args) -> int:
+    """gate policy-publish/evaluate/result/export（协议 §6–§7）。
+
+    evaluate 只求值固定引用：退出码 = 决策映射（pass=0 / quality_fail=1 /
+    execution_error=3 / insufficient|not_comparable=5 / safety_block=6）；
+    输入/配置不合法在求值前拒绝并退出 2。
+    """
+    from motte_sdk.comparisons import ComparisonError
+    from motte_sdk.export import result_to_json, result_to_junit
+
+    command = args.gate_command
+    if command not in ("policy-publish", "evaluate", "result", "export"):
+        return _error("CONTRACT_INVALID", f"unknown gate subcommand: {command}")
+    service = _comparison_service(args)
+
+    if command == "policy-publish":
+        document, usage_error = _load_m6_document(args.policy, "GATE_POLICY_INVALID")
+        if usage_error:
+            return _error("GATE_POLICY_INVALID", usage_error)
+        try:
+            stored = service.publish_gate_policy(document)
+        except ComparisonError as error:
+            return _error(error.code, str(error))
+        except ValueError as error:  # 同 id@version 异内容等存储冲突
+            return _error("GATE_POLICY_INVALID", str(error))
+        print(_m6_json(stored))
+        return 0
+
+    if command == "evaluate":
+        ref, usage_error = _gate_policy_ref(args)
+        if usage_error:
+            return _error("POLICY_REF_INVALID", usage_error)
+        try:
+            result = service.evaluate_gate_versioned(
+                policy_id=ref[0], policy_version=ref[1], run_id=args.run,
+                scoring_pass_id=args.scoring_pass, baseline_id=args.baseline,
+            )
+        except KeyError as error:
+            return _error("RUN_NOT_FOUND", f"run not found: {error}")
+        except ComparisonError as error:
+            return _error(error.code, str(error))
+        except ValueError as error:
+            return _error("GATE_EVALUATE_FAILED", str(error))
+        if args.json_out:
+            _write_text(args.json_out, _m6_json(result_to_json(result)))
+        if args.junit_out:
+            _write_text(args.junit_out, result_to_junit(result) + "\n")
+        print(_m6_json(result))
+        exit_code = result.get("exit_code")
+        if exit_code is None:
+            from motte_eval.gates import gate_exit_code
+
+            exit_code = gate_exit_code(result.get("decision"))
+        return int(exit_code)
+
+    gate_store = getattr(service.store, "gate_store", None)
+    if gate_store is None:
+        return _error("GATE_STORE_MISSING", "this store has no gate store wired")
+    gate_result_id = (
+        args.gate_result_id if command == "result" else args.result
+    )
+    stored = gate_store.get_result(gate_result_id)
+    if stored is None:
+        return _error(
+            "GATE_RESULT_NOT_FOUND", f"gate result not found: {gate_result_id}",
+        )
+    if command == "result":
+        print(_m6_json(stored))
+        return 0
+    if args.format == "junit":
+        content = result_to_junit(stored) + "\n"
+    else:
+        content = _m6_json(result_to_json(stored))
+    if args.out:
+        _write_text(args.out, content)
+    else:
+        sys.stdout.write(content)
+    return 0
+
+
+def _regression_command(args) -> int:
+    """regression：两份固定报告的逐 case 回归分类（A10/G14，只读）。"""
+    from motte_sdk.comparisons import ComparisonError
+
+    service = _comparison_service(args)
+    try:
+        report = service.classify_regression(
+            args.baseline, args.candidate,
+            baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+        )
+    except KeyError as error:
+        return _error("RUN_NOT_FOUND", f"run not found: {error}")
+    except ComparisonError as error:
+        return _error(error.code, str(error))
+    classification = report.get("classification") or {}
+    report["new_failure_cases"] = sorted(
+        case_id for case_id, outcome in classification.items()
+        if outcome == "new_failure"
+    )
+    report["fixed_cases"] = sorted(
+        case_id for case_id, outcome in classification.items()
+        if outcome == "fixed"
+    )
+    print(_m6_json(report))
+    return 0
+
+
 def main(argv=None):
     args = _build_parser().parse_args(argv)
 
@@ -1940,6 +2409,17 @@ def main(argv=None):
 
     if args.command == "judge":
         return _judge_command(args)
+
+    if args.command == "experiment":
+        return _experiment_command(args)
+    if args.command == "compare":
+        return _compare_command(args)
+    if args.command == "baseline":
+        return _baseline_command(args)
+    if args.command == "gate":
+        return _gate_command(args)
+    if args.command == "regression":
+        return _regression_command(args)
 
     if args.command == "skill":
         return _skill_command(args)

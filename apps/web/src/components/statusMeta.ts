@@ -5,10 +5,20 @@ export type Tone = "success" | "error" | "info" | "warning" | "neutral";
 
 /**
  * 状态归属：run = Run 状态（运行总览过滤下拉只列这一类）；
- * step = 步骤 / checkpoint 状态；resource = 资源校验与校准状态。
+ * step = 步骤 / checkpoint 状态；resource = 资源校验与校准状态；
+ * M6 追加：experiment = 实验 cell 分配状态；comparison = 比较三级结论；
+ * baseline = Baseline 资格；gate = Gate 决策与政策生命周期；rule = 逐规则求值状态。
  * 缺省视为 run：既有 10 种运行状态不重复声明。
  */
-export type StatusScope = "run" | "step" | "resource";
+export type StatusScope =
+  | "run"
+  | "step"
+  | "resource"
+  | "experiment"
+  | "comparison"
+  | "baseline"
+  | "gate"
+  | "rule";
 
 export interface StatusMetaEntry {
   label: string;
@@ -40,6 +50,32 @@ export const STATUS_META: Record<string, StatusMetaEntry> = {
   unavailable: { label: "能力不可用", tone: "warning", scope: "resource" },
   calibrated: { label: "已校准", tone: "success", scope: "resource" },
   experimental: { label: "实验性", tone: "warning", scope: "resource" },
+  // M6 实验 cell 分配状态（allocation_status）：pending / failed / cancelled
+  // 复用既有同名条目（语气一致 neutral / error / neutral），不重复登记。
+  allocated: { label: "已分配", tone: "success", scope: "experiment" },
+  allocating: { label: "分配中", tone: "info", scope: "experiment" },
+  // M6 比较三级结论（协议 §3）
+  comparable: { label: "可比", tone: "success", scope: "comparison" },
+  partially_comparable: { label: "部分可比", tone: "warning", scope: "comparison" },
+  not_comparable: { label: "不可比", tone: "error", scope: "comparison" },
+  // M6 Baseline 资格（协议 §4）
+  formal: { label: "正式", tone: "success", scope: "baseline" },
+  diagnostic: { label: "诊断", tone: "warning", scope: "baseline" },
+  // M6 Gate 六类决策（协议 §6）。not_comparable 复用比较条目（error 语气），
+  // 与导出器把它映射为 JUnit error 的分类一致。
+  pass: { label: "通过", tone: "success", scope: "gate" },
+  quality_fail: { label: "质量失败", tone: "error", scope: "gate" },
+  insufficient_evidence: { label: "证据不足", tone: "warning", scope: "gate" },
+  execution_error: { label: "执行错误", tone: "warning", scope: "gate" },
+  safety_block: { label: "安全阻断", tone: "error", scope: "gate" },
+  // M6 Gate 政策生命周期（协议 §9）
+  draft: { label: "草案", tone: "info", scope: "gate" },
+  published: { label: "已发布", tone: "success", scope: "gate" },
+  deprecated: { label: "已弃用", tone: "neutral", scope: "gate" },
+  // M6 逐规则求值状态（RuleResult.status；pass/fail 复用 passed/failed 条目）
+  insufficient: { label: "证据不足", tone: "warning", scope: "rule" },
+  not_applicable: { label: "不适用", tone: "neutral", scope: "rule" },
+  skipped_diagnostic: { label: "诊断跳过", tone: "neutral", scope: "rule" },
 };
 
 /** 运行总览的状态过滤来源：只列 Run 状态，步骤 / 资源状态不进入 Run 过滤器。 */

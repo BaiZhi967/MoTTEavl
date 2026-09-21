@@ -3800,7 +3800,9 @@ def create_app(
 
     from motte_sdk.experiments import ExperimentError, ExperimentService
 
-    experiments_service = ExperimentService(service.store, service)
+    experiments_service = ExperimentService(
+        service.store, service, resources=resources,
+    )
     application.state.experiments = experiments_service
 
     @application.post("/api/v1/experiments/preview")

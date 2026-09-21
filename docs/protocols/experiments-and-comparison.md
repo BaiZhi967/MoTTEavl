@@ -46,7 +46,9 @@ RunDispatcher / Worker / CaseAttempt / ScoringPass，不建立第二套调度器
 | `no_expectation` | 无期望答案（Direct LLM） | 不进质量分母；进覆盖分母 | judged 外 |
 
 不变量：`attempted + not_attempted = selected`；
-`judged + call_failed + unknown + needs_review = attempted`（按套件映射）。
+`judged + call_failed + unknown + needs_review + no_expectation = attempted`
+（no_expectation 的 case 已执行——模型被调用、费用已发生——计入 attempted；
+"judged 外"只指**质量分母资格**，不是未尝试）。
 缺失/未知/失败**永不**从分母静默删除；空分母、NaN、Infinity、null 不产生 pass，
 也不折算成 0。每个 metric 输出 `eligible_count` / `missing_count`。
 

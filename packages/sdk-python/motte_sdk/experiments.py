@@ -132,6 +132,30 @@ def _budget_view(budget: Any) -> dict[str, Any]:
     return view
 
 
+#: controlled_conditions 的合法键（fail-closed）：只有能安全进 Run manifest
+#: 的条件允许声明；未知条件在 preview/create 即拒绝，不在分配期才爆
+#: RESOLVED_MANIFEST_INVALID。
+_CONTROLLED_CONDITION_KEYS: frozenset[str] = frozenset({
+    "parameters",           # dict：并入 manifest.parameters（如 max_output_tokens）
+    "max_output_tokens",    # int：等价 parameters.max_output_tokens 简写
+})
+
+
+def _validate_controlled_conditions(spec: ExperimentSpec) -> None:
+    # None 值是显式"不设置"，进 manifest 时跳过，不参与键白名单判定。
+    declared = {
+        key for key, value in spec.controlled_conditions.items() if value is not None
+    }
+    unknown = sorted(declared - _CONTROLLED_CONDITION_KEYS)
+    if unknown:
+        raise ExperimentError(
+            "CONTROLLED_CONDITION_INVALID",
+            "controlled_conditions keys not consumable by the run manifest: "
+            + ",".join(unknown)
+            + " (known: " + ",".join(sorted(_CONTROLLED_CONDITION_KEYS)) + ")",
+        )
+
+
 def _validate_supported_suite(spec: ExperimentSpec) -> None:
     suite = spec.task_ref.get("suite")
     if suite not in SUPPORTED_SUITES:
@@ -145,6 +169,7 @@ def _validate_supported_suite(spec: ExperimentSpec) -> None:
             "EXPERIMENT_INVALID",
             "task_ref requires a nonempty scenario_version",
         )
+    _validate_controlled_conditions(spec)
 
 
 class ExperimentService:
@@ -155,10 +180,14 @@ class ExperimentService:
         store: Any,
         run_service: Any,
         *,
+        resources: Any = None,
         clock: Callable[[], str] | None = None,
     ) -> None:
         self.store = store
         self.run_service = run_service
+        # 资源仓库（datasets/scenarios/providers/models）：Cell 的 Run 走与
+        # 普通 Run 创建**同一条** prepare_run 解析链（TOCTOU 重校验在这里）。
+        self.resources = resources
         self._clock = clock or _default_clock
         # request_key → spec content hash。request_key 只用于服务侧幂等查询，
         # 不写入 spec payload（spec 内容不可变，见协议 §9）。
@@ -182,15 +211,52 @@ class ExperimentService:
             }
             for assignment, repeat_index in _expand_matrix(spec)
         ]
+        case_count, resolved = self._scenario_case_count(spec)
+        per_run = spec.trials_per_run or 1
+        max_potential_calls = len(cells) * per_run * case_count
+        violations = _violations(spec)
+        if (
+            spec.budget_policy.max_total_calls < max_potential_calls
+            and not any(item["code"] == "BUDGET_EXCEEDED" for item in violations)
+        ):
+            violations.append({
+                "code": "BUDGET_EXCEEDED",
+                "message": (
+                    f"max_potential_calls {max_potential_calls} exceeds budget "
+                    f"max_total_calls {spec.budget_policy.max_total_calls}"
+                ),
+            })
         return {
             "experiment_id": spec.experiment_id,
             "version": spec.version,
             "cells": cells,
             "cell_count": len(cells),
-            "max_potential_calls": spec.max_potential_calls(),
+            "max_potential_calls": max_potential_calls,
+            "case_count": case_count,
+            "case_count_resolved": resolved,
             "budget": _budget_view(spec.budget_policy),
-            "violations": _violations(spec),
+            "violations": violations,
         }
+
+    def _scenario_case_count(self, spec: ExperimentSpec) -> tuple[int, bool]:
+        """解析场景的真实 case 数（预算核算用）；资源缺失时保守返回 (1, False)。"""
+        if spec.selected_case_keys:
+            return len(spec.selected_case_keys), True
+        if self.resources is None:
+            return 1, False
+        scenario_ref = spec.task_ref.get("scenario_version") or ""
+        name, _, version = scenario_ref.rpartition("@")
+        scenario = getattr(self.resources, "scenarios", None)
+        record = scenario.get(name, version) if scenario is not None else None
+        dataset_ref = (record or {}).get("dataset")
+        if not dataset_ref:
+            return 1, False
+        dataset_name, _, dataset_version = str(dataset_ref).rpartition("@")
+        dataset = self.resources.datasets.get(dataset_name, dataset_version)
+        cases = (dataset or {}).get("cases")
+        if isinstance(cases, list) and cases:
+            return len(cases), True
+        return 1, False
 
     # ------------------------------------------------------------------- create
 
@@ -217,7 +283,9 @@ class ExperimentService:
                     "REQUEST_KEY_CONFLICT",
                     f"request_key {request_key!r} already created different spec content",
                 )
-        dump = spec.model_dump()
+        # JSON 规范化（tuple→list）：与 sqlite/pg 落盘读回的形状一致，
+        # 幂等重放不会因容器类型误判"异内容"（与 baseline store 同一规则）。
+        dump = spec.model_dump(mode="json")
         stored = self.store.experiments.get_spec(spec.experiment_id, spec.version)
         created = stored is None
         if stored is None or stored != dump:
@@ -336,10 +404,21 @@ class ExperimentService:
         cell: dict[str, Any],
         run_id: str,
     ) -> dict[str, Any]:
+        # 与普通 Run 创建同一条 prepare_run 解析链（场景/模型/快照/选择展开
+        # 与 TOCTOU 重校验都复用；不建第二条私有装配路径）。
+        from motte_sdk.resolve import ManifestResolutionError, prepare_run
+
+        scenario = spec.task_ref["scenario_version"]
+        manifest = self._build_manifest(spec, cell)
+        try:
+            prepared, case_ids = prepare_run(scenario, manifest, [], self.resources)
+        except ManifestResolutionError as error:
+            raise ExperimentError(error.code, str(error)) from error
         return self.run_service.create_run(
-            scenario_version=spec.task_ref["scenario_version"],
-            manifest=self._build_manifest(spec, cell),
-            case_ids=(),
+            scenario_version=scenario,
+            manifest=prepared,
+            case_ids=case_ids,
+            requested_manifest=manifest,
             run_id=run_id,
         )
 
@@ -361,7 +440,14 @@ class ExperimentService:
         for key, value in spec.controlled_conditions.items():
             if value is None:
                 continue
-            manifest[key] = value
+            if key == "parameters" and isinstance(value, dict):
+                merged = dict(manifest.get("parameters") or {})
+                merged.update(value)
+                manifest["parameters"] = merged
+            elif key == "max_output_tokens":
+                merged = dict(manifest.get("parameters") or {})
+                merged.setdefault("max_output_tokens", value)
+                manifest["parameters"] = merged
         if spec.selected_case_keys:
             manifest["case_selection"] = {
                 "mode": "ids",
@@ -416,7 +502,8 @@ class ExperimentService:
             repeat_index=repeat_index,
             resolved_spec_hash=spec.content_hash(),
         )
-        return cell.model_dump()
+        # JSON 规范化（factor_assignment.values tuple→list），与存储读回一致。
+        return cell.model_dump(mode="json")
 
     # ------------------------------------------------------------------- status
 

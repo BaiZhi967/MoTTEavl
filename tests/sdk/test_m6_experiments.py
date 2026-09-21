@@ -1,12 +1,16 @@
 """M6 ExperimentService 行为测试（A07 并发 / A08 恢复 / A20 取消 / retry / 幂等）。
 
-全部走公开存储原语（put_spec / put_cell / claim_cell / complete_cell）构造
-半分配现场，验证服务只编排既有 RunService、每 cell 恰好一个 initial Run。
+Cell 的 Run 走与普通 Run 同一条 ``prepare_run`` 解析链，因此夹具播种**真实**
+direct-llm 数据集（内置样例）与 provider/模型档案；半分配现场仍用公开存储
+原语（put_spec / put_cell / claim_cell / complete_cell）构造，验证服务只编排
+既有 RunService、每 cell 恰好一个 initial Run。
 """
 
 from __future__ import annotations
 
+import tempfile
 from itertools import product
+from pathlib import Path
 from threading import Barrier, Thread
 
 import pytest
@@ -24,28 +28,54 @@ from motte_sdk.experiments import (
     deterministic_run_id,
 )
 from motte_sdk.service import RunService
-from motte_storage.run_store import InMemoryRunStore
+from motte_storage.factory import default_content_store
+from motte_storage.resource_store import SQLiteResourceStore
+from motte_storage.run_store import SQLiteRunStore
 
 
 def make_service() -> tuple[object, RunService, ExperimentService]:
-    store = InMemoryRunStore()
+    """真实 direct-llm 资源环境：内置数据集 + 双模型（含 reasoning levels）。
+
+    Cell 的 Run 创建需要 scenario/dataset/provider/model 全部真实存在
+    （prepare_run 的创建期校验与 TOCTOU 重校验都会消费它们）。
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="m6-exp-sdk-")) / "env.db"
+    resources = SQLiteResourceStore(str(tmp), content_store=default_content_store())
+    from motte_sdk.direct_llm import import_builtin_dataset
+
+    import_builtin_dataset("direct-llm-exact-answer", resources=resources)
+    resources.providers.put({
+        "name": "local", "kind": "openai_compatible",
+        "base_url": "https://local.test/v1", "model": "unused",
+    })
+    for model_id in ("model-a", "model-b"):
+        resources.models.put({
+            "id": model_id, "provider": "local", "model": "probe-1",
+            "capabilities": {}, "max_output_tokens": 4096,
+            "reasoning": {
+                "supported": True, "levels": ["low", "high"],
+                "control": '{"reasoning_effort": reasoningLevel}',
+                "default_level": "low",
+            },
+        })
+    store = SQLiteRunStore(tmp)
     run_service = RunService(store)
-    return store, run_service, ExperimentService(store, run_service)
+    return store, run_service, ExperimentService(store, run_service, resources=resources)
 
 
 def spec_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "experiment_id": "exp-alpha",
         "version": "v1",
-        "task_ref": {"suite": "direct-llm", "scenario_version": "direct-llm@1"},
-        "selected_case_keys": ("case-1", "case-2"),
+        "task_ref": {"suite": "direct-llm",
+                     "scenario_version": "direct-llm-exact-answer@1"},
         "factors": {
             "model_profile": ("model-a", "model-b"),
             "reasoning_level": ("low", "high"),
         },
         "repeats": 2,
         "trials_per_run": None,
-        "controlled_conditions": {"timeout_seconds": 30, "note": None},
+        "controlled_conditions": {"max_output_tokens": 512, "note": None},
         "budget_policy": {"max_total_calls": 2000},
         "created_by": "tester",
         "reason": "unit test",
@@ -114,7 +144,9 @@ def test_preview_expands_matrix_without_touching_store() -> None:
     store, _run_service, service = make_service()
     result = service.preview(spec_payload(trials_per_run=3))
     assert result["cell_count"] == 8  # 2×2 因素 × 2 repeats
-    assert result["max_potential_calls"] == 8 * 3 * 2
+    # 真实场景 case 数（内置样例 8 题）参与预算核算：8 cell × 3 trial × 8 题。
+    assert result["case_count"] == 8 and result["case_count_resolved"] is True
+    assert result["max_potential_calls"] == 8 * 3 * 8
     assert len({cell["cell_id"] for cell in result["cells"]}) == 8
     assert {cell["repeat_index"] for cell in result["cells"]} == {0, 1}
     assert result["violations"] == []
@@ -186,16 +218,17 @@ def test_direct_llm_manifest_assembly() -> None:
         and c["repeat_index"] == 0
     )
     run = run_service.get_run(cell["run_id"])
-    assert run["scenario_version"] == "direct-llm@1"
+    assert run["scenario_version"] == "direct-llm-exact-answer@1"
     assert run["status"] == "queued"
     manifest = run["manifest"]
     assert manifest["model"] == "model-a"
     assert manifest["reasoning_level"] == "high"
-    assert manifest["timeout_seconds"] == 30  # controlled_conditions 展开
+    # controlled_conditions 经白名单并入 parameters（max_output_tokens 简写）。
+    assert manifest["parameters"]["max_output_tokens"] == 512
     assert "note" not in manifest  # None 跳过，不补假值
-    assert manifest["case_selection"]["case_ids"] == ["case-1", "case-2"]
-    assert manifest["case_selection"]["mode"] == "ids"
-    assert run["case_ids"] == []
+    # 未声明 selected_case_keys → 全量展开（prepare_run 展开为内置样例全部题）。
+    assert len(run["case_ids"]) == 8
+    assert run["manifest"]["cases"] or "cases" in run["manifest"]
 
 
 def test_unknown_suite_is_rejected_honestly() -> None:

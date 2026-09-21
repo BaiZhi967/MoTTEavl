@@ -1,16 +1,24 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import {
   ActivityIcon,
+  ArrowsLeftRightIcon,
   FlowArrowIcon,
+  FlagCheckeredIcon,
+  FlaskIcon,
   MagicWandIcon,
   PlugIcon,
   PuzzlePieceIcon,
+  PushPinIcon,
   ScalesIcon,
   StackIcon,
 } from "@phosphor-icons/react";
 import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
 import { JudgesPage } from "./pages/judges/JudgesPage";
+import { BaselinesPage } from "./pages/m6/BaselinesPage";
+import { ComparePage } from "./pages/m6/ComparePage";
+import { ExperimentsPage } from "./pages/m6/ExperimentsPage";
+import { GatePage } from "./pages/m6/GatePage";
 import { ScenarioRunStepsPage, ScenarioWorkflowsPage } from "./evalTypes/scenario/ScenarioPages";
 import { SkillComparePage, SkillValidationPage } from "./evalTypes/skill/SkillPages";
 import { EVAL_SUITES } from "./evalTypes/registry";
@@ -55,6 +63,10 @@ const GENERAL_NAV = [
   { to: "/scenario", label: "场景 Workflow", icon: FlowArrowIcon },
   { to: "/skill", label: "Skill 校验", icon: MagicWandIcon },
   { to: "/judges", label: "Judge 校准", icon: ScalesIcon },
+  { to: "/experiments", label: "实验", icon: FlaskIcon },
+  { to: "/compare", label: "比较", icon: ArrowsLeftRightIcon },
+  { to: "/baselines", label: "基线", icon: PushPinIcon },
+  { to: "/gate", label: "门禁", icon: FlagCheckeredIcon },
 ] as const;
 
 export default function App() {
@@ -96,6 +108,10 @@ export default function App() {
           <Route path="/skill" element={<SkillValidationPage />} />
           <Route path="/skill/compare" element={<SkillComparePage />} />
           <Route path="/judges" element={<JudgesPage />} />
+          <Route path="/experiments" element={<ExperimentsPage />} />
+          <Route path="/compare" element={<ComparePage />} />
+          <Route path="/baselines" element={<BaselinesPage />} />
+          <Route path="/gate" element={<GatePage />} />
           <Route path="/agent-tasks" element={<AgentOperate />} />
           <Route path="/runtimes" element={<HarnessOperate />} />
           <Route path="/runtimes/monitor" element={<HarnessMonitor />} />
