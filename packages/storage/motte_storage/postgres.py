@@ -336,6 +336,7 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         PgScoringPasses,
         PgTrials,
     )
+    from .pg_m6 import PgBaselineStore, PgExperiments, PgGateStore
 
     normalized = normalize_dsn(dsn)
     if migrate:
@@ -355,4 +356,7 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         benchmark_datasets=PgBenchmarkDatasets(normalized),
         baselines=PgBaselines(normalized),
         trials=PgTrials(normalized),
+        experiments=PgExperiments(normalized),
+        gate_store=PgGateStore(normalized),
+        baseline_store=PgBaselineStore(normalized),
     )

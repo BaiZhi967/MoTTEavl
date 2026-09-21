@@ -1553,3 +1553,341 @@ export const cancelJudgeJob = (jobId: string) =>
     `/api/v1/judges/jobs/${encodeURIComponent(jobId)}/cancel`,
     jsonBody({}),
   );
+
+// ---------------------------------------------------------------------------
+// M6：实验 / 比较 / Baseline / 门禁（experiments-and-comparison 协议）。
+//
+// compare / snapshot / gate / export 一律只读，零模型 / Judge / Runner 调用；
+// Baseline 与 GatePolicy 发布后不可变（同 id 异内容 409），默认 baseline 指针
+// 用 expected_current 做 CAS。服务端尚未注册的端点（404/405/501）由页面按
+// 「能力不可用」渲染（src/components/capability.tsx）；实体 404（*_NOT_FOUND）
+// 是普通错误，不按能力不可用处理。缺字段一律显示「未知」，不填 0。
+// ---------------------------------------------------------------------------
+
+/** 比较政策允许显式放行的因子（motte_contracts.comparison 冻结集合）。 */
+export const COMPARISON_FACTORS: readonly string[] = [
+  "model", "agent_id", "agent_version", "n_trials", "timeouts", "resources",
+  "tools", "retries", "environment", "credentials", "runtime", "intervention",
+  "workflow", "fixture", "skill", "judge", "rubric", "calibration", "budget_policy",
+];
+
+/** 三级比较结论（GET /comparisons）：结构性原因与指标原因分开。 */
+export interface ComparabilityView {
+  /** 兼容字段：质量指标是否可比（level ∈ comparable/partially 且质量 metric eligible）。 */
+  eligible: boolean;
+  /** comparable | partially_comparable | not_comparable；未知字符串按原样显示。 */
+  level: string;
+  reasons?: string[];
+  structural_reasons: string[];
+  metric_reasons: string[];
+  metric_eligibility: Record<string, boolean>;
+  case_diff: { added: string[]; removed: string[]; changed: string[] };
+  /** 政策显式允许的差异（本身可审计）。 */
+  allowed_differences?: string[];
+}
+
+export const compareRunReports = (params: {
+  baseline: string;
+  candidate: string;
+  factors?: string[];
+  baseline_pass?: string;
+  candidate_pass?: string;
+}) => {
+  const query = new URLSearchParams({
+    baseline: params.baseline,
+    candidate: params.candidate,
+  });
+  query.set("factors", (params.factors ?? ["model"]).join(","));
+  if (params.baseline_pass) query.set("baseline_pass", params.baseline_pass);
+  if (params.candidate_pass) query.set("candidate_pass", params.candidate_pass);
+  return request<ComparabilityView>(`/api/v1/comparisons?${query.toString()}`);
+};
+
+/** 回归分类（GET /regressions）：结论照实渲染，页面不自己下结论。 */
+export const getRegressionClassification = (params: {
+  baseline: string;
+  candidate: string;
+  baseline_pass?: string;
+  candidate_pass?: string;
+}) => {
+  const query = new URLSearchParams({
+    baseline: params.baseline,
+    candidate: params.candidate,
+  });
+  if (params.baseline_pass) query.set("baseline_pass", params.baseline_pass);
+  if (params.candidate_pass) query.set("candidate_pass", params.candidate_pass);
+  return request<Record<string, any>>(`/api/v1/regressions?${query.toString()}`);
+};
+
+/** ReportSnapshot（GET /runs/{id}/report-snapshot）：固定报告的冻结视图。 */
+export interface ReportSnapshotView {
+  snapshot_id: string;
+  ref: { run_id: string; scoring_pass_id: string; report_schema?: string; evidence_hash?: string };
+  created_at?: string | null;
+  suite?: string | null;
+  denominator?: string | null;
+  /** 9 个 disposition 计数键（协议 §2 不变量）。 */
+  counts: Record<string, number>;
+  coverage?: number | null;
+  /** null = 该指标资格不足（缺样本 / 未评分），不得显示成 0。 */
+  metric_values: Record<string, number | null>;
+  metric_registry_version?: string | null;
+  cost?: {
+    entries?: Array<{ scope?: string; currency?: string; amount?: number }>;
+    unknown_usage_count?: number;
+    source?: string | null;
+    usage_coverage?: number | null;
+  } | null;
+  evidence_pins?: Array<{ artifact_id: string; sha256: string }>;
+  case_dispositions?: Array<{ case_id: string; disposition: string; detail?: string | null }>;
+}
+
+export const getReportSnapshot = (runId: string, scoringPassId?: string) =>
+  request<ReportSnapshotView>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/report-snapshot`
+    + (scoringPassId ? `?scoring_pass_id=${encodeURIComponent(scoringPassId)}` : ""),
+  );
+
+// -- Baseline -------------------------------------------------------------
+
+export interface BaselineEntryView {
+  /** null = 单 Run baseline；非空 = 按 cell 条件映射。 */
+  cell_key: string | null;
+  ref: { run_id: string; scoring_pass_id: string } & Record<string, any>;
+}
+
+/** BaselineSnapshot（协议 §4）：固定 entries + 政策 hash + 资格，写入后不可变。 */
+export interface BaselineSnapshotView {
+  baseline_id: string;
+  entries: BaselineEntryView[];
+  comparison_policy_hash: string;
+  /** formal | diagnostic；ineligible 在创建时即被拒绝。 */
+  eligibility: string;
+  created_by: string;
+  reason: string;
+  source_note?: string | null;
+  created_at?: string | null;
+  metrics: Record<string, number | null>;
+}
+
+/** 默认 baseline 指针（scope → snapshot）：CAS 更新 + 审计，不覆盖历史。 */
+export interface DefaultBaselinePointerView {
+  scope: string;
+  baseline_id: string;
+  updated_by: string;
+  reason: string;
+  comparison_policy_hash: string;
+  updated_at?: string | null;
+  position?: number | null;
+}
+
+export const getBaselines = (limit = 100) =>
+  request<{ items: BaselineSnapshotView[]; total: number }>(
+    `/api/v1/baselines?limit=${limit}`,
+  );
+
+export const createBaseline = (body: {
+  baseline_id: string;
+  entries: Array<{ cell_key?: string | null; run_id: string; scoring_pass_id: string }>;
+  policy?: Record<string, unknown>;
+  created_by?: string;
+  reason?: string;
+  source_note?: string | null;
+}) => request<BaselineSnapshotView>("/api/v1/baselines", jsonBody(body));
+
+export const getBaseline = (baselineId: string) =>
+  request<BaselineSnapshotView>(`/api/v1/baselines/${encodeURIComponent(baselineId)}`);
+
+export const getDefaultBaseline = (scope: string) =>
+  request<{ scope: string; pointer: DefaultBaselinePointerView | null }>(
+    `/api/v1/baselines/default?scope=${encodeURIComponent(scope)}`,
+  );
+
+/** CAS 切换默认指针：expected_current 缺省且已有指针时 409 CAS_CONFLICT。 */
+export const setDefaultBaseline = (body: {
+  scope: string;
+  baseline_id: string;
+  expected_current?: string | null;
+  updated_by: string;
+  reason: string;
+}) => request<DefaultBaselinePointerView>("/api/v1/baselines/default", jsonBody(body));
+
+// -- GatePolicy / 版本化求值 / 导出 ----------------------------------------
+
+/** GatePolicyVersion（协议 §9）：published 后不可变；弃用只改 lifecycle。 */
+export interface GatePolicyView {
+  policy_id: string;
+  version: string;
+  /** draft | published | deprecated。 */
+  lifecycle?: string;
+  rules: Array<Record<string, any>>;
+  diagnostic?: boolean;
+  created_by?: string;
+  reason?: string;
+  created_at?: string | null;
+  [key: string]: any;
+}
+
+export const getGatePolicies = () =>
+  request<{ items: GatePolicyView[]; total: number }>("/api/v1/gate-policies");
+
+export const publishGatePolicy = (draft: Record<string, unknown>) =>
+  request<GatePolicyView>("/api/v1/gate-policies", jsonBody(draft));
+
+export const deprecateGatePolicy = (policyId: string, version: string) =>
+  request<GatePolicyView>(
+    `/api/v1/gate-policies/${encodeURIComponent(policyId)}/${encodeURIComponent(version)}/deprecate`,
+    jsonBody({}),
+  );
+
+/** 逐规则求值结果：status ∈ pass/fail/insufficient/not_applicable/skipped_diagnostic。 */
+export interface GateRuleResultView {
+  rule_id: string;
+  kind: string;
+  status: string;
+  severity?: string;
+  decision?: string | null;
+  reason: string;
+  diagnostic_skipped?: boolean;
+}
+
+/** GateResult（POST /gates/versioned 与 GET /gates/results/{id}）：追加只读。 */
+export interface GateResultFullView {
+  gate_result_id: string;
+  policy_id: string;
+  policy_version: string;
+  policy_content_hash?: string;
+  baseline?: { baseline_id?: string; run_id?: string; scoring_pass_id?: string } | null;
+  candidates?: Array<Record<string, any>>;
+  /** 六类决策（协议 §6）。 */
+  decision: string;
+  rule_results: GateRuleResultView[];
+  evaluation_input_hash?: string;
+  result_semantics_hash?: string;
+  conclusion_hash?: string;
+  evaluated_at?: string | null;
+  suggested_actions?: string[];
+  /** 决策 → 退出码摘要（协议 §7）；服务端未附带时为 null（页面显示未知）。 */
+  exit_code?: number | null;
+}
+
+export const evaluateVersionedGate = (body: {
+  run_id: string;
+  policy_id: string;
+  policy_version: string;
+  scoring_pass_id?: string;
+  baseline_id?: string;
+  allowed_factors?: string[];
+}) => request<GateResultFullView>("/api/v1/gates/versioned", jsonBody(body));
+
+export const getGateResult = (gateResultId: string) =>
+  request<GateResultFullView>(`/api/v1/gates/results/${encodeURIComponent(gateResultId)}`);
+
+/** 导出端点直接交给浏览器下载（JSON canonical dump / 最小 JUnit XML）。 */
+export function gateResultExportUrl(gateResultId: string, format: "json" | "junit"): string {
+  return `/api/v1/gates/results/${encodeURIComponent(gateResultId)}/export?format=${format}`;
+}
+
+// -- Experiment -----------------------------------------------------------
+
+/** 预览违规（MATRIX_TOO_LARGE / BUDGET_EXCEEDED 等）：非空时创建必须禁用。 */
+export interface ExperimentPreviewViolation {
+  code: string;
+  message: string;
+  [key: string]: unknown;
+}
+
+/** 零创建预览（POST /experiments/preview）：矩阵展开 + 护栏，不触碰存储。 */
+export interface ExperimentPreviewView {
+  experiment_id: string;
+  version: string;
+  cells: Array<{ cell_id: string; factor_assignment: Record<string, any>; repeat_index: number }>;
+  cell_count: number;
+  max_potential_calls: number;
+  budget?: Record<string, any>;
+  violations: ExperimentPreviewViolation[];
+}
+
+export interface ExperimentCellView {
+  cell_id: string;
+  experiment_id?: string;
+  experiment_version?: string | number;
+  repeat_index: number;
+  factor_assignment: Record<string, any>;
+  /** pending | allocating | allocated | failed | cancelled。 */
+  allocation_status: string;
+  run_id?: string | null;
+  superseding_run_ids?: string[];
+  failure_reason?: string | null;
+}
+
+export interface ExperimentStatusView {
+  experiment_id: string;
+  version: string;
+  spec: Record<string, any>;
+  cell_count: number;
+  progress: Record<string, number>;
+  cells: ExperimentCellView[];
+}
+
+/** POST /experiments（202）：发布 spec（幂等）+ 铺 cell + 分配的结果。 */
+export interface ExperimentCreateOutcome extends ExperimentStatusView {
+  created?: boolean;
+  allocated?: number;
+  skipped_existing?: number;
+  failed?: Array<{ cell_id: string; reason: string }>;
+}
+
+export const previewExperiment = (specPayload: Record<string, unknown>) =>
+  request<ExperimentPreviewView>("/api/v1/experiments/preview", jsonBody(specPayload));
+
+export const createExperiment = (
+  specPayload: Record<string, unknown>,
+  requestKey?: string,
+) =>
+  request<ExperimentCreateOutcome>(
+    "/api/v1/experiments",
+    jsonBody(requestKey ? { ...specPayload, _request_key: requestKey } : specPayload),
+  );
+
+export const allocateExperiment = (experimentId: string, version?: string) =>
+  request<ExperimentCreateOutcome>(
+    `/api/v1/experiments/${encodeURIComponent(experimentId)}/allocate`,
+    jsonBody(version ? { version } : {}),
+  );
+
+export const getExperiment = (experimentId: string, version?: string) =>
+  request<ExperimentStatusView>(
+    `/api/v1/experiments/${encodeURIComponent(experimentId)}`
+    + (version ? `?version=${encodeURIComponent(version)}` : ""),
+  );
+
+/** 只作用于本实验：pending/allocating cell 落 cancelled，自有 Run 走取消。 */
+export const cancelExperiment = (
+  experimentId: string,
+  body?: { version?: string; reason?: string },
+) =>
+  request<ExperimentStatusView & {
+    reason?: string;
+    cancelled_at?: string;
+    cancelled_cells?: string[];
+    cancelled_runs?: string[];
+  }>(
+    `/api/v1/experiments/${encodeURIComponent(experimentId)}/cancel`,
+    jsonBody(body ?? {}),
+  );
+
+/** 显式重试：superseding 子 Run（parent 指向原 Run），原结果不消失。 */
+export const retryExperimentCell = (cellId: string, reason?: string) =>
+  request<{
+    cell_id: string;
+    run_id: string;
+    parent_run_id?: string | null;
+    superseding_run_ids?: string[];
+    allocation_status?: string;
+    reason?: string;
+    retried_at?: string;
+  }>(
+    `/api/v1/experiments/cells/${encodeURIComponent(cellId)}/retry`,
+    jsonBody(reason ? { reason } : {}),
+  );

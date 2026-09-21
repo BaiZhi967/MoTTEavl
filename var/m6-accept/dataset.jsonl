@@ -1,0 +1,3 @@
+{"case_id": "m6-accept-101", "input": "Say alpha", "expected": "alpha", "scorer": "exact"}
+{"case_id": "m6-accept-102", "input": "Say beta", "expected": "beta", "scorer": "exact"}
+{"case_id": "m6-accept-103", "input": "Say gamma", "expected": "gamma", "scorer": "exact"}
