@@ -2,15 +2,43 @@ import json
 import os
 import time
 
+import pytest
 from motte_sdk.replay_run import ReplayProvider
 from motte_sdk.service import RunService
-from motte_storage.maintenance import backup_sqlite, cleanup_artifacts, restore_sqlite
+from motte_storage.maintenance import (
+    backup_sqlite,
+    begin_maintenance,
+    cleanup_artifacts,
+    end_maintenance,
+    maintenance_status,
+    restore_sqlite,
+)
 from motte_storage.run_store import SQLiteRunStore
 
 
 def _populate(db_path):
     service = RunService(SQLiteRunStore(db_path), provider=ReplayProvider({}).invoke)
     return service.create_run("replay@1", {}, case_ids=["case-1"])
+
+
+def test_maintenance_barrier_helpers_are_idempotent(tmp_path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    _populate(tmp_path / "runs.db")
+
+    assert maintenance_status(store) == {"active": False, "started_at": None}
+    first = begin_maintenance(store)
+    assert first["active"] is True
+    assert first["started_at"]
+    # 幂等重入：不刷新 started_at
+    again = begin_maintenance(store, reason="gc")
+    assert again["started_at"] == first["started_at"]
+    assert maintenance_status(store)["active"] is True
+
+    ended = end_maintenance(store)
+    assert ended["active"] is False
+    assert ended["ended_at"]
+    end_maintenance(store)  # 幂等：重复解除不报错
+    assert maintenance_status(store) == {"active": False, "started_at": None}
 
 
 def test_backup_and_restore_roundtrip_preserves_runs_and_events(tmp_path):
@@ -34,6 +62,12 @@ def test_backup_and_restore_roundtrip_preserves_runs_and_events(tmp_path):
     assert len(events) == 8
     assert [item["seq"] for item in events] == list(range(1, 9))
     assert any(item["type"] == "scoring_pass_created" for item in events)
+
+    # M7（协议 §9.2）：覆盖已有目标必须显式 confirm_overwrite
+    with pytest.raises(FileExistsError):
+        restore_sqlite(backup_dir, restored_db)
+    restore_sqlite(backup_dir, restored_db, confirm_overwrite=True)
+    assert RunService(SQLiteRunStore(restored_db)).get_run(run["id"])["status"] == "completed"
 
 
 def test_restore_uses_latest_backup(tmp_path):
@@ -64,7 +98,10 @@ def test_backup_includes_artifacts_snapshot(tmp_path):
     assert manifest["artifacts"]["files"] == 1
 
     (artifacts / "a.txt").unlink()
-    restore_sqlite(tmp_path / "backups", db, artifacts_root=artifacts)
+    # 恢复覆盖现有 db 与 artifacts 目录：需显式 confirm_overwrite（协议 §9.2）
+    with pytest.raises(FileExistsError):
+        restore_sqlite(tmp_path / "backups", db, artifacts_root=artifacts)
+    restore_sqlite(tmp_path / "backups", db, artifacts_root=artifacts, confirm_overwrite=True)
     assert (artifacts / "a.txt").read_text() == "x"
 
 
