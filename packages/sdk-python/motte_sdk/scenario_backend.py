@@ -64,13 +64,16 @@ def validate_scenario_manifest(manifest: dict[str, Any]) -> None:
         )
     # 先校验冻结输入的形状，再校验目标能力：配置错误应当先报出来，能力不足
     # 是另一类错误（错误码不同，客户端可以分别处理）。
+    # 只有 Workflow 真的声明了 fixture_refs 时才要求固定 Fixture：没有 Fixture
+    # 的流程（纯消息 + 断言）不该被一条空快照规则永久挡在创建之外。
+    declared_fixtures = snapshot.get("fixture_refs") or []
     fixtures = manifest.get("fixture_snapshot")
-    if not isinstance(fixtures, dict) or not fixtures:
+    if declared_fixtures and (not isinstance(fixtures, dict) or not fixtures):
         raise ExecutionBackendError(
             "SCENARIO_FIXTURE_REQUIRED",
-            "scenario runs require pinned fixture snapshots",
+            "scenario runs require pinned fixture snapshots for every declared fixture_ref",
         )
-    for key, record in fixtures.items():
+    for key, record in (fixtures or {}).items():
         if not isinstance(record, dict) or not record.get("content_hash"):
             raise ExecutionBackendError(
                 "SCENARIO_FIXTURE_INVALID",

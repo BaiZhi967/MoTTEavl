@@ -121,8 +121,20 @@ def test_missing_or_empty_snapshots_are_refused_at_creation(builtin_adapter):
         validate_scenario_manifest(workflow_manifest(workflow_snapshot={
             "ref": "x@1", "content_hash": "sha256:" + "1" * 64, "steps": [],
         }))
+    # 没有声明 fixture_refs 的流程不要求固定 Fixture（纯消息 + 断言的场景）。
+    validate_scenario_manifest(workflow_manifest(fixture_snapshot=None))
+    # 一旦 Workflow 声明了 fixture_refs，缺失/空的固定 Fixture 就必须拒绝。
+    declared = workflow_manifest(fixture_snapshot=None)
+    declared["workflow_snapshot"] = {
+        **declared["workflow_snapshot"],
+        "fixture_refs": [{"fixture_id": "order-state", "version": 1, "kind": "json"}],
+    }
     with pytest.raises(ExecutionBackendError, match="pinned fixture"):
-        validate_scenario_manifest(workflow_manifest(fixture_snapshot={}))
+        validate_scenario_manifest(declared)
+    with pytest.raises(ExecutionBackendError, match="pinned fixture"):
+        validate_scenario_manifest({
+            **declared, "fixture_snapshot": {},
+        })
 
 
 def test_execution_is_unavailable_until_the_vertical_chain_is_delivered(builtin_adapter):
