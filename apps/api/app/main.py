@@ -230,6 +230,58 @@ def _workflow_publication_record(
     return {**workflow.model_dump(mode="json"), "content_hash": computed}, defaulted, None
 
 
+def _fixture_publication_record(
+    body: Any, *, published_at: str,
+) -> tuple[dict[str, Any] | None, list[str], JSONResponse | None]:
+    """把请求体规范化为可发布的 FixtureSpec 记录（**纯函数**：不写库、不执行）。
+
+    验收 F-04：Fixture 版本以前没有公共发布入口，引用 fixture 的 Workflow 只能
+    发布、不能运行。草稿被拒绝；内容 hash 由服务端固定，客户端提交不一致的 hash
+    立即拒绝；published_at 缺失时补发布时刻（同一内容重复发布保持幂等）。
+    """
+    if not isinstance(body, dict):
+        return None, [], _error_json(422, "CONTRACT_INVALID", "fixture body must be an object")
+    managed = sorted(set(body).intersection({"_deleted"}))
+    if managed:
+        return None, [], _error_json(
+            422, "SERVER_MANAGED_FIELD", f"server-managed fields are not accepted: {managed}"
+        )
+    rejected = _reject_secret_fields(body)
+    if rejected is not None:
+        return None, [], rejected
+    from motte_contracts.fixture import FixtureSpec, fixture_content_hash
+    from pydantic import ValidationError
+
+    defaulted: list[str] = []
+    candidate = deepcopy(body)
+    if not candidate.get("published_at"):
+        candidate["published_at"] = published_at
+        defaulted.append("published_at")
+    if candidate.get("lifecycle", "published") != "published":
+        return None, defaulted, _error_json(
+            422,
+            "FIXTURE_NOT_PUBLISHED",
+            "only published fixture versions can be stored; a draft has no identity to freeze",
+        )
+    try:
+        fixture = FixtureSpec.model_validate(candidate)
+    except ValidationError as error:
+        return None, defaulted, _error_json(
+            422,
+            "FIXTURE_INVALID",
+            f"fixture document is not a publishable version: {error.error_count()} field error(s)",
+            fields=_contract_field_errors(error),
+        )
+    computed = fixture_content_hash(fixture)
+    if fixture.content_hash is not None and fixture.content_hash != computed:
+        return None, defaulted, _error_json(
+            422,
+            "FIXTURE_CONTENT_HASH_MISMATCH",
+            "fixture content_hash does not match its content; omit it to let the server pin it",
+        )
+    return {**fixture.model_dump(mode="json"), "content_hash": computed}, defaulted, None
+
+
 def _dataset_summary(record: dict[str, Any]) -> dict[str, Any]:
     """Project immutable identity and governance without returning large case payloads."""
     evaluation = record.get("eval") if isinstance(record.get("eval"), dict) else {}
@@ -1766,6 +1818,57 @@ def create_app(
             409,
             "PUBLISHED_RESOURCE_IMMUTABLE",
             f"published resource cannot be deleted: {workflow_id}@{version}",
+        )
+
+    # ------------------------------------------------------ M5 fixture 资源
+
+    @application.get("/api/v1/fixtures")
+    def list_fixtures():
+        """已发布 Fixture 版本目录：只读仓库，零模型调用、零执行。"""
+        items = resources.fixtures.list()
+        return {"items": items, "total": len(items)}
+
+    @application.post("/api/v1/fixtures", status_code=201)
+    def publish_fixture(body: dict):
+        """发布不可变 FixtureSpec 版本：同内容幂等，同版本异内容 409。
+
+        验收 F-04：这是 Fixture 的第一个公共发布入口；没有它，引用 fixture 的
+        Workflow 只会在创建 Run 时被 WORKFLOW_FIXTURE_MISSING 拒绝。
+        """
+        record, _defaulted, invalid = _fixture_publication_record(
+            body, published_at=datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        )
+        if invalid is not None:
+            return invalid
+        repository = resources.fixtures
+        try:
+            return resources.publish_fixture(record)
+        except ResourceConflictError:
+            existing = repository.get(record["fixture_id"], str(record["version"]))
+            comparison = dict(record)
+            if "published_at" not in body and existing is not None:
+                comparison["published_at"] = existing.get("published_at")
+            if existing != comparison:
+                raise
+            return existing
+        except ValueError as error:
+            return _error_json(422, "FIXTURE_INVALID", str(error))
+
+    @application.get("/api/v1/fixtures/{fixture_id}/{version}")
+    def get_fixture(fixture_id: str, version: str):
+        record = resources.fixtures.get(fixture_id, version)
+        if record is None:
+            raise HTTPException(status_code=404, detail="fixture not found")
+        return record
+
+    @application.delete("/api/v1/fixtures/{fixture_id}/{version}")
+    def delete_fixture(fixture_id: str, version: str):
+        if resources.fixtures.get(fixture_id, version) is None:
+            raise HTTPException(status_code=404, detail="fixture not found")
+        return _error_json(
+            409,
+            "PUBLISHED_RESOURCE_IMMUTABLE",
+            f"published resource cannot be deleted: {fixture_id}@{version}",
         )
 
     @application.post(

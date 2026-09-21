@@ -662,6 +662,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "--published-at", dest="published_at",
         help="发布时刻（只用于生成候选引用；缺省取当前 UTC）",
     )
+    fixture = sub.add_parser(
+        "fixture", help="Fixture 版本资源：发布 / 列表（与 API 同一校验；不执行 fixture）",
+    )
+    fixture_sub = fixture.add_subparsers(dest="fixture_command", required=True)
+    fx_publish = fixture_sub.add_parser(
+        "publish", help="发布不可变 FixtureSpec 版本（同内容幂等、异内容冲突）",
+    )
+    fx_publish.add_argument("file", help="FixtureSpec JSON 文件")
+    fx_publish.add_argument("--json", action="store_true")
+    fx_publish.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+    fx_list = fixture_sub.add_parser("list", help="列出已发布 Fixture 版本（只读）")
+    fx_list.add_argument("--json", action="store_true")
+    fx_list.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+
     run = sub.add_parser("run", help="创建 queued Run（由 Worker 异步执行）")
     run.add_argument("--spec", required=True, help="run 定义 JSON 或 @文件：{scenario_version, manifest, case_ids}")
     run.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
@@ -1501,6 +1515,51 @@ def _resources(args):
     return SQLiteResourceStore(args.db) if args.db else create_resource_store()
 
 
+def _fixture_command(args) -> int:
+    """fixture publish/list：与 API 同一契约、同一 content_hash。
+
+    发布只写不可变版本资源；不初始化 fixture、不执行工具、不创建 Run、不调用模型。
+    """
+    from motte_cli import fixtures as fx
+    from motte_storage.resource_store import ResourceConflictError
+
+    command = args.fixture_command
+    if command == "list":
+        items = _resources(args).fixtures.list()
+        if getattr(args, "json", False):
+            print(json.dumps({"items": items, "total": len(items)}, ensure_ascii=False))
+            return 0
+        if not items:
+            print("（没有已发布的 Fixture 版本）")
+        for item in items:
+            print(
+                f"  {item.get('fixture_id')}@{item.get('version')}  "
+                f"hash={item.get('content_hash')}"
+            )
+        return 0
+
+    if command == "publish":
+        try:
+            document = fx.load_document(args.file)
+            stored = fx.publish_fixture(_resources(args), document)
+        except fx.FixtureDocumentError as error:
+            return _error(error.code, str(error), **({"fields": error.fields} if error.fields else {}))
+        except ResourceConflictError as error:
+            return _error("RESOURCE_CONFLICT", str(error))
+        except ValueError as error:
+            return _error("CONTRACT_INVALID", str(error))
+        if getattr(args, "json", False):
+            print(json.dumps(stored, ensure_ascii=False))
+        else:
+            print(
+                f"published {stored.get('fixture_id')}@{stored.get('version')} "
+                f"content_hash={stored.get('content_hash')}"
+            )
+        return 0
+
+    return _error("CONTRACT_INVALID", f"unknown fixture command: {command}")
+
+
 def _workflow_command(args) -> int:
     """workflow publish/list/convert-legacy：与 API 同一契约、同一编译器。
 
@@ -1818,6 +1877,8 @@ def main(argv=None):
     if args.command == "judge":
         return _judge_command(args)
 
+    if args.command == "fixture":
+        return _fixture_command(args)
     if args.command == "workflow":
         return _workflow_command(args)
 
