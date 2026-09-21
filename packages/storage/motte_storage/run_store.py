@@ -598,56 +598,18 @@ class RunStore:
             attach_interactive_repositories(self)
 
 
-def _upgrade_score_sets(connection: sqlite3.Connection) -> None:
-    """把 case-only 主键的旧 score_sets 原地升级为多指标复合键（保留旧行）。"""
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(score_sets)")}
-    if "metric_id" in columns:
-        return
-    connection.executescript("""
-        CREATE TABLE score_sets_new (
-          scoring_pass_id TEXT NOT NULL,
-          case_id TEXT NOT NULL,
-          trial_id TEXT NOT NULL DEFAULT '',
-          metric_id TEXT NOT NULL DEFAULT '',
-          evaluator_id TEXT NOT NULL DEFAULT '',
-          evaluator_version TEXT NOT NULL DEFAULT '',
-          ordinal INTEGER NOT NULL,
-          payload TEXT NOT NULL,
-          PRIMARY KEY (scoring_pass_id, case_id, trial_id, metric_id, evaluator_id, evaluator_version),
-          FOREIGN KEY (scoring_pass_id) REFERENCES scoring_passes(id)
-        );
-        INSERT INTO score_sets_new
-          (scoring_pass_id, case_id, trial_id, metric_id, evaluator_id, evaluator_version, ordinal, payload)
-          SELECT scoring_pass_id, case_id, '', '', '', '', ordinal, payload FROM score_sets;
-        DROP TABLE score_sets;
-        ALTER TABLE score_sets_new RENAME TO score_sets;
-    """)
-
-
-def _upgrade_case_attempt_trial(connection: sqlite3.Connection) -> None:
-    """旧库补 ``case_attempts.trial_id``（M3-T02）：旧行保持空串语义。"""
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(case_attempts)")}
-    if columns and "trial_id" not in columns:
-        connection.execute(
-            "ALTER TABLE case_attempts ADD COLUMN trial_id TEXT NOT NULL DEFAULT ''",
-        )
-
-
 def SQLiteRunStore(path: str | Path) -> RunStore:
     from .audit_store import SQLiteAttempts, SQLiteCommands, SQLiteScoreSets, SQLiteScoringPasses
+    from .sqlite_schema import create_and_upgrade
 
     path = str(path)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with closing(_connect(path)) as connection:
         connection.execute("PRAGMA journal_mode=WAL")
-        connection.executescript(_SCHEMA)
-        with connection:
-            connection.execute("BEGIN IMMEDIATE")
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
-            if "revision" not in columns:
-                connection.execute("ALTER TABLE runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
-            _upgrade_score_sets(connection)
-            _upgrade_case_attempt_trial(connection)
+        # 建缺失表，并把旧库对齐到当前 schema（验收 F-01）：只缺列就补列，主键
+        # 不同就按当前 DDL 重建并保留共有列。旧实现在 metric_id 已存在时提前返回，
+        # 于是"有 metric_id、没有 trial_id"的中间形状永远补不上，结算期缺列失败。
+        create_and_upgrade(connection, _SCHEMA)
     from .baselines import SQLiteBaselines
     from .benchmark_datasets import SQLiteBenchmarkDatasets
     from .external_jobs import SQLiteExternalJobs

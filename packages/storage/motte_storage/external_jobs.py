@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import RLock
@@ -21,6 +22,7 @@ from typing import Any
 
 from .integrity import RunConflictError
 from .run_store import _connect
+from .sqlite_schema import create_and_upgrade
 
 RECOVERABLE_STATUSES = ("launching", "active", "collecting")
 
@@ -214,7 +216,9 @@ class SQLiteExternalJobs:
     def __init__(self, path: str) -> None:
         self._path = path
         with closing(_connect(path)) as connection:
-            connection.executescript(_SCHEMA_JOBS)
+            # F-01：建缺失表并把旧库对齐到当前形状（主键不同则重建）。
+            # 旧形状的主键叫 id；job_id 是它的自然键改名，按列名映射搬运。
+            create_and_upgrade(connection, _SCHEMA_JOBS, {"external_jobs": {"job_id": "id"}})
 
     def begin_job(self, job: dict[str, Any]) -> dict[str, Any]:
         stored = _job_defaults(_validate_job(job))

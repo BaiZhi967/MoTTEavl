@@ -298,9 +298,7 @@ class MemoryTrials:
             )
 
 
-def _ensure_schema(connection: sqlite3.Connection) -> None:
-    """建表 + 幂等补列（旧库升级只加列，不重建、不丢既有计划）。"""
-    connection.executescript("""CREATE TABLE IF NOT EXISTS trials (
+_TRIALS_SCHEMA = """CREATE TABLE IF NOT EXISTS trials (
   trial_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
   task_key TEXT NOT NULL,
@@ -314,12 +312,20 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
 );
 CREATE INDEX IF NOT EXISTS trials_run_idx ON trials(run_id);
 CREATE INDEX IF NOT EXISTS trials_task_idx ON trials(run_id, task_key);
-""")
-    existing = {row[1] for row in connection.execute("PRAGMA table_info(trials)").fetchall()}
-    if "result_payload" not in existing:
-        connection.execute("ALTER TABLE trials ADD COLUMN result_payload TEXT")
-    if "finished_at" not in existing:
-        connection.execute("ALTER TABLE trials ADD COLUMN finished_at TEXT")
+"""
+
+
+def _ensure_schema(connection: sqlite3.Connection) -> None:
+    """建表 + 旧库对齐（验收 F-01）。
+
+    旧实现只补 result_payload / finished_at 两列：主键仍是 id 的历史形状
+    （缺 trial_id / repeat_index / plan_hash / created_at）既补不上也修不了主键，
+    于是 Trial 写入报 no such column: repeat_index。现在交给共享对齐器：只缺列
+    就补列，主键不同就按当前 DDL 重建并保留共有列。
+    """
+    from .sqlite_schema import create_and_upgrade
+
+    create_and_upgrade(connection, _TRIALS_SCHEMA, {"trials": {"trial_id": "id"}})
 
 
 class SQLiteTrials:

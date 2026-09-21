@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import closing
+
 from copy import deepcopy
 from threading import RLock
 from typing import Any
@@ -32,6 +33,7 @@ from uuid import uuid4
 from .integrity import RunConflictError
 from .invocations import create_invocation_in_transaction, transition_invocation_in_transaction
 from .run_store import _append_event, _connect
+from .sqlite_schema import create_and_upgrade
 
 JOB_SCHEMA_VERSION = 1
 JOB_STATES = (
@@ -239,7 +241,8 @@ class SQLiteScoringJobs:
     def __init__(self, path: str) -> None:
         self._path = path
         with closing(_connect(path)) as connection:
-            connection.executescript(_SCHEMA)
+            # F-01：建缺失表并把旧库对齐到当前形状（主键不同则重建）。
+            create_and_upgrade(connection, _SCHEMA)
 
     # ------------------------------------------------------------- 读取
     def get(self, job_id: str) -> dict[str, Any] | None:
