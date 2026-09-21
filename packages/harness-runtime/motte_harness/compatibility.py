@@ -14,8 +14,6 @@ from typing import Any, Callable
 
 from .install import _parse_version
 
-# 与 docs/protocols/runtime-compatibility.json 的 manifest_version 对齐。
-COMPATIBILITY_MANIFEST_VERSION = "2026-09-20.1"
 _PI_PROTOCOL_VERSION = "v2"
 
 _REQUIRED_BACKEND_FIELDS = (

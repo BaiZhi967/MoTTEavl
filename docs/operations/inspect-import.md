@@ -28,3 +28,19 @@ Run 是只读来源归档，**从不进入 queued/Dispatcher**。导入准备中
 关闭新的导入入口，保留既有 Run、ScoringPass、源文件与 Artifact。不得删除已经被历史报告引用的原始日志，也不得覆盖历史原生评分。当前导入 Run 的 retry 与平台 rescore 明确拒绝；未来开放重评时必须配置支持导入证据的 evaluator，并生成独立 pass。
 
 官方结构依据：[EvalLog / EvalSpec](https://inspect.aisi.org.uk/reference/inspect_ai.log.html#evalspec)。本地验证：tests/harness/test_inspect_log_import.py、test_inspect_v2_identity.py，覆盖格式、原文、来源冲突及持久查询；不等同于任意 Inspect 版本兼容声明。
+
+## 固定版本原生收据
+
+已纳入官方 `inspect-ai==0.3.266` 真实 runner 生成的完整 EvalLog v2：
+`tests/fixtures/harness/inspect-ai-0.3.266-native-mock.json`（24,546 字节，
+SHA-256 `9dec3bb4c91175688bd5f93e066232da81cfdc321999a6753c2febb756479aea`）。
+原始字节保持不变，Git 禁止换行转换；平台绝对路径只作为历史元数据，不是导入前提。
+
+该收据使用官方 `mockllm/model` 与本地确定性评分器，属于 **actual-native-output +
+mock-model**，不算真实模型 live 验证。未使用凭据或外部模型；显式 mock token
+计数不能作为真实费用证据。两个原生样本的数值评分为 1.0、0.0。
+
+`tests/harness/test_inspect_native_fixture.py` 覆盖真实 fixture 的 SQLite 持久导入、
+重开查询、幂等重导、原文与 Artifact 字节一致以及零执行 attempt。原始采集脚本与
+整理后的复现脚本分别记录哈希；[复现说明](../../tests/fixtures/harness/inspect-native/README.md)
+提供独立 scratch 环境命令，不修改根项目依赖。

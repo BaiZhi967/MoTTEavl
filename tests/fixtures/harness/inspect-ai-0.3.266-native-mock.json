@@ -1,0 +1,889 @@
+{
+  "version": 2,
+  "status": "success",
+  "eval": {
+    "eval_id": "SjGVBXMPwjCenScjc9bAkv",
+    "run_id": "gJZXNj9svHoKT6E7yoQ5wx",
+    "created": "2026-09-21T02:55:08+00:00",
+    "task": "motte_native_mock_receipt",
+    "task_id": "N8DNCuP83r4FrwEAgnB4Z7",
+    "task_version": 0,
+    "task_display_name": "motte_native_mock_receipt",
+    "task_attribs": {},
+    "task_args": {},
+    "task_args_passed": {},
+    "dataset": {
+      "samples": 2,
+      "sample_ids": [
+        "native-1",
+        "native-2"
+      ],
+      "shuffled": false
+    },
+    "model": "mockllm/model",
+    "model_generate_config": {},
+    "model_args": {
+      "custom_outputs": [
+        {
+          "model": "mockllm/model",
+          "choices": [
+            {
+              "message": {
+                "id": "MjbyJtNTwrKkntHjqeQKX7",
+                "content": "alpha",
+                "source": "generate",
+                "role": "assistant",
+                "model": "mockllm/model"
+              },
+              "stop_reason": "stop"
+            }
+          ],
+          "completion": "alpha",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "time": 0.0
+        },
+        {
+          "model": "mockllm/model",
+          "choices": [
+            {
+              "message": {
+                "id": "7nDCzEniMrBjAnziSBnQrS",
+                "content": "wrong",
+                "source": "generate",
+                "role": "assistant",
+                "model": "mockllm/model"
+              },
+              "stop_reason": "stop"
+            }
+          ],
+          "completion": "wrong",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "time": 0.0
+        }
+      ]
+    },
+    "config": {
+      "epochs": 1,
+      "fail_on_error": true,
+      "continue_on_fail": false,
+      "score_on_error": false,
+      "max_samples": 1,
+      "sandbox_cleanup": true,
+      "sandbox_prebuilt": false,
+      "log_samples": true,
+      "log_realtime": false,
+      "log_images": true,
+      "score_display": true
+    },
+    "revision": {
+      "type": "git",
+      "origin": "https://github.com/BaiZhi967/MoTTEavl.git",
+      "commit": "af2adc4",
+      "dirty": true
+    },
+    "packages": {
+      "inspect_ai": "0.3.266"
+    },
+    "metadata": {
+      "provenance": "actual-native-output",
+      "model_kind": "official-mockllm",
+      "live_model": false
+    },
+    "scorers": [
+      {
+        "name": "deterministic_exact",
+        "options": {},
+        "metrics": [
+          {
+            "name": "inspect_ai/mean",
+            "options": {}
+          }
+        ],
+        "metadata": {}
+      }
+    ]
+  },
+  "plan": {
+    "name": "plan",
+    "steps": [
+      {
+        "solver": "generate",
+        "params": {
+          "tool_calls": "loop"
+        },
+        "params_passed": {}
+      }
+    ],
+    "config": {}
+  },
+  "results": {
+    "total_samples": 2,
+    "completed_samples": 2,
+    "scores": [
+      {
+        "name": "deterministic_exact",
+        "scorer": "deterministic_exact",
+        "scored_samples": 2,
+        "unscored_samples": 0,
+        "params": {},
+        "metrics": {
+          "mean": {
+            "name": "mean",
+            "value": 0.5,
+            "params": {}
+          }
+        }
+      }
+    ],
+    "headline": {
+      "scorer": "deterministic_exact",
+      "score": "deterministic_exact",
+      "metric": "mean"
+    }
+  },
+  "stats": {
+    "started_at": "2026-09-21T02:55:08+00:00",
+    "completed_at": "2026-09-21T02:55:09+00:00",
+    "model_usage": {
+      "mockllm/model": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0
+      }
+    },
+    "role_usage": {},
+    "connection_limit_history": []
+  },
+  "invalidated": false,
+  "tags": [],
+  "metadata": {
+    "provenance": "actual-native-output",
+    "model_kind": "official-mockllm",
+    "live_model": false
+  },
+  "samples": [
+    {
+      "id": "native-1",
+      "epoch": 1,
+      "input": "Return alpha",
+      "target": "alpha",
+      "messages": [
+        {
+          "id": "ZkVSU8gaeSxwMzzULZnzXB",
+          "content": "Return alpha",
+          "source": "input",
+          "role": "user"
+        },
+        {
+          "id": "MjbyJtNTwrKkntHjqeQKX7",
+          "content": "alpha",
+          "source": "generate",
+          "role": "assistant",
+          "model": "mockllm/model"
+        }
+      ],
+      "output": {
+        "model": "mockllm/model",
+        "choices": [
+          {
+            "message": {
+              "id": "MjbyJtNTwrKkntHjqeQKX7",
+              "content": "alpha",
+              "source": "generate",
+              "role": "assistant",
+              "model": "mockllm/model"
+            },
+            "stop_reason": "stop"
+          }
+        ],
+        "completion": "alpha",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        },
+        "time": 0.0
+      },
+      "scores": {
+        "deterministic_exact": {
+          "value": 1.0,
+          "answer": "alpha",
+          "history": []
+        }
+      },
+      "metadata": {},
+      "store": {},
+      "events": [
+        {
+          "uuid": "C9nXRF7cszUVmFFvV6teg2",
+          "span_id": "gBz9jUipcGB7zrTrtp8HFj",
+          "timestamp": "2026-09-21T02:55:09.598374+00:00",
+          "working_start": 249265.89,
+          "event": "span_begin",
+          "id": "gBz9jUipcGB7zrTrtp8HFj",
+          "type": "init",
+          "name": "init"
+        },
+        {
+          "uuid": "XWdfK8nwKfJKNDDUwT9Brj",
+          "span_id": "gBz9jUipcGB7zrTrtp8HFj",
+          "timestamp": "2026-09-21T02:55:09.598374+00:00",
+          "working_start": 249265.89,
+          "event": "sample_init",
+          "sample": {
+            "input": "Return alpha",
+            "target": "alpha",
+            "id": "native-1"
+          },
+          "state": {
+            "messages": [
+              {
+                "id": "ZkVSU8gaeSxwMzzULZnzXB",
+                "content": "Return alpha",
+                "source": "input",
+                "role": "user"
+              }
+            ],
+            "tools": [],
+            "tool_choice": null,
+            "store": {},
+            "output": {
+              "model": "mockllm/model",
+              "choices": [],
+              "completion": ""
+            },
+            "completed": false,
+            "metadata": {}
+          }
+        },
+        {
+          "uuid": "XUzBDoyz2vBrcRSq6p7bpA",
+          "span_id": "gBz9jUipcGB7zrTrtp8HFj",
+          "timestamp": "2026-09-21T02:55:09.598374+00:00",
+          "working_start": 249265.89,
+          "event": "span_end",
+          "id": "gBz9jUipcGB7zrTrtp8HFj"
+        },
+        {
+          "uuid": "RREtQC3K7GALfhKbnucGMV",
+          "span_id": "2hGukLSzi9ahfCGySuzgyD",
+          "timestamp": "2026-09-21T02:55:09.599372+00:00",
+          "working_start": 0.0,
+          "event": "span_begin",
+          "id": "2hGukLSzi9ahfCGySuzgyD",
+          "type": "solvers",
+          "name": "solvers"
+        },
+        {
+          "uuid": "eGuqDbQywnHevNH4MbaNbK",
+          "span_id": "NXF6YMjq3PEpBnYVioDiEu",
+          "timestamp": "2026-09-21T02:55:09.602592+00:00",
+          "working_start": 0.0,
+          "event": "span_begin",
+          "id": "NXF6YMjq3PEpBnYVioDiEu",
+          "parent_id": "2hGukLSzi9ahfCGySuzgyD",
+          "type": "solver",
+          "name": "generate"
+        },
+        {
+          "uuid": "gyZRMHZHM7otcPgLN22z2k",
+          "span_id": "NXF6YMjq3PEpBnYVioDiEu",
+          "timestamp": "2026-09-21T02:55:09.602592+00:00",
+          "working_start": 0.0,
+          "event": "model",
+          "model": "mockllm/model",
+          "input": [],
+          "input_refs": [
+            [
+              0,
+              1
+            ]
+          ],
+          "tools": [],
+          "tool_choice": "none",
+          "config": {},
+          "output": {
+            "model": "mockllm/model",
+            "choices": [
+              {
+                "message": {
+                  "id": "MjbyJtNTwrKkntHjqeQKX7",
+                  "content": "alpha",
+                  "source": "generate",
+                  "role": "assistant",
+                  "model": "mockllm/model"
+                },
+                "stop_reason": "stop"
+              }
+            ],
+            "completion": "alpha",
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "time": 0.0
+          },
+          "call": {
+            "request": {
+              "model": "model"
+            },
+            "response": {
+              "content": "alpha"
+            },
+            "call_refs": [
+              [
+                0,
+                1
+              ]
+            ],
+            "call_key": "messages"
+          },
+          "completed": "2026-09-21T02:55:09.858589+00:00",
+          "working_time": 0.0
+        },
+        {
+          "uuid": "NfrqpGTeVeXykYd4h9rJcG",
+          "span_id": "NXF6YMjq3PEpBnYVioDiEu",
+          "timestamp": "2026-09-21T02:55:09.859107+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "state",
+          "changes": [
+            {
+              "op": "add",
+              "path": "/output/time",
+              "value": 0.0
+            },
+            {
+              "op": "add",
+              "path": "/output/usage",
+              "value": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0
+              }
+            },
+            {
+              "op": "replace",
+              "path": "/output/completion",
+              "value": "alpha",
+              "replaced": ""
+            },
+            {
+              "op": "add",
+              "path": "/output/choices/0",
+              "value": {
+                "message": {
+                  "id": "MjbyJtNTwrKkntHjqeQKX7",
+                  "content": "alpha",
+                  "source": "generate",
+                  "role": "assistant",
+                  "model": "mockllm/model"
+                },
+                "stop_reason": "stop"
+              }
+            },
+            {
+              "op": "add",
+              "path": "/messages/1",
+              "value": {
+                "id": "MjbyJtNTwrKkntHjqeQKX7",
+                "content": "alpha",
+                "source": "generate",
+                "role": "assistant",
+                "model": "mockllm/model"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "fS8R76MedWdXoVzyiGuY2c",
+          "span_id": "NXF6YMjq3PEpBnYVioDiEu",
+          "timestamp": "2026-09-21T02:55:09.859622+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "span_end",
+          "id": "NXF6YMjq3PEpBnYVioDiEu"
+        },
+        {
+          "uuid": "cW9xVZsMvPbDzv2vPXJ8Nk",
+          "span_id": "2hGukLSzi9ahfCGySuzgyD",
+          "timestamp": "2026-09-21T02:55:09.859622+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "span_end",
+          "id": "2hGukLSzi9ahfCGySuzgyD"
+        },
+        {
+          "uuid": "UwCkHVVxSejgaRH7mq5YG9",
+          "span_id": "PsHECVF3mPBVpWnnLzbZCb",
+          "timestamp": "2026-09-21T02:55:09.860138+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "span_begin",
+          "id": "PsHECVF3mPBVpWnnLzbZCb",
+          "type": "scorers",
+          "name": "scorers"
+        },
+        {
+          "uuid": "9HP3NVm7gcTgFoxrFfruxS",
+          "span_id": "FjJ37UjZUbLfdxusnsC3dZ",
+          "timestamp": "2026-09-21T02:55:09.860138+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "span_begin",
+          "id": "FjJ37UjZUbLfdxusnsC3dZ",
+          "parent_id": "PsHECVF3mPBVpWnnLzbZCb",
+          "type": "scorer",
+          "name": "deterministic_exact"
+        },
+        {
+          "uuid": "LdL5gRiemg9MFhkJAkyfcN",
+          "span_id": "FjJ37UjZUbLfdxusnsC3dZ",
+          "timestamp": "2026-09-21T02:55:09.860652+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "score",
+          "score": {
+            "value": 1.0,
+            "answer": "alpha",
+            "history": []
+          },
+          "target": "alpha",
+          "intermediate": false,
+          "scorer": "deterministic_exact",
+          "scorer_args": {},
+          "model_usage": {
+            "mockllm/model": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            }
+          }
+        },
+        {
+          "uuid": "YgYCwby79syaoQAWJQKJ7u",
+          "span_id": "FjJ37UjZUbLfdxusnsC3dZ",
+          "timestamp": "2026-09-21T02:55:09.860652+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "span_end",
+          "id": "FjJ37UjZUbLfdxusnsC3dZ"
+        },
+        {
+          "uuid": "ipQWaa4k2ccp8yfJPnKsoR",
+          "span_id": "PsHECVF3mPBVpWnnLzbZCb",
+          "timestamp": "2026-09-21T02:55:09.860652+00:00",
+          "working_start": 0.2659999999741558,
+          "event": "span_end",
+          "id": "PsHECVF3mPBVpWnnLzbZCb"
+        }
+      ],
+      "model_usage": {
+        "mockllm/model": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        }
+      },
+      "role_usage": {},
+      "started_at": "2026-09-21T02:55:09.598374+00:00",
+      "completed_at": "2026-09-21T02:55:09.860652+00:00",
+      "total_time": 0.266,
+      "working_time": 0.266,
+      "uuid": "LmSGiwP9bVJvUc57F3FVNs",
+      "error_retries": [],
+      "attachments": {},
+      "events_data": {
+        "messages": [
+          {
+            "id": "ZkVSU8gaeSxwMzzULZnzXB",
+            "content": "Return alpha",
+            "source": "input",
+            "role": "user"
+          }
+        ],
+        "calls": [
+          {
+            "id": "ZkVSU8gaeSxwMzzULZnzXB",
+            "content": "Return alpha",
+            "source": "input",
+            "metadata": null,
+            "role": "user",
+            "tool_call_id": null
+          }
+        ]
+      },
+      "turn_count": 1
+    },
+    {
+      "id": "native-2",
+      "epoch": 1,
+      "input": "Return beta",
+      "target": "beta",
+      "messages": [
+        {
+          "id": "32DHgs8Gdt6xkqCt4zbeKV",
+          "content": "Return beta",
+          "source": "input",
+          "role": "user"
+        },
+        {
+          "id": "7nDCzEniMrBjAnziSBnQrS",
+          "content": "wrong",
+          "source": "generate",
+          "role": "assistant",
+          "model": "mockllm/model"
+        }
+      ],
+      "output": {
+        "model": "mockllm/model",
+        "choices": [
+          {
+            "message": {
+              "id": "7nDCzEniMrBjAnziSBnQrS",
+              "content": "wrong",
+              "source": "generate",
+              "role": "assistant",
+              "model": "mockllm/model"
+            },
+            "stop_reason": "stop"
+          }
+        ],
+        "completion": "wrong",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        },
+        "time": 0.0
+      },
+      "scores": {
+        "deterministic_exact": {
+          "value": 0.0,
+          "answer": "wrong",
+          "history": []
+        }
+      },
+      "metadata": {},
+      "store": {},
+      "events": [
+        {
+          "uuid": "g7ETvmq2hp8WArJTAwNe9P",
+          "span_id": "9EW73gy4bYcKSts7iHMxFn",
+          "timestamp": "2026-09-21T02:55:09.863425+00:00",
+          "working_start": 249266.156,
+          "event": "span_begin",
+          "id": "9EW73gy4bYcKSts7iHMxFn",
+          "type": "init",
+          "name": "init"
+        },
+        {
+          "uuid": "mFRbSXRvfs8J4buBd89QMb",
+          "span_id": "9EW73gy4bYcKSts7iHMxFn",
+          "timestamp": "2026-09-21T02:55:09.863425+00:00",
+          "working_start": 249266.156,
+          "event": "sample_init",
+          "sample": {
+            "input": "Return beta",
+            "target": "beta",
+            "id": "native-2"
+          },
+          "state": {
+            "messages": [
+              {
+                "id": "32DHgs8Gdt6xkqCt4zbeKV",
+                "content": "Return beta",
+                "source": "input",
+                "role": "user"
+              }
+            ],
+            "tools": [],
+            "tool_choice": null,
+            "store": {},
+            "output": {
+              "model": "mockllm/model",
+              "choices": [],
+              "completion": ""
+            },
+            "completed": false,
+            "metadata": {}
+          }
+        },
+        {
+          "uuid": "57uQJL56FZerVNHPDfnYAg",
+          "span_id": "9EW73gy4bYcKSts7iHMxFn",
+          "timestamp": "2026-09-21T02:55:09.863425+00:00",
+          "working_start": 249266.156,
+          "event": "span_end",
+          "id": "9EW73gy4bYcKSts7iHMxFn"
+        },
+        {
+          "uuid": "Jnbjdqxxo7JuzucAqY4y3E",
+          "span_id": "HE3n6mnDVGhbtaKYmgE5Hk",
+          "timestamp": "2026-09-21T02:55:09.863938+00:00",
+          "working_start": 0.0,
+          "event": "span_begin",
+          "id": "HE3n6mnDVGhbtaKYmgE5Hk",
+          "type": "solvers",
+          "name": "solvers"
+        },
+        {
+          "uuid": "A79HpXFiansRfWhY6Jgcce",
+          "span_id": "4FHqragXr3nkeZ3LT8Vv2H",
+          "timestamp": "2026-09-21T02:55:09.863938+00:00",
+          "working_start": 0.0,
+          "event": "span_begin",
+          "id": "4FHqragXr3nkeZ3LT8Vv2H",
+          "parent_id": "HE3n6mnDVGhbtaKYmgE5Hk",
+          "type": "solver",
+          "name": "generate"
+        },
+        {
+          "uuid": "7uqrVgcDWnPwbhk8TN479a",
+          "span_id": "4FHqragXr3nkeZ3LT8Vv2H",
+          "timestamp": "2026-09-21T02:55:09.863938+00:00",
+          "working_start": 0.0,
+          "event": "model",
+          "model": "mockllm/model",
+          "input": [],
+          "input_refs": [
+            [
+              0,
+              1
+            ]
+          ],
+          "tools": [],
+          "tool_choice": "none",
+          "config": {},
+          "output": {
+            "model": "mockllm/model",
+            "choices": [
+              {
+                "message": {
+                  "id": "7nDCzEniMrBjAnziSBnQrS",
+                  "content": "wrong",
+                  "source": "generate",
+                  "role": "assistant",
+                  "model": "mockllm/model"
+                },
+                "stop_reason": "stop"
+              }
+            ],
+            "completion": "wrong",
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "time": 0.0
+          },
+          "call": {
+            "request": {
+              "model": "model"
+            },
+            "response": {
+              "content": "wrong"
+            },
+            "call_refs": [
+              [
+                0,
+                1
+              ]
+            ],
+            "call_key": "messages"
+          },
+          "completed": "2026-09-21T02:55:09.865513+00:00",
+          "working_time": 0.0
+        },
+        {
+          "uuid": "PYvxRp7TpPK8CZEfDASXi9",
+          "span_id": "4FHqragXr3nkeZ3LT8Vv2H",
+          "timestamp": "2026-09-21T02:55:09.865513+00:00",
+          "working_start": 0.0,
+          "event": "state",
+          "changes": [
+            {
+              "op": "add",
+              "path": "/output/time",
+              "value": 0.0
+            },
+            {
+              "op": "add",
+              "path": "/output/usage",
+              "value": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0
+              }
+            },
+            {
+              "op": "replace",
+              "path": "/output/completion",
+              "value": "wrong",
+              "replaced": ""
+            },
+            {
+              "op": "add",
+              "path": "/output/choices/0",
+              "value": {
+                "message": {
+                  "id": "7nDCzEniMrBjAnziSBnQrS",
+                  "content": "wrong",
+                  "source": "generate",
+                  "role": "assistant",
+                  "model": "mockllm/model"
+                },
+                "stop_reason": "stop"
+              }
+            },
+            {
+              "op": "add",
+              "path": "/messages/1",
+              "value": {
+                "id": "7nDCzEniMrBjAnziSBnQrS",
+                "content": "wrong",
+                "source": "generate",
+                "role": "assistant",
+                "model": "mockllm/model"
+              }
+            }
+          ]
+        },
+        {
+          "uuid": "LZD95Sa437GRrkqyNqgfSw",
+          "span_id": "4FHqragXr3nkeZ3LT8Vv2H",
+          "timestamp": "2026-09-21T02:55:09.865513+00:00",
+          "working_start": 0.0,
+          "event": "span_end",
+          "id": "4FHqragXr3nkeZ3LT8Vv2H"
+        },
+        {
+          "uuid": "gTBJjR4PVabpKwxwRcpkVF",
+          "span_id": "HE3n6mnDVGhbtaKYmgE5Hk",
+          "timestamp": "2026-09-21T02:55:09.865513+00:00",
+          "working_start": 0.0,
+          "event": "span_end",
+          "id": "HE3n6mnDVGhbtaKYmgE5Hk"
+        },
+        {
+          "uuid": "4rXmJLP6ZPEb8kMzozhr7Q",
+          "span_id": "GJpB3sW2x38jciHnpui6qb",
+          "timestamp": "2026-09-21T02:55:09.866026+00:00",
+          "working_start": 0.0,
+          "event": "span_begin",
+          "id": "GJpB3sW2x38jciHnpui6qb",
+          "type": "scorers",
+          "name": "scorers"
+        },
+        {
+          "uuid": "FF3CCGd5SJuYxuxzBjHwvu",
+          "span_id": "2VX6DrBeENcBfm59izEZkL",
+          "timestamp": "2026-09-21T02:55:09.866026+00:00",
+          "working_start": 0.0,
+          "event": "span_begin",
+          "id": "2VX6DrBeENcBfm59izEZkL",
+          "parent_id": "GJpB3sW2x38jciHnpui6qb",
+          "type": "scorer",
+          "name": "deterministic_exact"
+        },
+        {
+          "uuid": "3Pjjkj32PmcPiQccnoCEj8",
+          "span_id": "2VX6DrBeENcBfm59izEZkL",
+          "timestamp": "2026-09-21T02:55:09.866026+00:00",
+          "working_start": 0.0,
+          "event": "score",
+          "score": {
+            "value": 0.0,
+            "answer": "wrong",
+            "history": []
+          },
+          "target": "beta",
+          "intermediate": false,
+          "scorer": "deterministic_exact",
+          "scorer_args": {},
+          "model_usage": {
+            "mockllm/model": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            }
+          }
+        },
+        {
+          "uuid": "dg7pgXD48cTuViCN7MsPCx",
+          "span_id": "2VX6DrBeENcBfm59izEZkL",
+          "timestamp": "2026-09-21T02:55:09.866026+00:00",
+          "working_start": 0.0,
+          "event": "span_end",
+          "id": "2VX6DrBeENcBfm59izEZkL"
+        },
+        {
+          "uuid": "SNGobQXb2L8sQiFpLvSzVy",
+          "span_id": "GJpB3sW2x38jciHnpui6qb",
+          "timestamp": "2026-09-21T02:55:09.866026+00:00",
+          "working_start": 0.0,
+          "event": "span_end",
+          "id": "GJpB3sW2x38jciHnpui6qb"
+        }
+      ],
+      "model_usage": {
+        "mockllm/model": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        }
+      },
+      "role_usage": {},
+      "started_at": "2026-09-21T02:55:09.863425+00:00",
+      "completed_at": "2026-09-21T02:55:09.866026+00:00",
+      "total_time": 0.0,
+      "working_time": 0.0,
+      "uuid": "KQjbHBdDmXYgFV76W8dfnb",
+      "error_retries": [],
+      "attachments": {},
+      "events_data": {
+        "messages": [
+          {
+            "id": "32DHgs8Gdt6xkqCt4zbeKV",
+            "content": "Return beta",
+            "source": "input",
+            "role": "user"
+          }
+        ],
+        "calls": [
+          {
+            "id": "32DHgs8Gdt6xkqCt4zbeKV",
+            "content": "Return beta",
+            "source": "input",
+            "metadata": null,
+            "role": "user",
+            "tool_call_id": null
+          }
+        ]
+      },
+      "turn_count": 1
+    }
+  ],
+  "reductions": [
+    {
+      "scorer": "deterministic_exact",
+      "samples": [
+        {
+          "value": 1.0,
+          "answer": "alpha",
+          "history": [],
+          "sample_id": "native-1"
+        },
+        {
+          "value": 0.0,
+          "answer": "wrong",
+          "history": [],
+          "sample_id": "native-2"
+        }
+      ]
+    }
+  ]
+}

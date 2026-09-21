@@ -1,0 +1,83 @@
+from pathlib import Path
+import hashlib
+import importlib.metadata
+import json
+import os
+import socket
+import sys
+
+ROOT = Path(__file__).resolve().parent
+os.chdir(ROOT)
+# Copy only named system locations; never enumerate/read credential variables.
+clean_env = {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATH') if key in os.environ}
+for name in ('home', 'tmp', 'appdata'):
+    (ROOT / name).mkdir(exist_ok=True)
+clean_env.update(HOME=str(ROOT / 'home'), USERPROFILE=str(ROOT / 'home'),
+    APPDATA=str(ROOT / 'appdata'), LOCALAPPDATA=str(ROOT / 'appdata'),
+    TEMP=str(ROOT / 'tmp'), TMP=str(ROOT / 'tmp'), PYTHONUTF8='1',
+    DOTENV_DISABLED='1')
+os.environ.clear()
+os.environ.update(clean_env)
+# A local empty file stops Inspect's upward dotenv discovery.
+(ROOT / '.env').write_text('', encoding='utf-8')
+external_attempts = []
+original_connect = socket.socket.connect
+original_connect_ex = socket.socket.connect_ex
+
+def allowed(address):
+    return isinstance(address, tuple) and address[0] in ('127.0.0.1', '::1', 'localhost')
+
+def checked_connect(self, address):
+    if not allowed(address):
+        external_attempts.append(str(address))
+        raise RuntimeError('external network disabled for native mock receipt')
+    return original_connect(self, address)
+
+def checked_connect_ex(self, address):
+    if not allowed(address):
+        external_attempts.append(str(address))
+        raise RuntimeError('external network disabled for native mock receipt')
+    return original_connect_ex(self, address)
+
+socket.socket.connect = checked_connect
+socket.socket.connect_ex = checked_connect_ex
+
+from inspect_ai import Task, eval
+from inspect_ai.dataset import Sample
+from inspect_ai.model import ModelOutput, ModelUsage, get_model
+from inspect_ai.scorer import Score, mean, scorer
+from inspect_ai.solver import generate
+
+@scorer(metrics=[mean()])
+def deterministic_exact():
+    async def score(state, target):
+        return Score(value=float(state.output.completion == target.text), answer=state.output.completion)
+    return score
+
+outputs = [ModelOutput.from_content(model='mockllm/model', content=answer) for answer in ('alpha', 'wrong')]
+for output in outputs:
+    output.usage = ModelUsage(input_tokens=0, output_tokens=0, total_tokens=0)
+model = get_model('mockllm/model', custom_outputs=outputs)
+task = Task(name='motte_native_mock_receipt',
+    dataset=[Sample(id='native-1', input='Return alpha', target='alpha'),
+             Sample(id='native-2', input='Return beta', target='beta')],
+    solver=generate(), scorer=deterministic_exact(),
+    metadata={'provenance': 'actual-native-output', 'model_kind': 'official-mockllm', 'live_model': False})
+logs = eval(task, model=model, log_dir=str(ROOT / 'logs-utf8'), log_format='json',
+            log_samples=True, log_realtime=False, display='none', max_samples=1)
+assert len(logs) == 1 and logs[0].status == 'success', logs[0].error
+paths = list((ROOT / 'logs-utf8').glob('*.json'))
+assert len(paths) == 1, paths
+raw = paths[0].read_bytes()
+assert not external_attempts, external_attempts
+receipt = {'package': 'inspect-ai', 'version': importlib.metadata.version('inspect-ai'),
+    'python': sys.version, 'source': str(paths[0].relative_to(ROOT)),
+    'source_bytes': len(raw), 'source_sha256': hashlib.sha256(raw).hexdigest(),
+    'status': logs[0].status, 'sample_count': len(logs[0].samples),
+    'schema_version': logs[0].version, 'model': logs[0].eval.model,
+    'native_scores': [{k:v.value for k,v in s.scores.items()} for s in logs[0].samples],
+    'capture_kind': 'actual-native-output', 'model_kind': 'official-mockllm',
+    'external_model_calls': 0, 'external_connection_attempts': len(external_attempts),
+    'credentials_used': False, 'live_model': False}
+(ROOT / 'generation-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n', encoding='utf-8')
+print(json.dumps(receipt, indent=2))

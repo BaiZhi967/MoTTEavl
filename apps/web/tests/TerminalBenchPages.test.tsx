@@ -1089,7 +1089,8 @@ describe("Terminal-Bench 页面", () => {
     expect(screen.getByTestId("tb-cost-basis").textContent).toContain("no_known_cost");
     expect(screen.queryByTestId("tb-cost-subtotal")).toBeNull();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "钻取" })[0]);
+    // Cost summary and Trial rows arrive through independent requests.
+    fireEvent.click((await screen.findAllByRole("button", { name: "钻取" }))[0]);
     await waitFor(() => expect(screen.getByTestId("tb-usage-coverage").textContent).toContain("未观测"));
     expect(screen.getByTestId("tb-usage-coverage").textContent).toContain("成本 未知");
     expect(screen.getByTestId("tb-usage-coverage").textContent).not.toContain("$0.000000");

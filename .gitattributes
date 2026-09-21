@@ -1,2 +1,6 @@
 # The checked-in protocol subset has a byte-level provenance hash.
 tests/fixtures/harness/codex-app-server-0.155.1.schema.json text eol=lf
+# Original native Inspect bytes and hashed reproduction sources must not drift.
+tests/fixtures/harness/inspect-ai-0.3.266-native-mock.json -text
+tests/fixtures/harness/inspect-native/generate.py text eol=lf
+tests/fixtures/harness/inspect-native/original-capture.py.txt -text
