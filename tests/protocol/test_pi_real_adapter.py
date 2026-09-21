@@ -203,3 +203,63 @@ def test_real_pi_session_interrupt_cancels_long_run(tmp_path):
     else:
         # bridge 在中断窗口内自然完成也被接受，但绝不能是协议错误冒充取消
         assert outcome["error"].code not in ("PI_PROTOCOL_INVALID",)
+
+@pytest.mark.parametrize("max_steps", [1, 2])
+def test_final_response_at_step_limit_is_success(tmp_path, max_steps):
+    responses = [[{"type": "text", "text": "done"}]]
+    if max_steps == 2:
+        responses.insert(0, [{"type": "toolCall", "name": "list_files", "arguments": {}}])
+    with _real_session(tmp_path, responses=responses, budgets={"max_steps": max_steps}) as session:
+        result = session.run("finish within limit")
+    assert result["final_output"] == "done"
+    assert result["steps"] == max_steps
+    assert result["budget_stop"] is False
+    assert result["status"] == "completed"
+
+
+def test_zero_tool_budget_blocks_first_write(tmp_path):
+    with _real_session(tmp_path, budgets={"max_steps": 8, "max_tool_calls": 0}) as session:
+        result = session.run("write a file")
+    assert not (tmp_path / "workspace" / "hello.txt").exists()
+    assert result["tool_calls"] == 0
+    assert result["budget_stop_reason"] == "max_tool_calls"
+
+
+def test_max_steps_blocks_only_next_model_action(tmp_path):
+    with _real_session(tmp_path, budgets={"max_steps": 1}) as session:
+        result = session.run("write a file")
+    assert (tmp_path / "workspace" / "hello.txt").read_text() == "hello from real sdk"
+    assert result["steps"] == 1
+    assert result["budget_stop_reason"] == "max_steps"
+    assert result["final_output"] != "Created hello.txt."
+
+@pytest.mark.parametrize("option,value", [("total_timeout", float("nan")), ("total_timeout", float("inf")), ("idle_timeout", float("nan")), ("idle_timeout", 0)])
+def test_session_rejects_nonfinite_or_nonpositive_timeout(tmp_path, option, value):
+    with pytest.raises(ValueError):
+        PiBridgeSession(run_id="r", case_id="c", session_id="s", operation_id="o",
+                        workspace=tmp_path, **{option: value})
+
+
+def test_concurrent_close_waits_for_process_termination(tmp_path):
+    import subprocess
+    import threading
+    import time
+
+    session = PiBridgeSession(run_id="r", case_id="c", session_id="s", operation_id="o", workspace=tmp_path)
+    process = subprocess.Popen([NODE, "-e", "setTimeout(() => process.exit(0), 700)"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    session._process = process
+    closer = threading.Thread(target=session.close)
+    closer.start()
+    try:
+        deadline = time.monotonic() + 2
+        while not session._closed and time.monotonic() < deadline:
+            time.sleep(0.01)
+        result = session.close()
+        assert result["status"] == "stopped"
+        assert process.poll() is not None, "close must not return while another close still waits"
+    finally:
+        closer.join(timeout=5)
+        if process.poll() is None:
+            process.kill()
+            process.wait()

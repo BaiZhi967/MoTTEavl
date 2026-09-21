@@ -900,6 +900,8 @@ class RunService:
 
     def rescore(self, run_id: str) -> dict[str, Any]:
         run = self._load(run_id)
+        if (run.get("manifest", {}).get("import_source") or {}).get("kind") == "inspect":
+            raise ValueError("Inspect imports are read-only; no observation evaluator is configured")
         self._validate_frozen_benchmark_snapshot(run)
         benchmark_terminal = run.get("manifest", {}).get("benchmark_provenance") and run["status"] in self.TERMINAL
         if run["status"] != "completed" and not benchmark_terminal:
@@ -948,6 +950,8 @@ class RunService:
         case_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         parent = self._load(run_id)
+        if (parent.get("manifest", {}).get("import_source") or {}).get("kind") == "inspect":
+            raise ValueError("Inspect imports are read-only; upload the identical source to resume an import")
         self._validate_frozen_benchmark_snapshot(parent)
         if parent["status"] not in RETRYABLE:
             raise ValueError(
@@ -1083,6 +1087,14 @@ class RunService:
         if any(score.get("scoring_pass_id") is not None for score in scores):
             raise ValueError("scoring_pass_id is assigned by the scoring pass, not by plugins")
         previous = self.store.scoring_passes.current(run_id)
+        from .commands import intervention_summary
+
+        interventions = (
+            deepcopy((previous.get('summary') or {}).get('interventions'))
+            if source == 'rescore' and previous else None
+        )
+        if interventions is None:
+            interventions = intervention_summary(self, run_id)
         manifest_bytes = json.dumps(
             run.get("manifest") or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
@@ -1201,6 +1213,7 @@ class RunService:
                 **({"multi_metric": True, "metrics": metric_summary} if metric_summary else {}),
                 **({"aggregate": deepcopy(aggregate)} if aggregate is not None else {}),
                 **(deepcopy(extra_summary) if extra_summary else {}),
+                'interventions': interventions,
             },
             "scores": deepcopy(scores),
         }

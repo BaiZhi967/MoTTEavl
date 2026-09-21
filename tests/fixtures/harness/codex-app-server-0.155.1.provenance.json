@@ -1,0 +1,82 @@
+{
+  "provenance": "synthetic-schema-validated",
+  "live_capture": false,
+  "package": "@openai/codex@0.155.1",
+  "schema_generator": "codex app-server generate-json-schema",
+  "bundle_sha256": "F1F3591667D8DCF77352C04BE5D0667153E492D1A378E4205D69E9AF6F31C0C3",
+  "subset_sha256": "4f5bee41f941e69a1d4c940bf1db09b2b001bbe141b5eac5610f47860ea09c98",
+  "sources": {
+    "InitializeParams": {
+      "path": "v1/InitializeParams.json",
+      "sha256": "6f0094be9a65242ec779a40794cbd4fdfa32fca1e45084a16adfb50501d33ea2"
+    },
+    "InitializeResponse": {
+      "path": "v1/InitializeResponse.json",
+      "sha256": "62ad689c2cb6379913c1d72749cfd8de5089d35760214123518eb92eef11acc9"
+    },
+    "ThreadStartParams": {
+      "path": "v2/ThreadStartParams.json",
+      "sha256": "792e2f32e37cece971bd616664ea2053741acbed4e9c92e9d1766427718f2ecd"
+    },
+    "ThreadStartResponse": {
+      "path": "v2/ThreadStartResponse.json",
+      "sha256": "5686cd0fecf44b09c533018de90e34f74fcc92b8aaf941430941fd6d633e6621"
+    },
+    "TurnStartParams": {
+      "path": "v2/TurnStartParams.json",
+      "sha256": "a3835e8c1e942e4b358e1a670939b89918b16c4d13105a579899892b7ade6dea"
+    },
+    "TurnStartResponse": {
+      "path": "v2/TurnStartResponse.json",
+      "sha256": "6fc49c3e5d0ce11a3a109ae194619b04d6e3ff98fa29bac683fdb754608958be"
+    },
+    "TurnSteerParams": {
+      "path": "v2/TurnSteerParams.json",
+      "sha256": "4a52eb76e7a717bb388484ccd7538737fca0df35481fc30a21e259f1bfe96e37"
+    },
+    "TurnSteerResponse": {
+      "path": "v2/TurnSteerResponse.json",
+      "sha256": "866ba9a77c12b5d570c837d58f73bf40b24e50fa93404bdf792dd984d313b1aa"
+    },
+    "TurnInterruptParams": {
+      "path": "v2/TurnInterruptParams.json",
+      "sha256": "6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b"
+    },
+    "TurnInterruptResponse": {
+      "path": "v2/TurnInterruptResponse.json",
+      "sha256": "531de6be06fe979b5963f249bab82498a175e614bf65ac12fb2e849dfe60bcf1"
+    },
+    "CommandExecutionRequestApprovalParams": {
+      "path": "CommandExecutionRequestApprovalParams.json",
+      "sha256": "16a71816c2d66e319c2c4aa83dd636dfdc43c61e72b6d5475e421ce08d8e6558"
+    },
+    "CommandExecutionRequestApprovalResponse": {
+      "path": "CommandExecutionRequestApprovalResponse.json",
+      "sha256": "6d0767113e22f311381809b6b236b0dde2b99b01992879c26bf7b1ea0e003cb7"
+    },
+    "FileChangeRequestApprovalParams": {
+      "path": "FileChangeRequestApprovalParams.json",
+      "sha256": "13848b26814c286ad6425a20d01c1691c86790e1f9e2529399677a8a22fe0d18"
+    },
+    "FileChangeRequestApprovalResponse": {
+      "path": "FileChangeRequestApprovalResponse.json",
+      "sha256": "b95b03ee6be674e25cee2e863cc135a28620e1070addd2f34685aadee27cde08"
+    },
+    "ServerRequestResolvedNotification": {
+      "path": "v2/ServerRequestResolvedNotification.json",
+      "sha256": "4f03d586a5af04edd912cad08cc97eceb658e7e06744565e6d41a93e04a55966"
+    },
+    "TurnCompletedNotification": {
+      "path": "v2/TurnCompletedNotification.json",
+      "sha256": "78af2a37391e8e669a4020cb58593e4d3e378756ced79d5fec72374fa69fb94b"
+    },
+    "LoginAccountParams": {
+      "path": "v2/LoginAccountParams.json",
+      "sha256": "48fb9bea54d7e0890052653ac06737efb3200ba2261515b2c4014027f36bea3d"
+    },
+    "LoginAccountResponse": {
+      "path": "v2/LoginAccountResponse.json",
+      "sha256": "72e6d77f49bc5809c3af50f183e2a0862dd8f7836816d4796ff69bb13eae0e89"
+    }
+  }
+}

@@ -121,13 +121,13 @@ def test_terminal_sessions_are_not_recovered(tmp_path):
     assert verdict["replayed"] is False
 
 
-def test_never_spawned_session_stays_prepared(tmp_path):
+def test_prepared_session_cannot_prove_spawn_never_happened(tmp_path):
     record = new_session_record(
         run_id="run-3", case_id="case-1", attempt_id="att-1",
         backend="claude-cli", argv=["claude", "-p", "hi"],
     )
     verdict = recover_session(record)
-    assert verdict["action"] == "never_spawned"
+    assert verdict["action"] == "needs_review"
 
 
 def test_persist_session_is_real_cas(tmp_path):

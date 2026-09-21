@@ -190,6 +190,9 @@ class RunCommand(Contract):
     expires_at: datetime | None = None
     expected_session_revision: int | None = Field(default=None, ge=1, strict=True)
     request_hash: str | None = None
+    intent_hash: str | None = None
+    worker_token: str | None = None
+    ack_evidence: dict[str, Any] | None = None
     # 人工干预标记：进入 Run 证据与比较条件（M4-G18）
     intervention: bool = False
     # 提交者（审计）：operator / api / worker

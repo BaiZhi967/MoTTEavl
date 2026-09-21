@@ -20,14 +20,13 @@ from motte_harness.parsers.inspect import parse_inspect_log
 
 
 def _eval_log(*, samples=None, scores=None, created="2026-09-20T00:00:00Z",
-              model="test-model", task="hello-task", status="completed",
+              model="test-model", task="hello-task", status="success",
               extra=None) -> str:
     payload = {
-        "version": 1,
+        "version": 2,
         "status": status,
-        "created": created,
-        "model": model,
-        "eval": {"task": task, "scorer": "exact"},
+        "eval": {"eval_id": f"eval-{created}", "run_id": f"run-{created}",
+                 "created": created, "model": model, "task": task},
         "plan": {"steps": [], "config": {}, "separators": []},
         "results": {"total_samples": len(samples or [])},
     }
@@ -61,8 +60,7 @@ class TestParser:
         assert parsed["samples"][0]["scores"]["exact"]["value"] == 1.0
         assert parsed["samples"][0]["scores"]["exact"]["answer"] == "V1"
         assert parsed["coverage"] == "complete"
-        assert parsed["identity"]["task"] == "hello-task"
-        assert parsed["identity"]["sample_count"] == 2
+        assert parsed["identity"]["eval_id"] == "eval-2026-09-20T00:00:00Z"
 
     def test_unknown_schema_rejected(self):
         with pytest.raises(InspectLogError) as raised:
@@ -123,7 +121,7 @@ class TestImport:
         assert first["samples"][0]["scores"]["exact"]["value"] == 1.0
         # R28：原始内容冻结并可只读复核。
         raw = load_import_raw(first["import_id"])
-        assert raw is not None and json.loads(raw)["model"] == "test-model"
+        assert raw is not None and json.loads(raw)["eval"]["model"] == "test-model"
         assert first["raw_frozen"].endswith(".source")
 
     def test_same_identity_different_content_conflicts(self, tmp_path, monkeypatch):

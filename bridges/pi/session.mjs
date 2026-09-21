@@ -31,6 +31,7 @@ import {
   streamSimple,
 } from "@mariozechner/pi-ai";
 import { buildWorkspaceTools } from "./tools.mjs";
+import { observeNativeUsage } from "./usage.mjs";
 
 const MAX_RESPONSE_STEPS = 64;
 const MAX_TEXT_BLOCK_BYTES = 512 * 1024;
@@ -41,6 +42,13 @@ const SUPPORTED_REAL_APIS = new Set([
   "google-generative-ai",
   "mistral-conversations",
 ]);
+const DEFAULT_BASE_URLS = {
+  "openai-completions": "https://api.openai.com/v1",
+  "openai-responses": "https://api.openai.com/v1",
+  "anthropic-messages": "https://api.anthropic.com",
+  "google-generative-ai": "https://generativelanguage.googleapis.com/v1beta",
+  "mistral-conversations": "https://api.mistral.ai",
+};
 
 function contentBlockFrom(payload) {
   if (!payload || typeof payload !== "object") {
@@ -100,17 +108,20 @@ function realModelFromSpec(modelSpec, providerSpec) {
     provider: typeof providerSpec.provider === "string" && providerSpec.provider
       ? providerSpec.provider
       : "custom",
+    baseUrl: providerSpec.base_url || DEFAULT_BASE_URLS[api],
+    reasoning: false,
+    input: ["text"],
+    // SDK requires prices to normalize token usage. These placeholders are
+    // never exposed as observed monetary cost by the platform.
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 4096,
   };
   if (typeof providerSpec.base_url === "string" && providerSpec.base_url) {
     model.baseUrl = providerSpec.base_url;
   }
   // provider 实现按模态字段分流（如 image 输入）；未声明时默认纯文本。
-  model.input = typeof modelSpec.input === "string" && modelSpec.input
-    ? modelSpec.input
-    : "text";
-  model.output = typeof modelSpec.output === "string" && modelSpec.output
-    ? modelSpec.output
-    : "text";
+  model.input = Array.isArray(modelSpec.input) ? modelSpec.input : ["text"];
   return model;
 }
 
@@ -184,6 +195,7 @@ export class PiSession {
     this.budgetStopReason = null;
     // 真实模型的原生计量（scripted 保持未上报，不伪造）。
     this.nativeUsage = null;
+    this.usageCalls = 0;
   }
 
   _buildModel() {
@@ -211,12 +223,18 @@ export class PiSession {
     const session = this;
     // 真实传输：streamSimple 的 key 走 options.apiKey（模型对象上的 key
     // 不会被 provider wrapper 读取）；scripted 传输直接用 streamSimple。
-    const streamFn = this.transportMode === "http" && this.modelApiKey
-      ? (modelArg, context, options) => streamSimple(modelArg, context, {
-          ...options,
-          apiKey: this.modelApiKey,
-        })
-      : streamSimple;
+    const streamFn = (modelArg, context, options) => {
+      session.nativeUsageSeen = {};
+      if (session.modelCallCount >= session.maxSteps) {
+        session._budgetStop("max_steps");
+        throw new Error("max_steps budget exceeded");
+      }
+      session.modelCallCount += 1;
+      return streamSimple(modelArg, context, {
+        ...options,
+        ...(session.modelApiKey ? { apiKey: session.modelApiKey } : {}),
+      });
+    };
     const agent = new Agent({
       initialState: {
         model,
@@ -229,7 +247,7 @@ export class PiSession {
         // 在放行处自增（事件回调里的计数会把第一个工具就判超限）。
         if (
           Number.isInteger(session.budgets.max_tool_calls) &&
-          session.budgets.max_tool_calls > 0 &&
+          session.budgets.max_tool_calls >= 0 &&
           session.toolCallCount >= session.budgets.max_tool_calls
         ) {
           session._budgetStop("max_tool_calls");
@@ -276,18 +294,31 @@ export class PiSession {
           if (text) {
             emit({ kind: "output", text });
           }
-          this.modelCallCount += 1;
-          const usage = event.message.usage;
-          if (this.transportMode === "http" && usage && typeof usage === "object") {
-            // 真实流的原生计量：只在字段可辨时如实上报。
-            const input = Number.isFinite(usage.input) ? usage.input : null;
-            const output = Number.isFinite(usage.output) ? usage.output : null;
-            if (input != null || output != null) {
-              this.nativeUsage = { input_tokens: input, output_tokens: output };
-            }
+          if (event.message.stopReason === "error") {
+            this.failure = event.message.errorMessage || "model stream failed";
+          } else if (event.message.stopReason === "aborted") {
+            this.aborted = true;
+            this.failure = event.message.errorMessage || "model stream aborted";
           }
-          if (this.maxSteps && this.modelCallCount >= this.maxSteps) {
-            this._budgetStop("max_steps");
+          const usage = event.message.usage;
+          if (this.transportMode === "http" && this.nativeUsageSeen && usage && typeof usage === "object") {
+            // 真实流的原生计量：只在字段可辨时如实上报。
+            const input = Object.hasOwn(this.nativeUsageSeen, "input") ? this.nativeUsageSeen.input : null;
+            const output = Object.hasOwn(this.nativeUsageSeen, "output") ? this.nativeUsageSeen.output : null;
+            // SDK totalTokens may be synthesized from default-zero components.
+            // Preserve an explicit native total even when its components are absent.
+            const total = Object.hasOwn(this.nativeUsageSeen, "total") ? this.nativeUsageSeen.total
+              : (input != null && output != null && Number.isFinite(usage.totalTokens) ? usage.totalTokens : null);
+            if (input != null || output != null || total != null) {
+              const prior = this.nativeUsage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+              const add = (previous, current) => previous == null || current == null ? null : previous + current;
+              this.nativeUsage = {
+                input_tokens: add(prior.input_tokens, input),
+                output_tokens: add(prior.output_tokens, output),
+                total_tokens: add(prior.total_tokens, total),
+              };
+              this.usageCalls += 1;
+            }
           }
         }
         break;
@@ -332,6 +363,9 @@ export class PiSession {
       throw new Error("session already ran; one run per operation");
     }
     this.agent = this._buildAgent();
+    const restoreFetch = this.transportMode === "http"
+      ? observeNativeUsage((field, value) => { this.nativeUsageSeen[field] = value; })
+      : () => {};
     try {
       await this.agent.prompt(promptText);
     } catch (error) {
@@ -341,8 +375,16 @@ export class PiSession {
       }
       this.failure = `${error && error.message ? error.message : String(error)}`;
       return this._result("error");
+    } finally {
+      restoreFetch();
     }
     if (this.interruptRequested || this.aborted) {
+      return this._result("cancelled");
+    }
+    if (this.failure) {
+      return this._result("error");
+    }
+    if (this.budgetStopReason) {
       return this._result("cancelled");
     }
     return this._result("completed");
@@ -378,17 +420,13 @@ export class PiSession {
 
   _usage() {
     if (this.transportMode === "http") {
-      if (this.nativeUsage) {
+      if (this.nativeUsage && this.usageCalls === this.modelCallCount) {
         return {
           reported: true,
           source: "native-model",
           input_tokens: this.nativeUsage.input_tokens,
           output_tokens: this.nativeUsage.output_tokens,
-          total_tokens: (
-            this.nativeUsage.input_tokens != null || this.nativeUsage.output_tokens != null
-              ? (this.nativeUsage.input_tokens || 0) + (this.nativeUsage.output_tokens || 0)
-              : null
-          ),
+          total_tokens: this.nativeUsage.total_tokens,
         };
       }
       // 真实传输但流未回报计量：保持未上报，不伪造 0。

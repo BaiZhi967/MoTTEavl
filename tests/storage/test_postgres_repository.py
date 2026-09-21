@@ -35,6 +35,7 @@ def test_alembic_revision_chain_is_linear_and_complete():
         "0004_multi_metric_score_sets", "0005_agent_invocations",
         "0006_external_jobs", "0007_benchmark_datasets", "0008_trials",
         "0009_runtime_resources",
+        "0010_interactive_sessions",
     ]
     config = alembic_config("postgresql://user@localhost/db")
     assert config.get_main_option("script_location") == str(MIGRATIONS_DIR)

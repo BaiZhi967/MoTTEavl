@@ -189,12 +189,74 @@ export interface RuntimeCatalogItem {
   upstream_version: string | null;
   model_control: string | null;
   interactive: boolean;
+  tool_enforcement?: string | null;
   published: boolean;
   readiness: RuntimeReadiness;
 }
 
 export const getRuntimes = () =>
   request<{ items: RuntimeCatalogItem[]; total: number }>("/api/v1/runtimes");
+
+export interface RuntimeApproval {
+  approval_id: string;
+  method: string;
+  item_id: string;
+  summary: unknown;
+  request_hash: string;
+  expires_at: string;
+  state: string;
+}
+
+export interface RuntimeSession {
+  session_id: string;
+  run_id: string;
+  case_id: string;
+  attempt_id: string;
+  state: string;
+  revision: number;
+  control_revision: number;
+  native_thread_id?: string;
+  active_turn_id?: string;
+  pending_approvals: RuntimeApproval[];
+}
+
+export interface RuntimeCommand {
+  id: string;
+  type: string;
+  status: string;
+  case_id?: string;
+  session_id?: string;
+  dedupe_key?: string;
+  content?: string;
+  error?: unknown;
+  ack_evidence?: { kind?: string };
+}
+
+export interface RuntimeCommandRequest {
+  kind: "user_message" | "approve" | "reject" | "interrupt";
+  case_id: string;
+  session_id: string;
+  expected_session_revision: number;
+  dedupe_key: string;
+  content?: string;
+  payload?: { approval_id: string; request_hash: string };
+}
+
+export const getRuntimeSessions = (runId: string) =>
+  request<{ items: RuntimeSession[]; total: number }>(`/api/v1/runs/${encodeURIComponent(runId)}/sessions`);
+export const getRuntimeCommands = (runId: string) =>
+  request<{ items: RuntimeCommand[]; total: number }>(`/api/v1/runs/${encodeURIComponent(runId)}/commands`);
+export async function sendRuntimeCommand(runId: string, body: RuntimeCommandRequest) {
+  const result = await request<{ command_id?: unknown; status?: unknown }>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/messages`, jsonBody(body),
+  );
+  if (!result || typeof result.command_id !== "string" || !result.command_id
+    || typeof result.status !== "string"
+    || !["queued", "delivered", "acknowledged", "rejected", "expired", "delivery_unknown", "failed"].includes(result.status)) {
+    throw new TypeError("命令接收响应不完整，提交结果未知");
+  }
+  return { command_id: result.command_id, status: result.status };
+}
 
 export const publishRuntimes = () =>
   request<{ published: string[]; total: number }>("/api/v1/runtimes/publish", jsonBody({}));

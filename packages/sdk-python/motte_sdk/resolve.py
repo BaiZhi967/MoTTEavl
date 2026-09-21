@@ -25,7 +25,10 @@ from .execution_backends import ExecutionBackendError, resolve_execution
 _SECRET_KEYS = {
     "api_key", "api-key", "x-api-key", "authorization", "password", "token",
     "secret", "cookie", "set-cookie", "proxy-authorization",
+    "access_token", "refresh_token", "client_secret", "private_key",
+    "openai_api_key", "anthropic_api_key", "moonshot_api_key", "deepseek_api_key",
 }
+_NORMALIZED_SECRET_KEYS = {re.sub(r"[-_]", "", key.lower()) for key in _SECRET_KEYS}
 
 
 class ManifestResolutionError(ValueError):
@@ -42,7 +45,7 @@ def find_secret_paths(value: Any, path: str = "$") -> list[str]:
     if isinstance(value, dict):
         for key, child in value.items():
             key_text = str(key)
-            if key_text.lower() in _SECRET_KEYS:
+            if re.sub(r"[-_]", "", key_text.lower()) in _NORMALIZED_SECRET_KEYS:
                 found.append(f"{path}.{key_text}")
             found.extend(find_secret_paths(child, f"{path}.{key_text}"))
     elif isinstance(value, list):
@@ -238,6 +241,8 @@ def _resolve_runtime_reference(
         )
     from motte_contracts.runtime import RuntimeProfile, validate_runtime_settings
 
+    if find_secret_paths(profile_payload):
+        raise ManifestResolutionError("CREDENTIALS_REJECTED", "plaintext credentials are not accepted")
     try:
         profile = RuntimeProfile.model_validate(profile_payload)
         validate_runtime_settings(snapshot["config_schema"], profile.native_settings)
@@ -313,6 +318,17 @@ def prepare_run(scenario_version: str, manifest: dict[str, Any], case_ids, resou
         ):
             ids = resolve_replay_case_ids(resolved, ids)
         validate_resolved_manifest(resolved)
+        # Pure configuration compilation only: never execute a caller-selected
+        # binary from the API process. Worker still checks the installed version.
+        runtime_name = str(resolved.get("runtime") or "").partition("@")[0]
+        if runtime_name == "pi-agent":
+            from .pi_runtime import PiRuntimeCaseExecutor
+
+            PiRuntimeCaseExecutor({"manifest": resolved})._preflight()
+        elif runtime_name in ("claude-cli", "codex-cli"):
+            from .cli_runtime import CliRuntimeCaseExecutor
+
+            CliRuntimeCaseExecutor({"manifest": resolved}, backend=runtime_name)._preflight()
     except ManifestResolutionError:
         raise
     except ExecutionBackendError as error:

@@ -7,6 +7,7 @@ import { RunTimeline } from "../../components/RunTimeline";
 import { ScoreTable } from "../../components/ScoreTable";
 import { RunAuditSummary } from "../../components/RunAuditSummary";
 import { RunErrorBanner } from "../../components/RunErrorBanner";
+import { RuntimeCommands } from "../../components/RuntimeCommands";
 
 /** 未匹配类型 run 的通用过程页：状态 + 时间线 + 取消/重试。 */
 export function FallbackMonitorPage() {
@@ -58,7 +59,7 @@ export function FallbackMonitorPage() {
             ) : (
               <button type="button" onClick={() => act(() => cancelRun(runId, "web 控制台取消"))}>取消</button>
             )}
-            {terminal && run && ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(current ?? "") && (
+            {terminal && run && (run.manifest?.import_source as { kind?: string } | undefined)?.kind !== "inspect" && ["failed", "cancelled", "unsupported", "profile_stale", "needs_review"].includes(current ?? "") && (
               <button type="button" onClick={() => void retry()}>重试</button>
             )}
           </div>
@@ -74,6 +75,15 @@ export function FallbackMonitorPage() {
           <p className="hint">等待 Worker 领取；若长期排队，请在服务端启动 Worker（make worker）。</p>
         )}
         <RunTimeline events={events} embedded />
+        {run?.manifest?.runtime?.startsWith("codex-app-server@") &&
+          run.manifest.execution?.capabilities?.interactive === true && (
+          <RuntimeCommands runId={runId} terminal={terminal} />
+        )}
+        {run?.manifest?.runtime && <details className="disclosure">
+          <summary>查看 Runtime 固定配置与预算</summary>
+          <pre className="terminal-log">{JSON.stringify({ runtime: run.manifest.runtime,
+            definition: run.manifest.runtime_snapshot, profile: run.manifest.runtime_profile }, null, 2)}</pre>
+        </details>}
       </section>
     </div>
   );
@@ -115,7 +125,9 @@ export function FallbackResultPage() {
           <h2 className="mono">运行 {runId}</h2>
           <div className="panel-head-actions">
             <Link className="link" to="/runs">返回总览</Link>
-            <button type="button" onClick={() => act(() => rescoreRun(runId))} disabled={run?.status !== "completed"}>
+            <button type="button" onClick={() => act(() => rescoreRun(runId))}
+              disabled={run?.status !== "completed" || (run.manifest?.import_source as { kind?: string } | undefined)?.kind === "inspect"}
+              title={(run?.manifest?.import_source as { kind?: string } | undefined)?.kind === "inspect" ? "Inspect 导入保留原生评分，当前不支持平台重评" : undefined}>
               重新评分
             </button>
             <button

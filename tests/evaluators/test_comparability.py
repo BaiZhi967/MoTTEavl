@@ -135,6 +135,26 @@ def test_native_model_difference_is_visible_to_the_model_factor():
     assert any(reason.startswith("FACTOR_NOT_ALLOWED:model") for reason in blocked.reasons)
 
 
+def test_model_factor_ignores_full_profile_hash_but_keeps_other_configuration():
+    base = _runtime_manifest(native_model="model-a", max_turns=5)
+    candidate = _runtime_manifest(native_model="model-b", max_turns=5)
+    base["runtime_profile"]["config_hash"] = "sha256:" + "a" * 64
+    candidate["runtime_profile"]["config_hash"] = "sha256:" + "b" * 64
+    result = compare_run_reports(
+        _ref("run-a"), _ref("run-b"),
+        baseline_manifest=base, candidate_manifest=candidate,
+        policy=ComparisonPolicy(allowed_factors=["model"]),
+    )
+    assert result.eligible is True
+    candidate["runtime_profile"]["native_settings"]["max_turns"] = 6
+    blocked = compare_run_reports(
+        _ref("run-a"), _ref("run-b"),
+        baseline_manifest=base, candidate_manifest=candidate,
+        policy=ComparisonPolicy(allowed_factors=["model"]),
+    )
+    assert blocked.eligible is False
+
+
 def test_runtime_change_blocks_comparison_unless_allowed():
     # 不同 runtime backend（Claude vs Codex）：即使 model 因子被允许，
     # runtime 条件不同仍阻断（M4 review R16）。

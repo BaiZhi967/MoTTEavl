@@ -112,12 +112,12 @@ class TestParser:
         # 模型不在流中回报：不得用请求值冒充 observed
         assert parsed["model"] is None
 
-    def test_unknown_message_types_are_retained_not_fatal(self):
+    def test_late_unknown_message_is_retained_as_partial_invalid_lifecycle(self):
         stream = "\n".join(_fixture_lines()) + "\n" + json.dumps({
             "type": "future.event", "data": 1,
         })
         parsed = parse_codex_exec_events(stream)
-        assert parsed["status"] == "final"
+        assert parsed["status"] == "insufficient"
         assert parsed["unknown_msg_types"] == ["future.event"]
         assert parsed["coverage"] == "partial"
 

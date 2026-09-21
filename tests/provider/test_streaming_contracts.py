@@ -254,7 +254,7 @@ class TestAnthropicStreaming:
                                "name": "write_file"}},
             {"type": "content_block_delta", "index": 1,
              "delta": {"type": "input_json_delta", "partial_json": "{}"}},
-            {"type": "message_delta", "stop_reason": "tool_use",
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"},
              "usage": {"output_tokens": 3}},
             {"type": "message_stop"},
         ]))
@@ -379,3 +379,14 @@ def test_pi_consumer_stream_terminal_consistency():
     assert "".join(outputs) == "Hello"
     # usage 未上报：与 SSE 侧 missing-usage 语义一致（不填 0）
     assert finished[0]["result"]["usage"]["reported"] is False
+
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "tool_use"])
+def test_anthropic_nested_delta_stop_reason(stop_reason):
+    transport, _ = _transport_with(_sse_lines([
+        {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
+        {"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 3}},
+        {"type": "message_stop"},
+    ]))
+    provider = _provider(AnthropicMessagesProvider, transport)
+    events = _collect(provider.stream(_request()))
+    assert events[-1]["payload"]["finish_reason"] == stop_reason

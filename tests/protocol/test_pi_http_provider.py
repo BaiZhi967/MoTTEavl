@@ -174,3 +174,111 @@ def test_http_provider_without_script_or_env_key_fails_at_init(tmp_path, fake_op
     with pytest.raises(PiBridgeError) as raised:
         session.start()
     assert raised.value.code == "SESSION_INIT_FAILED"
+
+@pytest.fixture()
+def http_case_server(monkeypatch):
+    class Handler(BaseHTTPRequestHandler):
+        replies = []
+        calls = 0
+
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            index = type(self).calls
+            type(self).calls += 1
+            status, payload = self.replies[min(index, len(self.replies) - 1)]
+            self.send_response(status)
+            self.send_header("Content-Type", "text/event-stream" if status == 200 else "application/json")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    monkeypatch.setenv("MOTTE_PI_TEST_KEY", "offline-fixture")
+    try:
+        yield Handler, f"http://127.0.0.1:{server.server_address[1]}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
+def _http_result(tmp_path, server, replies):
+    handler, url = server
+    handler.replies = replies
+    with PiBridgeSession(
+        run_id="r", case_id="c", session_id="s", operation_id="o",
+        workspace=tmp_path / "workspace", model_config={"id": "fake-model"},
+        provider_config={"api": "openai-completions", "provider": "fake",
+                         "base_url": url, "api_key_env": "MOTTE_PI_TEST_KEY"},
+        bridge_path=BRIDGE, node_binary=NODE, total_timeout=30,
+    ) as session:
+        return session.run("offline test")
+
+
+def _usage_chunk(input_tokens, output_tokens):
+    return {"id": "usage", "object": "chat.completion.chunk", "choices": [],
+            "usage": {"prompt_tokens": input_tokens, "completion_tokens": output_tokens,
+                      "total_tokens": input_tokens + output_tokens}}
+
+
+def test_native_usage_accumulates_all_model_calls(tmp_path, http_case_server):
+    result = _http_result(tmp_path, http_case_server, [
+        (200, _sse(_TOOL_CHUNK, _TOOL_DONE, _usage_chunk(11, 3))),
+        (200, _sse(_TEXT_CHUNK, _TEXT_DONE, _usage_chunk(17, 5))),
+    ])
+    assert result["status"] == "completed", result
+    assert result["final_output"] == "all done"
+    assert result["usage"]["reported"] is True
+    assert result["usage"]["input_tokens"] == 28
+    assert result["usage"]["output_tokens"] == 8
+    assert result["usage"]["total_tokens"] == 36
+
+
+@pytest.mark.parametrize("usage", [None, (0, 0)])
+def test_native_usage_distinguishes_missing_and_reported_zero(tmp_path, http_case_server, usage):
+    chunks = [_TEXT_CHUNK, _TEXT_DONE]
+    if usage is not None:
+        chunks.append(_usage_chunk(*usage))
+    result = _http_result(tmp_path, http_case_server, [(200, _sse(*chunks))])
+    assert result["status"] == "completed", result
+    assert result["final_output"] == "all done"
+    assert result["usage"]["reported"] is (usage is not None)
+    assert result["usage"]["total_tokens"] == (None if usage is None else 0)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_sdk_error_terminal_is_not_success(tmp_path, http_case_server, partial):
+    replies = []
+    if partial:
+        replies.append((200, _sse(_TEXT_CHUNK, _TOOL_CHUNK, _TOOL_DONE)))
+    replies.append((401, json.dumps({"error": {"type": "authentication_error", "message": "invalid test credential"}}).encode()))
+    result = _http_result(tmp_path, http_case_server, replies)
+    assert result["status"] == "error", result
+    assert "401" in result["failure"] or "credential" in result["failure"]
+    assert result["usage"]["reported"] is False
+    if partial:
+        assert result["final_output"] == "all done"
+
+
+def test_native_usage_does_not_invent_missing_token_fields(tmp_path, http_case_server):
+    usage = {"id": "partial-usage", "choices": [], "usage": {"prompt_tokens": 11}}
+    result = _http_result(tmp_path, http_case_server, [(200, _sse(_TEXT_CHUNK, _TEXT_DONE, usage))])
+    assert result["status"] == "completed"
+    assert result["usage"]["reported"] is True
+    assert result["usage"]["input_tokens"] == 11
+    assert result["usage"]["output_tokens"] is None
+    assert result["usage"]["total_tokens"] is None
+
+
+def test_native_total_only_usage_preserves_observed_value(tmp_path, http_case_server):
+    usage = {"id": "total-only", "choices": [], "usage": {"total_tokens": 17}}
+    result = _http_result(tmp_path, http_case_server, [(200, _sse(_TEXT_CHUNK, _TEXT_DONE, usage))])
+    assert result["status"] == "completed"
+    assert result["usage"]["reported"] is True
+    assert result["usage"]["total_tokens"] == 17
+    assert result["usage"]["input_tokens"] is None
+    assert result["usage"]["output_tokens"] is None

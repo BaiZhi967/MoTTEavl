@@ -1,0 +1,16 @@
+{"schema": "InitializeParams", "payload": {"clientInfo": {"name": "motte", "version": "2"}}}
+{"schema": "InitializeResponse", "payload": {"userAgent": "codex/0.155.1", "codexHome": "/controlled", "platformFamily": "unix", "platformOs": "linux"}}
+{"schema": "ThreadStartParams", "payload": {"model": "fixture", "cwd": "/workspace", "sandbox": "read-only", "approvalPolicy": "on-request", "approvalsReviewer": "user", "ephemeral": true}}
+{"schema": "ThreadStartResponse", "payload": {"thread": {"id": "thread-fixture", "cliVersion": "0.155.1", "createdAt": 1, "updatedAt": 1, "cwd": "/workspace", "ephemeral": true, "modelProvider": "openai", "preview": "", "projectId": null, "sessionId": "native-session", "source": "appServer", "status": {"type": "idle"}, "turns": []}, "model": "fixture", "modelProvider": "openai", "cwd": "/workspace", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": {"type": "readOnly"}}}
+{"schema": "TurnStartParams", "payload": {"threadId": "thread-fixture", "input": [{"type": "text", "text": "task"}]}}
+{"schema": "TurnStartResponse", "payload": {"turn": {"id": "turn-fixture", "items": [], "status": "inProgress"}}}
+{"schema": "TurnSteerParams", "payload": {"threadId": "thread-fixture", "expectedTurnId": "turn-fixture", "input": [{"type": "text", "text": "steer"}]}}
+{"schema": "TurnSteerResponse", "payload": {"turnId": "turn-fixture"}}
+{"schema": "CommandExecutionRequestApprovalParams", "payload": {"threadId": "thread-fixture", "turnId": "turn-fixture", "itemId": "tool", "startedAtMs": 1, "command": "echo hello", "cwd": "/workspace"}}
+{"schema": "CommandExecutionRequestApprovalResponse", "payload": {"decision": "accept"}}
+{"schema": "FileChangeRequestApprovalParams", "payload": {"threadId": "thread-fixture", "turnId": "turn-fixture", "itemId": "file", "startedAtMs": 1}}
+{"schema": "FileChangeRequestApprovalResponse", "payload": {"decision": "decline"}}
+{"schema": "ServerRequestResolvedNotification", "payload": {"threadId": "thread-fixture", "requestId": 7}}
+{"schema": "TurnInterruptParams", "payload": {"threadId": "thread-fixture", "turnId": "turn-fixture"}}
+{"schema": "TurnInterruptResponse", "payload": {}}
+{"schema": "TurnCompletedNotification", "payload": {"threadId": "thread-fixture", "turn": {"id": "turn-fixture", "items": [], "status": "interrupted"}}}

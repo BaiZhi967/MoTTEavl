@@ -72,19 +72,14 @@ def load_runtime_compatibility(path: Path | str | None = None) -> dict[str, Any]
 
 
 def _backend_entry(backend_id: str, manifest: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    key = f"{backend_id}@1"
-    entry = manifest["backends"].get(key)
-    if entry is None:
-        for candidate_key, candidate in manifest["backends"].items():
-            if candidate_key.rpartition("@")[0] == backend_id:
-                key, entry = candidate_key, candidate
-                break
-    if entry is None:
+    candidates = [(key, value) for key, value in manifest['backends'].items()
+        if key.rpartition('@')[0] == backend_id]
+    if not candidates:
         raise CompatibilityError(
             "COMPATIBILITY_BACKEND_UNKNOWN",
             f"runtime backend is not in the compatibility matrix: {backend_id}",
         )
-    return key, entry
+    return max(candidates, key=lambda item: int(item[0].rpartition('@')[2]))
 
 
 def resolve_pinned_version(backend_id: str, path: Path | str | None = None) -> str:
@@ -290,6 +285,4 @@ def probed_readiness(
 
 def backend_ids(path: Path | str | None = None) -> tuple[str, ...]:
     manifest = load_runtime_compatibility(path)
-    return tuple(
-        key.rpartition("@")[0] for key in manifest["backends"]
-    )
+    return tuple(dict.fromkeys(key.rpartition('@')[0] for key in manifest['backends']))

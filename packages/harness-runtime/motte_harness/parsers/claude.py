@@ -9,6 +9,7 @@ partial）。usage/cost 只取原生回报值，缺失保持 unknown（M4-A10）
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 PARSER_VERSION = "claude-json-v1"
@@ -39,6 +40,8 @@ def parse_claude_batch(stdout: str, *, raw_ref: str | None = None) -> dict[str, 
     if payload.get("type") != "result":
         return _insufficient("unknown_schema", raw_ref, unknown=unknown_fields)
     subtype = payload.get("subtype")
+    if not isinstance(subtype, str):
+        return _insufficient("invalid_subtype", raw_ref, unknown=unknown_fields)
     if subtype in _ERROR_SUBTYPES or payload.get("is_error") is True:
         return {
             "parser_version": PARSER_VERSION,
@@ -78,9 +81,9 @@ def _usage(payload: dict[str, Any]) -> dict[str, Any]:
     usage = payload.get("usage")
     if not isinstance(usage, dict):
         return {"reported": False, "input_tokens": None, "output_tokens": None}
-    input_tokens = usage.get("input_tokens")
-    output_tokens = usage.get("output_tokens")
-    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+    input_tokens = _int_or_none(usage.get("input_tokens"))
+    output_tokens = _int_or_none(usage.get("output_tokens"))
+    if input_tokens is None and output_tokens is None:
         return {"reported": False, "input_tokens": None, "output_tokens": None}
     return {
         "reported": True,
@@ -95,7 +98,12 @@ def _usage(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _cost(payload: dict[str, Any]) -> float | None:
     cost = payload.get("total_cost_usd")
-    return cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+    if type(cost) not in (int, float) or cost < 0:
+        return None
+    try:
+        return cost if math.isfinite(cost) else None
+    except OverflowError:
+        return None
 
 
 def _observed_model(payload: dict[str, Any]) -> str | None:
@@ -110,7 +118,7 @@ def _observed_model(payload: dict[str, Any]) -> str | None:
 
 
 def _int_or_none(value: Any) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    return value if type(value) is int and value >= 0 else None
 
 
 def _insufficient(

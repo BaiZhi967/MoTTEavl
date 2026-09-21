@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -61,3 +62,61 @@ def test_runtime_publish_is_idempotent_across_time():
     names_first = set(first.json()["published"])
     names_second = set(second.json()["published"])
     assert names_first & names_second >= {"pi-agent", "claude-cli", "codex-cli"}
+
+
+@pytest.mark.parametrize("secret_key", ["api_key", "access_token", "refresh_token", "client_secret", "apiKey"])
+def test_profile_publish_rejects_nested_plaintext_and_unknown_native_fields(secret_key):
+    client, _ = _client()
+    client.post("/api/v1/runtimes/publish")
+    payload = {"name": "secure", "version": "1", "runtime": "pi-agent@1",
+               "native_settings": {"model": "m", "provider": {secret_key: "ordinary-secret"}}}
+    rejected = client.post("/api/v1/runtime_profiles", json=payload)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "CREDENTIALS_REJECTED"
+    assert "ordinary-secret" not in rejected.text
+    payload["native_settings"] = {"model": "m", "unknown_option": True}
+    assert client.post("/api/v1/runtime_profiles", json=payload).status_code == 422
+    assert client.get("/api/v1/runtime_profiles").json()["total"] == 0
+
+
+def test_profile_publish_preserves_timestamp_and_rejects_changed_content():
+    client, _ = _client()
+    client.post("/api/v1/runtimes/publish")
+    payload = {"name": "stable", "version": "1", "runtime": "pi-agent@1",
+               "native_settings": {"model": "m"}}
+    first = client.post("/api/v1/runtime_profiles", json=payload)
+    second = client.post("/api/v1/runtime_profiles", json=payload)
+    assert first.status_code == second.status_code == 201
+    assert first.json() == second.json()
+    payload["native_settings"] = {"model": "changed"}
+    assert client.post("/api/v1/runtime_profiles", json=payload).status_code == 409
+
+
+def test_expanded_profile_is_secret_checked_and_static_configuration_fails_before_queue():
+    from motte_contracts.agent_tasks import normalize_agent_tasks_dataset, scenario_for_agent_tasks
+
+    client, application = _client()
+    client.post("/api/v1/runtimes/publish")
+    resources = application.state.resource_store
+    dataset = normalize_agent_tasks_dataset({
+        "name": "preflight", "version": "1", "suite": "agent-tasks",
+        "cases": [{"case_id": "c1", "input": "write a file", "fixture": {}, "expected": {}}],
+    })
+    resources.datasets.put(dataset)
+    scenario = resources.scenarios.put(scenario_for_agent_tasks(dataset))
+    profile = {"name": "legacy", "version": "1", "runtime": "pi-agent@1",
+               "published_at": "2026-09-21T00:00:00Z",
+               "native_settings": {"model": "m", "provider": {"api_key": "ordinary-secret"}}}
+    resources.runtime_profiles.put(profile)
+    request = {"scenario_version": f"{scenario['name']}@{scenario['version']}",
+               "manifest": {"runtime": "pi-agent@1", "runtime_profile": "legacy@1"}}
+    rejected = client.post("/api/v1/runs", json=request)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "CREDENTIALS_REJECTED"
+    request["manifest"]["runtime_profile"] = {
+        "runtime": "pi-agent@1", "native_settings": {"model": "m"},
+    }
+    rejected = client.post("/api/v1/runs", json=request)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "RUNTIME_MODEL_CONFIG_REQUIRED"
+    assert client.get("/api/v1/runs").json()["total"] == 0

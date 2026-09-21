@@ -70,8 +70,11 @@ usage 诚实保持未上报（scripted 无真实计量；不填 0）。
   未声明时交给 pi-ai 的 provider 环境解析（如 provider=openai 读
   OPENAI_API_KEY）；
 - `script` 与 `provider` 互斥（同时出现 → RUNTIME_MODEL_CONFIG_REQUIRED）；
-- 真实流的原生计量如实上报（`usage.source=native-model`）；流未回报 →
-  保持未上报；
+- 真实流的原生计量如实上报（`usage.source=native-model`）。桥在本次运行内观察
+  原生 SSE 的 usage 字段，区分明确上报的零与 SDK 默认零；多轮按模型调用累计。
+  任一调用缺少原生计量时，整体计量保持未上报，不能把部分总和当完整用量。
+  SDK 必需的价格字段采用零占位，仅供 SDK 处理 token，绝不当作已观测费用；
+- SDK 的 `error` / `aborted` 消息分别成为失败 / 取消终态，保留错误原因与已收到文本；
 - 离线验证：`tests/protocol/test_pi_http_provider.py` 用本地 fake OpenAI
   SSE 服务器走完整真实路径（认证头、工具往返、文本收口）。
 
@@ -85,7 +88,9 @@ usage 诚实保持未上报（scripted 无真实计量；不填 0）。
 - 工具集合 = runtime 快照声明工具 ∩ bridge 沙箱工具（声明之外的请求在
   预检即拒绝，不静默放行）；
 - 预算是**强制边界**（M4 review R08）：`budgets.max_steps` /
-  `max_tool_calls` 达到即停（后续模型/工具动作不再发生），终态映射为
+  `max_tool_calls` 在下一次超额动作之前阻止执行，额度内的最后回答正常完成；
+  `max_tool_calls=0` 禁止首个工具调用。预算键、有限数与边界由公共校验器验证，
+  未知或无法兑现的预算（如费用）明确拒绝。预算终态映射为
   `max_steps` / `max_tool_calls`（不冒充 final_answer，也不是取消）；
   `budgets.total_timeout` 是单调时钟总期限——持续产出事件也会被切断，
   终态 wall_time、证据照常冻结（R09）；
@@ -94,9 +99,10 @@ usage 诚实保持未上报（scripted 无真实计量；不填 0）。
 - SDK 版本门（M4 review R18）：bridge 报告的 sdk_version 与快照 pinned
   upstream（0.73.1）不符 → `RUNTIME_VERSION_DRIFT`，session 关闭、fail
   closed；
-- 事件 `pi_*` 经 RunService 持久 trace（bridge 原生 `source_seq` +
-  parser_version 对账，M4 review R14）；异常路径也冻结 workspace 快照与
-  产物后再清理。
+- 事件 `pi_*` 经 RunService 持久 trace（`operation_id`、bridge 原生 `source_seq` +
+  parser_version 对账，M4 review R14），调用记录也保留 operation_id；
+  正常与异常路径均先关闭 bridge 并确认进程及读取线程停止，再冻结 workspace
+  快照与产物，最后清理。停止无法确认时，证据标记不完整并保留工作区和残留记录。
 
 ## 取消与恢复
 

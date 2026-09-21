@@ -242,3 +242,156 @@ def test_pi_backend_disabled_rejects_new_runs_and_keeps_history(tmp_path, monkey
 
         eb.unregister_backend("pi-agent", "1")
         rb.install_runtime_backends()
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_pi_freezes_after_bridge_has_stopped(tmp_path, monkeypatch, timeout):
+    from motte_agent.pi import PiBridgeError
+    from motte_sdk.pi_runtime import PiRuntimeCaseExecutor
+
+    service, _, resources = _setup(tmp_path, monkeypatch)
+    resolved, case_ids = prepare_run("pi-suite@1", _pi_manifest(), [], resources=resources)
+    run = service.create_run("pi-suite@1", resolved, case_ids)
+
+    class FinishingSession:
+        sdk_version = "0.73.1"
+
+        def __init__(self, **kwargs):
+            self.workspace = kwargs["workspace"]
+
+        def start(self):
+            pass
+
+        def run(self, text):
+            if timeout:
+                raise PiBridgeError("timeout", code="PI_BRIDGE_TIMEOUT")
+            return {"status": "completed", "final_output": "done"}
+
+        def close(self):
+            # Models an outstanding tool completing while close joins execution.
+            (self.workspace / "late.txt").write_text("last tool write", encoding="utf-8")
+            return {"status": "stopped", "residual": []}
+
+    monkeypatch.setattr("motte_agent.pi.PiBridgeSession", FinishingSession)
+    executor = PiRuntimeCaseExecutor(run)
+    if timeout:
+        with pytest.raises(PiBridgeError) as raised:
+            executor.invoke("case-alpha")
+        result = raised.value.evidence
+    else:
+        result = executor.invoke("case-alpha")
+    assert "late.txt" in result["observation"]["workspace"]["after"]
+    assert result["cleanup"]["status"] == "ok"
+
+
+def test_pi_trace_keeps_operation_identity(tmp_path, monkeypatch):
+    service, dispatcher, resources = _setup(tmp_path, monkeypatch)
+    resolved, case_ids = prepare_run("pi-suite@1", _pi_manifest(), [], resources=resources)
+    run = service.create_run("pi-suite@1", resolved, case_ids)
+    dispatcher.dispatch(run["id"])
+    rows = service.store.case_runs.list_for_run(run["id"])
+    operation = {row["case_id"]: row["result"]["agent"]["runtime"]["operation_id"] for row in rows}
+    events = service.store.events.list_for_run(run["id"])
+    pi_events = [event for event in events if event["type"].startswith("pi_")]
+    assert pi_events
+    assert all(event.get("operation_id") == operation[event["case_id"]] for event in pi_events)
+    invocations = service.store.invocations.list_for_run(run["id"])
+    assert all(item["request_summary"].get("operation_id") == operation[item["case_id"]] for item in invocations)
+    attempts = {item['case_id']: item['id'] for item in service.store.attempts.list_for_run(run['id'])}
+    assert all(row['result']['observation']['attempt_id'] == attempts[row['case_id']] for row in rows)
+
+
+def test_pi_unconfirmed_close_quarantines_even_successful_result(tmp_path, monkeypatch):
+    service, dispatcher, resources = _setup(tmp_path, monkeypatch)
+    resolved, case_ids = prepare_run('pi-suite@1', _pi_manifest(), [], resources=resources)
+    run = service.create_run('pi-suite@1', resolved, case_ids)
+
+    class UnconfirmedSession:
+        sdk_version = '0.73.1'
+
+        def __init__(self, **kwargs):
+            self.workspace = kwargs['workspace']
+
+        def start(self):
+            pass
+
+        def run(self, text):
+            (self.workspace / 'answer.txt').write_text('pi-was-here', encoding='utf-8')
+            return {'status': 'completed', 'final_output': 'done'}
+
+        def close(self):
+            return {'status': 'failed', 'residual': [123], 'readers_stopped': True}
+
+    monkeypatch.setattr('motte_agent.pi.PiBridgeSession', UnconfirmedSession)
+    finished = dispatcher.dispatch(run['id'])
+    assert finished['status'] == 'needs_review'
+    assert service.store.attempts.list_for_run(run['id'])[0]['status'] == 'indeterminate'
+    assert not finished.get('scores')
+    assert not list((tmp_path / 'artifacts').rglob('answer.txt'))
+    assert list((tmp_path / 'pi-ws').rglob('answer.txt'))
+
+@pytest.mark.parametrize("stop_confirmed", [False, True])
+def test_pi_timeout_freezes_real_late_write_or_retains_unconfirmed_workspace(tmp_path, monkeypatch, stop_confirmed):
+    from motte_agent.pi import PiBridgeError, PiBridgeSession
+    from motte_sdk.pi_runtime import PiRuntimeCaseExecutor
+
+    service, _, resources = _setup(tmp_path, monkeypatch)
+    manifest = _pi_manifest()
+    manifest["runtime_profile"]["budgets"] = {"total_timeout": 0.05}
+    resolved, case_ids = prepare_run("pi-suite@1", manifest, [], resources=resources)
+    run = service.create_run("pi-suite@1", resolved, case_ids)
+    bridge = tmp_path / "late-bridge.mjs"
+    bridge.write_text('''
+import readline from "node:readline";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+let identity, workspace, seq = 0;
+const emit = (event) => process.stdout.write(JSON.stringify({...event, seq: ++seq}) + "\\n");
+const rl = readline.createInterface({input: process.stdin});
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.type === "probe") emit({type: "version", version: "test", protocol: "v2", sdk_version: "0.73.1", execution_ready: true});
+  if (message.type === "init") {
+    const { run_id, case_id, session_id, operation_id } = message;
+    identity = { run_id, case_id, session_id, operation_id };
+    workspace = message.workspace;
+    emit({type: "ready", ...identity, sdk_version: "0.73.1"});
+  }
+  if (message.type === "run") setTimeout(() => {
+    writeFileSync(path.join(workspace, "late.txt"), "late write");
+    process.exit(0);
+  }, 250);
+});
+''', encoding="utf-8")
+    if not stop_confirmed:
+        original_close = PiBridgeSession.close
+
+        def unconfirmed_close(self):
+            original_close(self)
+            return {"status": "failed", "residual": [123], "readers_stopped": True}
+
+        monkeypatch.setattr(PiBridgeSession, "close", unconfirmed_close)
+    executor = PiRuntimeCaseExecutor(run, bridge_path=bridge)
+    if not stop_confirmed:
+        from motte_sdk.execution_backends import ExecutionBackendError
+
+        with pytest.raises(ExecutionBackendError) as raised:
+            executor.invoke('case-alpha')
+        assert raised.value.code == 'RUNTIME_STOP_UNCONFIRMED'
+        assert raised.value.quarantine is True
+        assert raised.value.evidence['process_stop']['residual'] == [123]
+        assert Path(raised.value.evidence['workspace']).exists()
+        assert 'observation' not in raised.value.evidence
+        return
+    with pytest.raises(PiBridgeError) as raised:
+        executor.invoke("case-alpha")
+    assert raised.value.code == "PI_BRIDGE_TIMEOUT"
+    result = raised.value.evidence
+    observation = result["observation"]
+    assert "late.txt" in observation["workspace"]["after"]
+    assert observation["workspace"]["complete"] is stop_confirmed
+    assert observation["coverage"]["complete"] is stop_confirmed
+    workspace = tmp_path / "pi-ws" / run["id"] / "case-alpha"
+    assert workspace.exists() is (not stop_confirmed)
+    assert result["cleanup"]["status"] == ("ok" if stop_confirmed else "failed")
+    if not stop_confirmed:
+        assert result["agent"]["runtime"]["process_stop"]["residual"] == [123]

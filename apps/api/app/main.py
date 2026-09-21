@@ -531,19 +531,18 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         # 前端等待 GET /commands 的 acknowledged 状态，不把 202 当送达。
         from datetime import timedelta
 
-        from motte_sdk.commands import submit_command
+        from motte_sdk.commands import CommandError, submit_command
 
         expires = datetime.now(UTC) + timedelta(minutes=10)
-        command = submit_command(
-            service,
-            run_id,
-            kind=body.kind,
-            content=body.content,
-            payload=body.payload if isinstance(body.payload, dict) else {},
-            session_id=body.session_id,
-            dedupe_key=body.dedupe_key,
-            expires_at=expires,
-        )
+        try:
+            command = submit_command(
+                service, run_id, kind=body.kind, content=body.content, payload=body.payload,
+                case_id=body.case_id, session_id=body.session_id, dedupe_key=body.dedupe_key,
+                expected_session_revision=body.expected_session_revision, expires_at=expires,
+                actor='anonymous-local',
+            )
+        except CommandError as error:
+            raise HTTPException(status_code=409, detail={'code': error.code, 'message': str(error)}) from error
         return JSONResponse(
             status_code=202,
             content={
@@ -561,6 +560,19 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="run not found") from error
         items = service.store.commands.list_for_run(run_id)
         return {"items": items, "total": len(items)}
+
+    from motte_contracts.runtime import RuntimeSessionList
+
+    @application.get('/api/v1/runs/{run_id}/sessions', response_model=RuntimeSessionList)
+    def list_run_sessions(run_id: str):
+        from motte_sdk.commands import public_sessions
+
+        try:
+            service.get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail='run not found') from error
+        items = public_sessions(service, run_id)
+        return {'items': items, 'total': len(items)}
 
     @application.post(
         "/api/v1/runs/{run_id}/replay",
@@ -1277,20 +1289,22 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         for backend_id in backend_ids():
             canonical = CANONICAL_RUNTIME_VERSIONS.get(backend_id) or {}
             definition = canonical.get("definition") or {}
+            runtime_version = str(canonical.get('version') or '1')
             published = None
             try:
-                published = resources.runtimes.get(backend_id, "1")
+                published = resources.runtimes.get(backend_id, runtime_version)
             except Exception:  # noqa: BLE001 - 目录读取失败不 500
                 published = None
             readiness = probed_readiness(backend_id)
             items.append({
                 "name": backend_id,
-                "version": "1",
+                "version": runtime_version,
                 "kind": definition.get("kind"),
                 "transport": definition.get("transport"),
                 "upstream_version": (canonical.get("definition") or {}).get("upstream_version"),
                 "model_control": definition.get("model_control"),
                 "interactive": bool(definition.get("interactive")),
+                "tool_enforcement": (definition.get("tool_control") or {}).get("enforcement"),
                 "published": published is not None,
                 "readiness": readiness,
             })
@@ -1320,7 +1334,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         """发布一个 runtime profile 版本（不可变；name@version 唯一）。"""
         from datetime import UTC, datetime
 
-        from motte_contracts.runtime import RuntimeProfileVersion
+        from motte_contracts.runtime import RuntimeProfileVersion, validate_runtime_settings
         from pydantic import ValidationError
 
         if not isinstance(body, dict):
@@ -1328,6 +1342,9 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                 status_code=422,
                 content={"error": {"code": "RUNTIME_PROFILE_INVALID", "message": "body must be an object"}},
             )
+        rejected = _reject_secret_fields(body)
+        if rejected is not None:
+            return rejected
         payload = {
             "published_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             **body,
@@ -1356,7 +1373,28 @@ def create_app(store=None, resource_store=None) -> FastAPI:
                     "message": f"runtime {profile.runtime!r} is not published",
                 }},
             )
-        stored = application.state.resource_store.runtime_profiles.put(profile.model_dump())
+        try:
+            validate_runtime_settings(
+                (runtime.get("definition") or {}).get("config_schema") or {}, profile.native_settings,
+            )
+        except ValueError as error:
+            return JSONResponse(status_code=422, content={"error": {
+                "code": "RUNTIME_PROFILE_INVALID", "message": str(error),
+            }})
+        repository = application.state.resource_store.runtime_profiles
+        record = profile.model_dump()
+        try:
+            stored = repository.put(record)
+        except ResourceConflictError:
+            # The immutable insert arbitrates concurrent publishers. Only the
+            # server-generated timestamp is immaterial to identical retries.
+            existing = repository.get(profile.name, profile.version)
+            comparison = dict(record)
+            if "published_at" not in body and existing is not None:
+                comparison["published_at"] = existing.get("published_at")
+            if existing != comparison:
+                raise
+            stored = existing
         return stored
 
     @application.get("/api/v1/runtimes/{name}/readiness")
@@ -1381,7 +1419,8 @@ def create_app(store=None, resource_store=None) -> FastAPI:
     )
     def import_inspect(body: dict):
         """M4-T11：Inspect eval-log 只读导入（受控上传文本；不执行日志内容）。"""
-        from motte_harness.inspect import InspectLogError, import_inspect_log
+        from motte_harness.inspect import InspectLogError
+        from motte_sdk.inspect_import import import_inspect_run
 
         content = body.get("content")
         if not isinstance(content, str) or not content.strip():
@@ -1391,7 +1430,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             )
         name = body.get("name") if isinstance(body.get("name"), str) else None
         try:
-            report = import_inspect_log(content, name=name)
+            report = import_inspect_run(service, content, name=name)
         except InspectLogError as error:
             return JSONResponse(
                 status_code=422,
@@ -3494,6 +3533,16 @@ def create_app(store=None, resource_store=None) -> FastAPI:
         import hashlib as _hashlib
 
         data = target.read_bytes()
+        display = data.decode("utf-8", errors="replace")
+        if entry.get("media_type") == "application/json":
+            # Redacting serialized JSON only sees value shapes, not sensitive
+            # keys such as password. Parse the display copy; frozen bytes stay exact.
+            try:
+                display = json.dumps(redact_secrets(json.loads(display)), ensure_ascii=False)
+            except (ValueError, TypeError):
+                display = "[invalid JSON artifact: display unavailable]"
+        else:
+            display = redact_secrets(display)
         return {
             "run_id": run_id, "case_id": case_id, "path": path,
             "media_type": entry.get("media_type"),
@@ -3501,7 +3550,7 @@ def create_app(store=None, resource_store=None) -> FastAPI:
             "sha256": entry.get("sha256"),
             "sha256_matches": _hashlib.sha256(data).hexdigest() == entry.get("sha256"),
             # 展示视图做值形状脱敏；评分读取的冻结原文不受影响
-            "content": redact_secrets(data.decode("utf-8", errors="replace")),
+            "content": display,
         }
 
     @application.get("/api/v1/runs/{run_id}/invocations")

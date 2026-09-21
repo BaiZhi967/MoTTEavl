@@ -1,50 +1,30 @@
 # Inspect EvalLog 只读导入（M4-T11）
 
-范围：消费**官方 .json EvalLog 完整格式**（单 JSON 对象，`--full` 导出含
-`samples`），把样本与原生评分导入平台证据；**不支持 Inspect 执行**（不
-运行 task/solver/scorer、不加载 pickle/插件/日志内命令）。
+导入官方 **EvalLog version=2 的完整 JSON 对象**。不运行 task/solver/scorer，不加载插件、pickle 或日志中的命令。二进制 .eval 不直接支持，先用 Inspect 导出包含 samples 的完整 JSON。
 
-## 格式与限制
+## 固定身份与证据
 
-- 支持 `inspect-eval-log-v2`（parser `inspect-jsonl-v2`）：官方 `.json`
-  EvalLog 对象——顶层 `version` / `plan`（必需），`status` / `created` /
-  `model` / `eval` / `results` / `samples`；每个 sample 取
-  `id` / `epoch` / `scores`（scorer 名 → {name, value, answer, explanation}）；
-- **二进制 `.eval`（msgpack）不支持**：需先用 inspect 导出
-  `inspect view --full --format json`（或等价 `--log-format json --full`）；
-- summary-only 导出（无 `samples`）→ `AGGREGATE_ONLY` 拒绝（不从聚合
-  伪造样本；错误信息提示 `--full`）；
-- 上限：64MB / 100k 样本 / 每样本 64 个 scorer；
-- 未知顶层字段：记录进 `unknown_fields`、coverage 降 partial；未知
-  schema/状态 → 拒绝（fail closed）；
-- 原生分数标记 `score_source=inspect-native`（imported），与平台重评
-  pass 区分。
+- 必须包含 version=2、plan、eval 和非空 samples；eval.eval_id/run_id/created/model/task 为非空字符串。
+- 来源键是 eval_id + run_id，模型/时间从 eval 对象读取；样本键为 id + epoch，同键重复拒绝。
+- parser 为 inspect-json-v3。未知 schema version 拒绝；未知非关键顶层字段保留并标 partial。
+- 限制为 UTF-8 64MB、100k 样本、每样本64个评分器；不从 aggregate-only 日志制造样本。
+- 原始 UTF-8 字节原样冻结到 var/inspect-imports/<import_id>.source 并记录 SHA-256。OS 文件锁串行执行身份核验和记录发布，原子替换登记文件。
+- 同来源同内容重导幂等，同来源异内容报 IMPORT_IDENTITY_CONFLICT；改变样本数不能绕过来源冲突。
 
-## 使用
+## 使用和查询
 
 ```bash
-# CLI（.json 完整导出）
 uv run python -m motte_cli inspect-import path/to/log.json --name my-import --json
-
-# API（受控上传文本）
-curl -X POST /api/v1/inspect/import -d '{"name":"my-import","content":"<EvalLog JSON>"}'
 ```
 
-导入记录落在 `var/inspect-imports/inspect-<hash>.json`，**原始内容整体
-冻结**在同目录 `<import_id>.source`（复核/重解析的单一事实源，
-`load_import_raw(import_id)` 只读读取）。
+API 使用 POST /api/v1/inspect/import，body 为 name（可选）与 content（完整 JSON 文本）。返回 import_id、run_id、scoring_pass_id，可通过已有 GET /api/v1/runs/{run_id}、评分历史、报告和 /runs/{run_id}/cases/{case_id}/agent 查看导入内容。
 
-幂等与冲突（M4 review R28）：
+Run 是只读来源归档，**从不进入 queued/Dispatcher**。导入准备中保持 needs_review；样本、原生 ScoreSet 和 completed 终态由已有 ScoringPass CAS 原子发布。相同上传可完成中断的数据库登记，不会调用模型或原生 Inspect。
 
-- `import_id` 由**稳定源身份**派生（eval 任务 + 创建时间 + 模型 + 样本
-  数），不随内容微调漂移；
-- 同身份同内容重导 → `idempotent=true`（返回既有记录）；
-- 同身份**不同内容**（例如同一导出被改分）→ `IMPORT_IDENTITY_CONFLICT`
-  显式报错，不静默产生新导入。
-
-导入不进入 Dispatcher（无执行语义）。
+原生评分保存为 source=inspect-native、metric_id=native.<scorer>；数字值不自动解释为通过，布尔值保留原生通过语义。缺失或非数值评分保留原值并标证据不足。Observation 如实标明平台未验证工具轨迹，原始来源引用和文件 hash 可追溯；导入完成不代表被测任务通过。公共返回脱敏；原始字节导出沿用平台默认关闭的原始 Artifact 导出策略。
 
 ## 回退
 
-导入是纯附加证据：删除对应 `var/inspect-imports/inspect-*.json` 与
-`inspect-*.source` 即移除登记；不触碰任何运行/评分历史。
+关闭新的导入入口，保留既有 Run、ScoringPass、源文件与 Artifact。不得删除已经被历史报告引用的原始日志，也不得覆盖历史原生评分。当前导入 Run 的 retry 与平台 rescore 明确拒绝；未来开放重评时必须配置支持导入证据的 evaluator，并生成独立 pass。
+
+官方结构依据：[EvalLog / EvalSpec](https://inspect.aisi.org.uk/reference/inspect_ai.log.html#evalspec)。本地验证：tests/harness/test_inspect_log_import.py、test_inspect_v2_identity.py，覆盖格式、原文、来源冲突及持久查询；不等同于任意 Inspect 版本兼容声明。

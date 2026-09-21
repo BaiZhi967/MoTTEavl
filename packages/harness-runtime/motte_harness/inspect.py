@@ -3,7 +3,7 @@
 不执行 Inspect：无 task/solver/scorer/插件/pickle 加载路径；输入受限
 （受控文本内容 + 大小/样本/评分器数量上限）；**原始内容整体冻结**到
 导入仓（``<import_id>.source``，可复核/重解析，M4 review R28）；导入身份
-由稳定源身份（eval 任务/创建时间/模型/样本数）派生——同身份同内容重导
+由原生 eval_id/run_id 派生——同身份同内容重导
 幂等，同身份**异内容**冲突（IMPORT_IDENTITY_CONFLICT），不再把改分后的
 同一来源当作新导入；原生分数标记 imported（score_source=inspect-native），
 与平台重评 pass 区分。
@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+from .file_lock import exclusive_file_lock
 
 from .parsers.inspect import (
     InspectLogError,
@@ -80,6 +83,11 @@ def import_inspect_log(content: str, *, name: str | None = None) -> dict[str, An
         "unknown_fields": parsed["unknown_fields"],
         "coverage": parsed["coverage"],
     }
+    with exclusive_file_lock(IMPORT_STORE_ROOT / f"{import_id}.lock"):
+        return _freeze_import(record_path, raw_path, source_bytes, record)
+
+
+def _freeze_import(record_path, raw_path, source_bytes, record):
     idempotent = record_path.exists()
     if idempotent:
         existing = json.loads(record_path.read_text(encoding="utf-8"))
@@ -87,17 +95,22 @@ def import_inspect_log(content: str, *, name: str | None = None) -> dict[str, An
             raise InspectLogError(
                 "IMPORT_IDENTITY_CONFLICT",
                 f"the same inspect log identity was already imported with "
-                f"different content: {import_id} "
+                f"different content: {record['import_id']} "
                 f"(existing {existing.get('source_sha256')}, "
                 f"incoming {record['source_sha256']})",
             )
         return {**existing, "idempotent": True}
     record_path.parent.mkdir(parents=True, exist_ok=True)
     # 原始内容先冻结（R28）：复核/重解析的单一事实源。
-    raw_path.write_text(content, encoding="utf-8")
-    record_path.write_text(
-        json.dumps(record, ensure_ascii=False, sort_keys=True), encoding="utf-8",
-    )
+    raw_path.write_bytes(source_bytes)
+    temporary = record_path.with_suffix(f".{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(record, ensure_ascii=False, sort_keys=True), encoding="utf-8",
+        )
+        os.replace(temporary, record_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return {**record, "idempotent": False}
 
 

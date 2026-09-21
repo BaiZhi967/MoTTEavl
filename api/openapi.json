@@ -2054,6 +2054,18 @@
       "RunCommand": {
         "additionalProperties": false,
         "properties": {
+          "ack_evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ack Evidence"
+          },
           "acknowledged_at": {
             "anyOf": [
               {
@@ -2207,6 +2219,17 @@
             "title": "Id",
             "type": "string"
           },
+          "intent_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Hash"
+          },
           "intervention": {
             "default": false,
             "title": "Intervention",
@@ -2269,6 +2292,17 @@
             "default": "user_message",
             "title": "Type",
             "type": "string"
+          },
+          "worker_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Token"
           }
         },
         "required": [
@@ -2340,47 +2374,66 @@
       "RunMessageRequest": {
         "additionalProperties": false,
         "properties": {
-          "content": {
+          "case_id": {
+            "maxLength": 256,
             "minLength": 1,
-            "title": "Content",
+            "title": "Case Id",
             "type": "string"
           },
-          "dedupe_key": {
+          "content": {
             "anyOf": [
               {
+                "maxLength": 16000,
+                "minLength": 1,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Dedupe Key"
+            "title": "Content"
+          },
+          "dedupe_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Dedupe Key",
+            "type": "string"
+          },
+          "expected_session_revision": {
+            "minimum": 1.0,
+            "title": "Expected Session Revision",
+            "type": "integer"
           },
           "kind": {
             "default": "user_message",
-            "pattern": "^(user_message|approve|reject|interrupt)$",
+            "enum": [
+              "user_message",
+              "approve",
+              "reject",
+              "interrupt"
+            ],
             "title": "Kind",
             "type": "string"
           },
           "payload": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "type": "string"
+            },
             "title": "Payload",
             "type": "object"
           },
           "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
           }
         },
         "required": [
-          "content"
+          "case_id",
+          "session_id",
+          "dedupe_key",
+          "expected_session_revision"
         ],
         "title": "RunMessageRequest",
         "type": "object"
@@ -2505,6 +2558,168 @@
         ],
         "title": "RunStatus",
         "type": "string"
+      },
+      "RuntimeApprovalView": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "request_hash": {
+            "title": "Request Hash",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval_id",
+          "method",
+          "item_id",
+          "summary",
+          "request_hash",
+          "expires_at",
+          "state"
+        ],
+        "title": "RuntimeApprovalView",
+        "type": "object"
+      },
+      "RuntimeSessionList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeSessionView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "RuntimeSessionList",
+        "type": "object"
+      },
+      "RuntimeSessionView": {
+        "additionalProperties": false,
+        "properties": {
+          "active_turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Turn Id"
+          },
+          "attempt_id": {
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "control_revision": {
+            "title": "Control Revision",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "native_thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Thread Id"
+          },
+          "pending_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeApprovalView"
+            },
+            "title": "Pending Approvals",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "terminal_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal At"
+          }
+        },
+        "required": [
+          "session_id",
+          "run_id",
+          "case_id",
+          "attempt_id",
+          "state",
+          "revision",
+          "control_revision"
+        ],
+        "title": "RuntimeSessionView",
+        "type": "object"
       },
       "Score": {
         "additionalProperties": false,
@@ -6662,6 +6877,45 @@
           }
         },
         "summary": "List Scoring Passes"
+      }
+    },
+    "/api/v1/runs/{run_id}/sessions": {
+      "get": {
+        "operationId": "list_run_sessions_api_v1_runs__run_id__sessions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeSessionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Run Sessions"
       }
     },
     "/api/v1/runs/{run_id}/tasks": {

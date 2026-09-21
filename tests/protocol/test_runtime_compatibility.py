@@ -26,6 +26,7 @@ class TestManifestIntegrity:
         manifest = load_runtime_compatibility(MANIFEST)
         assert set(manifest["backends"]) == {
             "pi-agent@1", "claude-cli@1", "codex-cli@1", "codex-app-server@1",
+            "codex-app-server@2",
         }
         for backend in manifest["backends"].values():
             assert backend["upstream"]["version"]

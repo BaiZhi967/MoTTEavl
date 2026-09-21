@@ -166,6 +166,8 @@ Lucide / Feather / Heroicons 图标、`window.alert`、Lorem Ipsum 与假占位�
 
 ## 8. 变更流程
 
+M4 交互控制区复用现有 panel、kv、表格、hint/error 与按钮样式，不新增视觉 token。仅呈现当前会话的可执行操作；持久接收、已投递、原生确认、请求已处理、结果未知分别说明。审批明确展示请求摘要与有效期；未知提交保留原去重键并等待查询核对，终态只读。Run 状态仍统一读取 STATUS_META。
+
 1. 改设计 = 改 `DESIGN.md` = 改 `:root` token，三者同一个提交。
 2. 新增页面 / 新增界面区块：走 `design-taste-frontend` 流程（读需求 → 定方向 → 拨盘已在 0 节锁定）。
 3. 修改现有界面：走 `redesign-existing-projects` 流程（先审计 → 列问题 → 增量改，不重写）。

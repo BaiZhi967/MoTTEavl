@@ -76,6 +76,17 @@ def _result_by_id(results, metric_id):
     return next(item for item in results if item.metric_id == metric_id)
 
 
+def test_redacted_artifact_cannot_prove_original_content():
+    entry = ArtifactEntry(artifact_id='run-1/case-1/report.json', path='report.json',
+                          sha256=REPORT_SHA, redacted=True)
+    results = _evaluate(_observation(artifact_refs=[entry]), [
+        {'metric_id': 'redacted-content', 'kind': 'file-content', 'path': 'report.json',
+         'mode': 'exact', 'expected': REPORT_JSON.decode()},
+    ])
+    assert results[0].status == MetricStatus.insufficient_evidence
+    assert results[0].reason == 'artifact_redacted'
+
+
 def test_deterministic_success_fail_missing_error():
     results = _evaluate(_observation(), [
         # exact：成功 / 显式 normalization
@@ -266,11 +277,8 @@ def test_regex_catastrophic_backtracking_terminates():
 
 
 def test_incomplete_trajectory_cannot_prove_absence():
-    # 证据域分离（M4 review R13）：tool-call 断言的证据域是工具轨迹——
-    # 轨迹不完整时"从未调用"不可证明 → insufficient；no-forbidden-write 的
-    # 证据域是 workspace 快照——快照完整即可按最终状态评分（scope 注明
-    # workspace-final-state），不因轨迹缺失整体降级。已确认的违规（轨迹
-    # 命中）仍然永远计入（R4 #4）。
+    # 不完整轨迹既不能证明“未调用工具”，也不能排除写入后恢复。
+    # 已确认的违规（轨迹命中）仍然永远计入（R4 #4）。
     incomplete = _observation(coverage={"complete": False})
     results = _evaluate(incomplete, [
         {"metric_id": "tool-rule", "kind": "tool-call", "tool": "write_file", "min_calls": 1},
@@ -287,10 +295,10 @@ def test_incomplete_trajectory_cannot_prove_absence():
     tool_forbidden = _result_by_id(results, "tool-forbidden")
     assert tool_forbidden.status is MetricStatus.insufficient_evidence
     assert tool_forbidden.reason == "tool_trajectory_incomplete"
-    # workspace 域指标按自身证据评分：快照完整 + 无命中路径 → 通过（带 scope）
+    # 最终快照不能排除暂态写入，因此证据不全不判通过。
     forbidden = _result_by_id(results, "forbidden")
-    assert forbidden.status is MetricStatus.scored
-    assert forbidden.passed is True
+    assert forbidden.status is MetricStatus.insufficient_evidence
+    assert forbidden.passed is None
 
     # workspace 快照本身失败（complete=False）：no-forbidden-write insufficient
     snap_broken = _observation(workspace=WorkspaceSnapshot(before=[], after=[], complete=False))

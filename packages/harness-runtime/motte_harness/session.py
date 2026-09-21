@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .file_lock import exclusive_file_lock
 from .process import identity_matches, pid_alive, process_identity
 
 SESSION_VERSION = 1
@@ -40,7 +41,7 @@ def new_session_record(
     *,
     run_id: str,
     case_id: str,
-    attempt_id: str,
+    attempt_id: str | None,
     operation_id: str | None = None,
     backend: str,
     argv: list[str],
@@ -74,34 +75,40 @@ def new_session_record(
 def persist_session(path: str | Path, record: dict[str, Any]) -> dict[str, Any]:
     """CAS 持久化（临时文件 + 原子替换；并发写按 revision 拒绝）。
 
+    同一 session 的读取、比较和替换持有跨进程 OS 文件锁。
     写入方必须携带 ``record["revision"] = 现有 revision + 1``；携带的
     revision 落后于文件即抛 :class:`SessionCasError`，绝不静默改写。
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, Any] | None = None
-    if target.exists():
-        try:
-            existing = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            existing = None
-    if existing is not None:
-        if existing.get("session_id") != record.get("session_id"):
-            raise ValueError("session file belongs to another session")
-        current_revision = int(existing.get("revision") or 0)
-        if int(record.get("revision") or 0) != current_revision + 1:
-            raise SessionCasError(
-                f"session revision conflict: file at {current_revision}, "
-                f"write claims {record.get('revision')}"
-            )
-    record.setdefault("revision", 1)
-    if int(record.get("revision") or 1) < 1:
-        raise ValueError("session revision must be >= 1")
-    payload = json.dumps(record, ensure_ascii=False, sort_keys=True)
-    temporary = target.with_name(f"{target.name}.tmp-{uuid4().hex[:8]}")
-    temporary.write_text(payload, encoding="utf-8")
-    os.replace(temporary, target)
-    return record
+    with exclusive_file_lock(target.with_suffix(".lock")):
+        existing: dict[str, Any] | None = None
+        if target.exists():
+            try:
+                existing = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise SessionCasError("cannot compare revision of unreadable session") from error
+            if not isinstance(existing, dict):
+                raise SessionCasError("cannot compare revision of malformed session")
+        if existing is not None:
+            if existing.get("state") == "terminal" and record.get("state") != "terminal":
+                raise SessionCasError("terminal session cannot return to a nonterminal state")
+            if existing.get("session_id") != record.get("session_id"):
+                raise ValueError("session file belongs to another session")
+            current_revision = int(existing.get("revision") or 0)
+            if int(record.get("revision") or 0) != current_revision + 1:
+                raise SessionCasError(
+                    f"session revision conflict: file at {current_revision}, "
+                    f"write claims {record.get('revision')}"
+                )
+        record.setdefault("revision", 1)
+        if int(record.get("revision") or 1) < 1:
+            raise ValueError("session revision must be >= 1")
+        payload = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        temporary = target.with_name(f"{target.name}.tmp-{uuid4().hex[:8]}")
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, target)
+        return record
 
 
 def next_revision(record: dict[str, Any]) -> int:
@@ -116,7 +123,7 @@ def load_session(path: str | Path) -> dict[str, Any] | None:
         record = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if record.get("schema_version") != SESSION_VERSION:
+    if not isinstance(record, dict) or record.get("schema_version") != SESSION_VERSION:
         return None
     return record
 
@@ -167,8 +174,9 @@ def recover_session(record: dict[str, Any]) -> dict[str, Any]:
     pid = record.get("pid")
     if pid is None:
         return {
-            "action": "never_spawned",
-            "status": "prepared",
+            "action": "needs_review",
+            "status": "spawn_unconfirmed",
+            "reason": "prepared token may precede an unrecorded spawn; never replay",
             "replayed": False,
         }
     if not pid_alive(int(pid)):
@@ -194,28 +202,49 @@ def recover_session(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def recover_runtime_sessions(
-    anchor: str | Path = SESSION_STORE_ROOT,
+    anchor: str | Path | None = None, *, include_terminal: bool = False,
 ) -> list[dict[str, Any]]:
     """扫描 session 锚目录，对每个未终结记录给出恢复判定（只观察，不重放）。
 
     供 Worker/CLI 启动时调用：needs_review 的 run/case 由运维人工裁决；
     本函数不修改任何记录、不接触任何进程。
     """
-    root = Path(anchor)
+    root = Path(anchor or os.environ.get("MOTTE_RUNTIME_SESSION_ROOT", str(SESSION_STORE_ROOT)))
     if not root.is_dir():
         return []
     findings: list[dict[str, Any]] = []
     for record_path in sorted(root.glob("*/*/*.json")):
         record = load_session(record_path)
-        if record is None or record.get("state") == "terminal":
+        path_identity = {
+            "run_id": record_path.parent.parent.name,
+            "case_id": record_path.parent.name, "session_id": record_path.stem,
+        }
+        if record is None or any(record.get(key) != value for key, value in path_identity.items()):
+            findings.append({
+                **path_identity, "record_path": str(record_path), "state": "unknown",
+                "action": "needs_review", "status": "session_record_unreadable",
+                "reason": "missing, invalid, unsupported or mismatched session evidence; never replay",
+                "replayed": False,
+            })
             continue
+        if record.get("state") == "terminal" and not include_terminal:
+            continue
+        try:
+            verdict = recover_session(record)
+        except (TypeError, ValueError, OverflowError):
+            verdict = {"action": "needs_review", "status": "session_record_invalid", "replayed": False}
         findings.append({
             "session_id": record.get("session_id"),
             "run_id": record.get("run_id"),
             "case_id": record.get("case_id"),
+            "attempt_id": record.get("attempt_id"),
+            "operation_id": record.get("operation_id"),
+            "pid": record.get("pid"),
+            "identity": record.get("identity"),
+            "cleanup": record.get("cleanup"),
             "backend": record.get("backend"),
             "state": record.get("state"),
             "record_path": str(record_path),
-            **recover_session(record),
+            **verdict,
         })
     return findings

@@ -553,6 +553,7 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_import.add_argument("file", help="Inspect .json EvalLog 文件路径（--full 完整导出；二进制 .eval 不支持）")
     inspect_import.add_argument("--name", help="导入名称（审计用）")
     inspect_import.add_argument("--json", action="store_true")
+    inspect_import.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
 
     runtime = sub.add_parser("runtime", help="M4 外部 runtime：目录 / 分层就绪 / 发布规范版本")
     runtime_sub = runtime.add_subparsers(dest="runtime_command")
@@ -1426,11 +1427,12 @@ def main(argv=None):
     if args.command == "inspect-import":
         from pathlib import Path as _Path
 
-        from motte_harness.inspect import InspectLogError, import_inspect_log
+        from motte_harness.inspect import InspectLogError
+        from motte_sdk.inspect_import import import_inspect_run
 
-        content = _Path(args.file).read_text(encoding="utf-8")
+        content = _Path(args.file).read_bytes().decode("utf-8")
         try:
-            report = import_inspect_log(content, name=args.name)
+            report = import_inspect_run(_service(args), content, name=args.name)
         except InspectLogError as error:
             print(f"inspect-import: {error.code}: {error}")
             return 2

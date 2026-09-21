@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError, cancelRun, createBenchmarkRun, createRun, dryRunDirectLlm, getBenchmarkCases,
   getDirectLlmSources, getRuns, getRunTrialArtifact, getSourceDetail, importBenchmark, publishModel,
-  setCredential, updateModel, updateProvider,
+  setCredential, updateModel, updateProvider, sendRuntimeCommand,
 } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
@@ -20,6 +20,19 @@ afterEach(() => {
 });
 
 describe("api client", () => {
+  it.each([{}, null, { command_id: "cmd-1" }, { command_id: "cmd-1", status: "future" }])(
+    "命令成功响应缺失身份或状态时必须作为结果未知处理 %j", async (payload) => {
+      mockFetch(202, payload);
+      await expect(sendRuntimeCommand("run-1", { kind: "interrupt", case_id: "c", session_id: "s",
+        expected_session_revision: 1, dedupe_key: "key-1" })).rejects.toThrow("提交结果未知");
+    },
+  );
+  it("202 响应 JSON 截断不会变成已接收", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 202,
+      json: async () => { throw new SyntaxError("truncated JSON"); } })));
+    await expect(sendRuntimeCommand("run-1", { kind: "interrupt", case_id: "c", session_id: "s",
+      expected_session_revision: 1, dedupe_key: "key-1" })).rejects.toThrow("提交结果未知");
+  });
   it("GET runs 返回列表", async () => {
     const fetchMock = mockFetch(200, { items: [{ id: "run-1", status: "queued" }], total: 1 });
     const payload = await getRuns("queued");

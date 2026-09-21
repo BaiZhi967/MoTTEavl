@@ -139,9 +139,9 @@ def validate_runtime_manifest(
             f"runtime snapshot has unknown model_control: {model_control!r}",
         )
 
-    if snapshot.get("tool_enforcement") == "not-enforced" and not manifest.get(
+    if snapshot.get("tool_enforcement") == "not-enforced" and manifest.get(
         "runtime_accept_unenforced_tools"
-    ):
+    ) is not True:
         raise ExecutionBackendError(
             "RUNTIME_TOOL_BOUNDARY_UNENFORCED",
             "runtime tool boundary is not enforced; pass "
@@ -281,6 +281,25 @@ def install_runtime_backends() -> None:
         except ValueError:
             # 已注册（例如测试进程重复安装）：保留现有注册。
             continue
+    try:
+        register_backend(ExecutionBackendSpec(
+            id='codex-app-server', version='2',
+            validate=runtime_validator('codex-app-server', '2'), build=_build_codex_app_server,
+            capabilities={'interactive': True, 'safe_to_repeat': False, 'runtime': True},
+        ))
+    except ValueError:
+        pass
+
+
+def _build_codex_app_server(run):
+    from .codex_app_server_runtime import CodexAppServerCaseExecutor
+
+    executor = CodexAppServerCaseExecutor(run)
+    executor.run_build_gate()
+    return ExecutionHandle(backend_id='codex-app-server', backend_version='2',
+        invoke=executor.invoke, attach=lambda service, run_id: executor.bind_service(service),
+        capabilities={'interactive': True, 'safe_to_repeat': False, 'runtime': True,
+            'events': True, 'artifacts': True})
 
 
 # 四个 runtime backend 的规范 RuntimeVersion 定义（唯一事实源是
@@ -421,6 +440,19 @@ CANONICAL_RUNTIME_VERSIONS: dict[str, dict[str, Any]] = {
 }
 
 
+from copy import deepcopy
+
+HISTORICAL_APP_SERVER_V1 = deepcopy(CANONICAL_RUNTIME_VERSIONS['codex-app-server'])
+CANONICAL_RUNTIME_VERSIONS['codex-app-server'] = deepcopy(HISTORICAL_APP_SERVER_V1)
+CANONICAL_RUNTIME_VERSIONS['codex-app-server']['version'] = '2'
+CANONICAL_RUNTIME_VERSIONS['codex-app-server']['definition'].update(
+    adapter_version='codex-app-server@2', parser_version='codex-appserver-v2-0.155.1',
+    config_schema={'properties': {'model': {'type': 'string'}, 'binary': {'type': 'string'},
+        'sandbox': {'type': 'string'}, 'approval_policy': {'type': 'string'}}, 'required': ['model']},
+)
+CANONICAL_RUNTIME_VERSIONS['codex-app-server']['definition']['evidence_capabilities']['model_identity'] = False
+
+
 def publish_canonical_runtime_versions(resources: Any) -> dict[str, Any]:
     """把规范 runtime 版本发布进资源仓库（幂等；不可变版本资源）。
 
@@ -428,6 +460,11 @@ def publish_canonical_runtime_versions(resources: Any) -> dict[str, Any]:
     相同 → 复用既有记录（保留原始 published_at），重复发布不产生冲突；
     definition 内容变化才构成 RESOURCE_CONFLICT（走新版本号）。
     """
+    from datetime import UTC, datetime
+
+    if resources.runtimes.get('codex-app-server', '1') is None:
+        resources.runtimes.put({**deepcopy(HISTORICAL_APP_SERVER_V1), 'lifecycle': 'published',
+            'published_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z')})
     published: dict[str, Any] = {}
     for name, payload in CANONICAL_RUNTIME_VERSIONS.items():
         version = str(payload.get("version") or "1")

@@ -45,12 +45,29 @@ class ReplayRunRequest(APIModel):
 
 
 class RunMessageRequest(APIModel):
-    content: str = Field(min_length=1)
-    # M4-T10：命令种类 / 会话绑定 / 幂等键（批准类命令绑定 request_hash）
-    kind: str = Field(default="user_message", pattern=r"^(user_message|approve|reject|interrupt)$")
-    payload: dict = Field(default_factory=dict)
-    session_id: str | None = None
-    dedupe_key: str | None = None
+    content: str | None = Field(default=None, min_length=1, max_length=16000)
+    kind: Literal['user_message', 'approve', 'reject', 'interrupt'] = 'user_message'
+    payload: dict[str, str] = Field(default_factory=dict)
+    case_id: str = Field(min_length=1, max_length=256)
+    session_id: str = Field(min_length=1, max_length=256)
+    dedupe_key: str = Field(min_length=1, max_length=256)
+    expected_session_revision: int = Field(ge=1, strict=True)
+
+    @model_validator(mode='after')
+    def command_shape(self):
+        if self.kind == 'user_message':
+            if not self.content or not self.content.strip() or self.payload:
+                raise ValueError('message requires text and empty payload')
+        elif self.content is not None:
+            raise ValueError('content is only valid for user_message')
+        if self.kind in {'approve', 'reject'}:
+            if set(self.payload) != {'approval_id', 'request_hash'} or any(
+                not value or len(value) > 256 for value in self.payload.values()
+            ):
+                raise ValueError('approval requires approval_id and request_hash')
+        elif self.payload:
+            raise ValueError('unexpected command payload')
+        return self
 
 
 class RunListResponse(APIModel):

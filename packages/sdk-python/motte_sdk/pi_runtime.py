@@ -177,6 +177,7 @@ class PiRuntimeCaseExecutor:
         self.model_id = settings.get("model") or "scripted-1"
         self.system_prompt = settings.get("system_prompt") or ""
         self._service = service
+        self._attempt_id: str | None = None
         self._bridge_path = bridge_path
         self._node = node_binary
 
@@ -193,7 +194,16 @@ class PiRuntimeCaseExecutor:
         """把声明编译为有效配置；无法兑现的约束具名拒绝（不静默忽略）。"""
         from .execution_backends import ExecutionBackendError
 
-        budgets = dict(self.profile.get("budgets") or {})
+        from motte_contracts.runtime import validate_runtime_budgets
+
+        try:
+            budgets = validate_runtime_budgets("pi-agent@1", self.profile.get("budgets") or {})
+            if "max_steps" not in budgets and "max_steps" in self.settings:
+                budgets.update(validate_runtime_budgets(
+                    "pi-agent@1", {"max_steps": self.settings["max_steps"]},
+                ))
+        except ValueError as error:
+            raise ExecutionBackendError("RUNTIME_BUDGET_INVALID", str(error)) from error
 
         if self.profile.get("credential_refs"):
             # Pi bridge 当前没有向子进程注入凭据的受控通道；声明了凭据
@@ -244,6 +254,9 @@ class PiRuntimeCaseExecutor:
                 or os.environ.get("MOTTE_PI_TOTAL_TIMEOUT")
                 or "900"
             )
+            validate_runtime_budgets("pi-agent@1", {"total_timeout": total_timeout})
+            idle_timeout = float(os.environ.get("MOTTE_PI_IDLE_TIMEOUT", "120"))
+            validate_runtime_budgets("pi-agent@1", {"total_timeout": idle_timeout})
         except (TypeError, ValueError) as error:
             raise ExecutionBackendError(
                 "RUNTIME_BUDGET_INVALID", "budgets.total_timeout must be a number"
@@ -265,6 +278,7 @@ class PiRuntimeCaseExecutor:
                 if budgets.get("max_tool_calls") is not None else None
             ),
             "total_timeout": total_timeout,
+            "idle_timeout": idle_timeout,
             "workspace": dict(self.profile.get("workspace") or {}),
             "expected_sdk": expected_sdk,
         }
@@ -293,6 +307,15 @@ class PiRuntimeCaseExecutor:
         case = next((item for item in cases if item["case_id"] == case_id), None)
         if case is None:
             raise KeyError(case_id)
+
+        if self._service is not None:
+            from .execution_backends import ExecutionBackendError
+
+            attempts = [item for item in self._service.store.attempts.list_open(self.run['id'])
+                        if item.get('case_id') == case_id and item.get('status') == 'dispatching']
+            if len(attempts) != 1:
+                raise ExecutionBackendError('RUNTIME_ATTEMPT_UNRESOLVED', 'expected one dispatched CaseAttempt')
+            self._attempt_id = attempts[0]['id']
 
         from motte_agent.pi import PiBridgeError, PiBridgeSession
 
@@ -333,6 +356,7 @@ class PiRuntimeCaseExecutor:
                         self.run["id"], f"pi_{kind}",
                         {
                             "case_id": case_id, "session_id": session_id,
+                            "operation_id": operation_id,
                             # 事件对账字段：bridge 原生 seq + parser 版本（R14）。
                             "source_seq": event.get("seq"),
                             "parser_version": PI_PARSER_VERSION,
@@ -361,7 +385,7 @@ class PiRuntimeCaseExecutor:
             budgets=budgets,
             bridge_path=self._bridge_path,
             node_binary=self._node,
-            idle_timeout=float(os.environ.get("MOTTE_PI_IDLE_TIMEOUT", "120")),
+            idle_timeout=effective["idle_timeout"],
             total_timeout=effective["total_timeout"],
             event_callback=on_event,
         )
@@ -394,8 +418,6 @@ class PiRuntimeCaseExecutor:
                 outcome = session.run(case["input"])
             finally:
                 stop_watch.set()
-            self._log_invocations(case_id, session_id, outcome)
-            observation = self._capture(workspace, case, outcome, before, event_refs, tool_records)
         except BaseException as error:  # noqa: BLE001 - 异常路径也要采集与清理
             pending_error = error
             if isinstance(error, PiBridgeError) and error.code == "PI_BRIDGE_TIMEOUT":
@@ -412,19 +434,46 @@ class PiRuntimeCaseExecutor:
                     "tool_calls": len(tool_records),
                     "usage": {"reported": False, "source": "bridge-error"},
                 }
-            observation = self._capture(
-                workspace, case, outcome, before, event_refs, tool_records,
-            )
         finally:
             stop_watch.set()
+            if watcher.is_alive():
+                watcher.join(timeout=1)
             try:
-                session.close()
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                cleanup = workspace.cleanup()
-            except BaseException as error:  # noqa: BLE001
-                cleanup = {"status": "failed", "residual": [], "error": str(error)}
+                stopped = session.close()
+            except Exception as error:  # noqa: BLE001
+                stopped = {"status": "failed", "residual": [], "error": str(error)}
+
+        outcome["operation_id"] = operation_id
+        outcome["process_stop"] = stopped
+        if not stopped or stopped.get('status') != 'stopped':
+            from .execution_backends import ExecutionBackendError
+
+            error = ExecutionBackendError(
+                'RUNTIME_STOP_UNCONFIRMED',
+                f'Pi bridge stop unconfirmed; retained workspace {workspace.root}; review required',
+            )
+            error.quarantine = True
+            error.evidence = {'process_stop': stopped, 'workspace': str(workspace.root),
+                              'attempt_id': self._attempt_id, 'session_id': session_id,
+                              'operation_id': operation_id}
+            if self._service is not None:
+                self._service.emit_run_event(self.run['id'], 'runtime_stop_unconfirmed', {
+                    'case_id': case_id,
+                    **error.evidence,
+                })
+            raise error
+        self._log_invocations(case_id, session_id, outcome)
+        try:
+            observation = self._capture(workspace, case, outcome, before, event_refs, tool_records)
+        finally:
+            if not stopped or stopped.get("status") != "stopped":
+                cleanup = {"status": "failed", "residual": [str(workspace.root)],
+                           "error": "bridge stop unconfirmed; workspace retained"}
+            else:
+                try:
+                    cleanup = workspace.cleanup()
+                except BaseException as error:  # noqa: BLE001
+                    cleanup = {"status": "failed", "residual": [], "error": str(error)}
 
         duration_ms = round((monotonic() - started) * 1000, 3)
         termination_reason = self._termination_reason(outcome)
@@ -444,6 +493,7 @@ class PiRuntimeCaseExecutor:
                     "session_id": session_id,
                     "operation_id": operation_id,
                     "parser_version": PI_PARSER_VERSION,
+                    "process_stop": stopped,
                     "model_control": "runner-configured",
                     "transport": outcome.get("transport") or (
                         "http" if self.provider_config else "scripted"
@@ -520,6 +570,7 @@ class PiRuntimeCaseExecutor:
                 "request_summary": redact({
                     "runtime": f"{PI_BACKEND_ID}@{PI_BACKEND_VERSION}",
                     "session_id": session_id,
+                    "operation_id": outcome.get("operation_id"),
                     "model_control": "runner-configured",
                     "transport": outcome.get("transport") or "scripted",
                     "metering_source": (outcome.get("usage") or {}).get("source"),
@@ -553,6 +604,10 @@ class PiRuntimeCaseExecutor:
         after = workspace.snapshot()
         artifacts: list[dict[str, Any]] = []
         errors: list[str] = []
+        stopped = outcome.get("process_stop") or {}
+        stop_confirmed = stopped.get("status") == "stopped"
+        if not stop_confirmed:
+            errors.append("bridge stop unconfirmed; workspace evidence may still change")
         artifact_store = _artifact_store()
         before_files = set(before.get("files") or [])
         after_files = set(after.get("files") or [])
@@ -581,7 +636,7 @@ class PiRuntimeCaseExecutor:
             "observation_id": f"obs-{uuid4().hex}",
             "run_id": self.run["id"],
             "case_id": case["case_id"],
-            "attempt_id": None,
+            "attempt_id": self._attempt_id,
             "final_output": outcome.get("final_output"),
             "termination": {
                 "reason": self._termination_reason(outcome),
@@ -599,7 +654,7 @@ class PiRuntimeCaseExecutor:
             "usage": {
                 "reported": bool(usage.get("reported")),
                 "total_tokens": usage.get("total_tokens"),
-                "cost_total": usage.get("observed_cost") or None,
+                "cost_total": usage.get("observed_cost"),
             },
             "tool_calls": [
                 {
@@ -614,11 +669,12 @@ class PiRuntimeCaseExecutor:
             "workspace": {
                 "before": sorted(before_files),
                 "after": sorted(after_files),
-                "complete": bool(before.get("complete", True) and after.get("complete", True)),
+                "complete": stop_confirmed and bool(before.get("complete", True) and after.get("complete", True)),
                 "before_hashes": dict(before.get("hashes") or {}),
                 "after_hashes": dict(after.get("hashes") or {}),
             },
-            "processes": [],
+            "processes": [{"label": "pi-bridge", "exit_code": stopped.get("exit_code"),
+                           "status": "exited" if stop_confirmed else "unknown"}],
         }
         observation["evidence_hash"] = observation_evidence_hash(observation)
         observation["recorded_at"] = datetime.now(UTC).isoformat()

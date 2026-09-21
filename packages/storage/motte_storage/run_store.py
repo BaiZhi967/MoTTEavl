@@ -81,6 +81,15 @@ CREATE TABLE IF NOT EXISTS run_commands (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_commands_run_idx ON run_commands(run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS run_commands_dedupe_idx
+ON run_commands(run_id, json_extract(payload, '$.dedupe_key'))
+WHERE json_extract(payload, '$.dedupe_key') IS NOT NULL;
+CREATE TABLE IF NOT EXISTS runtime_sessions (
+  session_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, state TEXT NOT NULL,
+  revision INTEGER NOT NULL, payload TEXT NOT NULL,
+  FOREIGN KEY(run_id) REFERENCES runs(id)
+);
+CREATE INDEX IF NOT EXISTS runtime_sessions_run_idx ON runtime_sessions(run_id);
 CREATE TABLE IF NOT EXISTS agent_invocations (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -581,6 +590,12 @@ class RunStore:
     benchmark_datasets: Any = None
     baselines: Any = None
     trials: Any = None
+    runtime_sessions: Any = None
+
+    def __post_init__(self) -> None:
+        if self.commands is not None:
+            from .runtime_sessions import attach_interactive_repositories
+            attach_interactive_repositories(self)
 
 
 def _upgrade_score_sets(connection: sqlite3.Connection) -> None:

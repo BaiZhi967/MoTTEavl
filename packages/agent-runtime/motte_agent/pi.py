@@ -13,6 +13,7 @@ stdout 只承载协议；诊断走 stderr 且脱敏（错误消息不透传 brid
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import signal
@@ -169,6 +170,9 @@ class PiBridgeSession:
         total_timeout: float = 600.0,
         event_callback: Any = None,
     ) -> None:
+        for name, value in (("idle_timeout", idle_timeout), ("total_timeout", total_timeout)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         for name, value in (
             ("run_id", run_id), ("case_id", case_id),
             ("session_id", session_id), ("operation_id", operation_id),
@@ -200,6 +204,7 @@ class PiBridgeSession:
         self._total_read = 0
         self._total_lock = Lock()
         self._closed = False
+        self._close_lock = Lock()
 
     # ------------------------------------------------------------ 生命周期
 
@@ -304,10 +309,16 @@ class PiBridgeSession:
         except (OSError, ValueError):
             self.close()
 
-    def close(self) -> None:
+    def close(self) -> dict[str, Any]:
+        # Cancellation and executor teardown may race. A second caller must
+        # wait for the first close to confirm termination before freezing.
+        with self._close_lock:
+            return self._close_once()
+
+    def _close_once(self) -> dict[str, Any]:
         if self._closed or self._process is None:
             self._closed = True
-            return
+            return getattr(self, "_stop_result", {"status": "stopped", "residual": []})
         self._closed = True
         process = self._process
         try:
@@ -327,7 +338,17 @@ class PiBridgeSession:
         finally:
             for reader in getattr(self, "_readers", []):
                 reader.join(timeout=2)
-            self._process = None
+            alive = process.poll() is None
+            readers_alive = any(reader.is_alive() for reader in getattr(self, "_readers", []))
+            self._stop_result = {
+                "status": "failed" if alive or readers_alive else "stopped",
+                "residual": [process.pid] if alive else [],
+                "readers_stopped": not readers_alive,
+                "exit_code": process.returncode,
+            }
+            if not alive:
+                self._process = None
+        return self._stop_result
 
     def __enter__(self) -> PiBridgeSession:
         self.start()

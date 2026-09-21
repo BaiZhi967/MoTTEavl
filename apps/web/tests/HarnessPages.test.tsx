@@ -105,7 +105,7 @@ describe("HarnessPages（外部 Runtime）", () => {
     expect(screen.getByText("pi-agent@1")).toBeTruthy();
   });
 
-  it("交互通道未接消费者时目录页明确说明消息入口关闭", async () => {
+  it("目录页说明交互命令按运行能力开放", async () => {
     stubFetch({
       "/api/v1/runtimes": {
         total: 1,
@@ -127,7 +127,7 @@ describe("HarnessPages（外部 Runtime）", () => {
       </MemoryRouter>,
     );
     await screen.findAllByText("codex-app-server@1");
-    expect(screen.getByText(/命令消费者接通前，消息入口保持关闭/)).toBeTruthy();
+    expect(screen.getByText(/交互命令仅对具备交互能力的运行开放/)).toBeTruthy();
     expect(screen.getAllByText(/交互/).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -162,12 +162,18 @@ describe("HarnessPages（外部 Runtime）", () => {
     const scenarioSelect = await screen.findByLabelText("场景（agent-tasks）");
     fireEvent.change(scenarioSelect, { target: { value: "agent-suite@1" } });
     const runtimeSelect = screen.getByLabelText("Runtime（已发布）");
-    fireEvent.change(runtimeSelect, { target: { value: "pi-agent" } });
+    fireEvent.change(runtimeSelect, { target: { value: "pi-agent@1" } });
     const settingsBox = screen.getByLabelText("原生设置 JSON（runner-configured；至少 model 字段）");
     fireEvent.change(settingsBox, {
       target: { value: '{"model":"scripted-1"}' },
     });
-    fireEvent.click(screen.getByRole("button", { name: /预检并创建/ }));
+    fireEvent.change(screen.getByLabelText("预算 JSON", { exact: true }), {
+      target: { value: '{"total_timeout":12,"max_tool_calls":0}' },
+    });
+    fireEvent.change(screen.getByLabelText("Case ID（留空运行全部，空白分隔）"), {
+      target: { value: "case-a\ncase-b" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /校验配置并创建/ }));
     await waitFor(() => {
       const calls = fetchMock.mock.calls.map((call) => String(call[0]));
       expect(calls).toContain("/api/v1/runs");
@@ -179,6 +185,50 @@ describe("HarnessPages（外部 Runtime）", () => {
     expect(body.scenario_version).toBe("agent-suite@1");
     expect(body.manifest.runtime).toBe("pi-agent@1");
     expect(body.manifest.runtime_profile.native_settings.model).toBe("scripted-1");
+    expect(body.manifest.runtime_accept_unenforced_tools).not.toBe(true);
+    expect(body.manifest.runtime_profile.budgets).toEqual({ total_timeout: 12, max_tool_calls: 0 });
+    expect(body.manifest.case_selection).toEqual({ mode: "ids", case_ids: ["case-a", "case-b"] });
+  });
+
+  it("Profile 按完整 runtime 版本匹配，CLI 工具边界必须主动确认且切换后重置", async () => {
+    const fetchMock = stubFetch({
+      "/api/v1/runtimes": { total: 2, items: ["codex-cli", "claude-cli"].map((name) => ({
+        name, version: "2", kind: name, published: true, interactive: false,
+        tool_enforcement: "not-enforced", readiness: { reasons: {} },
+      })) },
+      "/api/v1/runtime_profiles": { total: 2, items: [
+        { name: "correct", version: "1", runtime: "codex-cli@2", native_settings: { model: "m" } },
+        { name: "wrong", version: "1", runtime: "codex-cli@1", native_settings: { model: "m" } },
+      ] },
+      "/api/v1/scenarios": { items: [{ name: "agent-suite", version: "1", suite: "agent-tasks" }] },
+      "/api/v1/runs": { id: "run-ack" },
+    });
+    render(<MemoryRouter><HarnessOperate /></MemoryRouter>);
+    await screen.findAllByText("codex-cli@2");
+    fireEvent.change(screen.getByLabelText("场景（agent-tasks）"), { target: { value: "agent-suite@1" } });
+    const runtimeSelect = screen.getByLabelText("Runtime（已发布）");
+    fireEvent.change(runtimeSelect, { target: { value: "codex-cli@2" } });
+    expect(screen.getByRole("option", { name: "correct@1" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "wrong@1" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Profile（可选，已发布版本）"), { target: { value: "correct@1" } });
+    const submit = screen.getByRole("button", { name: /校验配置并创建/ });
+    fireEvent.click(submit);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]) === "/api/v1/runs")).toBe(false);
+    const ack = screen.getByRole("switch", { name: "确认外部工具边界" });
+    expect(ack.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(ack);
+    fireEvent.change(runtimeSelect, { target: { value: "claude-cli@2" } });
+    expect(ack.getAttribute("aria-checked")).toBe("false");
+    fireEvent.change(runtimeSelect, { target: { value: "codex-cli@2" } });
+    fireEvent.change(screen.getByLabelText("Profile（可选，已发布版本）"), { target: { value: "correct@1" } });
+    fireEvent.click(ack);
+    fireEvent.click(submit);
+    await waitFor(() => expect(fetchMock.mock.calls.some((call) => String(call[0]) === "/api/v1/runs")).toBe(true));
+    const call = fetchMock.mock.calls.find((entry) => String(entry[0]) === "/api/v1/runs");
+    const body = JSON.parse(String((call?.[1] as RequestInit)?.body));
+    expect(body.manifest.runtime).toBe("codex-cli@2");
+    expect(body.manifest.runtime_profile).toBe("correct@1");
+    expect(body.manifest.runtime_accept_unenforced_tools).toBe(true);
   });
 
   it("R21：运行页详情链接指向已注册的 monitor 路由", async () => {

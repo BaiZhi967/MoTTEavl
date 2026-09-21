@@ -1,0 +1,81 @@
+# M4 完成复核记录
+
+状态：整改与最终验证中。分支 `codex/m4-pi-external-harnesses`，本轮起始提交 `57227fae9b670a22193b6e86467679fb99c4c390`。本文是当前状态入口；[前一轮记录](M4.md)中的历史能力边界不作为本轮最终结论。
+
+本轮要求包含全部 T01–T11；不能用 batch 闭环代替 T10/T11，也不能用离线 fake 或本地 HTTP stub 代替真实模型验收。M5 仅编写计划与交接提示词，没有实施。
+
+## 主要修复与实现
+
+- Pi 使用真实 0.73.1 SDK；补完整模型参数、SDK error/aborted、native usage 存在性与原生 total、max_steps/max_tool_calls 执行门。停止确认先于产物冻结；停止未知直接隔离并保留工作区。Observation 绑定真实 CaseAttempt。
+- 公共预算拒绝 bool、NaN、无限值、负数和不可落实字段；发布 Profile 与展开后的 Profile 都拒绝秘密值字段。版本发布同内容幂等；模型单因子比较不被包含模型的整体配置 hash 误伤。
+- Windows 进程先挂起、加入 Job Object 再运行；双管道、回调排空、输入写入与时间/输出限额有界。batch stdin 为 DEVNULL，交互显式 opt in。会话跨进程 CAS；损坏或身份不符的记录进入复核，不自动重放。
+- Codex 原生工具不再只保留 shell；终态冲突、跨 thread、终态后事件和非法 discriminator 降为错误或证据不足。未知计量不补零，费用/计数校验非负有限值。不完整工具轨迹及 opaque 工具副作用不能证明“从未禁止写入”。
+- CLI 为每次执行建立独立 native home；只支持明确命名的凭据引用，主机个人登录不继承。版本探测也使用隔离环境和有界 supervisor。配置记录 binary/Git/candidate hashes、环境名称与凭据存在性；加载来源无法证明时固定 partial，strict runner 政策拒绝。Git 快照禁止外部 diff/textconv/fsmonitor，扫描和 hash 有资源上限。
+- 配置秘密值不会进入已知输出、错误、产物内容/名称或快照键；脱敏产物标注 redacted，不能用于证明原始文件内容满足要求。该措施不等于证明第三方工具不能读取其进程认证材料，工具强制能力仍如实展示。
+- Web 可选择完整 Runtime/Profile 版本、预算和 Case 子集；不可强制工具政策需要显式确认。交互控制区绑定当前会话/revision/hash，区分接收、投递、原生确认、请求已解决和未知；损坏 202 保留原去重键等待查询，不自动重发。
+- Codex app-server 发布新版本 **@2**，保留历史 @1。原生 0.155.1 JSON-RPC transport、单 reader、thread/turn 绑定、真实 steer/审批回复/interrupt、Worker consumer、三存储事务、审计和恢复已实现。request_resolved 不宣称动作执行成功。人工干预冻结进评分 pass/报告及中央比较条件。
+- Inspect 原生 EvalLog v2 按 eval_id/run_id 定位，原始 UTF-8 字节冻结；导入 Run/Case/Observation/native ScoreSet 原子发布，重复上传可完成中断登记。导入不进入 Dispatcher，retry/rescore 当前明确拒绝；缺失指标不补分。
+
+## 目标、工作包与验收对照
+
+“离线实现”指实现与相关回归存在；最终 gate、平台和 live 状态仍以本页后文为准。
+
+| 目标 | 工作包 | 当前证据与边界 |
+|---|---|---|
+| G01/G02 | T01/T02 | 不可变资源、版本门、readiness 分离；不因 probe 成功升级真实执行支持 |
+| G03/G05 | T03/T04 | 真实 Pi SDK scripted 与本地 HTTP 协议测试；真实外部模型待验 |
+| G04 | T04/T06/T07/T10 | CaseAttempt/session/workspace 隔离、实际身份冻结；历史不复用 |
+| G06/G07 | T02/T06/T07 | 受控 native config/auth、候选 hash 与 partial/strict；完整原生加载观测未知 |
+| G08/G13 | T03/T06/T07 | 原生字段解析、未知保持未知、终态/计量/类型反例 |
+| G09/G10/G11 | T05 | 有界 supervisor、Windows Job、停止未知隔离、session CAS/恢复；POSIX 最终 CI 待验 |
+| G12 | T04/T06/T07 | 沿用 FrozenObservation/Artifact/ScoringPass，退出成功不等于质量通过 |
+| G14 | T08 | 中央比较 Runtime 条件、模型单因子和工具政策 |
+| G15 | T08 | API/CLI/Web 配置与证据，独立 retry 子 Run，历史可读 |
+| G16 | T09 | 分后端离线 fixture/SDK/子进程证据；**真实小任务 live 尚未验收** |
+| G17/G18 | T10 | @2 consumer 与交互 UI、明确 ack 语义、冻结人工干预；真实模型审批/取消待验 |
+| Inspect 扩展 | T11 | 官方 v2 只读导入、平台查询、native 评分与幂等；不支持执行或二进制 .eval |
+
+| 验收 | 主要测试入口 | 尚需独立证据 |
+|---|---|---|
+| A01 | runtime preflight/gate、native_configuration | 实际认证成功/失败 live |
+| A02/A03 | pi_real_adapter、pi_run_backend | 外部模型小任务 |
+| A04 | native_configuration | 原生加载清单保持 partial，不冒充完全可复现 |
+| A05/A06 | supervised_process、supervisor_safety | POSIX CI |
+| A07/A10 | batch_parser_boundaries、cli_run_backend、pi_http_provider | 真实 CLI 流样本 |
+| A08/A09 | supervisor_safety、session_concurrency、runtime_recovery、appserver_worker | POSIX/PG 与真实模型取消 |
+| A11/A12 | interactive_commands、command_delivery、intervention_comparison、RuntimeCommands | 真实模型审批/人工干预 |
+| A13 | native_configuration、appserver_worker、Pi sandbox tests | 原生工具限制不提升为平台强制 |
+| A14 | inspect_v2_identity、parser/raw evidence 与评分历史 | 固定版本真实捕获仍待补 |
+| A15 | external_runtime_slice、runtime registry tests | 无新增外部前置 |
+
+## 本轮实际验证
+
+环境：Windows；项目 uv Python 3.12、Node 24、pnpm 9.15。每行是对应执行时的快照，不能相加当作唯一测试数量，也不代表之后所有修改已经重新验证。
+
+| 命令/范围 | 实际结果 |
+|---|---|
+| Web 全量 test（2026-09-21） | 17 文件、239 测试通过 |
+| Web build | 通过；保留既有 bundle 大小提示 |
+| ruff check . | 通过（最终提交前再核对） |
+| mypy packages/contracts | 26 源文件通过 |
+| make openapi | 已导出 API 并重生成 TS |
+| Pi integration（停止失败/attempt 身份修复后） | 11 通过 |
+| native configuration（隔离/脱敏/惰性 Git/扫描上限） | 11 通过；F5 最终独立复审通过 |
+| native + CLI backend（前一快照） | 13 通过 |
+| parser/capture/Inspect 定向回归 | 51 通过 |
+| Task3 独立复审 | 49 通过 |
+| app-server 实现者定向集 | 109 通过、5 PG 跳过；追加 session 脱敏 5 项通过；三个 P1 及最后增量均独立复审通过 |
+| Windows make check | exit 2；283 failed / 1639 passed / 52 skipped / 1 deselected，323.88 秒。失败用例集合与本轮初始修复快照完全一致；不能写作全绿。最后 Git filter/不完整配置反例另以 11 项定向集补验 |
+| Linux/PG 最终 make check | 尚未执行；CI 已补 Node/pnpm 依赖，必须运行真实 SDK 与完整 make check |
+| 真实模型 live | 未执行；未获得本次具体 runtime/model/凭据引用与费用上限 |
+
+独立审查涵盖 Pi、公共契约/比较、Harness、产品、Inspect、命令 UI 和 M5 计划。最后一轮额外发现 Pi 未确认停止、parser lifecycle/类型、未知计量、native config/auth、app-server 事件身份/过期提案/错误脱敏，均要求反例验证后复审。最终报告须更新新发现的关闭情况，不以早期通过覆盖新发现。
+
+## 合入条件与未完成项
+
+1. 最终独立复审关闭全部阻断发现；提交记录与测试快照对应。
+2. Linux + PostgreSQL CI 的完整 make check、audit、生成契约检查通过；本机缺 Docker/WSL 不替代这些证据。
+3. G16/T09 真实小任务需明确后端、模型、凭据引用与调用/费用上限，分别记录 Pi/Claude/Codex 及 app-server 的 live 来源。不得读取或使用操作者已有登录态推定授权。
+4. 用户要求“全部 M4 完成后合并主干”；在上述验收未完成时不宣称全部完成或已满足该合入条件。M5 文档可先准备，实际 M4 主干 SHA 只在真实合并后登记。
+
+回退关闭新 Runtime 创建/consumer，不覆盖既有版本、命令审计、冻结证据或评分历史。停止不明的进程保留现场，不删工作区掩盖失败。

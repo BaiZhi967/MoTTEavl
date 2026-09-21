@@ -58,12 +58,42 @@ _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
 
 
+def _windows_kernel32():
+    # ctypes defaults truncate HANDLE on 64-bit Windows unless declared explicitly.
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    signatures = {
+        "CreateJobObjectW": ([ctypes.c_void_p, wintypes.LPCWSTR], wintypes.HANDLE),
+        "SetInformationJobObject": ([wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                      wintypes.DWORD], wintypes.BOOL),
+        "OpenProcess": ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+        "AssignProcessToJobObject": ([wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        "TerminateJobObject": ([wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+        "CloseHandle": ([wintypes.HANDLE], wintypes.BOOL),
+    }
+    for name, (args, result) in signatures.items():
+        function = getattr(kernel32, name)
+        function.argtypes = args
+        function.restype = result
+    return kernel32
+
+
+def _resume_suspended_process(process: subprocess.Popen[Any]) -> bool:
+    # Popen closes the primary thread HANDLE; NtResumeProcess resumes the owned
+    # suspended process using its retained HANDLE, without a PID lookup race.
+    resume = ctypes.WinDLL("ntdll").NtResumeProcess
+    resume.argtypes = [ctypes.c_void_p]
+    resume.restype = ctypes.c_long
+    return resume(int(process._handle)) == 0
+
+
 def _create_kill_on_close_job() -> int | None:
-    """创建 KILL_ON_JOB_CLOSE 的 Job Object；失败返回 None（降级枚举）。"""
+    """创建 KILL_ON_JOB_CLOSE 的 Job Object；失败由调用方 fail closed。"""
     if os.name != "nt":
         return None
     try:
-        kernel32 = ctypes.windll.kernel32  # noqa: SLJ001
+        kernel32 = _windows_kernel32()
     except AttributeError:
         return None
 
@@ -112,7 +142,7 @@ def _create_kill_on_close_job() -> int | None:
 
 def _assign_process_to_job(job: int, pid: int) -> bool:
     try:
-        kernel32 = ctypes.windll.kernel32  # noqa: SLJ001
+        kernel32 = _windows_kernel32()
     except AttributeError:
         return False
     process_handle = kernel32.OpenProcess(
@@ -128,7 +158,7 @@ def _assign_process_to_job(job: int, pid: int) -> bool:
 
 def _terminate_job(job: int) -> None:
     try:
-        kernel32 = ctypes.windll.kernel32  # noqa: SLJ001
+        kernel32 = _windows_kernel32()
     except AttributeError:
         return
     kernel32.TerminateJobObject(job, 1)
@@ -136,7 +166,7 @@ def _terminate_job(job: int) -> None:
 
 def _close_job(job: int) -> None:
     try:
-        kernel32 = ctypes.windll.kernel32  # noqa: SLJ001
+        kernel32 = _windows_kernel32()
     except AttributeError:
         return
     kernel32.CloseHandle(job)
@@ -170,6 +200,7 @@ class SupervisedProcess:
         on_stderr: Callable[[str], None] | None = None,
         name: str = "supervised",
         cancel_check: Callable[[], str | None] | None = None,
+        interactive_stdin: bool = False,
     ) -> None:
         if not argv or not isinstance(argv[0], str):
             raise ValueError("argv must be a non-empty list of strings")
@@ -183,6 +214,7 @@ class SupervisedProcess:
         self._on_stdout = on_stdout
         self._on_stderr = on_stderr
         self._cancel_check = cancel_check
+        self._interactive_stdin = interactive_stdin
         self._process: subprocess.Popen[Any] | None = None
         self._readers: list[threading.Thread] = []
         self._stop_reason: str | None = None
@@ -199,6 +231,10 @@ class SupervisedProcess:
         self._last_descendant_scan = -1.0
         # OS 级持久边界：Windows Job Object（KILL_ON_JOB_CLOSE）。
         self._job: int | None = None
+        self._callback_lock = threading.Lock()
+        self._callbacks_closed = threading.Event()
+        self._stdin_lock = threading.Lock()
+        self._finished = False
 
     # ------------------------------------------------------------ 生命周期
 
@@ -213,10 +249,11 @@ class SupervisedProcess:
             "env": self.env,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
-            "stdin": subprocess.DEVNULL,
+            "stdin": subprocess.PIPE if self._interactive_stdin else subprocess.DEVNULL,
+            "bufsize": 0,
         }
         if os.name == "nt":
-            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004
         else:
             options["start_new_session"] = True
         self._lock = threading.Lock()
@@ -231,13 +268,27 @@ class SupervisedProcess:
                 "PROCESS_START_FAILED", f"failed to spawn {self._executable}: {error}",
             ) from error
         if os.name == "nt":
-            # Job Object 是 Windows 上跨父进程退出的持久所有权边界；
-            # 创建/指派失败降级为 psutil 枚举清理（POSIX 走 session pgid）。
-            job = _create_kill_on_close_job()
-            if job is not None and _assign_process_to_job(job, self._process.pid):
+            job = None
+            try:
+                job = _create_kill_on_close_job()
+                if job is None or not _assign_process_to_job(job, self._process.pid):
+                    raise SupervisedProcessError(
+                        "PROCESS_OWNERSHIP_FAILED", "Windows process ownership could not be established",
+                    )
                 self._job = job
-            elif job is not None:
-                _close_job(job)
+                if not _resume_suspended_process(self._process):
+                    raise SupervisedProcessError(
+                        "PROCESS_OWNERSHIP_FAILED", "Windows owned process could not resume",
+                    )
+            except BaseException:
+                # The target has never executed. Never fall back to enumerating
+                # descendants of an unowned, already-running parent.
+                self._process.kill()
+                self._process.wait(timeout=5)
+                if job is not None:
+                    _close_job(job)
+                self._job = None
+                raise
         self._scan_descendants()
         self._start_readers()
 
@@ -245,6 +296,53 @@ class SupervisedProcess:
         if self._process is not None:
             raise SupervisedProcessError("SUPERVISOR_STATE", "process already started")
         self._spawn_locked()
+
+    def send_line(self, line: str) -> None:
+        """Write one bounded UTF-8 protocol line; timeout terminates the session.
+
+        Newlines are appended here. Call after start and before wait completes.
+        Concurrent sends serialize; a blocked peer cannot block this call beyond
+        the smaller of the idle timeout and remaining total deadline.
+        """
+        if not isinstance(line, str) or "\n" in line or "\r" in line:
+            raise SupervisedProcessError("STDIN_LINE_INVALID", "send_line requires one line")
+        data = (line + "\n").encode("utf-8")
+        if len(data) > self.limits.max_line_bytes:
+            raise SupervisedProcessError("STDIN_LINE_LIMIT", "stdin line exceeds max_line_bytes")
+        with self._stdin_lock:
+            process = self._process
+            if process is None or self._finished or self._stop_reason or process.poll() is not None:
+                raise SupervisedProcessError("SUPERVISOR_STATE", "process is not accepting input")
+            done = threading.Event()
+            errors: list[Exception] = []
+
+            def write() -> None:
+                try:
+                    assert process.stdin is not None
+                    remaining = memoryview(data)
+                    while remaining:
+                        written = process.stdin.write(remaining)
+                        if not written:
+                            raise BrokenPipeError("stdin closed")
+                        remaining = remaining[written:]
+                    process.stdin.flush()
+                except Exception as error:  # noqa: BLE001
+                    errors.append(error)
+                finally:
+                    done.set()
+
+            writer = threading.Thread(target=write, daemon=True, name=f"{self.name}-stdin")
+            writer.start()
+            deadline = (self._started_at or time.monotonic()) + self.limits.total_timeout
+            timeout = max(0.0, min(self.limits.idle_timeout, deadline - time.monotonic()))
+            if not done.wait(timeout):
+                self._stop_reason = "timeout"
+                if self._job is not None:
+                    _terminate_job(self._job)
+                kill_tree(process.pid)
+                raise SupervisedProcessError("STDIN_TIMEOUT", "peer did not consume stdin before deadline")
+            if errors:
+                raise SupervisedProcessError("STDIN_WRITE_FAILED", str(errors[0])) from errors[0]
 
     def _scan_descendants(self) -> None:
         """父进程存活期间登记后代身份；父进程已退出时保留既有登记。"""
@@ -272,14 +370,13 @@ class SupervisedProcess:
                     return
                 if not chunk:
                     return
-                try:
-                    chunk.decode("utf-8", errors="strict")
-                except UnicodeDecodeError:
-                    with self._lock:
-                        self._utf8_invalid = True
                 with self._lock:
-                    if self._stop_reason:
+                    if self._stop_reason or self._callbacks_closed.is_set():
                         return
+                    try:
+                        chunk.decode("utf-8", errors="strict")
+                    except UnicodeDecodeError:
+                        self._utf8_invalid = True
                     total = len(self._stdout) + len(self._stderr) + len(chunk)
                     if len(chunk) > limits.max_line_bytes:
                         self._stop_reason = "line_limit"
@@ -291,11 +388,14 @@ class SupervisedProcess:
                         return
                     sink.extend(chunk)
                 line = chunk.decode("utf-8", errors="replace")
-                if callback is not None:
-                    try:
-                        callback(line)
-                    except Exception:  # noqa: BLE001 - 慢消费者不阻塞采集
-                        pass
+                with self._callback_lock:
+                    if self._callbacks_closed.is_set():
+                        return
+                    if callback is not None:
+                        try:
+                            callback(line)
+                        except Exception:  # noqa: BLE001 - consumer failure does not lose raw evidence
+                            pass
 
         for stream, sink, callback in (
             (self._process.stdout, self._stdout, self._on_stdout),
@@ -389,6 +489,16 @@ class SupervisedProcess:
                     break
         duration_ms = int((time.monotonic() - started) * 1000)
         drain_note = self._drain_readers()
+        # Stop admitting callbacks, then allow one bounded grace for the active
+        # consumer. Arbitrary Python callbacks cannot be forcibly cancelled.
+        self._callbacks_closed.set()
+        callback_done = self._callback_lock.acquire(timeout=self.limits.drain_timeout)
+        if callback_done:
+            self._callback_lock.release()
+        else:
+            drain_note = f"{drain_note or ''};callback_unconfirmed"
+        with self._lock:
+            self._finished = True
         residual = self._collect_residual()
         status = self._outcome_status()
         detail = self._stop_reason

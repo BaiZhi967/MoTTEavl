@@ -59,7 +59,7 @@ COMMAND_TRANSITIONS = {
     # M4-T10：rejected/expired/delivery_unknown 与历史 failed 并存；
     # 交付不确定（重启/断连）永不回退为已送达，也不重复投递危险批准。
     "queued": {"delivered", "failed", "rejected", "expired"},
-    "delivered": {"acknowledged", "failed", "delivery_unknown"},
+    "delivered": {"acknowledged", "failed", "delivery_unknown", "rejected", "expired"},
     "acknowledged": set(),
     "failed": set(),
     "rejected": set(),

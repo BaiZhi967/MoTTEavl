@@ -116,7 +116,8 @@ def _runtime_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
     native.pop("model", None)
     return {
         "runtime": runtime if isinstance(runtime, str) else None,
-        "config_hash": profile.get("config_hash") if isinstance(profile, dict) else None,
+        # The full profile hash also includes model, an independently allowed
+        # factor. Compare its projected contents, not that unprojected hash.
         "native_settings": native,
         "budgets": profile.get("budgets") if isinstance(profile, dict) else None,
         "workspace": profile.get("workspace") if isinstance(profile, dict) else None,
@@ -137,6 +138,15 @@ def _compare_invariants(
     reasons: list[str] = []
     allowed: list[str] = []
     allowed_factors = set(policy.allowed_factors)
+    base_interventions = baseline_manifest.get('interventions') or {}
+    cand_interventions = candidate_manifest.get('interventions') or {}
+    unknown_intervention = base_interventions.get('possible') or cand_interventions.get('possible')
+    changed_intervention = base_interventions.get('condition_hash') != cand_interventions.get('condition_hash')
+    if unknown_intervention or changed_intervention:
+        if 'intervention' in allowed_factors:
+            allowed.append('ALLOWED_FACTOR:intervention: human input/decision conditions differ or are unknown')
+        else:
+            reasons.append('INTERVENTION_UNKNOWN' if unknown_intervention else 'INTERVENTION_CHANGED')
     base_model = _model_identity(baseline_manifest)
     cand_model = _model_identity(candidate_manifest)
     if base_model != cand_model:

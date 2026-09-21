@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import * as Switch from "@radix-ui/react-switch";
 import {
   ArrowClockwiseIcon,
   CheckCircleIcon,
@@ -70,6 +71,9 @@ export function HarnessOperate() {
   const [runtime, setRuntime] = useState("");
   const [profileRef, setProfileRef] = useState("");
   const [nativeJson, setNativeJson] = useState("");
+  const [budgetJson, setBudgetJson] = useState("{}");
+  const [selectedCaseIds, setSelectedCaseIds] = useState("");
+  const [acceptUnenforcedTools, setAcceptUnenforcedTools] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -119,6 +123,9 @@ export function HarnessOperate() {
     [profiles, runtime],
   );
   const agentScenarios = scenarios ?? [];
+  const needsToolAcknowledgement = publishedRuntimes.find(
+    (item) => `${item.name}@${item.version}` === runtime,
+  )?.tool_enforcement === "not-enforced";
 
   const submitCreate = (form: React.FormEvent<HTMLFormElement>) => {
     form.preventDefault();
@@ -127,20 +134,18 @@ export function HarnessOperate() {
       setCreateError("请选择场景与 runtime（runtime 需已发布）");
       return;
     }
-    let profile: Record<string, unknown>;
+    if (needsToolAcknowledgement && !acceptUnenforcedTools) {
+      setCreateError("请先确认外部 runtime 的工具访问边界");
+      return;
+    }
+    let profile: Record<string, unknown> | string;
     if (profileRef) {
       const record = runtimeProfiles.find((item) => `${item.name}@${item.version}` === profileRef);
       if (!record) {
         setCreateError("所选 profile 不属于当前 runtime");
         return;
       }
-      profile = {
-        runtime: record.runtime,
-        native_settings: record.native_settings,
-        workspace: record.workspace,
-        budgets: record.budgets,
-        credential_refs: record.credential_refs,
-      };
+      profile = profileRef;
     } else {
       if (!nativeJson.trim()) {
         setCreateError("内联配置不能为空（至少包含 model 字段）");
@@ -148,23 +153,26 @@ export function HarnessOperate() {
       }
       try {
         profile = {
-          runtime: `${runtime}@1`,
+          runtime,
           native_settings: JSON.parse(nativeJson),
+          budgets: JSON.parse(budgetJson),
         };
       } catch (cause) {
-        setCreateError(`原生设置 JSON 无法解析：${String(cause)}`);
+        setCreateError(`原生设置或预算 JSON 无法解析：${String(cause)}`);
         return;
       }
     }
     setCreating(true);
     createRun({
       scenario_version: scenario,
-      // 预检在创建时由后端 resolve_manifest 完成：schema/工具/版本任一
-      // 不符都会在提交处失败，而不是静默忽略。
+      // API 只编译静态配置，Worker 在执行前核验实际安装版本。
       manifest: {
-        runtime: `${runtime}@1`,
+        runtime,
         runtime_profile: profile,
-        runtime_accept_unenforced_tools: true,
+        runtime_accept_unenforced_tools: needsToolAcknowledgement && acceptUnenforcedTools,
+        ...(selectedCaseIds.trim() ? {
+          case_selection: { mode: "ids", case_ids: selectedCaseIds.split(/\s+/).filter(Boolean) },
+        } : {}),
       },
     })
       .then((run) => navigate(`/runs/${run.id}/monitor`))
@@ -248,7 +256,7 @@ export function HarnessOperate() {
           </details>
         )}
         <p className="hint">
-          交互通道（codex-app-server）的命令消费者接通前，消息入口保持关闭；batch Run 用下方表单发起。
+          交互命令仅对具备交互能力的运行开放；运行后可在监控页选择当前会话、发送消息和处理审批。
         </p>
       </Panel>
 
@@ -271,10 +279,12 @@ export function HarnessOperate() {
             <select className="control" value={runtime} onChange={(change) => {
               setRuntime(change.target.value);
               setProfileRef("");
+              setAcceptUnenforcedTools(false);
+              setBudgetJson("{}");
             }}>
               <option value="">选择 runtime…</option>
               {publishedRuntimes.map((item) => (
-                <option key={item.name} value={item.name}>
+                <option key={`${item.name}@${item.version}`} value={`${item.name}@${item.version}`}>
                   {item.name}@{item.version}
                 </option>
               ))}
@@ -292,6 +302,7 @@ export function HarnessOperate() {
             </select>
           </label>
           {!profileRef && (
+            <>
             <label>
               原生设置 JSON（runner-configured；至少 model 字段）
               <textarea
@@ -302,14 +313,43 @@ export function HarnessOperate() {
                 placeholder='{"model":"scripted-1","script":[[{"type":"text","text":"ok"}]]}'
               />
             </label>
+            <label>
+              预算 JSON
+              <textarea className="control mono" aria-label="预算 JSON" rows={2} value={budgetJson}
+                onChange={(event) => setBudgetJson(event.target.value)}
+                placeholder='{"total_timeout":120}' />
+              <span className="hint">total_timeout 为秒；Pi 支持 max_steps、max_tool_calls（0 表示禁用工具），CLI 支持 idle_timeout。不支持的限制会被拒绝。</span>
+            </label>
+            </>
           )}
+          {profileRef && <details className="disclosure">
+            <summary>查看所选 Profile 配置与预算</summary>
+            <pre className="terminal-log">{JSON.stringify(runtimeProfiles.find(
+              (item) => `${item.name}@${item.version}` === profileRef,
+            ), null, 2)}</pre>
+          </details>}
+          <label>
+            Case ID（留空运行全部，空白分隔）
+            <textarea className="control mono" rows={2} value={selectedCaseIds}
+              onChange={(event) => setSelectedCaseIds(event.target.value)} />
+          </label>
+          {needsToolAcknowledgement && (
+            <div className="inline-field">
+              <span className="hint">外部 runtime 自行控制工具、网络和文件访问；平台不保证限制其工作区之外的行为。</span>
+              <Switch.Root className="switch" aria-label="确认外部工具边界"
+                checked={acceptUnenforcedTools} onCheckedChange={setAcceptUnenforcedTools}>
+                <Switch.Thumb className="switch-thumb" />
+              </Switch.Root>
+            </div>
+          )}
+          <p className="hint">创建时校验配置，Worker 执行前检查安装版本；可执行状态需要真实运行证据。</p>
           <button type="submit" className="primary" disabled={creating}>
             <PaperPlaneTiltIcon size={14} weight="bold" aria-hidden />
-            {creating ? "提交中…" : "预检并创建"}
+            {creating ? "提交中…" : "校验配置并创建"}
           </button>
         </form>
         <p className="hint">
-          提交即预检：schema / 工具边界 / pinned 版本任一不符会在创建处失败；创建成功后跳转监控页。
+          配置校验通过后创建 Run 并跳转监控页；本机版本与认证是否可用由 Worker 在执行时确认。
         </p>
       </Panel>
 
@@ -328,31 +368,36 @@ function RuntimeProfilesPanel({
   onPublished: () => void;
 }) {
   const [name, setName] = useState("");
+  const [version, setVersion] = useState("1");
   const [runtimeRef, setRuntimeRef] = useState("");
   const [nativeJson, setNativeJson] = useState("");
+  const [budgetJson, setBudgetJson] = useState("{}");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const submit = (form: React.FormEvent<HTMLFormElement>) => {
     form.preventDefault();
     setError(null);
-    if (!name.trim() || !runtimeRef.trim() || !nativeJson.trim()) {
+    if (!name.trim() || !version.trim() || !runtimeRef.trim() || !nativeJson.trim()) {
       setError("name、runtime 与原生设置均为必填");
       return;
     }
     let native: Record<string, unknown>;
+    let budgets: Record<string, unknown>;
     try {
       native = JSON.parse(nativeJson);
+      budgets = JSON.parse(budgetJson);
     } catch (cause) {
-      setError(`原生设置 JSON 无法解析：${String(cause)}`);
+      setError(`原生设置或预算 JSON 无法解析：${String(cause)}`);
       return;
     }
     setBusy(true);
     publishRuntimeProfile({
       name: name.trim(),
-      version: "1",
+      version: version.trim(),
       runtime: runtimeRef.trim(),
       native_settings: native,
+      budgets,
     })
       .then(() => {
         setName("");
@@ -394,6 +439,10 @@ function RuntimeProfilesPanel({
           <input className="control mono" value={name} onChange={(change) => setName(change.target.value)} />
         </label>
         <label>
+          Profile 版本
+          <input className="control mono" value={version} onChange={(event) => setVersion(event.target.value)} />
+        </label>
+        <label>
           Runtime（name@version）
           <input
             className="control mono"
@@ -401,6 +450,11 @@ function RuntimeProfilesPanel({
             onChange={(change) => setRuntimeRef(change.target.value)}
             placeholder="pi-agent@1"
           />
+        </label>
+        <label>
+          Profile 预算 JSON
+          <textarea className="control mono" rows={2} value={budgetJson}
+            onChange={(event) => setBudgetJson(event.target.value)} />
         </label>
         <label>
           原生设置 JSON（profile 内容）

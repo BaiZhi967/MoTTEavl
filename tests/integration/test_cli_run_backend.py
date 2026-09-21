@@ -149,7 +149,7 @@ def test_cli_backend_end_to_end_scoring_and_evidence(tmp_path, monkeypatch, back
 
     # R14：原始 stdout 冻结为证据产物，parsed 带 raw_ref 指针。
     raw_refs = [ref for ref in observation["event_refs"] if ref["kind"] == "artifact"]
-    assert raw_refs and any("raw-stdout" in ref["locator"] for ref in raw_refs)
+    assert raw_refs and any("/evidence/stdout/" in ref["locator"] for ref in raw_refs)
 
     if backend == "claude-cli":
         # 原生 usage/cost 回报 → observed
@@ -332,4 +332,3 @@ def test_cli_cancel_interrupts_external_process(tmp_path, monkeypatch):
     if rows:
         observation = rows[0]["result"]["observation"]
         assert observation["termination"]["reason"] == "cancelled"
-

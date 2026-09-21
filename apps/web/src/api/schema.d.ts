@@ -1236,6 +1236,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Run Sessions */
+        get: operations["list_run_sessions_api_v1_runs__run_id__sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/tasks": {
         parameters: {
             query?: never;
@@ -2072,6 +2089,10 @@ export interface components {
         };
         /** RunCommand */
         RunCommand: {
+            /** Ack Evidence */
+            ack_evidence?: {
+                [key: string]: unknown;
+            } | null;
             /** Acknowledged At */
             acknowledged_at?: string | null;
             /** Actor */
@@ -2099,6 +2120,8 @@ export interface components {
             failed_at?: string | null;
             /** Id */
             id: string;
+            /** Intent Hash */
+            intent_hash?: string | null;
             /**
              * Intervention
              * @default false
@@ -2128,6 +2151,8 @@ export interface components {
              * @default user_message
              */
             type: string;
+            /** Worker Token */
+            worker_token?: string | null;
         };
         /** RunCommandListResponse */
         RunCommandListResponse: {
@@ -2150,21 +2175,26 @@ export interface components {
         };
         /** RunMessageRequest */
         RunMessageRequest: {
+            /** Case Id */
+            case_id: string;
             /** Content */
-            content: string;
+            content?: string | null;
             /** Dedupe Key */
-            dedupe_key?: string | null;
+            dedupe_key: string;
+            /** Expected Session Revision */
+            expected_session_revision: number;
             /**
              * Kind
              * @default user_message
+             * @enum {string}
              */
-            kind: string;
+            kind: "user_message" | "approve" | "reject" | "interrupt";
             /** Payload */
             payload?: {
-                [key: string]: unknown;
+                [key: string]: string;
             };
             /** Session Id */
-            session_id?: string | null;
+            session_id: string;
         };
         /** RunReport */
         RunReport: {
@@ -2206,6 +2236,57 @@ export interface components {
          * @enum {string}
          */
         RunStatus: "queued" | "preparing" | "running" | "collecting" | "scoring" | "completed" | "failed" | "cancelled" | "unsupported" | "profile_stale" | "needs_review";
+        /** RuntimeApprovalView */
+        RuntimeApprovalView: {
+            /** Approval Id */
+            approval_id: string;
+            /** Expires At */
+            expires_at: string;
+            /** Item Id */
+            item_id: string;
+            /** Method */
+            method: string;
+            /** Request Hash */
+            request_hash: string;
+            /** State */
+            state: string;
+            /** Summary */
+            summary: string;
+        };
+        /** RuntimeSessionList */
+        RuntimeSessionList: {
+            /** Items */
+            items: components["schemas"]["RuntimeSessionView"][];
+            /** Total */
+            total: number;
+        };
+        /** RuntimeSessionView */
+        RuntimeSessionView: {
+            /** Active Turn Id */
+            active_turn_id?: string | null;
+            /** Attempt Id */
+            attempt_id: string;
+            /** Case Id */
+            case_id: string;
+            /** Control Revision */
+            control_revision: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Native Thread Id */
+            native_thread_id?: string | null;
+            /** Pending Approvals */
+            pending_approvals?: components["schemas"]["RuntimeApprovalView"][];
+            /** Revision */
+            revision: number;
+            /** Run Id */
+            run_id: string;
+            /** Session Id */
+            session_id: string;
+            /** State */
+            state: string;
+            /** Terminal At */
+            terminal_at?: string | null;
+        };
         /** Score */
         Score: {
             /** Attempted */
@@ -4832,6 +4913,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScoringPassListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_run_sessions_api_v1_runs__run_id__sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeSessionList"];
                 };
             };
             /** @description Validation Error */

@@ -65,12 +65,31 @@ class WorkerLoop:
             return self._recover_interrupted_unlocked()
 
     def _recover_interrupted_unlocked(self) -> list[str]:
+        from motte_harness.session import recover_runtime_sessions
+
         store = self.service.store
+        session_findings = recover_runtime_sessions(include_terminal=True)
         interrupted = {"preparing", "running", "collecting", "scoring"}
         for run in store.runs.list():
+            from motte_sdk.commands import recover_interactive_sessions
+
+            recover_interactive_sessions(self.service, run['id'])
             attempts = store.attempts.list_for_run(run["id"])
+            runtime_sessions = [item for item in session_findings if item.get("run_id") == run["id"]]
+            session_attempt_ids = {item.get("attempt_id") for item in runtime_sessions}
             prepared = [item for item in attempts if item.get("status") == "prepared"]
             for attempt in prepared:
+                if attempt["id"] in session_attempt_ids or any(
+                    not item.get("attempt_id") and item.get("case_id") == attempt.get("case_id")
+                    for item in runtime_sessions
+                ):
+                    # A prepared session can have spawned just before a crash.
+                    # Convert the CaseAttempt to uncertain; never replay it.
+                    store.attempts.transition(
+                        attempt["id"], expected_revision=attempt["revision"],
+                        expected_status="prepared", status="dispatching",
+                    )
+                    continue
                 try:
                     store.attempts.transition(
                         attempt["id"],
@@ -85,6 +104,7 @@ class WorkerLoop:
                 except RunConflictError:
                     # Another executor completed the preparation while recovery scanned it.
                     pass
+            attempts = store.attempts.list_for_run(run["id"])
             uncertain = [
                 item for item in attempts
                 if item.get("status") in {"dispatching", "indeterminate"}
@@ -111,6 +131,8 @@ class WorkerLoop:
                         descriptor["backend_id"], descriptor["backend_version"]
                     ).capabilities.get("safe_to_repeat", False)
             except (KeyError, ValueError):
+                safe_to_repeat = False
+            if runtime_sessions:
                 safe_to_repeat = False
             if safe_to_repeat:
                 if run.get("status") in interrupted:
@@ -139,7 +161,7 @@ class WorkerLoop:
                     "error": {
                         "code": "CALL_OUTCOME_INDETERMINATE",
                         "message": "a dispatched external call was interrupted before durable completion",
-                        "details": {"attempt_ids": attempt_ids},
+                        "details": {"attempt_ids": attempt_ids, "runtime_sessions": runtime_sessions},
                     },
                 },
                 event={

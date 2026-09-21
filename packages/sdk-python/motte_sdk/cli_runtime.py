@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
 import sys
+import queue
+import tempfile
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -84,6 +85,24 @@ class CliRuntimeCaseExecutor:
         self.settings = settings
         self.binary = binary or settings.get("binary")
         self._service = service
+        self._attempt_id: str | None = None
+        self._credential_values: tuple[str, ...] = ()
+
+    def _clean(self, value: Any) -> Any:
+        if isinstance(value, str):
+            for secret in self._credential_values:
+                value = value.replace(secret, '[REDACTED-CREDENTIAL]')
+            return value
+        if isinstance(value, dict):
+            return {self._clean(key): self._clean(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._clean(item) for item in value]
+        return value
+
+    def _artifact_bytes(self, data: bytes) -> bytes:
+        for secret in self._credential_values:
+            data = data.replace(secret.encode('utf-8'), b'[REDACTED-CREDENTIAL]')
+        return data
 
     def bind_service(self, service: Any) -> None:
         self._service = service
@@ -100,30 +119,23 @@ class CliRuntimeCaseExecutor:
     # ------------------------------------------------------------ 预检（R07）
 
     def _preflight(self) -> dict[str, Any]:
-        if self.profile.get("credential_refs"):
-            # batch CLI 的凭据通道（登录态/环境注入）尚未接线：声明了凭据
-            # 却不落实等于静默降级认证——具名拒绝（M4 review R07/A13）。
-            raise _backend_error(
-                "RUNTIME_CREDENTIALS_UNRESOLVED",
-                f"{self.backend} has no credential channel to the CLI process; "
-                "credential_refs cannot be honored and are rejected at preflight",
-            )
-        budgets = dict(self.profile.get("budgets") or {})
+        from .native_config import validate_native_policy
+
+        validate_native_policy(self.backend, self.profile.get('credential_refs') or [])
+        from motte_contracts.runtime import validate_runtime_budgets
+
         try:
-            total_timeout = float(
-                budgets.get("total_timeout")
-                or os.environ.get("MOTTE_CLI_TOTAL_TIMEOUT")
-                or "600"
+            budgets = validate_runtime_budgets(
+                f"{self.backend}@1", dict(self.profile.get("budgets") or {}),
             )
-            idle_timeout = float(
-                budgets.get("idle_timeout")
-                or os.environ.get("MOTTE_CLI_IDLE_TIMEOUT")
-                or "120"
-            )
-        except (TypeError, ValueError) as error:
-            raise _backend_error(
-                "RUNTIME_BUDGET_INVALID", "budgets timeouts must be numbers"
-            ) from error
+            for name, default in (("total_timeout", "600"), ("idle_timeout", "120")):
+                if name not in budgets:
+                    budgets[name] = float(os.environ.get(f"MOTTE_CLI_{name.upper()}", default))
+            budgets = validate_runtime_budgets(f"{self.backend}@1", budgets)
+            total_timeout = float(budgets["total_timeout"])
+            idle_timeout = float(budgets["idle_timeout"])
+        except (TypeError, ValueError, OverflowError) as error:
+            raise _backend_error("RUNTIME_BUDGET_INVALID", str(error)) from error
         upstream = self.snapshot.get("upstream_version") or ""
         expected_version = upstream.rpartition("@")[2] if "@" in upstream else ""
         return {
@@ -140,6 +152,8 @@ class CliRuntimeCaseExecutor:
         if not expected_version:
             return {"checked": False}
         from motte_harness.compatibility import version_from_output
+        from motte_harness.process import minimal_env
+        from motte_harness.supervisor import SupervisedLimits, SupervisedProcess
 
         binary = self.binary or ("claude" if self.backend == "claude-cli" else "codex")
         probe_argv = [str(binary)]
@@ -147,14 +161,18 @@ class CliRuntimeCaseExecutor:
             probe_argv = [sys.executable, str(binary)]
         probe_argv = [*probe_argv, "--version"]
         try:
-            completed = subprocess.run(  # noqa: S603 - 受控固定 argv，无 shell
-                probe_argv,
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
+            with tempfile.TemporaryDirectory(prefix='motte-version-') as probe_home:
+                process = SupervisedProcess(probe_argv, cwd=probe_home,
+                    env=minimal_env({'HOME': probe_home, 'USERPROFILE': probe_home,
+                                     'CODEX_HOME': probe_home, 'CLAUDE_CONFIG_DIR': probe_home}),
+                    limits=SupervisedLimits(total_timeout=15, idle_timeout=15,
+                                           max_line_bytes=4096, max_total_bytes=16384))
+                process.start()
+                completed = process.wait()
+                if (completed.status != 'exited' or completed.exit_code != 0
+                        or completed.truncated or completed.residual_pids):
+                    raise OSError('version probe did not exit cleanly')
+        except (OSError, RuntimeError) as error:
             raise _backend_error(
                 "RUNTIME_BINARY_VERSION_UNKNOWN",
                 f"{self.backend} binary {binary!r} --version probe failed: {error}",
@@ -189,7 +207,7 @@ class CliRuntimeCaseExecutor:
             raise KeyError(case_id)
 
         from motte_harness.supervisor import SupervisedLimits
-        from motte_harness.process import minimal_env
+        from .native_config import prepare_native_environment
         from motte_harness.session import (
             SESSION_STORE_ROOT,
             mark_spawned,
@@ -209,23 +227,36 @@ class CliRuntimeCaseExecutor:
         harness = self._harness()
         prompt = case["input"]
         argv = self._argv(harness, prompt, workspace)
-        env_names = sorted((self.settings.get("env") or {}).keys())
-        env = minimal_env(dict(self.settings.get("env") or {}))
+        native = prepare_native_environment(
+            self.backend, self.profile.get('credential_refs') or [],
+            workspace=workspace.root, binary=self.binary or harness.binary, settings=self.settings,
+        )
+        env = native.env
+        self._credential_values = tuple(env[ref] for ref in self.profile.get('credential_refs') or [])
+        env_names = sorted(env)
 
         event_count = 0
+        stderr_lines: queue.SimpleQueue[str] = queue.SimpleQueue()
 
         def on_stderr(line: str) -> None:
+            # Reader callbacks never touch durable service state. Drain the queue
+            # on the invoking thread after wait freezes callback admission.
+            stderr_lines.put(line)
+
+        def emit_stderr() -> None:
             nonlocal event_count
-            service = self._service
-            if service is None or not line.strip():
-                return
-            event_count += 1
-            service.emit_run_event(
-                self.run["id"], f"{self.backend}_stderr",
-                {"case_id": case_id, "session_id": session_id,
-                 "source_seq": event_count, "parser_version": self._parser_version(),
-                 "coverage": "partial", "text": redact({"line": line})["line"][:2000]},
-            )
+            while not stderr_lines.empty():
+                line = self._clean(stderr_lines.get_nowait())
+                service = self._service
+                if service is None or not line.strip():
+                    continue
+                event_count += 1
+                service.emit_run_event(
+                    self.run["id"], f"{self.backend}_stderr",
+                    {"case_id": case_id, "session_id": session_id,
+                     "source_seq": event_count, "parser_version": self._parser_version(),
+                     "coverage": "partial", "text": redact({"line": line})["line"][:2000]},
+                )
 
         def cancel_check() -> str | None:
             service = self._service
@@ -246,16 +277,29 @@ class CliRuntimeCaseExecutor:
             idle_timeout=effective["idle_timeout"],
         )
 
-        # R15：spawn 前先持久 start_token；spawn 后记 PID/创建身份。
+        # Bind the real dispatched CaseAttempt; never invent an identity when
+        # running under the production service. Standalone harness use is explicit.
+        self._attempt_id = None
+        if self._service is not None:
+            attempts = [
+                item for item in self._service.store.attempts.list_open(self.run["id"])
+                if item.get("case_id") == case_id and item.get("status") == "dispatching"
+            ]
+            if len(attempts) != 1:
+                workspace.cleanup()
+                raise _backend_error("RUNTIME_ATTEMPT_UNRESOLVED", "expected one dispatched CaseAttempt")
+            self._attempt_id = attempts[0]["id"]
         session_record = new_session_record(
             run_id=self.run["id"], case_id=case_id,
-            attempt_id=str(self.run.get("current_attempt") or "attempt-unknown"),
+            attempt_id=self._attempt_id,
             operation_id=operation_id, backend=self.backend, argv=argv,
             workspace=str(workspace.root), config_hash=self.profile.get("config_hash"),
         )
         session_record["session_id"] = session_id
+        session_record['config_snapshot'] = native.evidence
         record_file = session_path(
-            SESSION_STORE_ROOT, self.run["id"], case_id, session_id,
+            os.environ.get("MOTTE_RUNTIME_SESSION_ROOT", str(SESSION_STORE_ROOT)),
+            self.run["id"], case_id, session_id,
         )
         session_record = persist_session(record_file, session_record)
 
@@ -281,7 +325,8 @@ class CliRuntimeCaseExecutor:
             process_view = dict(harness_result.get("process") or {})
             raw_stdout = harness_result.get("stdout") or ""
             raw_stderr = harness_result.get("stderr") or ""
-            parsed = harness_result.get("parsed")
+            parsed = self._clean(harness_result.get("parsed"))
+            emit_stderr()
         except BaseException as error:  # noqa: BLE001 - 异常路径也保留证据与清理
             pending_error = error
         finally:
@@ -292,24 +337,44 @@ class CliRuntimeCaseExecutor:
                 )
             except BaseException:  # noqa: BLE001
                 pass
-            try:
-                observation = self._capture(
-                    workspace, case, parsed, process_view, before,
-                    session_id, operation_id, evidence_refs,
-                )
-            except BaseException:  # noqa: BLE001 - 采集失败降级为空观测
+            unconfirmed = (
+                "callback_unconfirmed" in str(process_view.get("detail") or "")
+                or bool(process_view.get("residual_pids"))
+            )
+            if unconfirmed:
+                native.retain()
                 observation = {}
-            try:
-                cleanup = workspace.cleanup()
-            except BaseException as error:  # noqa: BLE001
-                cleanup = {"status": "failed", "residual": [], "error": str(error)}
-            terminal_status = self._combined_status(parsed, process_view)[0]
-            try:
-                session_record = mark_terminal(
-                    session_record, terminal_status, path=record_file, cleanup=cleanup,
+                cleanup = {"status": "unconfirmed", "retained_workspace": str(workspace.root),
+                           "residual_pids": process_view.get("residual_pids") or []}
+                pending_error = _backend_error(
+                    "RUNTIME_STOP_UNCONFIRMED", "runtime cleanup unconfirmed; retained workspace requires review",
                 )
-            except Exception:  # noqa: BLE001 - 记录失败不影响结果回传
-                pass
+                pending_error.quarantine = True
+                # Keep nonterminal session available to the recovery scanner.
+                session_record = persist_session(record_file, {
+                    **session_record, "revision": session_record["revision"] + 1,
+                    "cleanup": cleanup,
+                })
+            else:
+                try:
+                    observation = self._capture(
+                        workspace, case, parsed, process_view, before,
+                        session_id, operation_id, evidence_refs,
+                    )
+                except BaseException:  # noqa: BLE001 - capture failure cannot claim completeness
+                    observation = {}
+                try:
+                    cleanup = workspace.cleanup()
+                except BaseException as error:  # noqa: BLE001
+                    cleanup = {"status": "failed", "residual": [], "error": str(error)}
+                terminal_status = self._combined_status(parsed, process_view)[0]
+                try:
+                    session_record = mark_terminal(
+                        session_record, terminal_status, path=record_file, cleanup=cleanup,
+                    )
+                except Exception:  # noqa: BLE001 - recovery scanner retains nonterminal record
+                    pass
+                native.close()
 
         duration_ms = round((monotonic() - started) * 1000, 3)
         status, termination_detail = self._combined_status(parsed, process_view)
@@ -319,7 +384,7 @@ class CliRuntimeCaseExecutor:
                 "termination_reason": _TERMINATION_MAP.get(status, "error"),
                 "termination_detail": termination_detail,
                 "steps": (parsed or {}).get("num_turns") or len((parsed or {}).get("commands") or []),
-                "tool_calls": len((parsed or {}).get("commands") or []),
+                "tool_calls": len((parsed or {}).get("tool_calls") or []),
                 "duration_ms": duration_ms,
                 "runtime": {
                     "backend": f"{self.backend}@1",
@@ -329,6 +394,7 @@ class CliRuntimeCaseExecutor:
                     "model_control": "runner-configured",
                     "observed_model": (parsed or {}).get("model"),
                     "config_hash": self.profile.get("config_hash"),
+                    "config_snapshot": native.evidence,
                     "argv_redacted": redact({"argv": argv})["argv"],
                     "env_names": env_names,
                     "process": process_view,
@@ -399,24 +465,24 @@ class CliRuntimeCaseExecutor:
         if self.backend == "claude-cli":
             settings_file = workspace.root / "motte-settings.json"
             settings_file.write_text("{}", encoding="utf-8")
-            return harness.batch_argv(
+            return [*harness.batch_argv(
                 prompt,
                 model=self.settings.get("model"),
                 max_turns=self.settings.get("max_turns"),
                 permission_mode=self.settings.get("permission_mode"),
                 settings_file=settings_file,
-            )
+            ), '--bare', '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands']
         overrides = [
             (str(key)[2:], str(value))
             for key, value in (self.settings.get("codex_config") or {}).items()
             if str(key).startswith("c_")
         ]
-        return harness.batch_argv(
+        return [*harness.batch_argv(
             prompt,
             model=self.settings.get("model"),
             config_overrides=overrides,
             sandbox=self.settings.get("sandbox"),
-        )
+        ), '--ignore-user-config', '--ignore-rules', '--ephemeral']
 
     # ------------------------------------------------------------ 证据冻结（R14）
 
@@ -436,8 +502,9 @@ class CliRuntimeCaseExecutor:
         store = ArtifactStore(Path(os.environ.get("ARTIFACT_ROOT", "var/artifacts")))
         refs = list(evidence_refs)
         if raw_stdout:
-            artifact_id = f"{self.backend}/{self.run['id']}/{case_id}/raw-stdout"
-            payload = redact({"stdout": raw_stdout})["stdout"]
+            payload = redact({"stdout": self._clean(raw_stdout)})["stdout"]
+            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            artifact_id = f"{self.backend}/{self.run['id']}/{case_id}/evidence/stdout/{digest}"
             store.put_bytes(
                 artifact_id, payload.encode("utf-8"),
                 kind="harness-raw", media_type="text/plain",
@@ -448,8 +515,9 @@ class CliRuntimeCaseExecutor:
             if parsed is not None and not parsed.get("raw_ref"):
                 parsed = {**parsed, "raw_ref": artifact_id}
         if raw_stderr:
-            artifact_id = f"{self.backend}/{self.run['id']}/{case_id}/raw-stderr"
-            payload = redact({"stderr": raw_stderr})["stderr"]
+            payload = redact({"stderr": self._clean(raw_stderr)})["stderr"]
+            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            artifact_id = f"{self.backend}/{self.run['id']}/{case_id}/evidence/stderr/{digest}"
             store.put_bytes(
                 artifact_id, payload.encode("utf-8"),
                 kind="harness-raw", media_type="text/plain",
@@ -523,31 +591,37 @@ class CliRuntimeCaseExecutor:
         before_files = set(before.get("files") or [])
         after_files = set(after.get("files") or [])
         for rel in sorted(after_files):
-            artifact_id = f"{self.backend}/{self.run['id']}/{case['case_id']}/{rel}"
+            logical_path = self._clean(rel)
+            artifact_id = f"{self.backend}/{self.run['id']}/{case['case_id']}/files/{logical_path}"
             try:
                 data = _read_nofollow(workspace.root / rel)
+                original = data
+                data = self._artifact_bytes(data)
+                artifact_id = f"{artifact_id}/{hashlib.sha256(data).hexdigest()}"
                 artifact_store.put_bytes(
                     artifact_id, data, kind="case-artifact",
                     media_type=_guess_media_type(rel),
                 )
                 artifacts.append({
-                    "artifact_id": artifact_id, "path": rel,
+                    "artifact_id": artifact_id, "path": logical_path,
                     "media_type": _guess_media_type(rel),
                     "size_bytes": len(data),
                     "sha256": hashlib.sha256(data).hexdigest(),
                     "available": True, "truncated": False,
+                    "redacted": data != original or logical_path != rel,
                 })
             except Exception as error:  # noqa: BLE001
                 errors.append(f"{rel}: {type(error).__name__}: {error}")
                 artifacts.append({
-                    "artifact_id": artifact_id, "path": rel, "available": False,
+                    "artifact_id": artifact_id, "path": logical_path, "available": False,
                 })
         usage = (parsed or {}).get("usage") or {}
         reported_usage = {
             "reported": bool(usage.get("reported")),
             "total_tokens": (
-                (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
-                if usage.get("reported") else None
+                usage["input_tokens"] + usage["output_tokens"]
+                if usage.get("reported") and usage.get("input_tokens") is not None
+                and usage.get("output_tokens") is not None else None
             ),
             "cost_total": (parsed or {}).get("cost_usd"),
         }
@@ -571,7 +645,7 @@ class CliRuntimeCaseExecutor:
             "observation_id": f"obs-{uuid4().hex}",
             "run_id": self.run["id"],
             "case_id": case["case_id"],
-            "attempt_id": None,
+            "attempt_id": self._attempt_id,
             "final_output": (parsed or {}).get("final_output"),
             "termination": {
                 "reason": _TERMINATION_MAP.get(
@@ -595,18 +669,8 @@ class CliRuntimeCaseExecutor:
             },
             "usage": reported_usage,
             "tool_calls": [
-                {
-                    "call_id": f"cmd-{index}",
-                    "tool_name": "command_execution",
-                    "arguments": {"command": command.get("command")},
-                    "status": (
-                        "succeeded" if command.get("exit_code") == 0
-                        else "failed" if command.get("exit_code") is not None
-                        else "unknown"
-                    ),
-                    "step": index + 1,
-                }
-                for index, command in enumerate((parsed or {}).get("commands") or [])
+                {key: value for key, value in call.items() if key != "native_item"}
+                for call in (parsed or {}).get("tool_calls", [])
             ],
             "workspace": {
                 "before": sorted(before_files),
@@ -617,6 +681,7 @@ class CliRuntimeCaseExecutor:
             },
             "processes": [],
         }
+        observation = self._clean(observation)
         observation["evidence_hash"] = observation_evidence_hash(observation)
         observation["recorded_at"] = datetime.now(UTC).isoformat()
         del session_id, operation_id

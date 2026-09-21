@@ -54,6 +54,8 @@ def evaluate_file_exists(observation: FrozenObservation, metric: MetricRequest, 
 def _load_artifact_bytes(
     observation: FrozenObservation, metric: MetricRequest, context: Any, entry: Any,
 ):
+    if entry.redacted:
+        return _insufficient(observation, metric, 'artifact_redacted', refs=_ref(observation, entry))
     data = context.read_artifact(entry.artifact_id)
     if data is None:
         return _insufficient(observation, metric, "artifact_unavailable", refs=_ref(observation, entry))

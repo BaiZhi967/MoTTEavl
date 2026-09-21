@@ -193,12 +193,15 @@ class ComparisonService:
         import json
 
         manifest = run.get("manifest") or {}
+        scoring_pass = _resolve_pass(self.store, run_id, scoring_pass_id)
+        interventions = (scoring_pass.get('summary') or {}).get('interventions')
+        evidence = {'manifest': manifest, 'interventions': interventions} if interventions else manifest
         digest = hashlib.sha256(json.dumps(
-            manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
         # 显式 pass 与 current 同一校验：归属与存在性都由 _resolve_pass 把关
         # （review R2-08：不存在的 pass 不能参与比较）。
-        pass_id = str(_resolve_pass(self.store, run_id, scoring_pass_id)["id"])
+        pass_id = str(scoring_pass['id'])
         return RunReportRef(
             run_id=run_id,
             scoring_pass_id=pass_id,
@@ -206,13 +209,15 @@ class ComparisonService:
             evidence_hash="sha256:" + digest,
         )
 
-    def _manifest_view(self, run_id: str) -> dict[str, Any]:
+    def _manifest_view(self, run_id: str, scoring_pass_id: str | None = None) -> dict[str, Any]:
         run = self.store.runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
         manifest = run.get("manifest") or {}
         view = dict(manifest)
         view["case_ids"] = list(run.get("case_ids") or [])
+        scoring_pass = _resolve_pass(self.store, run_id, scoring_pass_id)
+        view['interventions'] = (scoring_pass.get('summary') or {}).get('interventions') or {}
         return view
 
     def _score_rows(self, record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -299,8 +304,8 @@ class ComparisonService:
         return compare_run_reports(
             self.report_ref(baseline_run_id, scoring_pass_id=baseline_pass_id),
             self.report_ref(candidate_run_id, scoring_pass_id=candidate_pass_id),
-            baseline_manifest=self._manifest_view(baseline_run_id),
-            candidate_manifest=self._manifest_view(candidate_run_id),
+            baseline_manifest=self._manifest_view(baseline_run_id, baseline_pass_id),
+            candidate_manifest=self._manifest_view(candidate_run_id, candidate_pass_id),
             policy=ComparisonPolicy(allowed_factors=tuple(allowed_factors)),
         )
 

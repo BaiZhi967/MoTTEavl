@@ -192,7 +192,8 @@ def test_create_run_rejects_nested_plaintext_credentials():
 def test_messages_endpoint_rejects_noninteractive_backend_without_fake_acceptance():
     client = TestClient(create_app(InMemoryRunStore()))
     run = client.post("/api/v1/runs", json={"scenario_version": "replay@1"}).json()
-    response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue"})
+    response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue",
+        "case_id": "c", "session_id": "s", "expected_session_revision": 1, "dedupe_key": "one"})
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "COMMAND_UNSUPPORTED"
     assert client.get(f"/api/v1/runs/{run['id']}/commands").json()["items"] == []
@@ -210,7 +211,8 @@ def test_messages_endpoint_does_not_trust_manifest_claimed_command_transport():
         },
     })
     client = TestClient(create_app(store))
-    response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue"})
+    response = client.post(f"/api/v1/runs/{run['id']}/messages", json={"content": "continue",
+        "case_id": "c", "session_id": "s", "expected_session_revision": 1, "dedupe_key": "one"})
     assert response.status_code == 501
     assert response.json()["error"]["code"] == "RUN_COMMANDS_NOT_IMPLEMENTED"
     assert store.commands.list_for_run(run["id"]) == []

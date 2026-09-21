@@ -66,7 +66,7 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 版本锁定与能力声明的唯一事实源：`docs/protocols/runtime-compatibility.json`
 （含 config_discovery 环境变量/自动发现文件清单与 readiness 规则）。
 协议夹具：`tests/fixtures/harness/`（claude-batch-result-v1.json、
-codex-exec-events-v1.jsonl、codex-app-server-rpc-v1.jsonl；provenance 为
+codex-exec-events-v1.jsonl、codex-app-server-rpc-v2.jsonl；provenance 为
 synthetic-from-docs，live 捕获待授权后补充）。
 
 ## Sandbox

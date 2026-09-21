@@ -133,3 +133,11 @@ def test_termination_reason_mapping_budget_and_timeout():
     assert PiRuntimeCaseExecutor._termination_reason({"status": "timeout"}) == "wall_time"
     assert PiRuntimeCaseExecutor._termination_reason({"status": "completed"}) == "final_answer"
     assert PiRuntimeCaseExecutor._termination_reason({"status": "error"}) == "error"
+
+@pytest.mark.parametrize("budgets", [{"total_timeout": float("nan")}, {"max_tool_calls": -1}, {"unknown": 1}])
+def test_direct_pi_preflight_rejects_invalid_budgets(budgets):
+    from motte_sdk.execution_backends import ExecutionBackendError
+
+    with pytest.raises(ExecutionBackendError) as raised:
+        PiRuntimeCaseExecutor(_run({"runtime_profile": {"budgets": budgets}}))._preflight()
+    assert raised.value.code == "RUNTIME_BUDGET_INVALID"

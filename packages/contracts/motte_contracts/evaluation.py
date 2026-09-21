@@ -77,6 +77,8 @@ class EvidenceRef(Contract):
 class ArtifactEntry(Contract):
     """An artifact captured from a case workspace into the frozen view."""
 
+    redacted: bool = False
+
     artifact_id: str  # safe relative path inside the artifact store
     path: str  # logical path inside the case workspace
     media_type: str | None = None

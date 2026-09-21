@@ -1,132 +1,153 @@
-"""M4-T10：codex app-server 传输（JSON-RPC over stdio 子集）——**草案**。
-
-**当前状态（M4 review R17）：未接线生产。** 注册 backend 的 interactive
-能力为 False（无持久命令消费者），API 消息端点对 app-server run 返回
-501 RUN_COMMANDS_NOT_IMPLEMENTED——不接收 202 让命令永久 queued。
-
-本模块的方法名/审批语义按早期笔记构造，**尚未与官方 app-server 协议**
-（initialize/newConversation/sendUserMessage/... + approval request/
-respond）对齐；真实接线前不得声称支持。真实二进制（pinned
-@openai/codex@0.155.1）经 `codex app-server` 子命令启动；版本漂移在构造
-时 fail closed。离线验证用 `SyntheticTransport`
-（tests/runtime/test_command_delivery.py）；真实会话证据属 live 单列。
-"""
+"""Pinned Codex 0.155.1 duplex RPC; one supervised reader, no durable callbacks."""
 from __future__ import annotations
 
 import json
-import subprocess
-from typing import Any
+import queue
+import threading
+from concurrent.futures import Future
+from uuid import uuid4
 
-from motte_harness.compatibility import CompatibilityError, resolve_pinned_version
+from .supervisor import ProcessOutcome, SupervisedLimits, SupervisedProcess
 
-PROTOCOL_SUBSET = ("initialize", "thread/start", "turn/create", "thread/stop")
+PROTOCOL_SUBSET = ('initialize', 'initialized', 'account/login/start', 'thread/start', 'turn/start', 'turn/steer', 'turn/interrupt')
+APPROVAL_METHODS = frozenset({'item/commandExecution/requestApproval', 'item/fileChange/requestApproval'})
 
 
-def _check_pinned(binary: str, version_output: str) -> None:
-    from motte_harness.install import _parse_version
+class RpcError(RuntimeError):
+    def __init__(self, error):
+        super().__init__(str(error))
+        self.error = error
 
-    pinned = resolve_pinned_version("codex-app-server")
-    installed = _parse_version(version_output)
-    if installed != pinned:
-        raise CompatibilityError(
-            "CODEX_APP_SERVER_VERSION_DRIFT",
-            f"codex app-server requires {pinned}, found {installed}",
-        )
+
+def typed_id(value):
+    if type(value) not in (int, str) or (isinstance(value, str) and not value):
+        raise RuntimeError('invalid RPC identity')
+    return type(value).__name__, value
 
 
 class CodexAppServerTransport:
-    """真实 app-server 传输骨架：initialize 握手 + turn/create 投递。
+    def __init__(self, argv: list[str], *, cwd: str, env: dict[str, str],
+                 limits: SupervisedLimits | None = None, max_events: int = 1024):
+        self.events: queue.Queue[dict] = queue.Queue(maxsize=max_events)
+        self.pending: dict[tuple, Future] = {}
+        self.incoming: dict[tuple, bool] = {}
+        self.lock = threading.RLock()
+        self.failure: BaseException | None = None
+        self.closed = threading.Event()
+        self.outcome: ProcessOutcome | None = None
+        self.process = SupervisedProcess(argv, cwd=cwd, env=env, limits=limits,
+            on_stdout=self._read_frame, name='codex-app-server', interactive_stdin=True)
+        self.waiter: threading.Thread | None = None
 
-    stdout JSON-RPC 逐行读取；投递返回 ack 与否由 turn/create 的响应
-    决定。超时/断连向上抛出（消费者据此记 delivery_unknown）。
-    """
+    @property
+    def pid(self):
+        return self.process.pid
 
-    def __init__(
-        self,
-        *,
-        binary: str = "codex",
-        version_output: str | None = None,
-        cwd: str | None = None,
-        request_timeout: float = 30.0,
-    ) -> None:
-        if version_output is not None:
-            _check_pinned(binary, version_output)
-        self._binary = binary
-        self._cwd = cwd
-        self._timeout = request_timeout
-        self._process: subprocess.Popen[Any] | None = None
-        self._next_id = 0
+    def start(self):
+        self.process.start()
+        self.waiter = threading.Thread(target=self._wait, daemon=True)
+        self.waiter.start()
 
-    def _ensure_started(self) -> None:
-        if self._process is not None:
-            return
-        self._process = subprocess.Popen(
-            [self._binary, "app-server"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            cwd=self._cwd,
-        )
-        self._request("initialize", {"clientInfo": {"name": "motteavl", "version": "1"}})
+    def _fail(self, error):
+        with self.lock:
+            self.failure = self.failure or error
+            for future in self.pending.values():
+                if not future.done():
+                    future.set_exception(self.failure)
 
-    def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        self._ensure_started()
-        assert self._process is not None and self._process.stdout is not None
-        self._next_id += 1
-        request_id = self._next_id
-        message = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-        assert self._process.stdin is not None
-        self._process.stdin.write((message + "\n").encode("utf-8"))
-        self._process.stdin.flush()
-        import threading
-
-        result_box: dict[str, Any] = {}
-
-        def read_reply() -> None:
-            for raw in self._process.stdout:  # type: ignore[union-attr]
-                try:
-                    reply = json.loads(raw.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    continue
-                if reply.get("id") == request_id:
-                    result_box["reply"] = reply
-                    return
-
-        reader = threading.Thread(target=read_reply, daemon=True)
-        reader.start()
-        reader.join(timeout=self._timeout)
-        if "reply" not in result_box:
-            raise TimeoutError(f"app-server request timed out: {method}")
-        return result_box["reply"]
-
-    def deliver(self, command: dict[str, Any]) -> dict[str, Any]:
-        kind = command.get("type")
-        if kind == "interrupt":
-            reply = self._request("thread/stop", {"threadId": command.get("session_id")})
-            ok = "result" in reply
-            return {"acked": ok, "reason": None if ok else "thread/stop error"}
-        params: dict[str, Any] = {"threadId": command.get("session_id")}
-        if kind == "user_message":
-            params["input"] = [{"type": "text", "text": command.get("content") or ""}]
-        elif kind in ("approve", "reject"):
-            params["input"] = [{
-                "type": "text",
-                "text": f"[platform:{kind}] request_hash={command.get('request_hash')}",
-            }]
-        else:
-            return {"acked": False, "reason": f"unsupported kind: {kind}"}
-        reply = self._request("turn/create", params)
-        ok = "result" in reply
-        return {"acked": ok, "reason": None if ok else "turn/create error"}
-
-    def close(self) -> None:
-        if self._process is None:
-            return
+    def _wait(self):
         try:
-            if self._process.stdin:
-                self._process.stdin.close()
-            self._process.wait(timeout=3)
-        except Exception:  # noqa: BLE001 - 关闭失败不掩盖主流程
-            self._process.kill()
+            self.outcome = self.process.wait()
+        except Exception as error:  # noqa: BLE001 - wake waiters, never replay
+            self._fail(error)
         finally:
-            self._process = None
+            self._fail(RuntimeError('app-server stream closed'))
+            self.closed.set()
+
+    def _read_frame(self, line):
+        try:
+            frame = json.loads(line)
+            if not isinstance(frame, dict):
+                raise RuntimeError('RPC frame must be an object')
+            with self.lock:
+                if self.failure is not None:
+                    return
+                if 'method' in frame:
+                    if not isinstance(frame['method'], str) or not isinstance(frame.get('params', {}), dict):
+                        raise RuntimeError('invalid RPC method/params')
+                    if 'id' in frame:
+                        key = typed_id(frame['id'])
+                        if key in self.incoming:
+                            raise RuntimeError('duplicate server request identity')
+                        self.incoming[key] = False
+                    self.events.put_nowait(frame)
+                else:
+                    key = typed_id(frame.get('id'))
+                    future = self.pending.get(key)
+                    if future is None or future.done():
+                        raise RuntimeError('unexpected or duplicate RPC response')
+                    if ('result' in frame) == ('error' in frame):
+                        raise RuntimeError('invalid RPC response shape')
+                    if 'error' in frame:
+                        future.set_exception(RpcError(frame['error']))
+                    elif not isinstance(frame['result'], dict):
+                        raise RuntimeError('RPC result must be an object')
+                    else:
+                        future.set_result(frame['result'])
+        except (ValueError, RuntimeError, queue.Full) as error:
+            reason = RuntimeError(f'app-server JSON/protocol failure: {error}')
+            self._fail(reason)
+            # Cleanup outside callback; waiting here would deadlock bounded drain.
+            threading.Thread(target=self.process.interrupt, args=('protocol_error',), daemon=True).start()
+
+    def _send(self, frame):
+        if self.failure or self.closed.is_set():
+            raise self.failure or RuntimeError('app-server closed')
+        self.process.send_line(json.dumps(frame, ensure_ascii=False, separators=(',', ':')))
+
+    def request(self, method, params, *, request_id=None) -> Future:
+        request_id = request_id if request_id is not None else f'motte-{uuid4().hex}'
+        key = typed_id(request_id)
+        future: Future = Future()
+        future.rpc_request_id = request_id
+        with self.lock:
+            if key in self.pending:
+                raise RuntimeError('duplicate client request identity')
+            if len(self.pending) >= 2048:
+                raise RuntimeError('RPC request bound exceeded')
+            self.pending[key] = future
+        try:
+            self._send({'id': request_id, 'method': method, 'params': params})
+        except Exception as error:  # noqa: BLE001
+            self._fail(error)
+            raise
+        return future
+
+    def notify(self, method):
+        self._send({'method': method})
+
+    def respond(self, request_id, result):
+        key = typed_id(request_id)
+        with self.lock:
+            if key not in self.incoming or self.incoming[key]:
+                raise RuntimeError('server request missing/already answered')
+            self.incoming[key] = True
+        self._send({'id': request_id, 'result': result})
+
+    def poll_event(self, timeout=0):
+        try:
+            return self.events.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def wait_closed(self, timeout=None):
+        if not self.closed.wait(timeout):
+            raise TimeoutError('app-server cleanup deadline')
+        if self.outcome is None:
+            raise self.failure or RuntimeError('no process cleanup evidence')
+        return self.outcome
+
+    def close(self):
+        if not self.closed.is_set():
+            self.process.interrupt('session_closed')
+        return self.wait_closed(20)

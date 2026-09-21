@@ -106,7 +106,7 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
             return []
         if event_type == "message_delta":
             usage = data.get("usage")
-            stop_reason = data.get("stop_reason")
+            stop_reason = (data.get("delta") or {}).get("stop_reason")
             if isinstance(stop_reason, str) and stop_reason:
                 self._stream_stop_reason = stop_reason
             events: list[dict[str, Any]] = []

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import re
+import math
 
 from pydantic import Field, field_validator, model_validator
 
@@ -59,6 +60,37 @@ EVIDENCE_CAPABILITY_FIELDS = frozenset({
 # 状态分层（M4-G02）：installed 只说明二进制/包在位；protocol_ready 说明
 # 协议探测通过；execution_ready 需要真实任务证据，不由 --version 推出。
 READINESS_LEVELS = ("installed", "protocol_ready", "execution_ready")
+
+
+def validate_runtime_budgets(runtime: str, budgets: dict[str, Any]) -> dict[str, Any]:
+    """Reject limits this runtime cannot enforce; never coerce strings or booleans.
+
+    Missing means default. Zero tool calls means no tool execution. Timeouts and
+    model-step limits must be positive. Native cost/token hard limits are not
+    enforceable by these transports and must not be silently accepted.
+    """
+    common = {"total_timeout"}
+    name = runtime.partition("@")[0]
+    supported = common | (
+        {"max_steps", "max_tool_calls"} if name == "pi-agent" else {"idle_timeout"}
+    )
+    unknown = set(budgets) - supported
+    if unknown:
+        raise ValueError(f"unsupported runtime budget fields: {sorted(unknown)}")
+    for key, value in budgets.items():
+        if key in {"max_steps", "max_tool_calls"}:
+            minimum = 0 if key == "max_tool_calls" else 1
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"runtime budget {key} must be an integer >= {minimum}")
+        elif (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value <= 0
+            or value > 1.7976931348623157e308
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"runtime budget {key} must be a finite positive number")
+    return dict(budgets)
 
 
 class RuntimeToolControl(Contract):
@@ -220,6 +252,11 @@ class RuntimeProfileVersion(Contract):
     credential_refs: list[str] = Field(default_factory=list)
     published_at: str = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def enforceable_budgets(self) -> RuntimeProfileVersion:
+        validate_runtime_budgets(self.runtime, self.budgets)
+        return self
+
     @field_validator("runtime")
     @classmethod
     def runtime_ref_shape(cls, value: str) -> str:
@@ -261,6 +298,11 @@ class RuntimeProfile(Contract):
     budgets: dict[str, Any] = Field(default_factory=dict)
     credential_refs: list[str] = Field(default_factory=list)
     config_hash: str | None = None
+
+    @model_validator(mode="after")
+    def enforceable_budgets(self) -> RuntimeProfile:
+        validate_runtime_budgets(self.runtime, self.budgets)
+        return self
 
     @field_validator("runtime")
     @classmethod
@@ -334,6 +376,36 @@ def validate_runtime_settings(
                 f"runtime setting {key} must be {properties[key]['type']}"
             )
     return settings
+
+
+class RuntimeApprovalView(Contract):
+    approval_id: str
+    method: str
+    item_id: str
+    summary: str
+    request_hash: str
+    expires_at: str
+    state: str
+
+
+class RuntimeSessionView(Contract):
+    session_id: str
+    run_id: str
+    case_id: str
+    attempt_id: str
+    state: str
+    revision: int
+    control_revision: int
+    native_thread_id: str | None = None
+    active_turn_id: str | None = None
+    created_at: str | None = None
+    terminal_at: str | None = None
+    pending_approvals: list[RuntimeApprovalView] = Field(default_factory=list)
+
+
+class RuntimeSessionList(Contract):
+    items: list[RuntimeSessionView]
+    total: int = Field(ge=0)
 
 
 def runtime_readiness(
