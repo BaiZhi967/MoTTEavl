@@ -279,7 +279,12 @@ def agent_tasks_scores(run: dict[str, Any], results: list[dict[str, Any]]) -> li
         case_id = case["case_id"]
         metrics = agent_task_metrics(case)
         row = rows.get(case_id)
-        observation = row.get("result", {}).get("observation") if row else None
+        # result 可能是 None：前一个 Case 触发 stop_run 后未尝试的题就写 result=None。
+        # dict.get 的默认值只在**键缺失**时生效，键存在而值为 None 会原样返回，
+        # 于是 None.get(...) 抛 AttributeError，把真实停止原因与整条评分 pass 一起
+        # 吞掉（验收 F-02）。这里显式做类型收窄。
+        case_result = row.get("result") if isinstance(row, dict) else None
+        observation = case_result.get("observation") if isinstance(case_result, dict) else None
         if row is None or row.get("outcome") == "not_attempted" or not isinstance(observation, dict):
             reason = "case_not_attempted" if (row is None or row.get("outcome") == "not_attempted") \
                 else "observation_missing"
