@@ -165,3 +165,90 @@ def test_history_without_provenance_stays_unknown_and_blocks():
 def test_policy_rejects_unknown_factors():
     with pytest.raises(ValueError, match="unknown comparison factors"):
         ComparisonPolicy(allowed_factors=("skill", "nonsense"))
+
+
+# ---------------------------------------------------------------- 实际预算（F11）
+
+
+def test_changed_actual_budget_values_block_a_skill_comparison():
+    base = manifest("a", budget={"policy": "same-total-budget", "max_total_tokens": 100})
+    changed = manifest(
+        "b", budget={"policy": "same-total-budget", "max_total_tokens": 100000},
+    )
+    result = compare(base, changed)
+    assert result.eligible is False
+    assert any(
+        "BUDGET_ALLOWANCE_CHANGED" in reason for reason in result.reasons
+    ), result.reasons
+
+
+def test_changed_agent_execution_config_blocks_a_skill_comparison():
+    base = manifest("a", agent_config={"mode": "legacy-json", "max_steps": 2})
+    changed = manifest("b", agent_config={"mode": "legacy-json", "max_steps": 200})
+    result = compare(base, changed)
+    assert result.eligible is False
+    assert any(
+        "AGENT_CONFIG_CHANGED" in reason for reason in result.reasons
+    ), result.reasons
+
+
+def test_same_total_budget_keeps_the_total_and_records_the_allocation():
+    """same-total-budget：总额度必须一致，执行额度差异显式计算并记录。"""
+    base = manifest("a", budget={
+        "policy": "same-total-budget", "total_allowance": 1000,
+        "execution_allowance": 1000,
+    })
+    changed = manifest("b", budget={
+        "policy": "same-total-budget", "total_allowance": 1000,
+        "execution_allowance": 880, "instruction_overhead": 120,
+    })
+    result = compare(base, changed)
+    assert result.eligible is True, result.reasons
+    assert any(
+        "BUDGET_ALLOCATION:execution_allowance" in item
+        for item in result.allowed_differences
+    ), result.allowed_differences
+
+
+def test_same_execution_budget_records_the_total_the_policy_permits():
+    """same-execution-budget：执行额度必须一致，总额度差异显式计算并记录。"""
+    base = manifest("a", budget={
+        "policy": "same-execution-budget", "total_allowance": 1000,
+        "execution_allowance": 900,
+    })
+    changed = manifest("b", budget={
+        "policy": "same-execution-budget", "total_allowance": 1050,
+        "execution_allowance": 900, "instruction_overhead": 150,
+    })
+    result = compare(base, changed)
+    assert result.eligible is True, result.reasons
+    assert any(
+        "BUDGET_ALLOCATION:total_allowance" in item
+        for item in result.allowed_differences
+    ), result.allowed_differences
+
+
+def test_a_policy_fixed_dimension_known_on_one_side_only_is_not_defaulted_equal():
+    base = manifest("a", budget={
+        "policy": "same-execution-budget", "total_allowance": 1000,
+    })
+    changed = manifest("b", budget={
+        "policy": "same-execution-budget", "total_allowance": 1000,
+        "execution_allowance": 900,
+    })
+    result = compare(base, changed)
+    assert result.eligible is False
+    assert any(
+        "IDENTITY_MISSING:budget.execution_allowance" in reason
+        for reason in result.reasons
+    ), result.reasons
+
+
+def test_a_declared_policy_without_amounts_is_recorded_as_unknown_not_equal():
+    """两侧都没声明额度时记录 unknown，不能补 0、也不能假装比较过。"""
+    result = compare(manifest("a"), manifest("b"))
+    assert result.eligible is True, result.reasons
+    assert any(
+        "BUDGET_DIMENSION_UNKNOWN:total_allowance" in item
+        for item in result.allowed_differences
+    ), result.allowed_differences

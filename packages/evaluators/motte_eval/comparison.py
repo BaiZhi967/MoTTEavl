@@ -125,6 +125,15 @@ def _runtime_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _agent_config_identity(manifest: dict[str, Any]) -> Any:
+    """agent_config 身份：去掉 budget 子键（实际预算由预算维度单独比对，F11）。"""
+    config = manifest.get("agent_config")
+    if not isinstance(config, dict):
+        return config
+    stripped = {key: value for key, value in config.items() if key != "budget"}
+    return stripped or None
+
+
 #: 场景 Run 的实验条件（顶层字段）→ 阻断码。这些字段在 benchmark Run 里
 #: 位于 external_benchmark.profile，由 _PROFILE_INVARIANTS 统一覆盖。
 _SCENARIO_TOP_LEVEL_FIELDS: tuple[tuple[str, str], ...] = (
@@ -135,10 +144,35 @@ _SCENARIO_TOP_LEVEL_FIELDS: tuple[tuple[str, str], ...] = (
     ("retries", "RETRIES_CHANGED"),
     ("environment", "ENVIRONMENT_CHANGED"),
     ("credentials", "CREDENTIALS_CHANGED"),
+    # M5（F11）：provider 与冻结 Target 同样是实验条件，不能被悄悄换掉。
+    ("provider", "PROVIDER_CHANGED"),
+    ("target_snapshot", "TARGET_CHANGED"),
 )
 
 #: M5：Skill 归因只有在预算政策可比时才成立。
 COMPARABLE_BUDGET_POLICIES: tuple[str, ...] = ("same-total-budget", "same-execution-budget")
+
+#: 实际预算的三个维度（F11）：政策固定其中一维，另一维是政策显式允许按臂分配的
+#: 变化。名称同时是计划服务（motte_sdk.skill_ablation）的接口。
+BUDGET_DIMENSIONS: tuple[str, ...] = (
+    "total_allowance", "instruction_overhead", "execution_allowance",
+)
+
+_BUDGET_POLICY_KEYS = ("policy", "comparison_policy")
+#: 冻结预算里表达同一维度的等价键名；只用于读取，不用于生成。
+_TOTAL_ALLOWANCE_KEYS = ("total_allowance", "max_total_tokens", "total_tokens")
+_EXECUTION_ALLOWANCE_KEYS = (
+    "execution_allowance", "max_execution_tokens", "execution_tokens",
+)
+_INSTRUCTION_OVERHEAD_KEYS = (
+    "instruction_overhead", "instruction_overhead_tokens", "skill_instruction_tokens",
+)
+_BUDGET_ALIAS_KEYS = frozenset(
+    _BUDGET_POLICY_KEYS
+    + _TOTAL_ALLOWANCE_KEYS
+    + _EXECUTION_ALLOWANCE_KEYS
+    + _INSTRUCTION_OVERHEAD_KEYS
+)
 
 
 def _workflow_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -188,12 +222,139 @@ def _skill_identity(manifest: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _budget_policy(manifest: dict[str, Any]) -> Any:
+def budget_source(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """实际预算的来源字典（F11）：manifest.budget 优先，缺省回退 agent_config.budget。
+
+    scenario 运行会把预算的一部分放在 agent_config 里（例如 max_steps），因此
+    只看顶层 budget 会漏掉真实执行预算。
+    """
+    config = manifest.get("agent_config")
+    nested = config.get("budget") if isinstance(config, dict) else None
     budget = manifest.get("budget")
-    if not isinstance(budget, dict):
+    if not isinstance(nested, dict) and not isinstance(budget, dict):
+        return None
+    merged: dict[str, Any] = {}
+    if isinstance(nested, dict):
+        merged.update(nested)
+    if isinstance(budget, dict):
+        merged.update(budget)
+    return merged
+
+
+def _pick_allowance(budget: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = budget.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def budget_dimensions(budget: dict[str, Any]) -> dict[str, Any]:
+    """预算 → 三个显式维度 + 其余配额；缺数据保持 None，绝不补 0。
+
+    - total_allowance：总额度（例如 max_total_tokens）
+    - instruction_overhead：Skill 指令开销
+    - execution_allowance：留给执行的额度
+    - other_allowances：其余配额（步数/轮数/墙钟等），逐字段比对
+    """
+    return {
+        "policy": (
+            budget.get("policy")
+            if budget.get("policy") is not None
+            else budget.get("comparison_policy")
+        ),
+        "total_allowance": _pick_allowance(budget, _TOTAL_ALLOWANCE_KEYS),
+        "execution_allowance": _pick_allowance(budget, _EXECUTION_ALLOWANCE_KEYS),
+        "instruction_overhead": _pick_allowance(budget, _INSTRUCTION_OVERHEAD_KEYS),
+        "other_allowances": {
+            key: value for key, value in budget.items() if key not in _BUDGET_ALIAS_KEYS
+        },
+    }
+
+
+def _budget_dimensions(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    budget = budget_source(manifest)
+    return budget_dimensions(budget) if budget is not None else None
+
+
+def _budget_policy(manifest: dict[str, Any]) -> Any:
+    budget = budget_source(manifest)
+    if budget is None:
         return None
     policy = budget.get("policy")
     return policy if policy is not None else budget.get("comparison_policy")
+
+
+def _compare_budget_dimensions(
+    base: dict[str, Any], cand: dict[str, Any], policy_value: Any,
+) -> tuple[list[str], list[str]]:
+    """实际预算的逐维度判定（F11）。
+
+    - 政策固定的那一维（same-total-budget → 总额度；same-execution-budget →
+      执行额度）必须两侧已知且相等；一侧缺失 → 身份缺失阻断，绝不默认相等。
+    - 政策允许变化的那几维显式计算并记录；一侧缺失时记录 unknown，不补 0。
+    - 其余配额（步数/轮数/墙钟等）逐字段比对，差异阻断。
+    """
+    reasons: list[str] = []
+    allowed: list[str] = []
+    base_other = base["other_allowances"]
+    cand_other = cand["other_allowances"]
+    for key in sorted(set(base_other) | set(cand_other)):
+        base_value = base_other.get(key)
+        cand_value = cand_other.get(key)
+        if base_value == cand_value:
+            continue
+        if (base_value is None) != (cand_value is None):
+            reasons.append(
+                f"IDENTITY_MISSING:budget.{key}: {base_value!r} vs {cand_value!r}"
+            )
+        else:
+            reasons.append(
+                f"BUDGET_ALLOWANCE_CHANGED:budget.{key}: "
+                f"{base_value!r} -> {cand_value!r}"
+            )
+    if policy_value not in COMPARABLE_BUDGET_POLICIES:
+        return reasons, allowed
+    if policy_value == "same-total-budget":
+        fixed, movable = "total_allowance", ("execution_allowance", "instruction_overhead")
+    else:
+        fixed, movable = "execution_allowance", ("total_allowance", "instruction_overhead")
+    base_fixed = base[fixed]
+    cand_fixed = cand[fixed]
+    if base_fixed is None and cand_fixed is None:
+        allowed.append(
+            f"BUDGET_DIMENSION_UNKNOWN:{fixed}: neither arm declares it; "
+            f"{policy_value} is recorded as unknown, never defaulted to equal"
+        )
+    elif base_fixed is None or cand_fixed is None:
+        reasons.append(
+            f"IDENTITY_MISSING:budget.{fixed}: {base_fixed!r} vs {cand_fixed!r}"
+        )
+    elif base_fixed != cand_fixed:
+        reasons.append(
+            f"BUDGET_ALLOWANCE_CHANGED:budget.{fixed}: {base_fixed!r} -> {cand_fixed!r}"
+        )
+    else:
+        allowed.append(
+            f"BUDGET_ALLOWANCE_EQUAL:budget.{fixed}: {base_fixed!r} "
+            f"(held equal by {policy_value})"
+        )
+    for key in movable:
+        base_value = base[key]
+        cand_value = cand[key]
+        if base_value == cand_value:
+            continue
+        if (base_value is None) != (cand_value is None):
+            allowed.append(
+                f"BUDGET_ALLOCATION_UNKNOWN:{key}: {base_value!r} -> {cand_value!r} "
+                f"(permitted by {policy_value}; unknown is never filled with 0)"
+            )
+        else:
+            allowed.append(
+                f"BUDGET_ALLOCATION:{key}: {base_value!r} -> {cand_value!r} "
+                f"(permitted by {policy_value})"
+            )
+    return reasons, allowed
 
 
 def _scoring_provenance(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -272,6 +433,21 @@ def _compare_m5_invariants(
                 f"BUDGET_POLICY_CHANGED:budget_policy: {base_policy_value!r} "
                 f"-> {cand_policy_value!r}"
             )
+    else:
+        # 政策一致还不够：**实际额度**也是实验条件（F11）。政策固定的那一维必须
+        # 相等，政策允许的分配差异显式计算并记录，未知维度绝不补 0 或默认一致。
+        base_dimensions = _budget_dimensions(baseline_manifest)
+        cand_dimensions = _budget_dimensions(candidate_manifest)
+        if (base_dimensions is None) != (cand_dimensions is None):
+            reasons.append(
+                f"IDENTITY_MISSING:budget: {base_dimensions!r} vs {cand_dimensions!r}"
+            )
+        elif base_dimensions is not None:
+            dimension_reasons, dimension_allowed = _compare_budget_dimensions(
+                base_dimensions, cand_dimensions, base_policy_value,
+            )
+            reasons.extend(dimension_reasons)
+            allowed.extend(dimension_allowed)
     if skill_differs and not reasons:
         # Skill 归因的前提：预算政策可比，且没有人工介入。否则差异不能只归因
         # 于 Skill（M5-A12）。
@@ -290,9 +466,18 @@ def _compare_m5_invariants(
             )
 
     # 场景 Run 的实验条件放在 manifest 顶层（benchmark Run 放在
-    # external_benchmark.profile，由 _PROFILE_INVARIANTS 覆盖）。只在一侧确实
-    # 是场景 Run 时比对顶层字段，避免对 benchmark Run 重复报告。
-    if base_workflow is not None or cand_workflow is not None:
+    # external_benchmark.profile，由 _PROFILE_INVARIANTS 覆盖）。只在任一侧确实
+    # 声明了场景条件时比对顶层字段，避免对 benchmark Run 重复报告；没有
+    # workflow 身份的 Target/直接 LLM Run 也必须有这一层。
+    declared_scenario_fields = any(
+        baseline_manifest.get(field) is not None
+        or candidate_manifest.get(field) is not None
+        for field, _code in _SCENARIO_TOP_LEVEL_FIELDS
+    )
+    if (
+        base_workflow is not None or cand_workflow is not None
+        or declared_scenario_fields
+    ):
         for field, code in _SCENARIO_TOP_LEVEL_FIELDS:
             base_value = baseline_manifest.get(field)
             cand_value = candidate_manifest.get(field)
@@ -316,18 +501,39 @@ def _compare_m5_invariants(
             f"IDENTITY_MISSING:scoring_provenance: {base_provenance!r} vs {cand_provenance!r}"
         )
     elif base_provenance is not None and base_provenance != cand_provenance:
+        # 逐字段给出可解释原因：identity/spec/prompt/rubric/输入选择/校准/人工修订。
+        # 一侧有值一侧缺失 → 保持 unknown 并阻断，绝不从当前配置补齐（F09）。
         for field, factor, code in (
+            ("scorer_id", "judge", "SCORER_CHANGED"),
+            ("scorer_version", "judge", "SCORER_CHANGED"),
             ("judge_profile_id", "judge", "JUDGE_CHANGED"),
+            ("mode", "judge", "JUDGE_MODE_CHANGED"),
+            ("profile_sha256", "judge", "JUDGE_PROFILE_CHANGED"),
+            ("spec_sha256", "judge", "JUDGE_SPEC_CHANGED"),
+            ("model", "judge", "JUDGE_MODEL_CHANGED"),
+            ("prompt", "judge", "JUDGE_PROMPT_CHANGED"),
+            ("prompt_sha256", "judge", "JUDGE_PROMPT_CHANGED"),
+            ("rubric_id", "rubric", "RUBRIC_CHANGED"),
             ("rubric_version", "rubric", "RUBRIC_CHANGED"),
+            ("rubric_sha256", "rubric", "RUBRIC_CONTENT_CHANGED"),
             ("calibration_version", "calibration", "CALIBRATION_CHANGED"),
             ("input_selector", "judge", "JUDGE_INPUT_CHANGED"),
+            ("missing_evidence_policy", "judge", "JUDGE_POLICY_CHANGED"),
+            ("manual_revision", "intervention", "MANUAL_REVISION_CHANGED"),
         ):
-            if base_provenance.get(field) == cand_provenance.get(field):
+            base_value = base_provenance.get(field)
+            cand_value = cand_provenance.get(field)
+            if base_value == cand_value:
                 continue
-            detail = (
-                f"{code}:{field}: {base_provenance.get(field)!r} "
-                f"-> {cand_provenance.get(field)!r}"
-            )
+            # 人工修订的"有/无"本身是已知事实（人改过评分），不是未知身份：
+            # 一律按 MANUAL_REVISION_CHANGED 记录。
+            if field != "manual_revision" and (base_value is None) != (cand_value is None):
+                reasons.append(
+                    f"IDENTITY_MISSING:scoring_provenance.{field}: "
+                    f"{base_value!r} vs {cand_value!r}"
+                )
+                continue
+            detail = f"{code}:{field}: {base_value!r} -> {cand_value!r}"
             if factor in allowed_factors:
                 allowed.append("ALLOWED_FACTOR:" + detail)
             else:
@@ -411,6 +617,30 @@ def _compare_invariants(
             reasons.append(
                 f"{code}:{invariant_field}: {base_value!r} -> {cand_value!r}"
             )
+
+    # M5（F11）：Agent 与 agent_config 是冻结执行条件。只改 max_steps 也是另一个
+    # 实验，不能被当成模型/Skill 差异比较；agent_config.budget 归预算维度。
+    base_agent = baseline_manifest.get("agent")
+    cand_agent = candidate_manifest.get("agent")
+    if (base_agent is None) != (cand_agent is None):
+        reasons.append(
+            f"IDENTITY_MISSING:agent: {base_agent!r} vs {cand_agent!r}"
+        )
+    elif base_agent is not None and base_agent != cand_agent:
+        if {"agent_id", "agent_version"} & allowed_factors:
+            allowed.append(f"ALLOWED_FACTOR:agent: {base_agent!r} -> {cand_agent!r}")
+        else:
+            reasons.append(f"AGENT_CHANGED:agent: {base_agent!r} -> {cand_agent!r}")
+    base_config = _agent_config_identity(baseline_manifest)
+    cand_config = _agent_config_identity(candidate_manifest)
+    if (base_config is None) != (cand_config is None):
+        reasons.append(
+            f"IDENTITY_MISSING:agent_config: {base_config!r} vs {cand_config!r}"
+        )
+    elif base_config is not None and base_config != cand_config:
+        reasons.append(
+            f"AGENT_CONFIG_CHANGED:agent_config: {base_config!r} -> {cand_config!r}"
+        )
 
     base_eval = baseline_manifest.get("evaluation")
     cand_eval = candidate_manifest.get("evaluation")

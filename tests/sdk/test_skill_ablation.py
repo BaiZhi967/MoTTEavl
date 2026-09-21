@@ -127,3 +127,117 @@ def test_plan_hash_tracks_the_budget_policy_and_arm_identity():
     assert first.plan_hash != second.plan_hash
     third = plan(arms=arms(skills_v1=("cancel-helper@9",)))
     assert third.plan_hash != first.plan_hash
+
+
+def test_plan_hash_includes_the_actual_budget_values():
+    """只改实际额度（政策名不变）也必须是另一份计划（F11）。"""
+    small = {"policy": "same-total-budget", "max_total_tokens": 100}
+    large = {"policy": "same-total-budget", "max_total_tokens": 100000}
+    first = plan(base={"budget": small})
+    second = plan(base={"budget": large})
+    assert first.plan_hash != second.plan_hash
+    # 冻结条件里保存的是政策名之外的实际额度值。
+    assert first.frozen_conditions["budget"]["max_total_tokens"] == 100
+
+
+def test_expanding_a_stale_plan_with_drifted_conditions_is_refused():
+    budget = {"policy": "same-total-budget", "max_total_tokens": 100}
+    planned = plan(base={"budget": budget})
+    # 旧计划换 model：不能静默展开。
+    with pytest.raises(AblationPlanError, match="non-skill conditions"):
+        arm_manifests(base_manifest(model="different-model", budget=budget), planned)
+    # 只改实际预算额度：同样拒绝。
+    with pytest.raises(AblationPlanError, match="non-skill conditions"):
+        arm_manifests(base_manifest(
+            budget={"policy": "same-total-budget", "max_total_tokens": 100000},
+        ), planned)
+    # 只改 agent_config 的执行配置：同样拒绝。
+    with pytest.raises(AblationPlanError, match="non-skill conditions"):
+        arm_manifests(base_manifest(
+            budget=budget, agent_config={"mode": "legacy-json", "max_steps": 200},
+        ), planned)
+    # 原基底仍然可以展开。
+    assert set(arm_manifests(base_manifest(budget=budget), planned)) == set(ARM_IDS)
+
+
+def test_arm_allocation_must_stay_inside_the_policy_permitted_dimension():
+    """same-total-budget 固定总额度：臂分配不得改它（F11）。"""
+    budget = {"policy": "same-total-budget", "total_allowance": 1000}
+    with pytest.raises(AblationPlanError, match="cannot allocate") as raised:
+        plan(base={"budget": budget}, arms=[
+            ArmSpec("no-skill"),
+            ArmSpec("skill-v1", ("cancel-helper@1",),
+                    skill_snapshot={"ref": "cancel-helper@1", "content_hash": "sha256:" + "3" * 64},
+                    budget_allocation={"total_allowance": 5000}),
+            ArmSpec("skill-v2", ("cancel-helper@2",),
+                    skill_snapshot={"ref": "cancel-helper@2", "content_hash": "sha256:" + "4" * 64}),
+        ])
+    assert raised.value.code == "ABLATION_BUDGET_ALLOCATION_INVALID"
+    # same-execution-budget 固定执行额度：改它同样拒绝。
+    execution = {"policy": "same-execution-budget", "total_allowance": 1000,
+                 "execution_allowance": 900}
+    with pytest.raises(AblationPlanError, match="cannot allocate") as raised:
+        plan(base={"budget": execution}, budget_policy="same-execution-budget", arms=[
+            ArmSpec("no-skill"),
+            ArmSpec("skill-v1", ("cancel-helper@1",),
+                    skill_snapshot={"ref": "cancel-helper@1", "content_hash": "sha256:" + "3" * 64},
+                    budget_allocation={"execution_allowance": 1200}),
+            ArmSpec("skill-v2", ("cancel-helper@2",),
+                    skill_snapshot={"ref": "cancel-helper@2", "content_hash": "sha256:" + "4" * 64}),
+        ])
+    assert raised.value.code == "ABLATION_BUDGET_ALLOCATION_INVALID"
+    # 允许的分配也不能超过政策固定的额度。
+    with pytest.raises(AblationPlanError, match="exceeds the fixed") as raised:
+        plan(base={"budget": budget}, arms=[
+            ArmSpec("no-skill"),
+            ArmSpec("skill-v1", ("cancel-helper@1",),
+                    skill_snapshot={"ref": "cancel-helper@1", "content_hash": "sha256:" + "3" * 64},
+                    budget_allocation={"execution_allowance": 2000}),
+            ArmSpec("skill-v2", ("cancel-helper@2",),
+                    skill_snapshot={"ref": "cancel-helper@2", "content_hash": "sha256:" + "4" * 64}),
+        ])
+    assert raised.value.code == "ABLATION_BUDGET_ALLOCATION_INVALID"
+
+
+def test_allocation_is_refused_when_the_policy_fixed_dimension_is_unknown():
+    """固定维度未知时不能补 0 也不能默认一致：臂分配直接拒绝（F11）。"""
+    with pytest.raises(AblationPlanError, match="unknown") as raised:
+        plan(base={"budget": {"policy": "same-total-budget"}}, arms=[
+            ArmSpec("no-skill"),
+            ArmSpec("skill-v1", ("cancel-helper@1",),
+                    skill_snapshot={"ref": "cancel-helper@1", "content_hash": "sha256:" + "3" * 64},
+                    budget_allocation={"execution_allowance": 800}),
+            ArmSpec("skill-v2", ("cancel-helper@2",),
+                    skill_snapshot={"ref": "cancel-helper@2", "content_hash": "sha256:" + "4" * 64}),
+        ])
+    assert raised.value.code == "ABLATION_BUDGET_ALLOCATION_UNVERIFIABLE"
+
+
+def test_same_execution_budget_records_the_per_arm_allocation():
+    """same-execution-budget 允许按臂分配总额度与指令开销，执行额度保持固定。"""
+    budget = {"policy": "same-execution-budget", "total_allowance": 1000,
+              "execution_allowance": 900}
+    planned = plan(
+        base={"budget": budget}, budget_policy="same-execution-budget",
+        arms=[
+            ArmSpec("no-skill", budget_allocation={"instruction_overhead": 0}),
+            ArmSpec("skill-v1", ("cancel-helper@1",),
+                    skill_snapshot={"ref": "cancel-helper@1", "content_hash": "sha256:" + "3" * 64},
+                    budget_allocation={"instruction_overhead": 50, "total_allowance": 950}),
+            ArmSpec("skill-v2", ("cancel-helper@2",),
+                    skill_snapshot={"ref": "cancel-helper@2", "content_hash": "sha256:" + "4" * 64},
+                    budget_allocation={"instruction_overhead": 120, "total_allowance": 1020}),
+        ],
+    )
+    manifests = arm_manifests(base_manifest(budget=budget), planned)
+    assert manifests["skill-v2"]["budget"]["execution_allowance"] == 900
+    assert manifests["skill-v2"]["budget"]["total_allowance"] == 1020
+    assert manifests["skill-v2"]["budget"]["instruction_overhead"] == 120
+    assert manifests["no-skill"]["budget"]["instruction_overhead"] == 0
+    # 除 Skill 与政策允许的预算分配之外，逐字段一致。
+    reference = manifests["no-skill"]
+    for arm_id, manifest in manifests.items():
+        for key, value in reference.items():
+            if key in {"skills", "skill_arm", "skill_snapshot", "budget"}:
+                continue
+            assert manifest[key] == value, f"{arm_id} changed {key}"
