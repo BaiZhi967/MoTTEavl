@@ -553,11 +553,13 @@ class ScoringJobService:
         - repeats 每个重复都是一次独立调用：有自己的 call_id、repeat_index 与
           账本条目，因此也有自己的 ScoreSet 行（trial_id = call_id）。
         """
+        self._verify_evidence_ownership(request)
         if request.mode == "pairwise":
             plans: list[dict[str, Any]] = []
             explicit = [list(order) for order in request.presentation_orders]
             index = 0
             for pair in request.pairwise_pairs:
+                self._verify_pairwise_candidates(request, pair)
                 orders = explicit or [list(pair.presentation_order)]
                 for order in orders:
                     if len(order) != 2 or sorted(order) != sorted(pair.presentation_order):
@@ -599,6 +601,7 @@ class ScoringJobService:
         plans = []
         index = 0
         for case_id, observation in request.observations.items():
+            self._verify_observation(request, case_id, observation)
             bundle = build_judge_input(
                 request.judge_spec, observation,
                 artifact_reader=self._artifact_reader,
@@ -616,6 +619,90 @@ class ScoringJobService:
                     "input_sha256": bundle.input_sha256,
                 })
         return inputs, plans
+
+    # ------------------------------------------------------------- 内部：证据归属
+    def _subject_run(self, request: ScoringJobRequest) -> dict[str, Any]:
+        """subject owner 必须绑定一个**保存过的** Run。"""
+        if request.run_id is None:
+            raise JudgeInputError("subject scoring job requires a run_id")
+        run = self.store.runs.get(request.run_id)
+        if run is None:
+            raise JudgeInputError(f"subject run is missing: {request.run_id}")
+        if request.source_pass_id:
+            source = self.store.scoring_passes.get(request.source_pass_id)
+            if source is None:
+                raise JudgeInputError(
+                    f"source scoring pass is missing: {request.source_pass_id}"
+                )
+            if source.get("run_id") != request.run_id:
+                raise JudgeInputError(
+                    "source scoring pass does not belong to the subject run"
+                )
+        return run
+
+    def _verify_case(self, run: dict[str, Any], case_id: str, *, what: str) -> None:
+        case_ids = run.get("case_ids")
+        if isinstance(case_ids, list) and case_ids and case_id not in case_ids:
+            raise JudgeInputError(f"{what} is not part of the saved run: {case_id}")
+
+    def _verify_evidence_ownership(self, request: ScoringJobRequest) -> None:
+        """提交前核对 owner/case/证据身份；不匹配时零调用、零发布。
+
+        calibration 使用自己的命名空间，不能冒充 subject：它没有 Run 可绑定，
+        样本 key 必须由 sample_ids 拥有（模型层已校验）。subject 则必须绑定
+        保存过的 Run 与同属该 Run 的 source pass。
+        """
+        if request.owner["kind"] == "calibration":
+            return
+        self._subject_run(request)
+
+    def _verify_observation(
+        self, request: ScoringJobRequest, case_id: str, observation: Any,
+    ) -> None:
+        raw = (
+            observation.model_dump(mode="json")
+            if isinstance(observation, Contract) else dict(observation)
+        )
+        if raw.get("case_id") != case_id:
+            raise JudgeInputError(
+                "observation case_id does not match the request case key: "
+                f"{raw.get('case_id')!r} != {case_id!r}"
+            )
+        if request.owner["kind"] == "calibration":
+            return
+        run = self._subject_run(request)
+        if raw.get("run_id") != request.run_id:
+            raise JudgeInputError(
+                "observation belongs to another run: "
+                f"{raw.get('run_id')!r} != {request.run_id!r}"
+            )
+        self._verify_case(run, case_id, what="observation case")
+        attempt_id = raw.get("attempt_id")
+        if attempt_id:
+            attempt = self.store.attempts.get(str(attempt_id))
+            if attempt is None or attempt.get("run_id") != request.run_id:
+                raise JudgeInputError(
+                    f"observation attempt does not belong to the run: {attempt_id}"
+                )
+
+    def _verify_pairwise_candidates(
+        self, request: ScoringJobRequest, pair: JudgePairwiseInput,
+    ) -> None:
+        if request.owner["kind"] == "calibration":
+            return
+        run = self._subject_run(request)
+        self._verify_case(run, pair.task_ref, what="pairwise task_ref")
+        for side in (pair.candidate_a, pair.candidate_b):
+            ref = side.candidate
+            if ref.owner_kind != "subject":
+                raise JudgeInputError(
+                    "a subject scoring job cannot judge calibration candidates"
+                )
+            if ref.run_id != request.run_id:
+                raise JudgeInputError(
+                    f"candidate {ref.candidate_id} belongs to another run: {ref.run_id}"
+                )
+            self._verify_case(run, str(ref.case_id), what="candidate case")
 
     # ------------------------------------------------------------- 内部：预算
     def _output_ceiling(self, spec: JudgeSpec, calls: int) -> int | None:

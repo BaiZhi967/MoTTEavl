@@ -26,11 +26,13 @@ from pydantic import Field, model_validator
 from motte_contracts.evaluation import EvidenceRef
 from motte_contracts.identity import canonical_sha256
 from motte_contracts.messages import Contract
+from motte_storage.integrity import RunConflictError
 
 from .judge import JudgeSpec
 from .rubrics import (
     CALIBRATION_SAMPLE_KINDS,
     CalibrationPolicy,
+    calibration_policy_sha256,
     policy_for,
     validate_policy,
 )
@@ -427,6 +429,10 @@ class CalibrationReport(Contract):
     model: str = Field(min_length=1)
     judge_spec_sha256: str | None = None
     policy: CalibrationPolicy
+    #: 政策阈值的内容摘要：阈值变化后旧资格不得继承。
+    policy_sha256: str = Field(min_length=71, max_length=71)
+    #: CalibrationSet.covers() 的完整结果（是否覆盖 + 逐类缺项原因）。
+    coverage: dict[str, Any] = Field(default_factory=dict)
     sample_count: int = Field(ge=0)
     human_reviewed_count: int = Field(ge=0)
     candidate_only_count: int = Field(ge=0)
@@ -466,6 +472,7 @@ def build_calibration_report(
         policy or policy_for(calibration.rubric_id, calibration.rubric_version)
     )
     calls = list(calls or [])
+    covered, coverage_missing = calibration.covers(resolved)
     samples = calibration.samples
     human = [item for item in samples if item.is_human_reviewed]
     criteria_order: list[str] = []
@@ -559,6 +566,8 @@ def build_calibration_report(
         model=calibration.model,
         judge_spec_sha256=calibration.judge_spec_sha256,
         policy=resolved,
+        policy_sha256=calibration_policy_sha256(resolved),
+        coverage={"covered": covered, "missing": list(coverage_missing)},
         sample_count=len(samples),
         human_reviewed_count=len(human),
         candidate_only_count=len(calibration.candidates()),
@@ -661,6 +670,8 @@ class JudgeQualification(Contract):
 
     qualification_id: str = Field(min_length=1)
     judge_spec_sha256: str = Field(min_length=71, max_length=71)
+    #: 资格绑定的校准政策阈值摘要；阈值变化即另一份资格。
+    policy_sha256: str | None = None
     rubric_id: str = Field(min_length=1)
     rubric_version: str = Field(min_length=1)
     model: str = Field(min_length=1)
@@ -677,7 +688,12 @@ class JudgeQualification(Contract):
 def qualify_judge(
     report: CalibrationReport, *, evaluated_at: str | None = None,
 ) -> CalibrationReport:
-    """把报告收敛成 qualified/experimental/gate_eligible 与原因列表。"""
+    """把报告收敛成 qualified/experimental/gate_eligible 与原因列表。
+
+    资格消费的是**完整覆盖结果 + 明确政策阈值**，不只是「测量过」标志：
+    五类人工样本覆盖不足、重复稳定率或换序一致率低于政策、拒答/缺证据率
+    超政策，都会给出具体原因并让结果保持 experimental。
+    """
     reasons: list[str] = []
     not_run: list[str] = []
     policy = report.policy
@@ -690,6 +706,12 @@ def qualify_judge(
         reasons.append("calibration is not human-reviewed at the required level")
     if report.judge_spec_sha256 is None:
         reasons.append("calibration does not pin a judge spec hash")
+
+    coverage = report.coverage or {}
+    if not coverage.get("covered"):
+        for missing in coverage.get("missing") or ["coverage was never measured"]:
+            reasons.append(f"calibration coverage is incomplete: {missing}")
+
     if report.disagreement_rate is None:
         reasons.append("no human-labelled criteria could be compared")
     elif report.disagreement_rate > policy.max_disagreement_rate:
@@ -701,14 +723,42 @@ def qualify_judge(
         reasons.append("no human-reviewed sample produced a judge outcome")
     elif report.error_rate > policy.max_error_rate:
         reasons.append(f"error rate {report.error_rate:.3f} > {policy.max_error_rate}")
-    if policy.require_repeat_stability and not report.repeat_stability.get("measured"):
-        reasons.append("repeated scoring stability was not measured")
-    if policy.require_position_swap_consistency and not report.position_swap.get("measured"):
-        reasons.append("pairwise position-swap consistency was not measured")
-    if report.position_swap.get("measured") and (
-        (report.position_swap.get("rate") or 0.0) < 1.0
+    if (
+        report.refusal_rate is not None
+        and report.refusal_rate > policy.max_refusal_rate
     ):
-        reasons.append("pairwise position swap changed the mapped winner")
+        reasons.append(
+            f"refusal rate {report.refusal_rate:.3f} > {policy.max_refusal_rate}"
+        )
+    if (
+        report.missing_evidence_rate is not None
+        and report.missing_evidence_rate > policy.max_missing_evidence_rate
+    ):
+        reasons.append(
+            f"missing-evidence rate {report.missing_evidence_rate:.3f} > "
+            f"{policy.max_missing_evidence_rate}"
+        )
+
+    if policy.require_repeat_stability:
+        stability = report.repeat_stability or {}
+        if not stability.get("measured"):
+            reasons.append("repeated scoring stability was not measured")
+        elif (stability.get("rate") or 0.0) < policy.min_repeat_stability_rate:
+            reasons.append(
+                f"repeat stability {float(stability.get('rate') or 0.0):.3f} < policy "
+                f"minimum {policy.min_repeat_stability_rate} "
+                f"({stability.get('stable')}/{stability.get('samples')} stable)"
+            )
+    if policy.require_position_swap_consistency:
+        swap = report.position_swap or {}
+        if not swap.get("measured"):
+            reasons.append("pairwise position-swap consistency was not measured")
+        elif (swap.get("rate") or 0.0) < policy.min_position_swap_consistency_rate:
+            reasons.append(
+                "pairwise position swap changed the mapped winner: "
+                f"{float(swap.get('rate') or 0.0):.3f} < policy minimum "
+                f"{policy.min_position_swap_consistency_rate}"
+            )
     qualified = not reasons
     return report.model_copy(update={
         "qualified": qualified,
@@ -729,6 +779,7 @@ def qualification_record(
     return JudgeQualification(
         qualification_id=qualification_id or f"qual-{report.calibration_sha256[7:19]}",
         judge_spec_sha256=report.judge_spec_sha256,
+        policy_sha256=report.policy_sha256,
         rubric_id=report.rubric_id,
         rubric_version=report.rubric_version,
         model=report.model,
@@ -744,10 +795,12 @@ def qualification_record(
 
 
 class QualificationRegistry:
-    """按 judge spec hash + rubric + model 精确登记的资格；不继承、不按名匹配。"""
+    """按 judge spec hash + rubric + model + 政策摘要精确登记；不继承、不按名匹配。"""
 
     def __init__(self, records: list[JudgeQualification] | None = None) -> None:
-        self._records: dict[tuple[str, str, str, str, str], JudgeQualification] = {}
+        self._records: dict[
+            tuple[str, str, str, str, str, str | None], JudgeQualification
+        ] = {}
         self._history: list[JudgeQualification] = []
         for record in records or []:
             self.register(record)
@@ -755,7 +808,7 @@ class QualificationRegistry:
     def register(self, record: JudgeQualification) -> JudgeQualification:
         key = (
             record.judge_spec_sha256, record.rubric_id, record.rubric_version,
-            record.model, record.calibration_version,
+            record.model, record.calibration_version, record.policy_sha256,
         )
         self._records[key] = record
         self._history.append(record)
@@ -767,22 +820,36 @@ class QualificationRegistry:
     def lookup(
         self, *, judge_spec_sha256: str, rubric_id: str, rubric_version: str,
         model: str, calibration_version: str | None = None,
+        policy_sha256: str | None = None,
     ) -> JudgeQualification | None:
-        """精确查找；calibration_version=None 表示"当前校准版本未知"，不允许命中。"""
+        """精确查找。
+
+        - calibration_version=None 表示"当前校准版本未知"，不允许命中。
+        - policy_sha256 给出时必须与该资格登记时的政策阈值摘要一致：阈值变化
+          后旧资格不会被继承。省略时返回同配置下最近登记的一条。
+        """
         if calibration_version is None:
             return None
-        return self._records.get((
+        prefix = (
             judge_spec_sha256, rubric_id, rubric_version, model, calibration_version,
-        ))
+        )
+        if policy_sha256 is not None:
+            return self._records.get((*prefix, policy_sha256))
+        matches = [
+            record for key, record in self._records.items() if key[:5] == prefix
+        ]
+        return matches[-1] if matches else None
 
     def eligible(
         self, *, judge_spec_sha256: str, rubric_id: str, rubric_version: str,
         model: str, calibration_version: str | None = None,
+        policy_sha256: str | None = None,
     ) -> dict[str, Any]:
         record = self.lookup(
             judge_spec_sha256=judge_spec_sha256, rubric_id=rubric_id,
             rubric_version=rubric_version, model=model,
             calibration_version=calibration_version,
+            policy_sha256=policy_sha256,
         )
         if record is None:
             return {
@@ -798,9 +865,13 @@ class QualificationRegistry:
 
 
 def pass_gate_eligibility(
-    pass_record: dict[str, Any], registry: QualificationRegistry,
+    pass_record: dict[str, Any], registry: QualificationRegistry, *,
+    policy_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """门禁资格只看**所选 pass** 的 judge 身份，不看当前 Judge 设置。"""
+    """门禁资格只看**所选 pass** 的 judge 身份，不看当前 Judge 设置。
+
+    policy_sha256 可选：给出时要求该 pass 的资格是在同一套校准政策阈值下登记的。
+    """
     if pass_record.get("source") != "judge" or not isinstance(pass_record.get("judge"), dict):
         return {
             "gate_eligible": False, "experimental": False,
@@ -815,6 +886,7 @@ def pass_gate_eligibility(
         calibration_version=(
             str(judge["calibration_version"]) if judge.get("calibration_version") else None
         ),
+        policy_sha256=policy_sha256,
     )
 
 
@@ -987,33 +1059,49 @@ def apply_manual_revision_to_store(
     revision_id: str,
     created_at: str,
 ) -> dict[str, Any]:
-    """把人工修订追加为新 pass：显式 CAS，绝不覆盖较新的 current。"""
+    """把人工修订追加为新 pass：显式 CAS，绝不覆盖较新的 current。
+
+    CAS 依据是 (Run revision, current_scoring_pass_id) 这一对。**先读 Run
+    revision，再读 current**：任何改动 current 指针的写入都会在同一个存储事务里
+    同时推进 Run revision，而 append 会在该事务里核对 revision，因此「revision
+    没变」蕴含「current 没变」。反过来先读 current 会留下窗口——旧 current 通过
+    校验、新的 revision 用于写入，后到的修订就会覆盖更新的 current（F04）。
+    冲突时整个事务回滚：没有半个 ScoreSet、孤立 pass 或伪成功事件。
+    """
     source = store.scoring_passes.get(request.source_pass_id)
     if source is None:
         raise CalibrationError(f"source scoring pass is missing: {request.source_pass_id}")
-    current = store.scoring_passes.current(request.run_id)
+    if source.get("run_id") != request.run_id:
+        raise CalibrationError("source pass belongs to another run")
     run = store.runs.get(request.run_id)
     if run is None:
         raise CalibrationError(f"run is missing: {request.run_id}")
+    current = store.scoring_passes.current(request.run_id)
     built = build_manual_revision(
         source, request, revision_id=revision_id, created_at=created_at,
         current_pass_id=(current or {}).get("id"),
     )
-    stored = store.scoring_passes.append(
-        built["pass"],
-        built["scores"],
-        expected_run_revision=run["revision"],
-        expected_run_status=run["status"],
-        event={
-            "run_id": request.run_id,
-            "type": "scoring_pass_created",
-            "scoring_pass_id": revision_id,
-            "source": "manual_revision",
-            "actor": request.actor,
-            "previous_pass_id": request.source_pass_id,
-        },
-        run_changes={"updated_at": created_at},
-    )
+    try:
+        stored = store.scoring_passes.append(
+            built["pass"],
+            built["scores"],
+            expected_run_revision=run["revision"],
+            expected_run_status=run["status"],
+            event={
+                "run_id": request.run_id,
+                "type": "scoring_pass_created",
+                "scoring_pass_id": revision_id,
+                "source": "manual_revision",
+                "actor": request.actor,
+                "previous_pass_id": request.source_pass_id,
+            },
+            run_changes={"updated_at": created_at},
+        )
+    except RunConflictError as error:
+        raise ManualRevisionConflict(
+            "current scoring pass or run revision changed during the manual "
+            f"revision; expected {request.expected_current_pass_id!r}"
+        ) from error
     return {
         "pass": stored,
         "diffs": built["diffs"],

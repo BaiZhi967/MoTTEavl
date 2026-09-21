@@ -1,28 +1,56 @@
 # Judge 运维说明（M5）
 
-状态：T09a（契约与零成本预检）已提交；T09b（持久作业与调用账本）、T09c（原子
-发布）、T10（校准与人工修订）仍在实现中。本文只描述已经落地的边界与不可协商的
-约束，未实现部分明确标注。
+状态按三层证据分别记录，不再混用：
 
-## 1. 已固定的契约边界（T09a）
+| 能力 | 代码已存在 | 已接公共入口 | 已验证 |
+|---|---|---|---|
+| T09a 契约、输入 allowlist、预检 | 是 | 无（库内 API） | 单元/行为测试 |
+| T09b 持久 ScoringJob、judge 调用账本、取消 | 是 | 无（等待 R8 接线） | 单元/行为测试（SQLite + memory；真实 PG 需 `MOTTE_PG_DSN`） |
+| T09c 原子发布 ScoreSet + pass + receipt + current | 是 | 无（等待 R8 接线） | 单元/行为测试 |
+| T10 校准报告、资格登记、人工修订 | 是 | 无 | 单元/行为测试；**真实人工校准资料仍缺** |
+| API/CLI 提交、只读查询、幂等取消 | 否 | 否 | 未验证 |
 
-- JudgeSpec 固定 judge profile、prompt/rubric 版本与 hash、criteria、输出 schema、
-  参数、输入证据选择、缺失政策、校准版本与预算。
-- 输入只来自选定 Observation 的白名单字段与归属校验过的 Artifact，并保存
-  input evidence digest。候选内容只作为**数据**：不给业务工具，不给网络。
-- 输出逐 criterion 校验；不属于输入集合的证据引用被拒绝。
-- 拒答/畸形/超时/缺证据保持 evaluator_error 或 insufficient，**不补 0、不判通过**。
-- preflight 返回用途、模型、样本数、最大调用次数、tokens 上限、价格覆盖与预算
-  可执行性；无授权即零调用；价格未知时不声称精确货币硬上限。
-- pairwise 与 single 分开：两个 candidate_id 固定同一任务，presentation_order 与
-  候选身份无关；正反序 fingerprint 不同、各计一次费用。
+“无公共入口”指今天没有 `/api/v1/judges*` 路由与 Worker 领取接线；不能把库内
+测试通过当作已交付的用户能力。真实付费调用与真实至少 30 条人工复核资料均未发生，
+Judge 保持 experimental。
 
-## 2. 尚未交付（不得当作已有能力）
+## 1. 调用计划与预算（R2 固定）
 
-- 持久 ScoringJob、用途为 judge 的调用账本、取消与 CAS、原子发布 ScoreSet/pass。
-- 崩溃窗口逐项行为（prepared / dispatching / 响应已落库 / 事务中断 / 提交后通知）。
-- 校准集、混淆/分歧/换序统计、experimental 标记与人工修订。
-- API/CLI 的提交、只读查询与幂等取消入口。
+- `ScoringJobService.submit()` 先编译**唯一冻结计划** `plans`，每项含
+  `call_id / owner(case) / mode / repeat_index / presentation_order / input_sha256 /
+  budget_sha256 / reservation`；预检的 `max_calls` 就等于 `len(plans)`，不存在第二个
+  公式。pairwise 未显式给 `presentation_orders` 时每个 pair 只按自己的顺序评一次，
+  不再笛卡尔扩展；`repeats=N` 产生 N 次独立调用与 N 行 ScoreSet（`trial_id=call_id`），
+  `save_policy=append_pass_append_trials` 保证后一次运行只追加新 pass。
+- prompt token 上界来自**真实渲染请求**的 UTF-8 字节数（字节级 BPE 每个 token 至少
+  一个字节，因此是上界）；输出上限取 `spec.parameters.max_output_tokens` 与
+  `budget.max_completion_tokens // calls` 的较小值，并作为 `max_output_tokens` 写进真实请求。
+- 金额硬上限只有在「价格已知 + prompt 上界可证明 + Provider 强制执行输出上限 +
+  估算不超过声明上限」同时成立时才成立；否则硬预算请求在提交期被拒绝（`JudgeBudgetError`），
+  估算绝不冒充硬上限。`JudgeProviderPolicy.prompt_token_bound` /
+  `enforces_output_limit` 是声明这两项能力的地方。
+- 每次 dispatch 在同一个存储事务里原子预留额度（call/token/cost）；已发出未结算的
+  调用占用额度且**绝不重发**（重复 `call_id` 被 `begin_call` 拒绝）。费用与 usage
+  只在全部已结算调用都有值时才累计，任一次未知就让总额保持未知。
+
+## 2. 证据归属与人工修订（R3 固定）
+
+- subject 作业必须绑定**保存过的** Run 与同属该 Run 的 `source_pass_id`；Observation
+  的 `run_id/case_id`（以及给出时的 `attempt_id`）必须与请求键和目标 Run 一致；
+  pairwise 的两个候选必须是同一 Run 的 subject 候选。任何不匹配都在提交期拒绝：
+  零调用、零发布，current 与原 subject 证据不变。
+- calibration owner 使用 `calibration:<job>` 独立命名空间，绝不写入 subject Run。
+- 人工修订的 CAS 依据是 `(Run revision, current_scoring_pass_id)` 这一对，且**先读
+  Run revision、再读 current**：任何改动 current 的写入都会在同一事务里推进 Run
+  revision，append 在该事务里核对 revision，因此 revision 未变蕴含 current 未变。
+  冲突时整个事务回滚（无半个 ScoreSet、孤立 pass 或伪成功事件），失败方得到
+  `ManualRevisionConflict`。Memory/SQLite 由上述事务语义保证；真实 PostgreSQL 需
+  设置 `MOTTE_PG_DSN` 才会执行对应测试（未设置时标 not_run）。
+- 校准资格消费**完整覆盖结果 + 明确政策阈值**（`CalibrationPolicy` 的五类样本下限、
+  重复稳定率、换序一致率、拒答/缺证据率）；覆盖不足或阈值不达标一律 experimental、
+  `gate_eligible=false` 并记录具体原因。政策阈值摘要 `policy_sha256` 进入报告与资格
+  记录：阈值变化、model/rubric/spec hash 变化都不会继承旧资格。资格读取走真实发布的
+  `pass.judge`（含 `rubric_id/rubric_version/spec_sha256/calibration_version`）。
 
 ## 3. 不可协商的约束
 
@@ -30,31 +58,20 @@
 - Judge 是独立授权作业：在 Worker 中执行，不在 API 请求内付费运行。
 - 待执行/失败/部分证据只留在 job，不进入终态 pass 表；终态 ScoreSet + 预分配
   ScoringPass + job receipt + current 指针在同一事务 CAS 提交。
-- 不确定时不自动重发：原始 subject Run 的终态与证据不因 Judge 故障改写。
+- 不确定时不自动重发：已 dispatch 的失败没有「未处理」的证明就保持不确定计费/结果
+  （Provider 错误分类复用 `motte_provider.errors`），原始 subject Run 的终态与证据不因
+  Judge 故障改写。
 - 人工修订只追加新 pass 并保留依据；新 rubric 不继承旧校准，未校准 Judge 为
   experimental，不进阻断门禁。
+- `submit()` 在 `provider_factory is None` 时**明确拒绝**提交。这条保护必须保留：
+  不能为了方便接线而取消它，否则会产出永远无法执行的作业。
 
-## 4. 接线前必须解决的前提（已核实的阻断点）
+## 4. 接线前剩余的前提
 
 T09 给出的接线面是：WorkerLoop 里构造 ScoringJobService、恢复时调
-recover_interrupted()、无 Run 可领时调 claim_and_run()。已核实两个事实：
-
-1. `ScoringJobService(store, *, provider_factory=None, artifact_reader=None)` 的
-   provider_factory 参数虽然可选，但 **submit() 在 provider_factory 为 None 时明确
-   拒绝提交**（本文件早先写成"仍可提交、只会空转"是错的，审查 F19 已更正）。
-   这条保护必须保留：不能为了方便接线而取消它，否则会产出永远无法执行的作业。
-2. `RunService.__init__` 只持有 `store`，**没有资源仓库**（model profile /
-   provider connection / price table）。因此 Worker 侧今天拿不到按 JudgeSpec
-   固定模型解析连接的入口，写不出正确的 provider_factory。
-
-因此接线前必须先做一个显式设计决定，二选一：
-
-- **A（推荐，与 Run 的冻结语义一致）**：在**提交期**由 API 用资源仓库解析出
-  Judge 的 provider 快照并冻结进请求/作业，Worker 只按快照构造 Provider，
-  provider_factory 退化为"从快照构建"，Worker 不需要资源仓库。
-- **B**：把资源仓库注入 WorkerLoop，使 Worker 在领取时解析模型档案。
-
-选 A 时，Judge 的模型/连接/价格表与 Run 一样在创建期固定，历史作业不随资源
-改名漂移；选 B 时必须在作业上再固定解析结果，否则同一作业在两次领取间可能
-解析到不同 provider。无论选哪种，都必须保持"GET 与普通离线 rescore 零调用"
-以及"pending/failed job 不进终态 pass 表"。
+`recover_interrupted()`、无 Run 可领时调 `claim_and_run()`。
+`RunService.__init__` 只持有 `store`，**没有资源仓库**（model profile /
+provider connection / price table），所以 Worker 侧今天拿不到按 JudgeSpec 固定模型
+解析连接的入口。R8 的选择 A 仍适用：在**提交期**由 API 用资源仓库解析出 Judge 的
+provider 与价格快照并冻结进请求/作业，Worker 只按快照构造 Provider。无论选哪种，
+都必须保持“GET 与普通离线 rescore 零调用”以及“pending/failed job 不进终态 pass 表”。

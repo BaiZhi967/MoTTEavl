@@ -696,7 +696,7 @@ def single_request(
     publish_policy: str = "all_scored", observations: dict | None = None,
     spec: JudgeSpec | None = None, calibration_job_id: str | None = None,
     sample_ids: dict | None = None, repeats: int = 1,
-    price_table: dict | None = None,
+    price_table: dict | None = None, source_pass_id: str | None = None,
 ) -> ScoringJobRequest:
     case_ids = case_ids or ["case-1"]
     observations = observations or {
@@ -713,6 +713,7 @@ def single_request(
         "publish_policy": publish_policy,
         "repeats": repeats,
         "price_table": price_table,
+        "source_pass_id": source_pass_id,
     }
     if not authorised:
         payload["authorisation"] = None
@@ -1398,7 +1399,7 @@ def test_hard_cost_cap_requires_a_provable_output_ceiling(tmp_path):
 
 def test_pairwise_plan_uses_each_pairs_own_order_and_matches_preflight(tmp_path):
     store = make_service_store(tmp_path)
-    make_completed_run(store)
+    make_completed_run(store, case_ids=["case-1", "case-2"])
     first = build_pairwise_input(
         task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
         candidate_b=candidate("cand-b", "answer B", "20"),
@@ -1572,5 +1573,89 @@ def test_submit_still_refuses_without_a_provider_factory(tmp_path):
     with pytest.raises(JudgeError, match="provider factory"):
         service.submit(single_request())
     assert service.list_for_run("run-1") == []
+
+
+# ==================================================================== R3 证据归属
+
+def test_foreign_observation_and_case_identity_are_rejected_before_any_call(tmp_path):
+    store = make_service_store(tmp_path)
+    run = make_completed_run(store)
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    # FOREIGN/foreign-case 的 Observation 不能成为 run-1/case-1 的证据。
+    with pytest.raises(JudgeInputError):
+        service.submit(single_request(
+            observations={"case-1": observation(run_id="FOREIGN", case_id="foreign-case")},
+        ))
+    # 字典 case key 与 Observation 的 case_id 必须一致。
+    with pytest.raises(JudgeInputError):
+        service.submit(single_request(
+            request_key="req-key", observations={"case-1": observation(case_id="case-9")},
+        ))
+    # 不属于该 Run 的 case 也不能被评分。
+    with pytest.raises(JudgeInputError):
+        service.submit(single_request(
+            request_key="req-case", observations={"case-other": observation(case_id="case-other")},
+        ))
+
+    assert provider.calls == []
+    assert service.list_for_run("run-1") == []
+    assert store.scoring_passes.list_for_run("run-1") == []
+    unchanged = store.runs.get("run-1")
+    assert unchanged["revision"] == run["revision"]
+    assert unchanged.get("current_scoring_pass_id") is None
+
+
+def test_source_pass_must_belong_to_the_subject_run(tmp_path):
+    store = make_service_store(tmp_path)
+    make_completed_run(store)
+    other_run = make_completed_run(store, run_id="run-2")
+    store.scoring_passes.append(
+        {
+            "id": "pass-other", "run_id": "run-2", "scorer_id": "agent-deterministic",
+            "scorer_version": "1", "created_at": "2026-09-21T00:00:00+00:00",
+            "source": "initial", "summary": {"scores": 0}, "scores": [],
+        },
+        [],
+        expected_run_revision=other_run["revision"], expected_run_status="completed",
+    )
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    with pytest.raises(JudgeInputError):
+        service.submit(single_request(source_pass_id="pass-other"))
+    with pytest.raises(JudgeInputError):
+        service.submit(single_request(request_key="req-missing", source_pass_id="pass-nope"))
+    assert provider.calls == []
+    assert service.list_for_run("run-1") == []
+    assert store.scoring_passes.list_for_run("run-1") == []
+
+
+def test_calibration_owner_never_impersonates_a_subject_run(tmp_path):
+    store = make_service_store(tmp_path)
+    run = make_completed_run(store)
+    provider = ScriptedProvider([json.dumps(JUDGE_ANSWER)])
+    service = judge_service(store, provider)
+
+    submitted = service.submit(single_request(
+        request_key="cal-impersonate", run_id=None, calibration_job_id="cjob-x",
+        observations={"sample-1": observation(run_id="run-1", case_id="sample-1")},
+        sample_ids={"sample-1": "sample-1"},
+    ))
+    result = service.claim_and_run()
+    assert result["status"] == "completed"
+    # calibration 有自己的命名空间：subject Run 的状态、revision 与证据都不变。
+    assert store.runs.get("run-1")["revision"] == run["revision"]
+    assert store.runs.get("run-1").get("current_scoring_pass_id") is None
+    assert store.scoring_passes.list_for_run("run-1") == []
+    stored = store.scoring_passes.get(result["receipt"]["scoring_pass_id"])
+    assert stored["run_id"] == "calibration:cjob-x"
+    assert stored["judge"]["owner"]["kind"] == "calibration"
+    assert stored["judge"]["owner"]["calibration_job_id"] == "cjob-x"
+    assert store.invocations.list_for_job(submitted["job_id"])[0]["run_id"] == (
+        "calibration:cjob-x"
+    )
+
 
 

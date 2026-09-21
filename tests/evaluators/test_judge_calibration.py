@@ -42,7 +42,13 @@ from motte_eval.judge import (
     build_judge_spec,
     parse_judge_output,
 )
-from motte_eval.rubrics import CalibrationPolicy, policy_for, validate_policy
+from motte_contracts.evaluation import EvidenceRef
+from motte_eval.rubrics import (
+    CalibrationPolicy,
+    calibration_policy_sha256,
+    policy_for,
+    validate_policy,
+)
 from motte_storage.run_store import SQLiteRunStore
 
 RUBRIC_ID = "answer-quality"
@@ -680,3 +686,301 @@ def test_calibration_and_revision_reads_cost_no_judge_money(tmp_path):
     # 人工修订没有 judge 身份：它不会带来任何 Judge 费用，也不宣称做过验证。
     assert applied["pass"]["scorer_id"] == "manual-revision"
     assert "judge" not in applied["pass"]
+
+
+# ---------------------------------------------------------------- R3：CAS 与资格
+
+class _ReadHook:
+    """确定性交错：在第 N 次「CAS 依据读取」之后、返回之前插入竞争请求。"""
+
+    def __init__(self, trigger, at: int = 2) -> None:
+        self._trigger = trigger
+        self._at = at
+        self.reads = 0
+        self.fired = False
+
+    def note(self) -> None:
+        self.reads += 1
+        if self.reads == self._at and not self.fired:
+            self.fired = True
+            self._trigger()
+
+
+class _CasRepo:
+    """代理一个仓储；只对构成 CAS 依据的读取计数（runs.get / passes.current）。"""
+
+    def __init__(self, inner, hook: _ReadHook, counted: set[str]) -> None:
+        self._inner = inner
+        self._hook = hook
+        self._counted = counted
+
+    def __getattr__(self, name):
+        attribute = getattr(self._inner, name)
+        if name in self._counted:
+            def counted(*args, **kwargs):
+                self._hook.note()
+                return attribute(*args, **kwargs)
+            return counted
+        return attribute
+
+
+def interleaved_store(store, trigger):
+    """把一次竞争修订插进 CAS 窗口的正中间。"""
+    hook = _ReadHook(trigger)
+
+    class Wrapper:
+        runs = _CasRepo(store.runs, hook, {"get"})
+        scoring_passes = _CasRepo(store.scoring_passes, hook, {"current"})
+
+    return Wrapper()
+
+
+def revision_request(actor: str, *, source: str = "pass-source") -> ManualRevisionRequest:
+    return ManualRevisionRequest(
+        run_id="run-1", source_pass_id=source, actor=actor,
+        reason=f"{actor} fix",
+        changes=[ManualScoreChange(
+            case_id="case-1", metric_id="task_completion", passed=False,
+            reason="contradicted by evidence",
+        )],
+        expected_current_pass_id=source,
+    )
+
+
+def test_competing_revisions_share_one_cas_window_and_only_one_wins(tmp_path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    make_run_and_pass(store)
+
+    def competing() -> None:
+        apply_manual_revision_to_store(
+            store, revision_request("operator-b"),
+            revision_id="pass-rev-b", created_at="2026-09-21T02:00:00+00:00",
+        )
+
+    hooked = interleaved_store(store, competing)
+    # 请求 A 已经读到 current=pass-source；B 在它写入之前完整跑完。
+    with pytest.raises(ManualRevisionConflict):
+        apply_manual_revision_to_store(
+            hooked, revision_request("operator-a"),
+            revision_id="pass-rev-a", created_at="2026-09-21T03:00:00+00:00",
+        )
+
+    # 只有一个胜者：B 的 current 不被 A 覆盖。
+    assert store.runs.get("run-1")["current_scoring_pass_id"] == "pass-rev-b"
+    assert [item["id"] for item in store.scoring_passes.list_for_run("run-1")] == [
+        "pass-source", "pass-rev-b",
+    ]
+    # 失败请求没有半个 ScoreSet、孤立 pass 或伪成功事件。
+    assert store.scoring_passes.get("pass-rev-a") is None
+    assert store.score_sets.list_for_pass("pass-rev-a") == []
+    events = [
+        event for event in store.events.list_for_run("run-1")
+        if event.get("scoring_pass_id") == "pass-rev-a"
+    ]
+    assert events == []
+    # 原 subject 证据不变。
+    source = store.scoring_passes.get("pass-source")
+    assert source["source"] == "initial"
+    assert [row["passed"] for row in source["scores"]] == [True, True, False]
+
+
+def test_manual_revision_keeps_the_source_pass_and_baseline_untouched(tmp_path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    make_run_and_pass(store)
+    before = store.scoring_passes.get("pass-source")
+    rows_before = store.score_sets.list_for_pass("pass-source")
+
+    applied = apply_manual_revision_to_store(
+        store,
+        ManualRevisionRequest(
+            run_id="run-1", source_pass_id="pass-source", actor="operator",
+            reason="human review found the evidence",
+            evidence=[EvidenceRef(kind="artifact", run_id="run-1", locator="report.json")],
+            changes=[ManualScoreChange(
+                case_id="case-1", metric_id="evidence_grounding", passed=True,
+                reason="artifact report.json contains the call",
+            )],
+            expected_current_pass_id="pass-source",
+        ),
+        revision_id="pass-rev-manual", created_at="2026-09-21T01:00:00+00:00",
+    )
+    summary = applied["pass"]["manual_revision"]
+    assert summary["actor"] == "operator"
+    assert summary["reason"] == "human review found the evidence"
+    assert summary["source_pass_id"] == "pass-source"
+    assert summary["evidence"][0]["locator"] == "report.json"
+    assert applied["pass"]["previous_pass_id"] == "pass-source"
+    assert applied["pass"]["source"] == "manual_revision"
+    # 旧 pass 内容逐字节不变，baseline 不追随 current。
+    assert store.scoring_passes.get("pass-source") == before
+    assert store.score_sets.list_for_pass("pass-source") == rows_before
+    assert store.runs.get("run-1")["current_scoring_pass_id"] == "pass-rev-manual"
+
+
+def coverage_calibration(spec: JudgeSpec, *, kinds: dict[str, int]):
+    samples: list[CalibrationSample] = []
+    for kind, count in kinds.items():
+        for index in range(count):
+            sample = candidate_sample(
+                f"{kind}-{index}", kind, f"output {kind} {index}",
+                rubric_id=RUBRIC_ID, rubric_version=RUBRIC_VERSION, model="judge-model",
+                labelling_notes="synthetic candidate for protocol verification",
+            )
+            samples.append(review_sample(
+                sample, annotator="annotator-a", reviewer="reviewer-b",
+                expected_criteria={name: kind == "clear_pass" for name in CRITERIA},
+                reviewed_at="2026-09-21T00:00:00+00:00",
+                labelling_notes="human reviewed",
+            ))
+    return calibration_with(samples, judge_spec_sha256=spec.spec_sha256)
+
+
+def test_qualification_consumes_the_full_coverage_result():
+    spec = judge_spec(calibration_version="1")
+    calibration = coverage_calibration(spec, kinds={"clear_pass": 30})
+    observed = matching_observed(calibration, spec)
+    report = build_calibration_report(
+        calibration, observed=observed, calls=measurement_calls(calibration, observed),
+    )
+
+    # 30 条 clear_pass、其余四类为 0：样本总数够，覆盖不足，绝不 gate eligible。
+    assert report.human_reviewed_count == 30
+    assert report.kind_counts["clear_fail"] == 0
+    assert report.coverage["covered"] is False
+    assert report.qualified is False
+    assert report.experimental is True
+    assert report.gate_eligible is False
+    assert any("clear_fail" in reason for reason in report.reasons)
+    assert any("missing_evidence" in reason for reason in report.reasons)
+    assert report.not_run == []  # 人工标签存在，缺的是覆盖与质量
+
+
+def test_repeat_stability_below_the_policy_is_not_qualified():
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    calls = measurement_calls(calibration, observed)
+    # 一个样本的重复评分与第一次不同：稳定率 29/30 < policy 要求。
+    calls[1] = calls[1].model_copy(update={"criteria": {"task_completion": False}})
+    report = build_calibration_report(calibration, observed=observed, calls=calls)
+
+    assert report.repeat_stability["rate"] == pytest.approx(29 / 30)
+    assert report.qualified is False
+    assert report.experimental is True
+    assert report.gate_eligible is False
+    reason = next(
+        item for item in report.reasons if "repeat stability" in item
+    )
+    assert "29/30" in reason or "0.966" in reason
+
+
+def test_policy_thresholds_enter_the_report_and_qualification_hash():
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    report = build_calibration_report(
+        calibration, observed=observed, calls=measurement_calls(calibration, observed),
+    )
+    assert report.qualified is True, report.reasons
+    assert report.policy_sha256 == calibration_policy_sha256(report.policy)
+    assert report.policy.min_repeat_stability_rate == 1.0
+
+    record = qualification_record(report)
+    assert record.policy_sha256 == report.policy_sha256
+    registry = QualificationRegistry()
+    registry.register(record)
+    assert registry.lookup(
+        judge_spec_sha256=spec.spec_sha256, rubric_id=RUBRIC_ID,
+        rubric_version=RUBRIC_VERSION, model="judge-model", calibration_version="1",
+        policy_sha256=report.policy_sha256,
+    ) is not None
+    # 阈值变了就是另一份资格：绝不继承旧政策下的资格。
+    loosened = CalibrationPolicy(
+        rubric_id=RUBRIC_ID, rubric_version=RUBRIC_VERSION,
+        min_repeat_stability_rate=0.5,
+    )
+    assert calibration_policy_sha256(loosened) != report.policy_sha256
+    assert registry.lookup(
+        judge_spec_sha256=spec.spec_sha256, rubric_id=RUBRIC_ID,
+        rubric_version=RUBRIC_VERSION, model="judge-model", calibration_version="1",
+        policy_sha256=calibration_policy_sha256(loosened),
+    ) is None
+    # 新 model / rubric / spec hash 同样不匹配。
+    assert registry.lookup(
+        judge_spec_sha256=spec.spec_sha256, rubric_id=RUBRIC_ID,
+        rubric_version=RUBRIC_VERSION, model="other-model", calibration_version="1",
+    ) is None
+    assert registry.lookup(
+        judge_spec_sha256="sha256:" + "0" * 64, rubric_id=RUBRIC_ID,
+        rubric_version=RUBRIC_VERSION, model="judge-model", calibration_version="1",
+    ) is None
+
+
+def test_qualification_is_read_through_the_real_published_pass(tmp_path):
+    """资格必须能按真实发布的 pass 读取，而不是测试专用字典。"""
+    from motte_sdk.scoring_jobs import ScoringJobRequest, ScoringJobService
+
+    class ScriptedProvider:
+        def __init__(self, content: str) -> None:
+            self.content = content
+            self.calls: list = []
+
+        def complete(self, request):  # noqa: ANN001 - 协议方法
+            self.calls.append(request)
+            return {
+                "provider": "scripted", "model": request.model, "content": self.content,
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                "cost": None, "response_id": "resp-1", "metering": {"attempts": 1},
+            }
+
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    report = build_calibration_report(
+        calibration, observed=observed, calls=measurement_calls(calibration, observed),
+    )
+    assert report.qualified is True, report.reasons
+
+    registry = QualificationRegistry()
+    registry.register(qualification_record(report))
+
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    make_run_and_pass(store)
+    provider = ScriptedProvider(criteria_json({name: True for name in CRITERIA}))
+    service = ScoringJobService(store, provider_factory=lambda model: provider)
+    submitted = service.submit(ScoringJobRequest.model_validate({
+        "request_key": "qual-1",
+        "judge_spec": spec,
+        "mode": "single",
+        "run_id": "run-1",
+        "source_pass_id": "pass-source",
+        "observations": {"case-1": OBSERVATION},
+        "authorisation": {
+            "authorised": True, "actor": "operator", "max_calls": 4,
+        },
+    }))
+    result = service.claim_and_run()
+    assert result["status"] == "completed"
+    published = store.scoring_passes.get(result["receipt"]["scoring_pass_id"])
+    assert published["source"] == "judge"
+    # pass.judge 必须带可被资格读取的 rubric 身份，而不是只有拼接字符串。
+    assert published["judge"]["rubric_id"] == RUBRIC_ID
+    assert published["judge"]["rubric_version"] == RUBRIC_VERSION
+    assert published["judge"]["rubric"] == f"{RUBRIC_ID}@{RUBRIC_VERSION}"
+    assert published["judge"]["spec_sha256"] == spec.spec_sha256
+
+    eligible = pass_gate_eligibility(published, registry)
+    assert eligible["gate_eligible"] is True
+    assert eligible["experimental"] is False
+    assert eligible["qualification_id"] == qualification_record(report).qualification_id
+    assert len(provider.calls) == 1
+
+    # 换模型 / 换 spec hash 的 pass 不会继承这份资格。
+    other = registry.eligible(
+        judge_spec_sha256="sha256:" + "0" * 64, rubric_id=RUBRIC_ID,
+        rubric_version=RUBRIC_VERSION, model="judge-model", calibration_version="1",
+    )
+    assert other["gate_eligible"] is False and other["experimental"] is True
+    assert submitted["request_key"] == "qual-1"
+
+

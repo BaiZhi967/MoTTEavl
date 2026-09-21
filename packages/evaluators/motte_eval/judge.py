@@ -544,6 +544,10 @@ class JudgeSpec(Contract):
             "prompt": f"{self.prompt_id}@{self.prompt_version}",
             "prompt_sha256": self.prompt_sha256,
             "rubric": self.rubric_reference,
+            # 资格读取需要独立的 rubric 身份字段：只给拼接字符串会让
+            # pass_gate_eligibility 永远查不到真实发布的 pass。
+            "rubric_id": self.rubric_id,
+            "rubric_version": self.rubric_version,
             "rubric_sha256": self.rubric_sha256,
             "criteria": list(self.criteria),
             "calibration_version": self.calibration_version,

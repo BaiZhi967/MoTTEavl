@@ -34,6 +34,7 @@ __all__ = [
     "RubricError",
     "available_rubrics",
     "build_rubric",
+    "calibration_policy_sha256",
     "get_rubric",
     "policy_for",
     "rubric_content_sha256",
@@ -211,8 +212,14 @@ class CalibrationPolicy(Contract):
     min_injection: int = Field(default=6, ge=0)
     max_disagreement_rate: float = Field(default=0.15, ge=0.0, le=1.0)
     max_error_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+    max_refusal_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+    max_missing_evidence_rate: float = Field(default=0.25, ge=0.0, le=1.0)
     require_repeat_stability: bool = True
+    #: 重复评分必须达到的稳定率；1.0 表示「出现任何不稳定都不合格」。
+    min_repeat_stability_rate: float = Field(default=1.0, ge=0.0, le=1.0)
     require_position_swap_consistency: bool = True
+    #: 正反展示顺序必须保持一致的比例；1.0 表示不允许换序改变结论。
+    min_position_swap_consistency_rate: float = Field(default=1.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def kinds_fit_the_minimum(self) -> "CalibrationPolicy":
@@ -334,6 +341,20 @@ def policy_for(rubric_id: str, version: str) -> CalibrationPolicy:
         raise RubricError(
             f"no calibration policy is registered for {rubric_id}@{version}"
         ) from error
+
+
+def calibration_policy_sha256(policy: "CalibrationPolicy | dict[str, Any]") -> str:
+    """校准政策阈值的内容摘要。
+
+    阈值一旦变化（放宽或收紧）摘要就变化，因此在新政策下 **不会** 命中旧政策
+    登记过的资格：资格与报告都必须绑定这份摘要。
+    """
+    payload = (
+        policy.model_dump(mode="json")
+        if isinstance(policy, CalibrationPolicy)
+        else dict(policy)
+    )
+    return canonical_sha256(payload)
 
 
 def validate_policy(policy: CalibrationPolicy) -> CalibrationPolicy:
