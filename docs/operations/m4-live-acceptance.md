@@ -1,10 +1,10 @@
 # M4 live 验收执行卡
 
-状态：**执行方案，付费模型 live 尚未执行、未通过**；本卡本身不构成付费调用授权。安装固定版本、创建临时目录、选择端口和核对代码状态等普通准备按已有授权推进。本卡不证明 M4 已合并或全部验收完成。执行前登记最终代码 SHA、实际迁移 head 和环境；未运行项保持 `not_run`，真实依赖缺失保持 `blocked`。本次编写仅核对源码与文档，没有读取凭据、调用模型、启动 CLI 任务或修改现有用户文件。
+状态：**执行方案，付费模型 live 尚未执行、未通过**；本卡本身不构成付费调用授权。安装固定版本、创建临时目录、选择端口和核对代码状态等普通准备按已有授权推进。主干合入已另行完成；本卡不证明 M4 的真实模型验收完成。执行前登记最终代码 SHA、实际迁移 head 和环境；未运行项保持 `not_run`，真实依赖缺失保持 `blocked`。本次编写仅核对源码与文档，没有读取凭据、调用模型、启动 CLI 任务或修改现有用户文件。
 
 范围来自 [M4 kickoff T09/T10/T11 与退出门](../superpowers/plans/2026-09-20-m4-kickoff.md)：每个声明支持的后端需要同一文件小任务、实际执行中取消和失败证据；交互通道另验审批、steer、interrupt；Inspect 原生日志只读导入单列，不冒充模型 live。实现状态以 [M4 完成复核记录](../verification/M4-completion-review-2026-09-21.md) 为准。
 
-交接状态：开发分支代码 `270bfad` 已推送，[最终 Linux/PG CI 35556224363](https://github.com/BaiZhi967/MoTTEavl/actions/runs/35556224363) 全绿：Python **1963 passed、29 skipped、1 deselected**，Web **239 passed**；完整 make check、audit 和生成契约检查通过。main 尚未合并。真实 Codex 0.155.1 曾以空凭据完成 initialize→initialized→thread/start 零模型探针，回报 readOnly/network=false，未发送 turn/start，关闭无残留。该证据只归类 protocol/integration，不能记为模型 live、真实认证或模型取消通过。真实 Inspect 使用 mock 模型产生的原生收据已通过导入验收，原生格式证据可用，详见第 8 节。本卡四种创建 body 与 13 组预算已由独立 reviewer 经临时库/真实 API 作零 spawn、零 Worker 校验；执行时仍重新登记代码和实际环境。
+交接状态：开发分支代码 `270bfad` 已推送，[最终 Linux/PG CI 35556224363](https://github.com/BaiZhi967/MoTTEavl/actions/runs/35556224363) 全绿：Python **1963 passed、29 skipped、1 deselected**，Web **239 passed**；完整 make check、audit 和生成契约检查通过。用户已于 2026-09-21 明确要求先合入；main 已快进到 adf468a 并推送，该提交完整 CI 亦通过。此合入不改变 live 待验结论。真实 Codex 0.155.1 曾以空凭据完成 initialize→initialized→thread/start 零模型探针，回报 readOnly/network=false，未发送 turn/start，关闭无残留。该证据只归类 protocol/integration，不能记为模型 live、真实认证或模型取消通过。真实 Inspect 使用 mock 模型产生的原生收据已通过导入验收，原生格式证据可用，详见第 8 节。本卡四种创建 body 与 13 组预算已由独立 reviewer 经临时库/真实 API 作零 spawn、零 Worker 校验；执行时仍重新登记代码和实际环境。
 
 ## 1. 执行范围和停止条件
 

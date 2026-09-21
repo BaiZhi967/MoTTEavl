@@ -1,6 +1,6 @@
 # M4 完成复核记录
 
-状态：**implementation_complete / live_pending**。本轮代码修复、独立复审和 Linux/PG 完整 CI 已通过；真实模型验收未执行，main 尚未合并。分支 `codex/m4-pi-external-harnesses`，已验证代码提交 `270bfadcb7c23097cb49e6817cde22db039462ee`，本轮起始提交 `57227fae9b670a22193b6e86467679fb99c4c390`。本文是当前状态入口；[前一轮记录](M4.md)中的历史能力边界不作为本轮最终结论。
+状态：**implementation_complete / live_pending，已按用户要求合入主干**。本轮代码修复、独立复审和 Linux/PG 完整 CI 已通过；真实模型验收未执行。2026-09-21 用户明确要求先合并并推送，已将 `codex/m4-pi-external-harnesses` 快进合入 `main` 并推送至 `origin/main`，合入点 `adf468aec4b46ab5f17db7ded56354d93dd2673e`，该提交 [CI 35556677158](https://github.com/BaiZhi967/MoTTEavl/actions/runs/35556677158) 全绿。合入不改变 live 待验事实，也不阻止 M5 开发。前一代码验证提交为 `270bfadcb7c23097cb49e6817cde22db039462ee`，本轮起始提交 `57227fae9b670a22193b6e86467679fb99c4c390`。本文是当前状态入口；[前一轮记录](M4.md)中的历史能力边界不作为本轮最终结论。
 
 本轮要求包含全部 T01–T11；不能用 batch 闭环代替 T10/T11，也不能用离线 fake 或本地 HTTP stub 代替真实模型验收。M5 仅编写计划与交接提示词，没有实施。
 
@@ -82,7 +82,7 @@
 1. **已满足**：最终独立复审关闭本轮全部阻断发现；CI 修复、异步 Web 测试和原生 Inspect 收据增量亦独立复审通过。
 2. **已满足**：Linux + PostgreSQL CI 的完整 make check、audit、生成契约检查通过；本机 Windows 的失败记录仍保留，不用 Linux 结果冒充 Windows 全绿。
 3. G16/T09 真实小任务需明确后端、模型、凭据引用与调用/费用上限，分别记录 Pi/Claude/Codex 及 app-server 的 live 来源。不得读取或使用操作者已有登录态推定授权。
-4. 用户要求“全部 M4 完成后合并主干”；在上述验收未完成时不宣称全部完成或已满足该合入条件。M5 文档可先准备，实际 M4 主干 SHA 只在真实合并后登记。
+4. **已按最新指令调整并执行**：用户后续明确要求“先合并到主干并推送”，已于上述合入点完成。该指令覆盖此前“全部验收后再合入”的顺序约束；不据此宣称真实模型验收通过。M5 基线已登记，可开展开发。
 
 真实模型执行范围、参数、收据字段和待补配置见 [M4 live 验收执行卡](../operations/m4-live-acceptance.md)。该卡是可审阅的执行方案，不是调用授权或验收通过记录。
 

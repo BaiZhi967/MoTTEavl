@@ -4,6 +4,8 @@
 
 约定：每个 Task 完成后运行对应 focused tests，提交一个 commit；每个里程碑完成后推送 `main`。真实 Provider/Harness 付费评测由操作者自行启动，本记录只标记仓库内验证与 replay 验证。
 
+当前里程碑更新（2026-09-21）：M4 实现与修复已按用户要求快进合入并推送主干，合入点 `adf468a`，完整 Linux/PG CI 通过；真实模型验收仍为 `live_pending`。当前事实见 [M4 复核记录](verification/M4-completion-review-2026-09-21.md)。M5 可从此主干开始开发，使用 [详细计划](superpowers/plans/2026-09-21-m5-execution.md) 和 [开发提示词](prompts/M5-development-agent.md)。下列早期 Task 状态保留为历史记录。
+
 | Task | 内容 | 状态 | Commit | 验证 |
 |---|---|---|---|---|
 | 1 | 工作区、依赖、Compose、CI | ✅ | `2f8e15c`（含基础提交） | `uv run pytest tests/test_workspace_health.py -q`（1 passed）；Compose config 通过 |

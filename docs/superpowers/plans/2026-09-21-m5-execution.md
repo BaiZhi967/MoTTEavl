@@ -6,7 +6,7 @@
 
 **需求优先级：** 用户本次要求 > 项目 AGENTS.md / DESIGN.md > [M5 需求全文](../../roadmap/M5-scenarios-skills-and-judges.md)及[共通约束](../../roadmap/README.md) > 本执行细化。[2026-09-19 计划](2026-09-19-m1-m7/M5.md)保留为历史规划，当前实施顺序和接口事实以本文件为准。
 
-**代码基线：** M4 交付主干提交在交接时登记；编写期间 M4 整改尚在验证，禁止把计划中的拟新增接口当作现有能力。开工必须记录 `git rev-parse HEAD`、工作区状态、Alembic 实际 head 和 M4 验证记录中的未验收环境。
+**代码基线：** M4 已按用户 2026-09-21 的明确要求先行快进合入并推送主干，合入点为 `adf468aec4b46ab5f17db7ded56354d93dd2673e`，该提交完整 Linux/PG CI 已通过。M5 可从包含此提交的最新主干立即开发；M4 live_pending 保留为真实支持边界，不是 M5 全阶段开工阻断。禁止把计划中的拟新增接口当作现有能力。开工必须记录 `git rev-parse HEAD`、工作区状态、Alembic 实际 head 和 M4 验证记录中的未验收环境。
 
 **技术栈：** Python 3.12、uv workspace、FastAPI/Pydantic、Node 24/pnpm、React/Vite、SQLite/PostgreSQL；既有 RunDispatcher、CaseAttempt、InvocationRecord、Artifact、FrozenObservation、ScoreSet、ScoringPass 和 Worker 执行锁。
 
