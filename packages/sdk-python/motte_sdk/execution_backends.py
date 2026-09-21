@@ -657,6 +657,7 @@ except ImportError:
 try:
     from .scenario_backend import install_scenario_backend as _install_scenario_backend
 
-    _install_scenario_backend(available=True)
+    # 可用性由 scenario_backend.SCENARIO_BACKEND_AVAILABLE 决定（唯一事实源）。
+    _install_scenario_backend()
 except ImportError:
     pass

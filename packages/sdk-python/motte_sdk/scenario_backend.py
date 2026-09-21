@@ -79,18 +79,8 @@ def validate_scenario_manifest(manifest: dict[str, Any]) -> None:
         raise ExecutionBackendError(
             "SCENARIO_WORKFLOW_INVALID", "workflow snapshot carries no steps"
         )
-    kind = target_kind_of(manifest)
-    from motte_scenario.targets import (
-        TargetCapabilityError,
-        require_capabilities,
-        target_capabilities,
-    )
-
-    try:
-        capabilities = target_capabilities(kind, manifest)
-        require_capabilities(target, capabilities)
-    except TargetCapabilityError as error:
-        raise ExecutionBackendError(error.code, str(error)) from error
+    # 先校验冻结输入的形状，再校验目标能力：配置错误应当先报出来，能力不足
+    # 是另一类错误（错误码不同，客户端可以分别处理）。
     fixtures = manifest.get("fixture_snapshot")
     if not isinstance(fixtures, dict) or not fixtures:
         raise ExecutionBackendError(
@@ -103,6 +93,18 @@ def validate_scenario_manifest(manifest: dict[str, Any]) -> None:
                 "SCENARIO_FIXTURE_INVALID",
                 f"fixture snapshot {key} is missing a pinned content hash",
             )
+    kind = target_kind_of(manifest)
+    from motte_scenario.targets import (
+        TargetCapabilityError,
+        require_capabilities,
+        target_capabilities,
+    )
+
+    try:
+        capabilities = target_capabilities(kind, manifest)
+        require_capabilities(target, capabilities)
+    except TargetCapabilityError as error:
+        raise ExecutionBackendError(error.code, str(error)) from error
 
 
 def _build_scenario(run: dict[str, Any]) -> ExecutionHandle:
@@ -122,12 +124,15 @@ def _build_scenario(run: dict[str, Any]) -> ExecutionHandle:
     )
 
 
-def install_scenario_backend(*, available: bool) -> ExecutionBackendSpec:
+def install_scenario_backend(*, available: bool | None = None) -> ExecutionBackendSpec:
     """注册/更新 scenario@1。
 
     available=False 时创建期即明确 unavailable，不静默改选其他 backend
     （M5-T01 完成门：可执行 backend 注册前公开执行必须明确不可用）。
+    默认沿用本模块的 SCENARIO_BACKEND_AVAILABLE 事实开关。
     """
+    if available is None:
+        available = SCENARIO_BACKEND_AVAILABLE
     return register_backend(
         ExecutionBackendSpec(
             id=SCENARIO_BACKEND_ID,
@@ -142,4 +147,13 @@ def install_scenario_backend(*, available: bool) -> ExecutionBackendSpec:
     )
 
 
-install_scenario_backend(available=True)
+#: M5 执行状态开关。
+#:
+#: 契约、编译、条件、Fixture 生命周期与有界引擎（含受控进程目标）都已实现
+#: 并有测试；但把引擎接进既有 CaseAttempt/Observation/ScoringPass 纵向链路的
+#: ScenarioCaseExecutor **尚未交付**（M5-T05 未完成）。在它落地之前公开执行
+#: 必须明确 unavailable：创建期就返回 EXECUTION_BACKEND_UNAVAILABLE，而不是
+#: 让 Run 进入分派后才失败，也绝不静默改选 replay/direct-llm。
+SCENARIO_BACKEND_AVAILABLE = False
+
+install_scenario_backend(available=SCENARIO_BACKEND_AVAILABLE)
