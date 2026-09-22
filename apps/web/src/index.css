@@ -224,6 +224,142 @@ body {
   overflow-y: auto;
 }
 
+/* ---------- 顶栏（DESIGN.md 3.1）：面包屑 + 分段页签 / 页面标题 ---------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  padding: 0 24px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.crumb {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.crumb b {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.topbar-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.topbar-tabs {
+  margin-bottom: 0;
+}
+
+/* 顶栏页签激活：与 Radix data-state=active 同规格 */
+.tabs-trigger-active,
+.tabs-trigger[aria-current="page"] {
+  background: var(--bg-surface);
+  color: var(--accent);
+  font-weight: 500;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+/* ---------- 侧栏底部连接状态条（DESIGN.md 3.2） ---------- */
+
+.sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 10px 4px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-foot:hover {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.led {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--neutral);
+}
+
+.led-on {
+  background: var(--success);
+}
+
+/* ---------- 移动端（DESIGN.md 3.5）：侧栏转顶部横向滚动导航 ---------- */
+
+@media (max-width: 760px) {
+  .app-shell {
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+  }
+
+  .sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+  }
+
+  .brand,
+  .nav-group-label {
+    display: none;
+  }
+
+  .side-nav {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .tab {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .sidebar-foot {
+    width: auto;
+    margin-top: 0;
+    margin-left: auto;
+    padding: 4px 8px;
+    border-top: none;
+    white-space: nowrap;
+  }
+
+  .topbar {
+    padding: 0 16px;
+  }
+}
+
 /* ---------- 页面与面板（DESIGN.md 3.3） ---------- */
 
 .page {

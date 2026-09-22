@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation, Link } from "react-router-dom";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   ActivityIcon,
@@ -7,7 +7,6 @@ import {
   FlowArrowIcon,
   FlagCheckeredIcon,
   FlaskIcon,
-  KeyIcon,
   MagicWandIcon,
   PlugIcon,
   PuzzlePieceIcon,
@@ -25,7 +24,7 @@ import { ExperimentsPage } from "./pages/m6/ExperimentsPage";
 import { GatePage } from "./pages/m6/GatePage";
 import { ScenarioRunStepsPage, ScenarioWorkflowsPage } from "./evalTypes/scenario/ScenarioPages";
 import { SkillComparePage, SkillValidationPage } from "./evalTypes/skill/SkillPages";
-import { EVAL_SUITES } from "./evalTypes/registry";
+import { EVAL_SUITES, type EvalTypeSuite } from "./evalTypes/registry";
 import { FallbackMonitorPage, FallbackResultPage } from "./evalTypes/fallback/FallbackPages";
 import { CevalCases } from "./evalTypes/ceval/CevalPages";
 import { CevalCompare } from "./evalTypes/ceval/CevalPages";
@@ -61,20 +60,80 @@ const CmmluPages = makeExternalPages("cmmlu", {
   preparePlaceholder: "每行一题 JSON（id/subject/question/A-D/answer；subject 需在 CMMLU 67 学科清单）",
 });
 
-const GENERAL_NAV = [
-  { to: "/runs", label: "运行", icon: StackIcon },
+/* 两级导航（DESIGN.md 3.2）：侧栏只放分区入口，套件五段页签由顶栏承担 */
+
+const OVERVIEW_NAV = [{ to: "/runs", label: "运行总览", icon: StackIcon }] as const;
+
+const RESOURCE_NAV = [
   { to: "/providers", label: "Provider 与模型", icon: PlugIcon },
   { to: "/harnesses", label: "Agent / Harness", icon: PuzzlePieceIcon },
   { to: "/scenario", label: "场景 Workflow", icon: FlowArrowIcon },
   { to: "/skill", label: "Skill 校验", icon: MagicWandIcon },
   { to: "/judges", label: "Judge 校准", icon: ScalesIcon },
+] as const;
+
+const EXPERIMENT_NAV = [
   { to: "/experiments", label: "实验", icon: FlaskIcon },
   { to: "/compare", label: "比较", icon: ArrowsLeftRightIcon },
   { to: "/baselines", label: "基线", icon: PushPinIcon },
   { to: "/gate", label: "门禁", icon: FlagCheckeredIcon },
 ] as const;
 
-function ApiTokenDialog() {
+const GENERAL_NAV = [...OVERVIEW_NAV, ...RESOURCE_NAV, ...EXPERIMENT_NAV] as const;
+
+function suiteForPath(pathname: string): EvalTypeSuite | null {
+  const segment = pathname.split("/")[1] ?? "";
+  return EVAL_SUITES.find((suite) => suite.id === segment) ?? null;
+}
+
+/** 顶栏（DESIGN.md 3.1）：左面包屑，中段套件分段页签（全局页为页面标题），右留白给会话级操作 */
+function TopBar() {
+  const location = useLocation();
+  const suite = suiteForPath(location.pathname);
+
+  const isTabActive = (to: string) => {
+    const [path, query] = to.split("?");
+    if (location.pathname !== path) return false;
+    if (!query) return true;
+    const [key, value] = query.split("=");
+    return new URLSearchParams(location.search).get(key) === decodeURIComponent(value);
+  };
+
+  if (suite) {
+    return (
+      <header className="topbar">
+        <span className="crumb">
+          评测套件 / <b>{suite.id}</b>
+        </span>
+        <nav className="tabs-list topbar-tabs" aria-label={`${suite.label}分段页签`}>
+          {suite.tabs.map((tab) => (
+            <Link
+              key={tab.key}
+              to={tab.to}
+              aria-current={isTabActive(tab.to) ? "page" : undefined}
+              className={`tabs-trigger${isTabActive(tab.to) ? " tabs-trigger-active" : ""}`}
+            >
+              {tab.label}
+            </Link>
+          ))}
+        </nav>
+      </header>
+    );
+  }
+
+  const current = GENERAL_NAV.find((item) => location.pathname.startsWith(item.to));
+  return (
+    <header className="topbar">
+      <span className="crumb">
+        通用 / <b>{location.pathname.split("/")[1] || "runs"}</b>
+      </span>
+      {current ? <span className="topbar-title">{current.label}</span> : null}
+    </header>
+  );
+}
+
+/** 侧栏底部连接状态条：LED + mono 文案，点击打开 API 认证设置 */
+function ApiTokenBar() {
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
   const configured = getApiToken() !== "";
@@ -92,9 +151,9 @@ function ApiTokenDialog() {
       if (next) setToken(getApiToken());
     }}>
       <Dialog.Trigger asChild>
-        <button type="button" className="tab">
-          <KeyIcon size={16} weight="bold" aria-hidden />
-          <span>{configured ? "API 已认证" : "API 认证"}</span>
+        <button type="button" className="sidebar-foot">
+          <span className={`led${configured ? " led-on" : ""}`} aria-hidden />
+          <span>{configured ? "API 已认证" : "API 未认证"}</span>
         </button>
       </Dialog.Trigger>
       <Dialog.Portal>
@@ -144,25 +203,39 @@ export default function App() {
           <p>评测控制台</p>
         </div>
         <nav className="side-nav" aria-label="主导航">
-          <p className="nav-group-label">评测类型</p>
+          <p className="nav-group-label">总览</p>
+          {OVERVIEW_NAV.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} className="tab">
+              <Icon size={16} weight="bold" aria-hidden />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+          <p className="nav-group-label">评测套件</p>
           {EVAL_SUITES.map(({ id, label, icon: Icon }) => (
             <NavLink key={id} to={`/${id}`} className="tab">
               <Icon size={16} weight="bold" aria-hidden />
               <span>{label}</span>
             </NavLink>
           ))}
-          <p className="nav-group-label">通用</p>
-          {GENERAL_NAV.map(({ to, label, icon: Icon }) => (
+          <p className="nav-group-label">资源</p>
+          {RESOURCE_NAV.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} className="tab">
               <Icon size={16} weight="bold" aria-hidden />
               <span>{label}</span>
             </NavLink>
           ))}
-          <p className="nav-group-label">连接</p>
-          <ApiTokenDialog />
+          <p className="nav-group-label">实验体系</p>
+          {EXPERIMENT_NAV.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} className="tab">
+              <Icon size={16} weight="bold" aria-hidden />
+              <span>{label}</span>
+            </NavLink>
+          ))}
         </nav>
+        <ApiTokenBar />
       </aside>
       <div className="workbench">
+        <TopBar />
         <Routes>
           <Route path="/" element={<Navigate to="/gsm8k" replace />} />
           <Route path="/runs" element={<RunsOverviewPage />} />

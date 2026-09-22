@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Select from "@radix-ui/react-select";
 import { CaretDownIcon, CheckIcon, DotsThreeIcon } from "@phosphor-icons/react";
@@ -18,9 +18,15 @@ function typeLabel(run: RunRecord): string {
 
 export function RunsOverviewPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [statusFilter, setStatusFilter] = useState("all");
-  const [typeFilter, setTypeFilter] = useState("all");
+  // 套件顶栏「结果」页签以 ?type=<套件标签> 落入本页，合法的标签作为初始过滤值
+  const [typeFilter, setTypeFilter] = useState(() => {
+    const wanted = searchParams.get("type");
+    const known = [...EVAL_SUITES.map((suite) => suite.label), "通用"];
+    return wanted && known.includes(wanted) ? wanted : "all";
+  });
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {

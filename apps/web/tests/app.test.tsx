@@ -93,3 +93,33 @@ describe("应用路由（收尾）", () => {
     await waitFor(() => expect(screen.getByTestId("tb-dataset-revision")).toBeTruthy());
   });
 });
+
+describe("两级导航（DESIGN.md 3.2）", () => {
+  it("套件页顶栏出现分段页签与面包屑", () => {
+    renderWithLocation("/gsm8k");
+    expect(screen.getByRole("link", { name: "操作" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "题目" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "监控" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "对比" })).toBeTruthy();
+    // 「结果」页签落在运行总览并按套件标签过滤
+    const resultTab = screen.getByRole("link", { name: "结果" });
+    expect(resultTab.getAttribute("href")).toContain("/runs?type=");
+    // 面包屑（评测套件 / gsm8k）
+    expect(screen.getByText("gsm8k")).toBeTruthy();
+  });
+
+  it("「结果」页签的落地页按套件标签过滤运行总览", async () => {
+    renderWithLocation(`/runs?type=${encodeURIComponent("GSM8K 数学评测")}`);
+    await waitFor(() => expect(screen.getAllByText("运行总览").length).toBeGreaterThan(0));
+  });
+
+  it("Terminal-Bench 页签用「任务」替代「题目」", () => {
+    renderWithLocation("/terminal-bench");
+    expect(screen.getByRole("link", { name: "任务" })).toBeTruthy();
+  });
+
+  it("侧栏底部连接状态条常显", () => {
+    renderWithLocation("/gsm8k");
+    expect(screen.getByRole("button", { name: /API 未认证/ })).toBeTruthy();
+  });
+});
