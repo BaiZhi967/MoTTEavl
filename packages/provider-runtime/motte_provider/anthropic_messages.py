@@ -12,6 +12,7 @@ from typing import Any
 from motte_contracts.messages import Message, ModelRequest, ModelResponse
 
 from .base import BaseHTTPProvider, validate_http_provider_config
+from .errors import ProviderProtocolError
 from .normalization import normalize_finish_reason, normalize_usage_details
 
 ANTHROPIC_VERSION = "2023-06-01"
@@ -50,7 +51,7 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
         body["stream"] = True
         return body
 
-    def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+    def normalize_stream_event(self, data: dict[str, Any], state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Anthropic Messages SSE 事件 → 归一化；未知事件类型 fail closed。
 
         计量跨事件累积（M4 review R26）：``message_start`` 携带 input/
@@ -61,6 +62,7 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
         """
         from .errors import ProviderHTTPError
 
+        state = state if state is not None else {}
         event_type = data.get("type")
         if event_type == "content_block_delta":
             delta = data.get("delta") or {}
@@ -97,7 +99,7 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
             message = data.get("message") or {}
             usage = message.get("usage")
             if isinstance(usage, dict) and usage:
-                merged = self._merge_stream_usage(usage)
+                merged = self._merge_stream_usage(usage, state)
                 if merged:
                     return [{
                         "type": self.STREAM_USAGE, "delta": "",
@@ -108,10 +110,10 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
             usage = data.get("usage")
             stop_reason = (data.get("delta") or {}).get("stop_reason")
             if isinstance(stop_reason, str) and stop_reason:
-                self._stream_stop_reason = stop_reason
+                state["stop_reason"] = stop_reason
             events: list[dict[str, Any]] = []
             if isinstance(usage, dict) and usage:
-                merged = self._merge_stream_usage(usage)
+                merged = self._merge_stream_usage(usage, state)
                 if merged:
                     events.append({
                         "type": self.STREAM_USAGE, "delta": "",
@@ -124,20 +126,20 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
         if event_type == "message_stop":
             return [{
                 "type": self.STREAM_FINISH, "delta": "",
-                "payload": {"finish_reason": self._stream_stop_reason or "stop"},
+                "payload": {"finish_reason": state.get("stop_reason") or "stop"},
             }]
         raise ProviderHTTPError(
             f"anthropic stream event has unknown type: {event_type!r}",
             error_class="protocol",
         )
 
-    def _reset_stream_state(self) -> None:
-        self._stream_usage_state = {}
-        self._stream_stop_reason = None
+    def _normalize_stream_event(self, data: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.normalize_stream_event(data, state)
 
-    def _merge_stream_usage(self, usage: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _merge_stream_usage(usage: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """按事件累积计量：input（message_start）+ output（message_delta）。"""
-        merged = dict(getattr(self, "_stream_usage_state", None) or {})
+        merged = dict(state.get("usage") or {})
         for key in (
             "input_tokens", "output_tokens",
             "cache_read_input_tokens", "cache_creation_input_tokens",
@@ -145,7 +147,7 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
             value = usage.get(key)
             if isinstance(value, int) and not isinstance(value, bool):
                 merged[key] = value
-        self._stream_usage_state = merged
+        state["usage"] = merged
         return merged
 
     def build_request_body(self, request: ModelRequest) -> dict[str, Any]:
@@ -186,16 +188,23 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
                 blocks.append({"type": "text", "text": message.content})
             for call in message.tool_calls:
                 function = call.get("function") or {}
-                arguments = function.get("arguments") or "{}"
+                name = call.get("name") or function.get("name")
+                arguments = call.get("arguments")
+                if arguments is None:
+                    arguments = function.get("arguments")
+                arguments = arguments or "{}"
                 try:
                     inputs = json.loads(arguments) if isinstance(arguments, str) else arguments
                 except ValueError:
                     inputs = {"_raw": arguments}
-                blocks.append({"type": "tool_use", "id": call.get("id"), "name": function.get("name"), "input": inputs})
+                blocks.append({"type": "tool_use", "id": call.get("id"), "name": name, "input": inputs})
             return {"role": "assistant", "content": blocks}
         return {"role": message.role, "content": message.content}
 
     def normalize_response(self, data: dict[str, Any]) -> ModelResponse:
+        content = data.get("content")
+        if not isinstance(content, list) or not content or not all(isinstance(block, dict) for block in content):
+            raise ProviderProtocolError("malformed provider response: missing content")
         texts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         for block in data.get("content") or []:

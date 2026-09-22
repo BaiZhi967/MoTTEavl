@@ -10,17 +10,50 @@ from email.utils import parsedate_to_datetime
 from datetime import timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .errors import (
     ProviderAuthenticationError,
     ProviderHTTPError,
     ProviderRateLimitError,
+    ProviderRedirectError,
     classify_error_type,
     classify_status,
 )
 
 AUTH_STYLES = ("bearer", "x-api-key")
+
+
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    """Allow only same-origin, non-downgrade redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        source = urlsplit(req.full_url)
+        target = urlsplit(newurl)
+        source_port = source.port or (443 if source.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        same_origin = (
+            source.scheme == target.scheme
+            and source.hostname == target.hostname
+            and source_port == target_port
+        )
+        if not same_origin or (source.scheme == "https" and target.scheme != "https"):
+            raise ProviderRedirectError(
+                "provider redirect refused: cross-origin or HTTPS downgrade"
+            )
+        # Preserve POST semantics and credentials for the same trusted origin.
+        return Request(
+            newurl,
+            data=req.data,
+            headers=dict(req.headers),
+            origin_req_host=req.origin_req_host,
+            unverifiable=True,
+            method=req.get_method(),
+        )
+
+
+def _safe_urlopen(request, *, timeout):
+    return build_opener(_SafeRedirectHandler()).open(request, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -31,7 +64,7 @@ class TransportOutcome:
     path: str
     request_body: dict
     status: int | None = None
-    response_body: dict | None = None
+    response_body: object | None = None
     attempts: int = 0
     latency_ms: float = 0.0
     error_class: str | None = None
@@ -51,7 +84,7 @@ class HTTPTransport:
         backoff_max: float = 30.0,
         auth: str = "bearer",
         default_headers: dict[str, str] | None = None,
-        opener: Callable = urlopen,
+        opener: Callable | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -66,7 +99,7 @@ class HTTPTransport:
         self.backoff_max = max(self.backoff_initial, float(backoff_max))
         self._auth = auth
         self._default_headers = dict(default_headers or {})
-        self._opener = opener
+        self._opener = opener or _safe_urlopen
         self._sleep = sleep
         self._clock = clock
         self._wall_clock = wall_clock
@@ -130,7 +163,11 @@ class HTTPTransport:
                     error_message=error_message or str(exc.reason),
                     headers={"Content-Type": "application/json", "Accept": "application/json", **self._default_headers},
                 )
-                if self._is_retryable_status(exc.code) and attempt <= self.max_retries:
+                if (
+                    self._retry_enabled(headers)
+                    and self._is_retryable_status(exc.code)
+                    and attempt <= self.max_retries
+                ):
                     delay = self._retry_delay(exc.headers, attempt)
                     self._sleep(delay)
                     continue
@@ -149,7 +186,11 @@ class HTTPTransport:
                     error_class=error_class,
                     error_message=message,
                 )
-                if outcome.error_class == "network" and attempt <= self.max_retries:
+                if (
+                    self._retry_enabled(headers)
+                    and outcome.error_class == "network"
+                    and attempt <= self.max_retries
+                ):
                     delay = min(self.backoff_max, self.backoff_initial * (2 ** (attempt - 1)))
                     self._sleep(delay)
                     continue
@@ -225,6 +266,13 @@ class HTTPTransport:
         if delay is None:
             delay = self.backoff_initial * (2 ** (attempt - 1))
         return min(self.backoff_max, delay)
+
+    @staticmethod
+    def _retry_enabled(headers: dict[str, str]) -> bool:
+        return any(
+            key.lower() == "idempotency-key" and bool(value)
+            for key, value in headers.items()
+        )
 
     @staticmethod
     def _is_retryable_status(status: int) -> bool:

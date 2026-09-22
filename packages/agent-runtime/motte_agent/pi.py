@@ -458,10 +458,7 @@ class PiBridgeSession:
             raise PiBridgeError("pi bridge event must be an object", code="PI_PROTOCOL_INVALID")
         validated = self._validate_event(event)
         if self.event_callback is not None:
-            try:
-                self.event_callback(validated)
-            except Exception:  # noqa: BLE001 - 回调失败不破坏协议流
-                pass
+            self.event_callback(validated)
         return validated
 
     def _expect(self, allowed_keys: Any, *, terminal: bool) -> dict[str, Any]:

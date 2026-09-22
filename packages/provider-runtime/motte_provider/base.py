@@ -17,7 +17,7 @@ from motte_contracts.messages import ModelRequest, ModelResponse
 from motte_trace.redaction import redact
 
 from .capabilities import validate_parameters
-from .errors import ProviderError, ProviderHTTPError, classify_exception
+from .errors import ProviderError, ProviderHTTPError, ProviderProtocolError, classify_exception
 from .identity import assess_identity, validate_identity_config
 from .pricing import PriceTable, cost_detail, parse_price_table
 from .transport import HTTPTransport, TransportOutcome
@@ -123,8 +123,8 @@ class BaseHTTPProvider:
         """
         raise NotImplementedError
 
-    def _reset_stream_state(self) -> None:
-        """每次 stream 调用前重置 adapter 内的跨事件累积状态（默认无状态）。"""
+    def _normalize_stream_event(self, data: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.normalize_stream_event(data)
 
     # ----------------------------------------------------------------- 流式
 
@@ -145,7 +145,7 @@ class BaseHTTPProvider:
         """
         body = self.build_stream_request_body(request)
         body.update(reasoning_patch(self.reasoning, self.reasoning_level))
-        self._reset_stream_state()
+        stream_state: dict[str, Any] = {}
         started_any_text: list[str] = []
         tool_fragments: dict[int, dict[str, Any]] = {}
         terminal_usage: dict[str, Any] | None = None
@@ -169,7 +169,7 @@ class BaseHTTPProvider:
                         "stream chunk must be a JSON object", error_class="protocol",
                     )
                 chunks += 1
-                for event in self.normalize_stream_event(data):
+                for event in self._normalize_stream_event(data, stream_state):
                     if event["type"] == self.STREAM_TEXT_DELTA:
                         started_any_text.append(event.get("delta") or "")
                     elif event["type"] == self.STREAM_TOOL_DELTA:
@@ -265,7 +265,8 @@ class BaseHTTPProvider:
         envelope = self._envelope(body, outcome, error=None)
         if "error" in envelope:
             # Canonical response is redacted in _envelope; preserve token usage as evidence.
-            envelope["tool_calls"] = self._redactor(envelope["tool_calls"])
+            if "tool_calls" in envelope:
+                envelope["tool_calls"] = self._redactor(envelope["tool_calls"])
             self.calls.append(envelope)
             raise ProviderCallError(envelope)
         self.calls.append(envelope)
@@ -308,7 +309,7 @@ class BaseHTTPProvider:
                 "error_class": classify_exception(error) if error else None,
             },
         }
-        if outcome is not None and isinstance(outcome.response_body, dict):
+        if outcome is not None and outcome.response_body is not None:
             envelope["canonical"]["response"] = {
                 "status": outcome.status,
                 "body": self._redactor(outcome.response_body),
@@ -319,7 +320,25 @@ class BaseHTTPProvider:
                 "message": str(error),
             }
             return envelope
-        response = self.normalize_response(outcome.response_body or {})
+        try:
+            if not isinstance(outcome.response_body, dict):
+                raise ProviderProtocolError("malformed provider response: expected a JSON object")
+            response = self.normalize_response(outcome.response_body)
+        except ProviderError as protocol_error:
+            envelope["metering"]["error_class"] = classify_exception(protocol_error)
+            envelope["error"] = {
+                "class": classify_exception(protocol_error),
+                "message": str(protocol_error),
+            }
+            return envelope
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+            protocol_error = ProviderProtocolError("malformed provider response: invalid response shape")
+            envelope["metering"]["error_class"] = classify_exception(protocol_error)
+            envelope["error"] = {
+                "class": classify_exception(protocol_error),
+                "message": str(protocol_error),
+            }
+            return envelope
         envelope.update(
             content=response.content,
             finish_reason=response.finish_reason,

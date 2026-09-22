@@ -8,6 +8,7 @@ R2-12 由 make openapi-check 门禁。真实固定环境端到端仍按 not_run 
 """
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -41,6 +42,22 @@ from motte_storage.benchmark_datasets import SQLiteBenchmarkDatasets
 from motte_storage.external_jobs import SQLiteExternalJobs
 from motte_storage.run_store import SQLiteRunStore
 from motte_contracts.external_job import ExternalJobSpec
+
+
+def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        return f'"{pid}"' in result.stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
 
 
 def _row(row_id, subject, answer, question="Q?"):
@@ -148,12 +165,13 @@ def test_r2_01_bridge_renders_opencompass_config_with_credential_refs(tmp_path):
     assert "os.environ" in source and "MOTTE_TEST_KEY" in source
     assert "sk-plain" not in source
     assert "opencompass-cli" not in source
-    exported = [json.loads(line) for line in data_files["logic"].read_text().splitlines()]
+    exported = [json.loads(line) for line in data_files["logic"].read_text(encoding="utf-8").splitlines()]
     assert exported[0]["id"] == "logic-1"
     assert exported[0]["question"] == "Q?" and exported[0]["B"] == "2"
     assert "answer" not in exported[0]  # 目标 gold 不进 Runner 数据
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable stub contract")
 def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_path, monkeypatch):
     work = tmp_path / "job"
     work.mkdir()
@@ -186,7 +204,7 @@ def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_
     monkeypatch.setenv("MOTTE_RUNNER_PYTHON", str(stub))
     exit_code = entry_main([])
     assert exit_code == 0
-    argv = (work / "cli-argv.txt").read_text().split("\n")[0].split()
+    argv = (work / "cli-argv.txt").read_text(encoding="utf-8").split("\n")[0].split()
     # 固定版 CLI 调用形态：-m opencompass.cli.main <config(位置参数)>
     # --work-dir <outputs>；无 --config/--launch-token 等 0.4.2 不支持的
     # 身份参数（review R2-01）。
@@ -195,9 +213,9 @@ def test_r2_01_entry_invokes_pinned_cli_positionally_without_identity_flags(tmp_
     assert argv[3:] == ["--work-dir", str(work / "outputs"), "--mode", "infer"]
     assert "--launch-token" not in argv and "--config" not in argv
     # 实验目录指针 + 完成标记（R2-02/R2-10 契约）。
-    pointer = json.loads((work / "outputs" / "experiment.json").read_text())
+    pointer = json.loads((work / "outputs" / "experiment.json").read_text(encoding="utf-8"))
     assert pointer["experiment"] == "20260920_090000"
-    marker = json.loads((work / ".motte-job-complete").read_text())
+    marker = json.loads((work / ".motte-job-complete").read_text(encoding="utf-8"))
     assert marker == {"exit_code": 0, "completed": True}
     # 指针下可直接解析（真实固定版产物形态）。
     parsed = parse_opencompass_results(work / "outputs", dataset="ceval")
@@ -574,7 +592,7 @@ def test_r2_06_official_scores_bound_to_frozen_content_hash(tmp_path, monkeypatc
     # 采集后改写工作目录：不影响已绑定的证据 hash / 已导入分数。
     work_dir = Path(job["handle"]["work_dir"])
     target = next(work_dir.rglob("ceval-logic.json"))
-    tampered = json.loads(target.read_text())
+    tampered = json.loads(target.read_text(encoding="utf-8"))
     tampered["details"]["0"]["origin_prediction"] = "答案为 D"
     target.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
     refreshed = jobs.get_job(job["job_id"])
@@ -672,9 +690,7 @@ def test_r2_09_default_max_wall_applies_to_opencompass_adapter(tmp_path):
     pid = outcome["handle"]["owned_resources"]["pids"][0]
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _pid_alive(pid):
             break
         real_sleep(0.05)
     else:

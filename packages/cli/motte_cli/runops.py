@@ -176,7 +176,7 @@ def run_events_command(args) -> int:
         outcome = remote.call_remote(
             args,
             lambda client: (
-                client.run_events_snapshot(args.run_id, after=after).events
+                _server_snapshot_events(client, args.run_id, after)
                 if args.snapshot
                 else _server_event_lines(client, args.run_id, after)
             ),
@@ -200,10 +200,24 @@ def run_events_command(args) -> int:
     return 0
 
 
+def _server_snapshot_events(client, run_id: str, after: int) -> list[dict]:
+    """Read every snapshot page while rejecting a non-advancing server cursor."""
+    events: list[dict] = []
+    cursor = after
+    while True:
+        snapshot = client.run_events_snapshot(run_id, after=cursor)
+        events.extend(snapshot.events)
+        if not snapshot.has_more:
+            return events
+        next_after = snapshot.next_after if snapshot.next_after is not None else snapshot.last_seq
+        if next_after is None or next_after <= cursor:
+            raise RuntimeError("events snapshot pagination cursor did not advance")
+        cursor = next_after
+
+
 def _server_event_lines(client, run_id: str, after: int) -> str:
-    """server JSONL 模式：snapshot 端点取事件并逐行打印（stdout 机器数据）。"""
-    snapshot = client.run_events_snapshot(run_id, after=after)
-    for event in snapshot.events:
+    """server JSONL 模式：逐页取全量事件并逐行打印（stdout 机器数据）。"""
+    for event in _server_snapshot_events(client, run_id, after):
         print(json.dumps(event, ensure_ascii=False))
     return ""
 
@@ -283,7 +297,7 @@ def _local_run_report(service, run_id: str, scoring_pass_id: str | None):
 
     返回 None 表示指定的 scoring pass 不属于该 Run（SCORING_PASS_NOT_FOUND）。
     """
-    from datetime import UTC, datetime
+    from motte_sdk.reporting import build_public_run_report
 
     run = service.get_run(run_id)
     if scoring_pass_id is not None:
@@ -293,29 +307,4 @@ def _local_run_report(service, run_id: str, scoring_pass_id: str | None):
         run["scores"] = service.store.score_sets.list_for_pass(scoring_pass_id)
         run["current_scoring_pass_id"] = scoring_pass_id
         run["scoring_pass"] = selected
-    cases = run.get("cases", [])
-    scores = run.get("scores", [])
-    passed = sum(1 for score in scores if score.get("passed") is True)
-    failed = sum(1 for score in scores if score.get("passed") is False)
-    judged = passed + failed
-    scoring_pass = run.get("current_scoring_pass_id")
-    return {
-        "schema_version": 2 if scoring_pass else 1,
-        "run_id": run["id"],
-        "scenario_version": run.get("scenario_version"),
-        "status": run.get("status"),
-        "generated_at": datetime.now(UTC).isoformat(),
-        "summary": {
-            "cases": len(cases),
-            "scored": len(scores),
-            "passed": passed,
-            "failed": failed,
-            "pass_rate": round(passed / judged, 4) if judged else None,
-        },
-        "scoring_pass_id": scoring_pass,
-        "scores": scores,
-        "cases": [
-            {"case_id": case.get("case_id"), "result": case.get("result")}
-            for case in cases
-        ],
-    }
+    return build_public_run_report(run)

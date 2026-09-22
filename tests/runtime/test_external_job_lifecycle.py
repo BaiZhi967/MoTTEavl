@@ -13,6 +13,7 @@
 """
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -68,13 +69,19 @@ class _UnrelatedJob:
 
 
 def _pid_alive(pid):
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        return f'"{pid}"' in result.stdout
     try:
         os.kill(pid, 0)
         return True
-    except ProcessLookupError:
-        return False
     except PermissionError:
         return True
+    except OSError:
+        return False
 
 
 def _single_job_dir(work_root):
@@ -264,7 +271,12 @@ def test_collect_rejects_escape_oversize_and_halfwritten(tmp_path):
     outside.write_text(json.dumps({"records": [
         {"case_id": "s-a:1", "status": "succeeded"},
     ]}), encoding="utf-8")
-    os.symlink(outside, work_dir / "results.json")
+    try:
+        os.symlink(outside, work_dir / "results.json")
+    except OSError as error:
+        if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or symlink privilege")
+        raise
     with pytest.raises(BenchmarkRuntimeError, match="results"):
         adapter.collect(handle, {})
 

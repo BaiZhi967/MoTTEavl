@@ -12,7 +12,9 @@ from typing import Any
 
 from psycopg.types.json import Json
 
-from .baseline_store import BaselineConflict
+from .baseline_store import BaselineConflict, _validate as _validate_baseline
+from .experiments import _validate_cell, _validate_spec
+from .gate_store import _validate_policy, _validate_result
 from .pg_audit_store import _as_payload, _connect
 
 
@@ -27,7 +29,7 @@ class PgExperiments:
     # -- spec ---------------------------------------------------------------
 
     def put_spec(self, payload: dict[str, Any]) -> dict[str, Any]:
-        spec = deepcopy(payload)
+        spec = _validate_spec(payload)
         experiment_id = spec["experiment_id"]
         version = spec["version"]
         with _connect(self._dsn) as connection:
@@ -79,8 +81,7 @@ class PgExperiments:
     # -- cells --------------------------------------------------------------
 
     def put_cell(self, payload: dict[str, Any]) -> dict[str, Any]:
-        cell = deepcopy(payload)
-        cell.setdefault("allocation_status", "pending")
+        cell = _validate_cell(payload)
         cell_id = cell["cell_id"]
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
@@ -256,7 +257,7 @@ class PgGateStore:
         self._dsn = dsn
 
     def put_policy(self, payload: dict[str, Any]) -> dict[str, Any]:
-        policy = deepcopy(payload)
+        policy = _validate_policy(payload)
         policy_id = policy["policy_id"]
         version = policy["version"]
         with _connect(self._dsn) as connection:
@@ -324,7 +325,7 @@ class PgGateStore:
                 return policy
 
     def put_result(self, payload: dict[str, Any]) -> dict[str, Any]:
-        result = deepcopy(payload)
+        result = _validate_result(payload)
         result_id = result["gate_result_id"]
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
@@ -378,10 +379,8 @@ class PgBaselineStore:
         self._dsn = dsn
 
     def put(self, payload: dict[str, Any]) -> dict[str, Any]:
-        from motte_contracts.comparison import BaselineSnapshot
-
-        # 契约校验 + JSON 规范化（与 Memory/SQLite 同形状，幂等判定一致）。
-        snapshot = BaselineSnapshot.model_validate(payload).model_dump(mode="json")
+        # Use the same contract normalization as Memory/SQLite.
+        snapshot = _validate_baseline(payload)
         baseline_id = snapshot["baseline_id"]
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:

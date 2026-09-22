@@ -410,3 +410,69 @@ def test_postgres_external_jobs_idempotent_import_and_conflict(migrated_dsn):
     jobs.update_job("job-pg-t03", {"status": "settled"})
     assert jobs.recoverable_for_run("run-pg-t03") == []
     assert jobs.get_job("job-pg-t03")["checkpoint"]["records_consumed"] == 1
+
+
+def test_postgres_external_job_begin_is_idempotent_by_launch_token(migrated_dsn):
+    from motte_storage.integrity import RunConflictError
+
+    jobs = create_postgres_run_store(migrated_dsn).external_jobs
+    job_id = f"job-pg-begin-{os.getpid()}"
+    record = {
+        "job_id": job_id,
+        "run_id": f"run-pg-begin-{os.getpid()}",
+        "status": "launching",
+        "launch_token": "launch-pg-idempotent",
+        "spec": {},
+        "handle": {"job_id": job_id},
+        "checkpoint": {},
+    }
+    first = jobs.begin_job(record)
+    assert jobs.begin_job(record) == first
+    with pytest.raises(RunConflictError, match="launch token"):
+        jobs.begin_job({**record, "launch_token": "launch-pg-different"})
+
+
+def test_postgres_external_import_same_key_race_is_noop_or_conflict(migrated_dsn):
+    jobs = create_postgres_run_store(migrated_dsn).external_jobs
+    suffix = f"{os.getpid()}"
+    job_id = "job-pg-import-race-" + suffix
+    jobs.begin_job({
+        "job_id": job_id,
+        "run_id": "run-pg-import-race-" + suffix,
+        "status": "active",
+        "launch_token": "launch-pg-race",
+        "spec": {},
+        "handle": {"job_id": job_id},
+        "checkpoint": {},
+    })
+    args = (job_id, "case-race", "parser-v1", "hash-race", {"value": 1})
+
+    def import_once():
+        return jobs.import_record(*args)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(import_once) for _ in range(2)]
+        outcomes = [future.result(timeout=15) for future in futures]
+    assert sorted(item["status"] for item in outcomes) == ["imported", "noop"]
+    assert jobs.get_job(job_id)["checkpoint"]["records_consumed"] == 1
+
+    divergent = [
+        (job_id, "case-conflict", "parser-v1", "hash-a", {"value": "a"}),
+        (job_id, "case-conflict", "parser-v1", "hash-b", {"value": "b"}),
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(jobs.import_record, *item) for item in divergent]
+        outcomes = [future.result(timeout=15) for future in futures]
+    assert sorted(item["status"] for item in outcomes) == ["conflict", "imported"]
+    assert len(jobs.list_conflicts(job_id)) == 1
+    assert jobs.get_job(job_id)["checkpoint"]["records_consumed"] == 2
+
+    distinct = [
+        (job_id, "case-distinct-a", "parser-v1", "hash-a", {"value": 1}),
+        (job_id, "case-distinct-b", "parser-v1", "hash-b", {"value": 2}),
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(jobs.import_record, *item) for item in distinct]
+        outcomes = [future.result(timeout=15) for future in futures]
+    assert [item["status"] for item in outcomes] == ["imported", "imported"]
+    assert jobs.get_job(job_id)["checkpoint"]["records_consumed"] == 4

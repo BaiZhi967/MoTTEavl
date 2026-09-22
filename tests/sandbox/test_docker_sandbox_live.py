@@ -6,8 +6,24 @@ import pytest
 from motte_sandbox.docker import DockerSandbox
 from motte_sandbox.policy import SandboxPolicy
 
+
+def _docker_available() -> bool:
+    if os.environ.get("MOTTE_SANDBOX_LIVE") != "1":
+        return False
+    try:
+        import docker
+
+        client = docker.from_env()
+        client.ping()
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    os.environ.get("MOTTE_SANDBOX_LIVE") != "1", reason="set MOTTE_SANDBOX_LIVE=1 to run live sandbox tests"
+    not _docker_available(),
+    reason="set MOTTE_SANDBOX_LIVE=1 and provide a reachable Docker daemon",
 )
 
 

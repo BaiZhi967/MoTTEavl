@@ -5,6 +5,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import App from "../src/App";
 
 vi.mock("../src/api/client", () => ({
+  getApiToken: vi.fn(() => ""),
+  setApiToken: vi.fn(),
   getRuns: vi.fn(async () => ({ items: [], total: 0 })),
   createRun: vi.fn(),
   getRun: vi.fn(),

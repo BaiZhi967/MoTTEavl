@@ -159,22 +159,26 @@ def maintenance_command(args) -> int:
     if blocked is not None:
         return blocked
     from motte_storage.maintenance import (
+        MaintenanceConflict,
         begin_maintenance,
         end_maintenance,
         maintenance_status,
     )
 
     store = _store(args)
-    if args.maintenance_command == "status":
-        view = maintenance_status(store)
-    elif args.maintenance_command == "begin":
-        view = begin_maintenance(store, reason=args.reason)
-    elif args.maintenance_command == "end":
-        view = end_maintenance(store)
-    else:
-        return remote.cli_error(
-            "CONTRACT_INVALID", f"unknown maintenance subcommand: {args.maintenance_command}"
-        )
+    try:
+        if args.maintenance_command == "status":
+            view = maintenance_status(store)
+        elif args.maintenance_command == "begin":
+            view = begin_maintenance(store, reason=args.reason)
+        elif args.maintenance_command == "end":
+            view = end_maintenance(store, owner=args.owner)
+        else:
+            return remote.cli_error(
+                "CONTRACT_INVALID", f"unknown maintenance subcommand: {args.maintenance_command}"
+            )
+    except MaintenanceConflict as error:
+        return remote.cli_error("MAINTENANCE_CONFLICT", str(error))
     return _emit(view, pretty=getattr(args, "pretty", False))
 
 
@@ -329,7 +333,8 @@ def add_ops_parsers(sub: argparse._SubParsersAction) -> None:
     maintenance_status_parser = maintenance_sub.add_parser("status", help="读取屏障状态（只读）")
     maintenance_begin = maintenance_sub.add_parser("begin", help="置维护屏障（幂等）")
     maintenance_begin.add_argument("--reason", default="cli maintenance", help="维护原因（审计）")
-    maintenance_end = maintenance_sub.add_parser("end", help="解除维护屏障（幂等）")
+    maintenance_end = maintenance_sub.add_parser("end", help="使用 begin 返回的 owner 解除维护屏障")
+    maintenance_end.add_argument("--owner", required=True, help="maintenance begin 返回的 lease owner")
     for parser in (maintenance_status_parser, maintenance_begin, maintenance_end):
         parser.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH（var/runs.db）")
         parser.add_argument("--pretty", action="store_true", help="缩进 JSON 输出")

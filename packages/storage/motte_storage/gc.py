@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .maintenance import begin_maintenance, end_maintenance
 from .platform import platform_for
 
 ARTIFACT_KEYS = ("artifact_id", "artifact_ids", "artifacts")
@@ -64,6 +65,14 @@ def _collect_artifact_ids(value: Any, found: set[str]) -> None:
                             found.add(item["artifact_id"])
             elif key == "artifact_id" and isinstance(child, str):
                 found.add(child)
+            elif "artifact" in key.lower() and isinstance(child, list):
+                for item in child:
+                    if isinstance(item, str) and item:
+                        found.add(item)
+                    elif isinstance(item, dict):
+                        identifier = item.get("id") or item.get("artifact_id")
+                        if isinstance(identifier, str) and identifier:
+                            found.add(identifier)
             _collect_artifact_ids(child, found)
     elif isinstance(value, list):
         for item in value:
@@ -71,24 +80,57 @@ def _collect_artifact_ids(value: Any, found: set[str]) -> None:
 
 
 def _walk_store(store: Any):
-    """遍历保存证据的各仓储（缺失的组件跳过）。"""
-    for repo_name in (
-        "runs", "case_runs", "invocations", "external_jobs", "attempts",
-    ):
-        repo = getattr(store, repo_name, None)
-        if repo is None:
+    """遍历所有可能承载 artifact 引用的仓储。
+
+    Child repositories intentionally use their run-scoped list APIs.  Calling a
+    repository with the wrong shape is an implementation error and must propagate
+    instead of silently dropping retention references.
+    """
+    runs_repo = getattr(store, "runs", None)
+    if runs_repo is None or not hasattr(runs_repo, "list"):
+        raise AttributeError("store.runs.list is required for artifact GC")
+    runs = runs_repo.list()
+    for run in runs:
+        yield run
+        run_id = run.get("id") if isinstance(run, dict) else None
+        if not run_id:
             continue
-        list_all = getattr(repo, "list", None)
-        if list_all is None:
-            continue
-        try:
-            for record in list_all():
+        for repo_name in (
+            "case_runs", "attempts", "invocations", "scoring_passes",
+            "commands", "trials", "runtime_sessions", "scoring_jobs",
+        ):
+            repo = getattr(store, repo_name, None)
+            if repo is None:
+                continue
+            list_for_run = getattr(repo, "list_for_run", None)
+            if list_for_run is None:
+                continue
+            child_records = list_for_run(run_id)
+            for record in child_records:
                 yield record
-        except TypeError:  # pragma: no cover - 形状不符的仓储跳过
-            continue
+                if repo_name == "scoring_passes" and isinstance(record, dict):
+                    score_sets = getattr(store, "score_sets", None)
+                    if score_sets is not None and hasattr(score_sets, "list_for_pass"):
+                        for score in score_sets.list_for_pass(record.get("id", "")):
+                            yield score
+        external_jobs = getattr(store, "external_jobs", None)
+        if external_jobs is not None and hasattr(external_jobs, "jobs_for_run"):
+            for job in external_jobs.jobs_for_run(run_id):
+                yield job
+                for record in external_jobs.list_records(job.get("job_id", "")):
+                    yield record
+        baselines = getattr(store, "baselines", None)
+        if baselines is not None and hasattr(baselines, "get_for_run"):
+            for baseline in baselines.get_for_run(run_id):
+                yield baseline
+
     baseline_store = getattr(store, "baseline_store", None)
     if baseline_store is not None and hasattr(baseline_store, "list"):
-        for record in baseline_store.list(limit=10000):
+        for record in baseline_store.list(limit=1_000_000):
+            yield record
+    gate_store = getattr(store, "gate_store", None)
+    if gate_store is not None and hasattr(gate_store, "list_results"):
+        for record in gate_store.list_results(limit=1_000_000):
             yield record
 
 
@@ -190,11 +232,10 @@ def apply_gc(
         raise ValueError("gc apply requires confirm=True (dry-run is the default)")
     if plan.dry_run is False and not plan.deletable:
         pass  # 空计划也允许执行（幂等）
-    root = Path(artifacts_root)
+    root = Path(artifacts_root).resolve()
     platform_stores = platform_for(store)
-    # 与采集/评分/备份互斥：进入维护屏障（协议 §9.3）。
-    platform_stores.meta.set("maintenance", "active")
-    platform_stores.meta.set("maintenance_started_at", datetime.now(UTC).isoformat())
+    # 与采集/评分/备份互斥：以带 owner 的维护租约保护整个 apply。
+    lease = begin_maintenance(store, reason="gc")
     deleted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     try:
@@ -233,8 +274,7 @@ def apply_gc(
         if deleted:
             platform_stores.tombstones.append(deleted)
     finally:
-        platform_stores.meta.delete("maintenance")
-        platform_stores.meta.delete("maintenance_started_at")
+        end_maintenance(store, owner=lease["owner"])
     return {
         "gc_run_id": plan.gc_run_id,
         "deleted": len(deleted),

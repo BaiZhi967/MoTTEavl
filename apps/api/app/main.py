@@ -9,12 +9,13 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from motte_contracts.compat import adapt_legacy_report, adapt_legacy_run, adapt_legacy_trace_event
+from motte_contracts.compat import adapt_legacy_run, adapt_legacy_trace_event
 from motte_contracts.events import TraceEvent
 from motte_contracts.identity import canonical_sha256
-from motte_contracts.report import ReportSummary, RunReport
+from motte_contracts.report import RunReport
 from motte_contracts.run import Run, RunCommand
 from motte_sdk.execution_backends import legacy_execution
+from motte_sdk.reporting import build_public_run_report, build_run_report as _build_report
 from motte_sdk.resolve import (
     ManifestResolutionError,
     find_secret_paths,
@@ -73,8 +74,6 @@ _UNSET: Any = object()
 SSE_POLL_INTERVAL_SECONDS = 1.0
 #: 单轮 poll 最多推送的事件数（协议 §2 流大小上限）；超出部分下一轮继续。
 SSE_EVENTS_PER_POLL = 500
-#: 单轮 poll 最多推送的事件数（协议 §2 流大小上限）；超出部分下一轮继续。
-SSE_EVENTS_PER_POLL = 500
 #: events/snapshot 持久查询的单次上限。
 EVENTS_SNAPSHOT_LIMIT = 500
 
@@ -93,9 +92,9 @@ AGENT_CATALOG = [
     {
         "id": "builtin-react",
         "kind": "react",
-        "description": "内置 ReAct agent（尚未接入 ExecutionBackend）",
+        "description": "内置 ReAct agent（ExecutionBackend builtin-agent@1）",
         "protocol_ready": True,
-        "execution_ready": False,
+        "execution_ready": True,
     },
     {
         "id": "pi",
@@ -844,7 +843,7 @@ def create_app(
                 actor='anonymous-local',
             )
         except CommandError as error:
-            raise HTTPException(status_code=409, detail={'code': error.code, 'message': str(error)}) from error
+            return _error_json(409, error.code, str(error))
         return JSONResponse(
             status_code=202,
             content={
@@ -1000,9 +999,14 @@ def create_app(
                             "event: motte-gap\ndata: "
                             + json.dumps(gap, ensure_ascii=False) + "\n\n"
                         )
-                for event in pending[:SSE_EVENTS_PER_POLL]:
+                batch = pending[:SSE_EVENTS_PER_POLL]
+                for event in batch:
                     cursor = event["seq"]
                     yield f"id: {event['seq']}\ndata: {_envelope(event)}\n\n"
+                # A terminal run can still have more than one persisted page. Drain all
+                # events before closing so clients never miss the terminal tail.
+                if len(pending) > len(batch):
+                    continue
                 if service.get_run(run_id)["status"] in RunService.TERMINAL:
                     return
                 yield ": ping\n\n"
@@ -1020,9 +1024,9 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         bounded = max(1, min(limit, EVENTS_SNAPSHOT_LIMIT))
-        pending = service.events_after(run_id, max(0, after))[:bounded]
-        # 快照内不会出现 gap（一次查询原子的 seq > after 前缀）；快照之外是否
-        # 还有事件由 last_seq 与调用方游标比较得出。
+        available = service.events_after(run_id, max(0, after))
+        pending = available[:bounded]
+        has_more = len(available) > len(pending)
         return {
             "events": [
                 TraceEvent.model_validate(
@@ -1031,6 +1035,8 @@ def create_app(
                 for event in pending
             ],
             "last_seq": pending[-1]["seq"] if pending else None,
+            "next_after": pending[-1]["seq"] if has_more and pending else None,
+            "has_more": has_more,
             "run_status": run.get("status"),
             "partial": False,
         }
@@ -1060,7 +1066,7 @@ def create_app(
             run["scores"] = service.store.score_sets.list_for_pass(scoring_pass_id)
             run["current_scoring_pass_id"] = scoring_pass_id
             run["scoring_pass"] = selected
-        return adapt_legacy_report(_build_report(adapt_legacy_run(_redact_agent_run_view(run))))
+        return build_public_run_report(run)
 
     @application.get("/api/v1/runs/{run_id}/scoring-passes", response_model=ScoringPassListResponse)
     def list_scoring_passes(run_id: str):
@@ -1130,6 +1136,92 @@ def create_app(
         if isinstance(error, JudgeError):
             return _error_json(503, "JUDGE_PROVIDER_UNAVAILABLE", str(error))
         raise error
+
+    def _judge_spec_catalog() -> list[dict[str, Any]]:
+        from motte_eval.rubrics import available_rubrics, get_rubric, policy_for
+        from motte_sdk.scoring_jobs import (
+            JudgeProviderSnapshotError,
+            freeze_judge_provider_snapshot,
+        )
+
+        items: list[dict[str, Any]] = []
+        for model in resources.models.list():
+            if model.get("lifecycle") != "published":
+                continue
+            try:
+                freeze_judge_provider_snapshot(
+                    model_resource_id=str(model.get("id") or ""), resources=resources,
+                )
+            except (JudgeProviderSnapshotError, ManifestResolutionError):
+                # The catalog is executable inventory, not every published model.
+                continue
+            for rubric_id, rubric_version in available_rubrics():
+                rubric = get_rubric(rubric_id, rubric_version)
+                policy = policy_for(rubric_id, rubric_version)
+                identity = canonical_sha256({
+                    "model": model.get("id"),
+                    "rubric_id": rubric_id,
+                    "rubric_version": rubric_version,
+                }).removeprefix("sha256:")[:20]
+                judge_id = f"judge-{identity}"
+                budget = {
+                    "max_calls": 100,
+                    "max_prompt_tokens": 40_000,
+                    "max_completion_tokens": min(
+                        int(model.get("max_output_tokens") or 2_048), 4_096
+                    ),
+                    "hard_cost_cap_usd": None,
+                }
+                spec = {
+                    "judge_profile_id": judge_id,
+                    "model": model["id"],
+                    "rubric_id": rubric_id,
+                    "rubric_version": rubric_version,
+                    "criteria": [item.criterion_id for item in rubric.criteria],
+                    "parameters": dict(model.get("parameters") or {}),
+                    "missing_evidence_policy": rubric.missing_evidence_policy,
+                    "budget": budget,
+                }
+                items.append({
+                    "judge_id": judge_id,
+                    "version": rubric_version,
+                    "name": f"{rubric_id} / {model['id']}",
+                    "description": (
+                        f"{rubric_id}@{rubric_version} using published model {model['id']}"
+                    ),
+                    "provider": model.get("provider"),
+                    "model": model.get("model"),
+                    "model_resource_id": model.get("id"),
+                    "modes": ["single"],
+                    "status": "available",
+                    "rubric": rubric.model_dump(mode="json"),
+                    "calibration": {
+                        "status": "not_run",
+                        "policy": policy.model_dump(mode="json"),
+                    },
+                    "budget": budget,
+                    "spec": spec,
+                })
+        return items
+
+    @application.get("/api/v1/judge-specs")
+    def list_judge_specs():
+        items = _judge_spec_catalog()
+        return {"items": items, "total": len(items)}
+
+    @application.get("/api/v1/judge-specs/{judge_id}")
+    def get_judge_spec(judge_id: str):
+        item = next((candidate for candidate in _judge_spec_catalog() if candidate["judge_id"] == judge_id), None)
+        if item is None:
+            return _error_json(404, "JUDGE_SPEC_NOT_FOUND", f"judge spec not found: {judge_id}")
+        return item
+
+    @application.get("/api/v1/judge-specs/{judge_id}/calibration")
+    def get_judge_calibration(judge_id: str):
+        item = next((candidate for candidate in _judge_spec_catalog() if candidate["judge_id"] == judge_id), None)
+        if item is None:
+            return _error_json(404, "JUDGE_SPEC_NOT_FOUND", f"judge spec not found: {judge_id}")
+        return item["calibration"]
 
     def _judge_request(body: JudgeSubmissionBase, *, request_key: str):
         """服务端解析资源与证据，编译唯一冻结请求（与 CLI 共用同一编译器）。"""
@@ -1784,8 +1876,23 @@ def create_app(
         from motte_harness.codex import CodexHarness
 
         harnesses = [ClaudeHarness(), CodexHarness()]
-        reports = await asyncio.gather(*(harness.inspect() for harness in harnesses))
-        items = [{**report, "protocol_ready": True, "execution_ready": False} for report in reports]
+        reports = await asyncio.gather(
+            *(harness.inspect() for harness in harnesses), return_exceptions=True,
+        )
+        items = []
+        for harness, report in zip(harnesses, reports, strict=True):
+            if isinstance(report, BaseException):
+                items.append({
+                    "name": harness.name, "installed": False, "runnable": False,
+                    "protocol_ready": True, "execution_ready": False,
+                    "inspection_error": type(report).__name__,
+                })
+                continue
+            items.append({
+                **report,
+                "protocol_ready": True,
+                "execution_ready": bool(report.get("runnable")),
+            })
         return {"items": items, "total": len(items)}
 
     # ------------------------------------------------------------ M4 runtimes
@@ -4851,98 +4958,6 @@ def _redact_agent_run_view(run: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
-def _build_report(run: dict[str, Any]) -> dict[str, Any]:
-    cases = run.get("cases", [])
-    scores = run.get("scores", [])
-    benchmark = run.get("manifest", {}).get("benchmark_provenance")
-    costs = [
-        case["result"]["cost"]
-        for case in cases
-        if isinstance(case.get("result"), dict) and isinstance(case["result"].get("cost"), dict)
-    ]
-    known_costs = [cost["total"] for cost in costs if cost.get("total") is not None]
-    total_cost = sum(known_costs)
-    versions = sorted(
-        {cost["price_table_version"] for cost in costs if cost.get("price_table_version")}
-    )
-    scoring_pass_id = run.get("current_scoring_pass_id")
-    passed = sum(1 for score in scores if score.get("passed") is True)
-    failed = sum(1 for score in scores if score.get("passed") is False)
-    judged = passed + failed
-    report = {
-        "schema_version": 2 if scoring_pass_id else 1,
-        "run_id": run["id"],
-        "scenario_version": run.get("scenario_version"),
-        "status": run["status"],
-        "generated_at": datetime.now(UTC).isoformat(),
-        "summary": {
-            "cases": len(cases),
-            "scored": len(scores),
-            "passed": passed,
-            "failed": failed,
-            "pass_rate": round(passed / judged, 4) if judged else None,
-            **({"unjudged": len(scores) - judged} if len(scores) != judged else {}),
-        },
-        "cost": {
-            "total": round(total_cost, 8) if known_costs else None,
-            "price_table_versions": versions,
-        },
-        "scoring_pass_id": scoring_pass_id,
-        "scores": scores,
-        "cases": [{"case_id": case["case_id"], "result": case.get("result")} for case in cases],
-    }
-    if benchmark:
-        report["benchmark"] = benchmark
-        scoring_pass = run.get("scoring_pass") or {}
-        pass_summary = scoring_pass.get("summary") or {}
-        aggregate = pass_summary.get("aggregate")
-        if not isinstance(aggregate, dict):
-            # Legacy passes have no aggregate snapshot; retain their persisted scalar summary
-            # rather than invoking mutable plugin code while serving a report.
-            aggregate = {
-                key: value
-                for key, value in pass_summary.items()
-                if key not in {"scores", "passed", "aggregate"}
-            }
-        report["summary"].update(
-            {
-                key: value
-                for key, value in aggregate.items()
-                if key in ReportSummary.model_fields and key != "aggregate"
-            }
-        )
-        report["summary"]["aggregate"] = aggregate
-        selected = aggregate.get("selected")
-        responded = aggregate.get("responded")
-        correct = aggregate.get("correct")
-        attempted = aggregate.get("attempted")
-        accuracy = aggregate.get("accuracy")
-        if isinstance(selected, int):
-            report["summary"]["cases"] = selected
-        if isinstance(responded, int):
-            report["summary"]["scored"] = responded
-        if isinstance(correct, int):
-            report["summary"]["passed"] = correct
-            if benchmark.get("plugin_version") == "2":
-                aggregate_judged = aggregate.get("judged")
-                if isinstance(selected, int) and isinstance(aggregate_judged, int):
-                    report["summary"]["failed"] = aggregate_judged - correct
-                    report["summary"]["unjudged"] = selected - aggregate_judged
-            elif isinstance(selected, int):
-                report["summary"]["failed"] = selected - correct
-        if isinstance(accuracy, (int, float)):
-            report["summary"]["pass_rate"] = accuracy
-        report["cost"].update(
-            known_cases=len(known_costs),
-            unknown_cases=(attempted - len(known_costs)) if isinstance(attempted, int) else None,
-        )
-        usage = [c["result"].get("usage", {}) for c in cases if isinstance(c.get("result"), dict)]
-        report["usage"] = {
-            key: sum(u[key] for u in usage if key in u)
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            if any(key in u for u in usage)
-        }
-    return report
 
 
 app = create_app()

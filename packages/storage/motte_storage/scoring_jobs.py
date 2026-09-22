@@ -1278,8 +1278,6 @@ class PostgresScoringJobs:
 
     # ------------------------------------------------------------- 提交
     def submit(self, record: dict[str, Any]) -> dict[str, Any]:
-        from psycopg.errors import UniqueViolation
-
         stored = validate_scoring_job(record)
         with self._open() as connection:
             with connection.cursor() as cursor:
@@ -1296,25 +1294,51 @@ class PostgresScoringJobs:
                             f"{stored['request_key']}"
                         )
                     return {"created": False, "job": current}
-                try:
-                    cursor.execute(
-                        "INSERT INTO scoring_jobs(job_id, request_key, fingerprint, "
-                        "owner_kind, owner_ref, run_id, status, revision, "
-                        "reserved_pass_id, payload) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                        (
-                            stored["job_id"], stored["request_key"],
-                            stored["fingerprint"], stored["owner_kind"],
-                            stored["owner_ref"], stored["run_id"], stored["status"],
-                            stored["revision"], stored["reserved_pass_id"],
-                            self._json(stored),
-                        ),
-                    )
-                except UniqueViolation as error:
+                cursor.execute(
+                    "INSERT INTO scoring_jobs(job_id, request_key, fingerprint, "
+                    "owner_kind, owner_ref, run_id, status, revision, "
+                    "reserved_pass_id, payload) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT DO NOTHING RETURNING payload",
+                    (
+                        stored["job_id"], stored["request_key"],
+                        stored["fingerprint"], stored["owner_kind"],
+                        stored["owner_ref"], stored["run_id"], stored["status"],
+                        stored["revision"], stored["reserved_pass_id"],
+                        self._json(stored),
+                    ),
+                )
+                inserted = cursor.fetchone()
+                if inserted is not None:
+                    return {"created": True, "job": self._row_payload(inserted)}
+                # A concurrent first insert may have won the request-key index.
+                # READ COMMITTED gives this statement the committed winner.
+                cursor.execute(
+                    "SELECT payload FROM scoring_jobs WHERE request_key = %s FOR UPDATE",
+                    (stored["request_key"],),
+                )
+                existing = cursor.fetchone()
+                if existing is not None:
+                    current = self._row_payload(existing)
+                    if current["fingerprint"] != stored["fingerprint"]:
+                        raise ScoringJobConflict(
+                            "request key already exists with different content: "
+                            f"{stored['request_key']}"
+                        )
+                    return {"created": False, "job": current}
+                # The only remaining conflict is a different job_id.
+                cursor.execute(
+                    "SELECT payload FROM scoring_jobs WHERE job_id = %s FOR UPDATE",
+                    (stored["job_id"],),
+                )
+                if cursor.fetchone() is not None:
                     raise ScoringJobConflict(
                         f"scoring job already exists: {stored['job_id']}"
-                    ) from error
-        return {"created": True, "job": stored}
+                    )
+                raise ScoringJobConflict(
+                    "scoring job insert was rejected without a conflicting row: "
+                    + stored["job_id"]
+                )
 
     # ------------------------------------------------------------- 状态机
     def claim(self, job_id: str) -> dict[str, Any] | None:
@@ -1712,7 +1736,7 @@ class PostgresScoringJobs:
                             "reason": "prepared_without_dispatch_evidence",
                             "billed_calls": 0,
                         }
-                    else:
+                    elif current["status"] == "dispatching":
                         for item in current.get("calls") or []:
                             if item.get("status") != "dispatching":
                                 continue
@@ -1740,6 +1764,9 @@ class PostgresScoringJobs:
                                        "resent automatically",
                         }
                         record["indeterminate_at"] = _now()
+                    else:
+                        # Another recoverer may have already requeued or finalized it.
+                        continue
                     updated = _next_revision(record, current["revision"])
                     self._write(cursor, updated, expected_revision=current["revision"],
                                 expected_status=current["status"])

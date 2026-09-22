@@ -184,6 +184,13 @@ def _inside(compose_dir: Path, source: str) -> bool:
     return resolved == compose_dir or compose_dir in resolved.parents
 
 
+def _is_bind_source(source: str) -> bool:
+    return (
+        source.startswith(("/", ".", "~"))
+        or (len(source) >= 3 and source[0].isalpha() and source[1] == ":" and source[2] in "\\/")
+    )
+
+
 def _volume_entry(entry: Any) -> tuple[str | None, str]:
     """卷条目的 ``(source, kind)``；``kind`` ∈ ``bind``/``named``/``anonymous``。
 
@@ -192,18 +199,24 @@ def _volume_entry(entry: Any) -> tuple[str | None, str]:
     优先，缺省时同样按源的形状判断。调用方先拒绝插值，再按 ``:`` 分段。
     """
     if isinstance(entry, str):
-        parts = entry.split(":")
-        if len(parts) == 1:
-            return (None, "anonymous")
-        source = parts[0]
-        return (source, "bind" if source.startswith(("/", ".", "~")) else "named")
+        if _is_bind_source(entry) and len(entry) >= 2 and entry[1] == ":":
+            separator = entry.find(":", 2)
+            if separator < 0:
+                return (None, "anonymous")
+            source = entry[:separator]
+        else:
+            parts = entry.split(":")
+            if len(parts) == 1:
+                return (None, "anonymous")
+            source = parts[0]
+        return (source, "bind" if _is_bind_source(source) else "named")
     if isinstance(entry, Mapping):
         source = entry.get("source")
         if not isinstance(source, str) or not source:
             return (None, "anonymous")
         kind = entry.get("type")
         if kind is None:
-            kind = "bind" if source.startswith(("/", ".", "~")) else "named"
+            kind = "bind" if _is_bind_source(source) else "named"
         return (source, str(kind))
     return (None, "anonymous")
 

@@ -13,6 +13,7 @@ from typing import Any
 from motte_contracts.messages import Message, ModelRequest, ModelResponse
 
 from .base import BaseHTTPProvider, ProviderCallError, validate_http_provider_config
+from .errors import ProviderProtocolError
 from .normalization import normalize_finish_reason, normalize_usage_details
 
 __all__ = [
@@ -155,8 +156,15 @@ class OpenAICompatibleProvider(BaseHTTPProvider):
         return events
 
     def normalize_response(self, data: dict[str, Any]) -> ModelResponse:
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ProviderProtocolError("malformed provider response: missing choices")
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ProviderProtocolError("malformed provider response: missing message")
+        if "content" not in message and "tool_calls" not in message:
+            raise ProviderProtocolError("malformed provider response: missing content or tool calls")
         tool_calls = [
             {
                 "id": call.get("id"),

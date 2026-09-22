@@ -45,8 +45,19 @@ const JUDGE_EXPERIMENTAL = {
   provider: "provider-a",
   model: "provider-a/judge-model",
   spec_sha256: "sha256:spec",
-  modes: ["score"],
+  modes: ["single"],
+  model_resource_id: "judge-model",
   budget: { max_calls: 40, hard_cost_cap_usd: null },
+  spec: {
+    judge_profile_id: "answer-quality",
+    model: "judge-model",
+    rubric_id: "answer-quality",
+    rubric_version: "2",
+    criteria: ["correctness"],
+    parameters: {},
+    missing_evidence_policy: "insufficient_evidence",
+    budget: { max_calls: 40, max_prompt_tokens: 40000, max_completion_tokens: 4096, hard_cost_cap_usd: null },
+  },
   evidence: {
     selector: { fields: ["final_output"] },
     case_ids: ["case-1"],
@@ -59,7 +70,7 @@ const JUDGE_EXPERIMENTAL = {
     content_sha256: "sha256:rubric",
     scale: "pass_fail",
     missing_evidence_policy: "insufficient_evidence",
-    criteria: [{ id: "correctness", description: "回答是否正确", scale: "pass_fail", weight: 1 }],
+    criteria: [{ criterion_id: "correctness", description: "回答是否正确", scale: "pass_fail", weight: 1 }],
   },
   calibration: {
     status: "experimental",
@@ -179,12 +190,13 @@ describe("JudgesPage 付费提交", () => {
   async function openJudge() {
     render(wrap(<JudgesPage />));
     await waitFor(() => expect(screen.getByTestId("judge-paid-summary")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("被评 Run"), { target: { value: "run-1" } });
   }
 
   it("显示用途、模型、样本数、最大调用次数与已知/未知费用，且必须显式确认后才提交", async () => {
     clientMocks.preflightJudge.mockResolvedValue(PREFLIGHT_UNKNOWN_PRICE);
     clientMocks.submitJudgeJob.mockResolvedValue({
-      job_id: "job-1", status: "queued", judge_id: "answer-quality", version: "1", purpose: "score",
+      job_id: "job-1", status: "settled", judge_id: "answer-quality", version: "1", purpose: "score",
       model: "provider-a/judge-model", scoring_pass_id: "pass-9", max_calls: 4, calls_made: 0,
       cost: { reported_usd: null, estimated_usd: null, unknown_cost: true, unknown_calls: 0 },
     });
@@ -203,11 +215,15 @@ describe("JudgesPage 付费提交", () => {
     expect(screen.getByTestId("judge-submit-reason").textContent).toContain("必须先读取只读预检");
     expect(clientMocks.submitJudgeJob).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByLabelText("样本数"), { target: { value: "2" } });
     fireEvent.click(screen.getByRole("button", { name: "读取预检（只读，零调用）" }));
     await waitFor(() => expect(clientMocks.preflightJudge).toHaveBeenCalledTimes(1));
     expect(clientMocks.preflightJudge.mock.calls[0][0]).toMatchObject({
-      judge_id: "answer-quality", version: "1", purpose: "score", sample_count: 2,
+      run_id: "run-1", mode: "single",
+      spec: { judge_profile_id: "answer-quality", model: "judge-model" },
+      authorisation: {
+        authorised: true, actor: "web-operator-preflight", max_calls: 40,
+        max_total_tokens: 1_763_840, hard_cost_cap_usd: null,
+      },
     });
     await waitFor(() => expect(screen.getByTestId("judge-paid-summary").textContent).toContain("4"));
     expect(screen.getByTestId("judge-cost-coverage").textContent).toContain("未知");
@@ -223,7 +239,8 @@ describe("JudgesPage 付费提交", () => {
     fireEvent.click(screen.getByTestId("judge-submit-button"));
     await waitFor(() => expect(clientMocks.submitJudgeJob).toHaveBeenCalledTimes(1));
     const body = clientMocks.submitJudgeJob.mock.calls[0][0];
-    expect(body.authorisation).toMatchObject({ authorised: true, purpose: "score", max_calls: 4 });
+    expect(body.request_key).toMatch(/^judge-web-/);
+    expect(body.authorisation).toMatchObject({ authorised: true, actor: "web-operator", max_calls: 4 });
     await waitFor(() => expect(screen.getByTestId("judge-job")).toBeTruthy());
     expect(screen.getByTestId("judge-job").textContent).toContain("job-1");
 
@@ -232,6 +249,11 @@ describe("JudgesPage 付费提交", () => {
     expect(screen.getByTestId("judge-submit-reason").textContent).toContain("已提交");
     fireEvent.click(screen.getByTestId("judge-submit-button"));
     expect(clientMocks.submitJudgeJob).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "新建 Judge 请求" }));
+    expect(screen.queryByTestId("judge-job")).toBeNull();
+    expect(screen.getByTestId("judge-submit-reason").textContent).toContain("必须先读取只读预检");
+    expect((screen.getByRole("switch", { name: "确认付费提交" }) as HTMLButtonElement).getAttribute("data-state")).toBe("unchecked");
   });
 
   it("未授权预检：提交保持禁用并说明零调用", async () => {
@@ -246,7 +268,7 @@ describe("JudgesPage 付费提交", () => {
     await waitFor(() => expect(screen.getByTestId("judge-preflight-reasons")).toBeTruthy());
     fireEvent.click(screen.getByRole("switch", { name: "确认付费提交" }));
     expect((screen.getByTestId("judge-submit-button") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("judge-submit-reason").textContent).toContain("未授权");
+    expect(screen.getByTestId("judge-submit-reason").textContent).toContain("预算不可执行");
     expect(clientMocks.submitJudgeJob).not.toHaveBeenCalled();
   });
 
@@ -263,8 +285,8 @@ describe("JudgesPage 付费提交", () => {
     expect(screen.getByTestId("judge-submit-error").textContent).toContain("judge 暂时不可用");
     expect(screen.getByTestId("judge-submit-unknown").textContent).toContain("绝不自动重试");
     // 表单内容原样保留，但重新提交必须重新确认（不能沿用上一次勾选）
-    expect((screen.getByLabelText("样本数") as HTMLInputElement).value).toBe("1");
-    expect((screen.getByLabelText("用途") as HTMLSelectElement).value).toBe("score");
+    expect((screen.getByLabelText("被评 Run") as HTMLInputElement).value).toBe("run-1");
+    expect((screen.getByLabelText("用途") as HTMLSelectElement).value).toBe("single");
     expect((screen.getByTestId("judge-submit-button") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId("judge-submit-reason").textContent).toContain("需要显式确认");
   });

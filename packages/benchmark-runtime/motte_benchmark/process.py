@@ -387,6 +387,30 @@ class ProcessJobAdapter:
         return cmdline is not None and launch_token in cmdline
 
     def _pid_cmdline(self, pid: int) -> str | None:
+        if os.name == "nt":
+            def _powershell() -> Any:
+                async def go() -> str | None:
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                            f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                    except OSError:
+                        return None
+                    out, _ = await proc.communicate()
+                    if proc.returncode != 0:
+                        return None
+                    value = out.decode("utf-8", "replace").strip()
+                    return value or None
+
+                return go()
+
+            try:
+                return self._loop_runner.run(_powershell, timeout=10.0)
+            except (BenchmarkRuntimeError, TimeoutError):
+                return None
         if os.name != "posix":
             return None
         proc_cmdline = Path(f"/proc/{pid}/cmdline")
@@ -490,6 +514,17 @@ class ProcessJobAdapter:
 
     # ------------------------------------------------------------------ 中断
 
+    async def _kill_windows_tree(self, pid: int) -> None:
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill.exe", "/PID", str(pid), "/T", "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await killer.wait()
+        except OSError:
+            return
+
     def _signal_owned_group(self, proc: Any, grace_seconds: float) -> int | None:
         def _stop() -> Any:
             async def go() -> int | None:
@@ -498,20 +533,25 @@ class ProcessJobAdapter:
                     if os.name == "posix":
                         os.killpg(os.getpgid(pid), signal.SIGTERM)
                     else:
-                        proc.terminate()
+                        await self._kill_windows_tree(pid)
                 except (AttributeError, ProcessLookupError, PermissionError, OSError):
                     pass
                 try:
-                    return await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
+                    exit_code = await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
                 except (TimeoutError, asyncio.TimeoutError):
                     try:
                         if os.name == "posix":
                             os.killpg(os.getpgid(pid), signal.SIGKILL)
                         else:
-                            proc.kill()
+                            await self._kill_windows_tree(pid)
                     except (AttributeError, ProcessLookupError, PermissionError, OSError):
                         pass
-                    return await proc.wait()
+                    exit_code = await proc.wait()
+                if os.name == "nt":
+                    transport = getattr(proc, "_transport", None)
+                    if transport is not None:
+                        transport.close()
+                return exit_code
 
             return go()
 
@@ -524,6 +564,8 @@ class ProcessJobAdapter:
         proc = self._owned_proc(handle)
         if proc is not None and proc.returncode is None:
             exit_code = self._signal_owned_group(proc, grace)
+            self._procs.pop(proc.pid, None)
+            self._tokens.pop(proc.pid, None)
             resources = {**handle.owned_resources, "exit_code": exit_code}
             return handle.model_copy(update={
                 "status": ExternalJobStatus.cancelled,
@@ -537,7 +579,9 @@ class ProcessJobAdapter:
                 if os.name == "posix":
                     os.killpg(os.getpgid(pid), signal.SIGTERM)
                 else:
-                    os.kill(pid, signal.SIGTERM)
+                    def _kill_tree() -> Any:
+                        return self._kill_windows_tree(pid)
+                    self._loop_runner.run(_kill_tree, timeout=grace + 30.0)
                 deadline = threading.Event()
                 deadline.wait(min(grace, 1.0))
                 if self._verify_identity(pid, handle.launch_token):
@@ -545,7 +589,9 @@ class ProcessJobAdapter:
                         if os.name == "posix":
                             os.killpg(os.getpgid(pid), signal.SIGKILL)
                         else:
-                            os.kill(pid, signal.SIGKILL)
+                            def _force_tree() -> Any:
+                                return self._kill_windows_tree(pid)
+                            self._loop_runner.run(_force_tree, timeout=30.0)
                     except (ProcessLookupError, PermissionError, OSError):
                         pass
             except (AttributeError, ProcessLookupError, PermissionError, OSError):

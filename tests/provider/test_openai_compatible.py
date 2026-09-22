@@ -37,7 +37,7 @@ def chat_body(content="hi", prompt_tokens=2, completion_tokens=3):
     }
 
 
-def make_provider(opener, *, parameters=None, price_table=None):
+def make_provider(opener, *, parameters=None, price_table=None, idempotency_key=None):
     state = {"now": 0.0}
 
     def clock():
@@ -50,6 +50,7 @@ def make_provider(opener, *, parameters=None, price_table=None):
         opener=opener,
         sleep=lambda _: None,
         clock=clock,
+        default_headers=({"Idempotency-Key": idempotency_key} if idempotency_key else None),
     )
     return OpenAICompatibleProvider(transport, "test-model", parameters=parameters, price_table=price_table)
 
@@ -123,12 +124,24 @@ def test_429_retry_records_retry_count():
             raise HTTPError(request.full_url, 429, "busy", {"Retry-After": "0"}, None)
         return FakeResponse(chat_body())
 
-    envelope = make_provider(opener).complete(
+    envelope = make_provider(opener, idempotency_key="test-key").complete(
         ModelRequest(model="test-model", messages=[Message(role="user", content="x")])
     )
     assert envelope["metering"]["attempts"] == 2
     assert envelope["metering"]["retry_count"] == 1
     assert "error" not in envelope
+
+
+def test_malformed_200_response_becomes_protocol_call_evidence():
+    provider = make_provider(lambda request, *, timeout: FakeResponse({"choices": []}))
+    with pytest.raises(ProviderCallError) as failure:
+        provider.complete(ModelRequest(model="test-model", messages=[Message(role="user", content="x")]))
+    assert failure.value.error_class == "protocol"
+    assert failure.value.evidence["error"] == {
+        "class": "protocol",
+        "message": "malformed provider response: missing choices",
+    }
+    assert failure.value.evidence["canonical"]["response"]["body"] == {"choices": []}
 
 
 def test_auth_failure_is_classified_and_carries_evidence():

@@ -36,7 +36,12 @@ from motte_contracts.fixture import FixtureSpec
 from motte_contracts.workflow import TOOL_MODES, workflow_content_hash
 
 from .compiler import compile_workflow
-from .engine import STATUS_NEEDS_REVIEW, WorkflowEngine, WorkflowOutcome
+from .engine import (
+    EvidenceBoundaryError,
+    STATUS_NEEDS_REVIEW,
+    WorkflowEngine,
+    WorkflowOutcome,
+)
 from .fixtures import CleanupReport, FixtureRuntime
 from .state import (
     hidden_field_paths,
@@ -326,11 +331,12 @@ class ScenarioLedger:
                 expected_status="prepared", status="dispatching",
                 changes={"dispatched_at": datetime.now(UTC).isoformat()},
             )
-        except Exception as error:  # noqa: BLE001 - 证据边界失败不阻断业务
-            self.invocation_errors.append(
-                "prepared/dispatching: " + type(error).__name__ + ": " + str(error)
-            )
-            return None
+        except Exception as error:  # noqa: BLE001 - no action without durable boundary
+            detail = "prepared/dispatching: " + type(error).__name__ + ": " + str(error)
+            self.invocation_errors.append(detail)
+            raise EvidenceBoundaryError(
+                "INVOCATION_PERSISTENCE_FAILED", detail,
+            ) from error
 
     def _settle(
         self, invocation: Mapping[str, Any] | None, outcome: str,
@@ -349,8 +355,10 @@ class ScenarioLedger:
                     "settled_at": datetime.now(UTC).isoformat(),
                 },
             )
-        except Exception as error:  # noqa: BLE001 - settle 失败即调用边界不确定
-            self.invocation_errors.append("settle: " + type(error).__name__ + ": " + str(error))
+        except Exception as error:  # noqa: BLE001 - dispatching remains indeterminate
+            detail = "settle: " + type(error).__name__ + ": " + str(error)
+            self.invocation_errors.append(detail)
+            raise EvidenceBoundaryError("INVOCATION_SETTLE_FAILED", detail) from error
 
 
 def _business_target(arguments: Mapping[str, Any]) -> str | None:
@@ -1049,9 +1057,16 @@ class ScenarioCaseExecutor:
             stored = service.emit_run_event(
                 self.run["id"], event_type, {"case_id": case_id, **payload},
             )
-        except Exception:  # noqa: BLE001 - 证据通道故障不阻断执行
-            return
-        if ledger is not None and isinstance(stored, Mapping):
+        except Exception as error:  # noqa: BLE001 - evidence boundary
+            raise EvidenceBoundaryError(
+                "EVENT_PERSISTENCE_FAILED",
+                f"event persistence failed: {type(error).__name__}: {error}",
+            ) from error
+        if not isinstance(stored, Mapping) or not isinstance(stored.get("seq"), int):
+            raise EvidenceBoundaryError(
+                "EVENT_PERSISTENCE_FAILED", "event persistence failed: no durable event returned",
+            )
+        if ledger is not None:
             ledger.note_event_ref(stored.get("seq"))
 
     def _cancel_check(self) -> Callable[[], bool]:

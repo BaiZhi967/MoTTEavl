@@ -1,11 +1,14 @@
 import json
 import os
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from motte_sdk.replay_run import ReplayProvider
 from motte_sdk.service import RunService
+from motte_storage.gc import apply_gc, plan_gc
 from motte_storage.maintenance import (
+    MaintenanceConflict,
     backup_sqlite,
     begin_maintenance,
     cleanup_artifacts,
@@ -29,16 +32,41 @@ def test_maintenance_barrier_helpers_are_idempotent(tmp_path):
     first = begin_maintenance(store)
     assert first["active"] is True
     assert first["started_at"]
-    # 幂等重入：不刷新 started_at
-    again = begin_maintenance(store, reason="gc")
+    # 同一操作幂等重入：不刷新 started_at
+    again = begin_maintenance(store, reason="backup")
     assert again["started_at"] == first["started_at"]
+    assert again["owner"] == first["owner"]
     assert maintenance_status(store)["active"] is True
 
-    ended = end_maintenance(store)
+    # GC cannot overlap or steal the backup lease.
+    with pytest.raises(MaintenanceConflict):
+        begin_maintenance(store, reason="gc")
+
+    ended = end_maintenance(store, owner=first["owner"])
     assert ended["active"] is False
     assert ended["ended_at"]
-    end_maintenance(store)  # 幂等：重复解除不报错
+    end_maintenance(store, owner=first["owner"])  # 幂等：重复解除不报错
     assert maintenance_status(store) == {"active": False, "started_at": None}
+
+
+def test_backup_and_gc_cannot_overlap(tmp_path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    _populate(tmp_path / "runs.db")
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    old = root / "orphan.bin"
+    old.write_bytes(b"x")
+    stamp = (datetime.now(UTC) - timedelta(days=365)).timestamp()
+    os.utime(old, (stamp, stamp))
+    plan = plan_gc(store, root, artifact_ttl_days=1)
+
+    lease = begin_maintenance(store, reason="backup")
+    try:
+        with pytest.raises(MaintenanceConflict):
+            apply_gc(store, root, plan, confirm=True)
+        assert old.exists()
+    finally:
+        end_maintenance(store, owner=lease["owner"])
 
 
 def test_backup_and_restore_roundtrip_preserves_runs_and_events(tmp_path):

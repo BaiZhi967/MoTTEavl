@@ -328,6 +328,8 @@ class PiRuntimeCaseExecutor:
         event_refs: list[EvidenceRef] = []
         tool_records: list[dict[str, Any]] = []
         outputs: list[str] = []
+        evidence_errors: list[str] = []
+        invocation: dict[str, Any] | None = None
 
         def on_event(event: dict[str, Any]) -> None:
             kind = event.get("type")
@@ -352,21 +354,37 @@ class PiRuntimeCaseExecutor:
                         key: value for key, value in event.items()
                         if key not in ("run_id", "case_id", "session_id", "operation_id", "type")
                     }))
-                    stored = service.emit_run_event(
-                        self.run["id"], f"pi_{kind}",
-                        {
-                            "case_id": case_id, "session_id": session_id,
-                            "operation_id": operation_id,
-                            # 事件对账字段：bridge 原生 seq + parser 版本（R14）。
-                            "source_seq": event.get("seq"),
-                            "parser_version": PI_PARSER_VERSION,
-                            **payload,
-                        },
-                    )
-                    if stored is not None and isinstance(stored.get("seq"), int):
-                        event_refs.append(EvidenceRef(
-                            kind="event", run_id=self.run["id"], locator=str(stored["seq"]),
-                        ))
+                    try:
+                        stored = service.emit_run_event(
+                            self.run["id"], f"pi_{kind}",
+                            {
+                                "case_id": case_id, "session_id": session_id,
+                                "operation_id": operation_id,
+                                # 事件对账字段：bridge 原生 seq + parser 版本（R14）。
+                                "source_seq": event.get("seq"),
+                                "parser_version": PI_PARSER_VERSION,
+                                **payload,
+                            },
+                        )
+                    except Exception as error:  # noqa: BLE001 - evidence boundary
+                        from .execution_backends import ExecutionBackendError
+
+                        detail = f"Pi event persistence failed: {type(error).__name__}: {error}"
+                        evidence_errors.append(detail)
+                        failure = ExecutionBackendError("PI_EVENT_PERSISTENCE_FAILED", detail)
+                        failure.quarantine = True
+                        raise failure from error
+                    if not isinstance(stored, dict) or not isinstance(stored.get("seq"), int):
+                        from .execution_backends import ExecutionBackendError
+
+                        detail = "Pi event persistence failed: no durable event returned"
+                        evidence_errors.append(detail)
+                        failure = ExecutionBackendError("PI_EVENT_PERSISTENCE_FAILED", detail)
+                        failure.quarantine = True
+                        raise failure
+                    event_refs.append(EvidenceRef(
+                        kind="event", run_id=self.run["id"], locator=str(stored["seq"]),
+                    ))
 
         budgets = {"max_steps": effective["max_steps"]}
         if effective["max_tool_calls"] is not None:
@@ -413,6 +431,7 @@ class PiRuntimeCaseExecutor:
         try:
             session.start()
             self._enforce_sdk_version(session, effective["expected_sdk"])
+            invocation = self._prepare_invocation(case_id, session_id, operation_id)
             watcher.start()
             try:
                 outcome = session.run(case["input"])
@@ -462,9 +481,18 @@ class PiRuntimeCaseExecutor:
                     **error.evidence,
                 })
             raise error
-        self._log_invocations(case_id, session_id, outcome)
+        if invocation is not None and not evidence_errors:
+            try:
+                self._settle_invocation(invocation, outcome)
+            except BaseException as error:  # noqa: BLE001 - retain dispatching for review
+                evidence_errors.append(str(error))
+                if pending_error is None or not getattr(pending_error, "quarantine", False):
+                    pending_error = error
         try:
-            observation = self._capture(workspace, case, outcome, before, event_refs, tool_records)
+            observation = self._capture(
+                workspace, case, outcome, before, event_refs, tool_records,
+                evidence_errors=evidence_errors,
+            )
         finally:
             if not stopped or stopped.get("status") != "stopped":
                 cleanup = {"status": "failed", "residual": [str(workspace.root)],
@@ -550,43 +578,82 @@ class PiRuntimeCaseExecutor:
 
     # ------------------------------------------------------------ 调用日志
 
-    def _log_invocations(
-        self, case_id: str, session_id: str, outcome: dict[str, Any],
-    ) -> None:
+    def _prepare_invocation(
+        self, case_id: str, session_id: str, operation_id: str,
+    ) -> dict[str, Any] | None:
         store = getattr(self._service, "store", None) if self._service else None
         invocations = getattr(store, "invocations", None) if store else None
         if invocations is None:
-            return
+            if self._service is None:
+                return None
+            self._invocation_failure("PI_INVOCATION_PERSISTENCE_FAILED",
+                                     "Pi invocation persistence unavailable")
         try:
-            model_invocation = invocations.create({
+            prepared = invocations.create({
                 "id": f"inv-{uuid4().hex}",
                 "run_id": self.run["id"],
                 "case_id": case_id,
+                "attempt_id": self._attempt_id,
                 "kind": "model",
                 "step": 1,
-                "status": "settled",
+                "status": "prepared",
                 "tool_name": None,
                 "model": self.model_id,
                 "request_summary": redact({
                     "runtime": f"{PI_BACKEND_ID}@{PI_BACKEND_VERSION}",
                     "session_id": session_id,
-                    "operation_id": outcome.get("operation_id"),
+                    "operation_id": operation_id,
                     "model_control": "runner-configured",
-                    "transport": outcome.get("transport") or "scripted",
-                    "metering_source": (outcome.get("usage") or {}).get("source"),
+                    "transport": "http" if self.provider_config else "scripted",
+                    "metering_source": (
+                        "provider" if self.provider_config else "scripted-model"
+                    ),
                 }),
                 "prepared_at": datetime.now(UTC).isoformat(),
-                "dispatched_at": datetime.now(UTC).isoformat(),
-                "outcome": "succeeded" if outcome.get("status") == "completed" else "failed",
-                "result_summary": {
-                    "usage_reported": (outcome.get("usage") or {}).get("reported", False),
-                    "steps": outcome.get("steps", 0),
-                },
-                "settled_at": datetime.now(UTC).isoformat(),
             })
-            del model_invocation
-        except Exception:  # noqa: BLE001 - 调用日志失败不吞执行结果
-            pass
+            return invocations.transition(
+                prepared["id"], expected_revision=prepared["revision"],
+                expected_status="prepared", status="dispatching",
+                changes={"dispatched_at": datetime.now(UTC).isoformat()},
+            )
+        except Exception as error:  # noqa: BLE001 - no action before durable dispatch
+            self._invocation_failure(
+                "PI_INVOCATION_PERSISTENCE_FAILED",
+                f"Pi invocation prepared/dispatching failed: {type(error).__name__}: {error}",
+            )
+
+    def _settle_invocation(
+        self, invocation: dict[str, Any] | None, outcome: dict[str, Any],
+    ) -> None:
+        if invocation is None:
+            return
+        invocations = self._service.store.invocations
+        try:
+            invocations.transition(
+                invocation["id"], expected_revision=invocation["revision"],
+                expected_status="dispatching", status="settled",
+                changes={
+                    "outcome": "succeeded" if outcome.get("status") == "completed" else "failed",
+                    "result_summary": {
+                        "usage_reported": (outcome.get("usage") or {}).get("reported", False),
+                        "steps": outcome.get("steps", 0),
+                    },
+                    "settled_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        except Exception as error:  # noqa: BLE001 - dispatched effect is uncertain
+            self._invocation_failure(
+                "PI_INVOCATION_SETTLE_FAILED",
+                f"Pi invocation settle failed: {type(error).__name__}: {error}",
+            )
+
+    @staticmethod
+    def _invocation_failure(code: str, detail: str) -> None:
+        from .execution_backends import ExecutionBackendError
+
+        failure = ExecutionBackendError(code, detail)
+        failure.quarantine = True
+        raise failure
 
     # ------------------------------------------------------------ Observation
 
@@ -598,12 +665,13 @@ class PiRuntimeCaseExecutor:
         before: dict[str, Any],
         event_refs: list[EvidenceRef],
         tool_records: list[dict[str, Any]],
+        *, evidence_errors: list[str] | None = None,
     ) -> dict[str, Any]:
         from motte_sdk.agent_backend import _guess_media_type, _read_nofollow
 
         after = workspace.snapshot()
         artifacts: list[dict[str, Any]] = []
-        errors: list[str] = []
+        errors: list[str] = list(evidence_errors or [])
         stopped = outcome.get("process_stop") or {}
         stop_confirmed = stopped.get("status") == "stopped"
         if not stop_confirmed:

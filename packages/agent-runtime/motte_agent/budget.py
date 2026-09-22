@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,13 @@ BUDGET_FIELDS = (
     "max_steps", "max_tool_calls", "wall_time_sec", "per_call_timeout_sec",
     "max_output_tokens", "total_token_limit", "observed_cost_limit",
 )
+
+
+def _is_finite_number(value: int | float) -> bool:
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 class BudgetConfigError(ValueError):
@@ -68,17 +76,22 @@ class ExecutionBudget:
             ceiling = LIMITS_CEILING[name]
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise BudgetConfigError(f"budget.{name} must be a number")
+            if not _is_finite_number(value):
+                raise BudgetConfigError(f"budget.{name} must be finite")
             if value <= 0:
                 raise BudgetConfigError(f"budget.{name} must be positive")
             if value > ceiling:
                 raise BudgetConfigError(
                     f"budget.{name}={value} exceeds the allowed ceiling {ceiling}"
                 )
-            if name == "max_steps" and int(value) != value:
-                raise BudgetConfigError("budget.max_steps must be an integer")
-            values[name] = int(value) if name in ("max_steps", "max_tool_calls",
-                                                  "max_output_tokens",
-                                                  "total_token_limit") else float(value)
+            if name in ("max_steps", "max_tool_calls", "max_output_tokens",
+                        "total_token_limit") and (
+                not isinstance(value, int) or isinstance(value, bool)
+            ):
+                raise BudgetConfigError(f"budget.{name} must be an integer")
+            values[name] = value if name in ("max_steps", "max_tool_calls",
+                                              "max_output_tokens",
+                                              "total_token_limit") else float(value)
         enforced = config.get("per_call_timeout_enforced", False)
         if not isinstance(enforced, bool):
             raise BudgetConfigError("per_call_timeout_enforced must be a boolean")
@@ -119,11 +132,23 @@ class ExecutionBudget:
     def record_usage(self, usage: dict[str, Any] | None, cost: dict[str, Any] | None) -> None:
         """Provider 报告的 usage/cost 事后计量；不报告则保持 unknown。"""
         total = usage.get("total_tokens") if isinstance(usage, dict) else None
-        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+        if total is not None:
+            if isinstance(total, bool) or not isinstance(total, int):
+                raise BudgetConfigError("usage.total_tokens must be a non-negative integer")
+            if total < 0:
+                raise BudgetConfigError("usage.total_tokens must be non-negative")
             self._usage_reported = True
             self._total_tokens += total
         total_cost = cost.get("total") if isinstance(cost, dict) else None
-        if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+        if total_cost is not None:
+            if (
+                isinstance(total_cost, bool)
+                or not isinstance(total_cost, (int, float))
+                or not _is_finite_number(total_cost)
+            ):
+                raise BudgetConfigError("cost.total must be finite")
+            if total_cost < 0:
+                raise BudgetConfigError("cost.total must be non-negative")
             self._observed_cost += float(total_cost)
 
     def _wall_or_usage_stop(self) -> str | None:

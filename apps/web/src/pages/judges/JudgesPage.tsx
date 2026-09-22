@@ -4,6 +4,7 @@ import {
   ArrowClockwiseIcon,
   CurrencyDollarIcon,
   GavelIcon,
+  PlusIcon,
   ProhibitIcon,
   SealCheckIcon,
 } from "@phosphor-icons/react";
@@ -18,6 +19,7 @@ import {
   submitJudgeJob,
   type JudgeCalibrationView,
   type JudgeJobRecord,
+  type JudgePreflightRequest,
   type JudgePreflightView,
   type JudgeSpecView,
 } from "../../api/client";
@@ -85,14 +87,17 @@ function JudgeCriteria({ judge }: { judge: JudgeSpecView }) {
       <table>
         <thead><tr><th>criterion</th><th>说明</th><th>量表</th><th>权重</th></tr></thead>
         <tbody>
-          {(rubric.criteria ?? []).map((criterion) => (
-            <tr key={criterion.id}>
-              <td className="mono nowrap">{criterion.id}</td>
+          {(rubric.criteria ?? []).map((criterion, index) => {
+            const criterionId = criterion.id ?? criterion.criterion_id ?? `criterion-${index + 1}`;
+            return (
+            <tr key={criterionId}>
+              <td className="mono nowrap">{criterionId}</td>
               <td>{criterion.description ?? "—"}</td>
               <td className="mono">{criterion.scale ?? UNKNOWN_TEXT}</td>
               <td className="mono">{criterion.weight ?? UNKNOWN_TEXT}</td>
             </tr>
-          ))}
+            );
+          })}
           {(rubric.criteria ?? []).length === 0 && (
             <tr><td colSpan={4} className="empty">服务端未登记逐项 criterion</td></tr>
           )}
@@ -162,13 +167,15 @@ function JudgeCalibration({ judge }: { judge: JudgeSpecView }) {
   );
 }
 
+const TERMINAL_JUDGE_JOB_STATUSES = new Set(["settled", "failed", "cancelled", "indeterminate"]);
+
 function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
   const modes = useMemo(() => (judge.modes ?? []).filter((mode) => typeof mode === "string" && mode !== ""), [judge.modes]);
   const [purpose, setPurpose] = useState(modes[0] ?? "");
   const [runId, setRunId] = useState("");
   const [sourcePass, setSourcePass] = useState("");
-  const [sampleCount, setSampleCount] = useState("1");
   const [repeats, setRepeats] = useState("1");
+  const [requestKey, setRequestKey] = useState("");
   const [preflight, setPreflight] = useState<JudgePreflightView | null>(null);
   const [preflightFor, setPreflightFor] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -178,30 +185,46 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
   const [submitUnknown, setSubmitUnknown] = useState("");
   const submitSeq = useRef(0);
 
-  const samples = Number(sampleCount);
   const repeatCount = Number(repeats);
-  const formKey = [judge.judge_id, judge.version, purpose, runId, sourcePass, sampleCount, repeats].join("|");
+  const formKey = [judge.judge_id, judge.version, purpose, runId, sourcePass, repeats].join("|");
   const preflightFresh = preflightFor === formKey && preflight !== null;
+  const previewMaxCalls = judge.budget?.max_calls ?? judge.spec?.budget?.max_calls ?? 0;
+  const previewTokensPerCall =
+    (judge.spec?.budget?.max_prompt_tokens ?? 0) +
+    (judge.spec?.budget?.max_completion_tokens ?? 0);
+  const previewMaxTotalTokens =
+    previewMaxCalls > 0 && previewTokensPerCall > 0
+      ? previewMaxCalls * previewTokensPerCall
+      : null;
 
-  const request = {
-    judge_id: judge.judge_id,
-    version: judge.version,
-    purpose,
-    run_id: runId.trim() === "" ? undefined : runId.trim(),
+  const request: JudgePreflightRequest | null = judge.spec ? {
+    run_id: runId.trim(),
+    mode: purpose === "pairwise" ? "pairwise" : "single",
+    spec: judge.spec,
     source_pass_id: sourcePass.trim() === "" ? undefined : sourcePass.trim(),
-    sample_count: Number.isFinite(samples) ? samples : 0,
+    case_ids: [],
     repeats: Number.isFinite(repeatCount) && repeatCount > 0 ? repeatCount : 1,
-  };
+    authorisation: {
+      authorised: true,
+      actor: "web-operator-preflight",
+      max_calls: previewMaxCalls,
+      max_total_tokens: previewMaxTotalTokens,
+      hard_cost_cap_usd: judge.budget?.hard_cost_cap_usd ?? null,
+    },
+    publish_policy: "all_scored",
+  } : null;
 
   const onPreflight = async () => {
     const seq = ++submitSeq.current;
     setBusy("preflight");
     setError("");
+    if (request === null || request.run_id === "") return;
     try {
       const result = await preflightJudge(request);
       if (submitSeq.current !== seq) return; // 表单已改动：迟到预检不得当成当前结论
       setPreflight(result);
       setPreflightFor(formKey);
+      setRequestKey(`judge-web-${crypto.randomUUID()}`);
       setConfirmed(false);
     } catch (caught) {
       if (submitSeq.current !== seq) return;
@@ -215,28 +238,41 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
 
   const blockedReason =
     modes.length === 0 ? "服务端未声明可用于付费执行的用途（modes）：提交入口禁用"
-      : purpose === "" ? "未选择用途"
-        : !Number.isInteger(samples) || samples <= 0 ? "样本数必须是正整数"
-          : job !== null ? "本次请求已提交，等待作业终态；再次提交请重新读取预检"
-            : !preflightFresh ? "必须先读取只读预检（预检本身不产生任何调用）"
-              : preflight?.authorised === false ? "未授权：预检结论为零调用"
+      : judge.spec == null ? "服务端未返回可执行 Judge spec"
+        : purpose === "" ? "未选择用途"
+          : runId.trim() === "" ? "必须填写被评 Run"
+            : job !== null ? "本次请求已提交，等待作业终态；再次提交请重新读取预检"
+              : !preflightFresh ? "必须先读取只读预检（预检本身不产生任何调用）"
                 : preflight?.budget_executable !== true ? "预检结论为预算不可执行：不会发出任何调用"
-                  : !confirmed ? "需要显式确认用途、模型、样本数与费用"
-                    : null;
+                  : !confirmed ? "需要显式确认用途、模型、证据范围与费用"
+                    : requestKey === "" ? "缺少幂等请求键，请重新预检"
+                      : null;
   const canSubmit = blockedReason === null && busy === null;
+  const jobTerminal = job !== null && TERMINAL_JUDGE_JOB_STATUSES.has(job.status);
+
+  const resetForNextRequest = () => {
+    setJob(null);
+    setPreflight(null);
+    setPreflightFor(null);
+    setConfirmed(false);
+    setRequestKey("");
+    setError("");
+    setSubmitUnknown("");
+  };
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canSubmit || preflight === null) return;
+    if (!canSubmit || preflight === null || request === null) return;
     setBusy("submit");
     setError("");
     setSubmitUnknown("");
     try {
       const record = await submitJudgeJob({
         ...request,
+        request_key: requestKey,
         authorisation: {
           authorised: true,
-          purpose,
+          actor: "web-operator",
           max_calls: preflight.max_calls ?? 0,
           max_total_tokens: preflight.token_ceiling?.total ?? null,
           hard_cost_cap_usd: judge.budget?.hard_cost_cap_usd ?? null,
@@ -297,7 +333,7 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
         </select>
       </label>
       <label htmlFor="judge-run">
-        被评 Run（可选）
+        被评 Run
         <input
           id="judge-run"
           className="mono"
@@ -316,16 +352,6 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
           onChange={(change) => { setSourcePass(change.target.value); setPreflightFor(null); setConfirmed(false); }}
         />
       </label>
-      <label htmlFor="judge-samples">
-        样本数
-        <input
-          id="judge-samples"
-          type="number"
-          min={1}
-          value={sampleCount}
-          onChange={(change) => { setSampleCount(change.target.value); setPreflightFor(null); setConfirmed(false); }}
-        />
-      </label>
       <label htmlFor="judge-repeats">
         重复次数（含换序计量）
         <input
@@ -342,8 +368,8 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
         <dd className="mono">{purpose === "" ? "未选择" : purpose}</dd>
         <dt>模型</dt>
         <dd className="mono">{judge.model ?? UNKNOWN_TEXT}</dd>
-        <dt>样本数</dt>
-        <dd className="mono">{Number.isFinite(samples) ? samples : UNKNOWN_TEXT}</dd>
+        <dt>证据样本数</dt>
+        <dd className="mono">{preflightFresh ? (preflight?.sample_count ?? UNKNOWN_TEXT) : "由服务端预检"}</dd>
         <dt>最大调用次数</dt>
         <dd className="mono">{preflightFresh ? (preflight?.max_calls ?? UNKNOWN_TEXT) : "未预检"}</dd>
         <dt>已知 / 未知费用</dt>
@@ -355,7 +381,7 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
       </dl>
 
       <div className="actions">
-        <button type="button" disabled={busy !== null || modes.length === 0} onClick={() => void onPreflight()}>
+        <button type="button" disabled={busy !== null || modes.length === 0 || request === null || request.run_id === ""} onClick={() => void onPreflight()}>
           {busy === "preflight" ? "预检中…" : "读取预检（只读，零调用）"}
         </button>
         <button
@@ -373,7 +399,7 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
       )}
 
       <div className="switch-row">
-        <span className="field-label">我已确认用途、模型、样本数与费用（提交会产生真实调用与费用）</span>
+        <span className="field-label">我已确认用途、模型、证据范围与费用（提交会产生真实调用与费用）</span>
         <Switch.Root
           className="switch"
           checked={confirmed}
@@ -414,12 +440,17 @@ function JudgeSubmitForm({ judge }: { judge: JudgeSpecView }) {
       )}
       {job && (
         <div className="actions">
-          <button type="button" disabled={busy !== null} onClick={() => void onCancel()}>
+          <button type="button" disabled={busy !== null || jobTerminal} onClick={() => void onCancel()}>
             <ProhibitIcon size={14} weight="bold" aria-hidden /> 取消该作业
           </button>
           <button type="button" disabled={busy !== null} onClick={() => void refreshJob()}>
             <ArrowClockwiseIcon size={14} weight="bold" aria-hidden /> 刷新作业状态
           </button>
+          {jobTerminal && (
+            <button type="button" disabled={busy !== null} onClick={resetForNextRequest}>
+              <PlusIcon size={14} weight="bold" aria-hidden /> 新建 Judge 请求
+            </button>
+          )}
           <span className="hint">取消只作用于该作业；已完成的历史评分批次保持不变。</span>
         </div>
       )}

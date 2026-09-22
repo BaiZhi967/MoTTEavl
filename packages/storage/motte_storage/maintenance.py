@@ -28,11 +28,13 @@ import sqlite3
 import subprocess
 import time
 from contextlib import closing
+from threading import RLock, get_ident
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .platform import platform_for
 
@@ -49,7 +51,17 @@ _ALL_LIMIT = 1_000_000
 
 MAINTENANCE_FLAG = "maintenance"
 MAINTENANCE_STARTED_AT = "maintenance_started_at"
+MAINTENANCE_OWNER = "maintenance_owner"
+MAINTENANCE_REASON = "maintenance_reason"
+MAINTENANCE_LEASE_UNTIL = "maintenance_lease_until"
 RESTORE_GUARD_KEY = "restored_from_backup"
+
+_MAINTENANCE_LOCK = RLock()
+_LOCAL_MAINTENANCE_LEASES: dict[tuple[int, int], str] = {}
+
+
+class MaintenanceConflict(RuntimeError):
+    """A maintenance operation attempted to take or release another lease."""
 
 #: staging 恢复后需要操作员显式决定的 Run 状态（协议 §9.2：不自动付费执行）。
 UNRESOLVED_RUN_STATUSES = (
@@ -85,26 +97,70 @@ class RestoreIncomplete(RuntimeError):
 # --------------------------------------------------------------- 维护屏障
 
 
-def begin_maintenance(store: Any, *, reason: str = "backup") -> dict[str, Any]:
-    """置维护屏障（幂等）：API 写入口 503、Worker 拒绝领取新工作。
+def _lease_key(store: Any) -> tuple[int, int]:
+    return id(store), get_ident()
 
-    已处于维护窗口时保留原 started_at（幂等重入不刷新时间戳）。
+
+def begin_maintenance(store: Any, *, reason: str = "backup") -> dict[str, Any]:
+    """Acquire the shared maintenance barrier for one named operation.
+
+    Re-entry by the same operation remains idempotent, but a different reason
+    cannot steal or replace the active owner.  The lease token is returned to
+    internal callers and persisted in the shared metadata store.
     """
     meta = platform_for(store).meta
-    started_at = meta.get(MAINTENANCE_STARTED_AT)
-    if meta.get(MAINTENANCE_FLAG) != "active":
+    with _MAINTENANCE_LOCK:
+        if meta.get(MAINTENANCE_FLAG) == "active":
+            current_reason = meta.get(MAINTENANCE_REASON) or "backup"
+            if current_reason != reason:
+                raise MaintenanceConflict(
+                    f"maintenance barrier owned by {current_reason!r}, cannot acquire for {reason!r}"
+                )
+            owner = meta.get(MAINTENANCE_OWNER)
+            started_at = meta.get(MAINTENANCE_STARTED_AT)
+            if not owner:
+                owner = uuid4().hex
+                meta.set(MAINTENANCE_OWNER, owner)
+            _LOCAL_MAINTENANCE_LEASES[_lease_key(store)] = owner
+            return {"active": True, "started_at": started_at, "reason": reason, "owner": owner}
+
+        owner = uuid4().hex
         started_at = _utc_now_iso()
         meta.set(MAINTENANCE_FLAG, "active")
         meta.set(MAINTENANCE_STARTED_AT, started_at)
-    return {"active": True, "started_at": started_at, "reason": reason}
+        meta.set(MAINTENANCE_OWNER, owner)
+        meta.set(MAINTENANCE_REASON, reason)
+        # The token is a lease identity; no caller may clear it without matching it.
+        meta.set(MAINTENANCE_LEASE_UNTIL, "session")
+        _LOCAL_MAINTENANCE_LEASES[_lease_key(store)] = owner
+        return {"active": True, "started_at": started_at, "reason": reason, "owner": owner}
 
 
-def end_maintenance(store: Any) -> dict[str, Any]:
-    """解除维护屏障（幂等）。"""
+def end_maintenance(
+    store: Any, *, owner: str | None = None, reason: str | None = None
+) -> dict[str, Any]:
+    """Release only the lease owned by this operation.
+
+    The optional owner preserves the old API for the thread that acquired the
+    lease; explicit owners are required across worker/operation boundaries.
+    """
     meta = platform_for(store).meta
-    meta.delete(MAINTENANCE_FLAG)
-    meta.delete(MAINTENANCE_STARTED_AT)
-    return {"active": False, "started_at": None, "ended_at": _utc_now_iso()}
+    with _MAINTENANCE_LOCK:
+        if meta.get(MAINTENANCE_FLAG) != "active":
+            return {"active": False, "started_at": None, "ended_at": _utc_now_iso()}
+        current_owner = meta.get(MAINTENANCE_OWNER)
+        expected_owner = owner or _LOCAL_MAINTENANCE_LEASES.get(_lease_key(store))
+        current_reason = meta.get(MAINTENANCE_REASON) or "backup"
+        if expected_owner != current_owner or (reason is not None and reason != current_reason):
+            raise MaintenanceConflict("maintenance barrier cannot be cleared by a different operation")
+        started_at = meta.get(MAINTENANCE_STARTED_AT)
+        for key in (
+            MAINTENANCE_FLAG, MAINTENANCE_STARTED_AT, MAINTENANCE_OWNER,
+            MAINTENANCE_REASON, MAINTENANCE_LEASE_UNTIL,
+        ):
+            meta.delete(key)
+        _LOCAL_MAINTENANCE_LEASES.pop(_lease_key(store), None)
+        return {"active": False, "started_at": started_at, "ended_at": _utc_now_iso()}
 
 
 def maintenance_status(store: Any) -> dict[str, Any]:
@@ -151,7 +207,13 @@ def _artifact_path(root: Path, artifact_id: str) -> Path:
     relative = Path(artifact_id)
     if relative.is_absolute() or relative.drive or ".." in relative.parts:
         raise ValueError("artifact path escapes root: " + artifact_id)
-    return root / relative
+    resolved_root = root.resolve()
+    resolved = (resolved_root / relative).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as error:
+        raise ValueError("artifact path escapes root: " + artifact_id) from error
+    return resolved
 
 
 def _backup_stamp(now: datetime) -> str:
@@ -231,22 +293,38 @@ def _referenced_artifact_hashes(store: Any) -> dict[str, str | None]:
     for run in store.runs.list():
         run_id = run.get("id")
         _collect_artifact_refs(run, refs)
-        for case in store.case_runs.list_for_run(run_id):
-            _collect_artifact_refs(case, refs)
-        if store.invocations is not None:
-            for invocation in store.invocations.list_for_run(run_id):
-                _collect_artifact_refs(invocation, refs)
-        if store.scoring_passes is not None:
-            for scoring_pass in store.scoring_passes.list_for_run(run_id):
-                _collect_artifact_refs(scoring_pass, refs)
-        if store.external_jobs is not None:
-            for job in store.external_jobs.jobs_for_run(run_id):
+        for repo_name in (
+            "case_runs", "attempts", "invocations", "scoring_passes",
+            "commands", "trials", "runtime_sessions", "scoring_jobs",
+        ):
+            repo = getattr(store, repo_name, None)
+            if repo is None or not hasattr(repo, "list_for_run"):
+                continue
+            for record in repo.list_for_run(run_id):
+                _collect_artifact_refs(record, refs)
+                if repo_name == "scoring_passes":
+                    score_sets = getattr(store, "score_sets", None)
+                    if score_sets is not None and hasattr(score_sets, "list_for_pass"):
+                        for score in score_sets.list_for_pass(record.get("id", "")):
+                            _collect_artifact_refs(score, refs)
+        external_jobs = getattr(store, "external_jobs", None)
+        if external_jobs is not None:
+            for job in external_jobs.jobs_for_run(run_id):
                 _collect_artifact_refs(job, refs)
-                for record in store.external_jobs.list_records(job.get("job_id", "")):
+                for record in external_jobs.list_records(job.get("job_id", "")):
                     _collect_artifact_refs(record, refs)
-    if store.baseline_store is not None:
-        for baseline in store.baseline_store.list(limit=_ALL_LIMIT):
+        baselines = getattr(store, "baselines", None)
+        if baselines is not None and hasattr(baselines, "get_for_run"):
+            for baseline in baselines.get_for_run(run_id):
+                _collect_artifact_refs(baseline, refs)
+    baseline_store = getattr(store, "baseline_store", None)
+    if baseline_store is not None:
+        for baseline in baseline_store.list(limit=_ALL_LIMIT):
             _collect_artifact_refs(baseline, refs)
+    gate_store = getattr(store, "gate_store", None)
+    if gate_store is not None and hasattr(gate_store, "list_results"):
+        for result in gate_store.list_results(limit=_ALL_LIMIT):
+            _collect_artifact_refs(result, refs)
     try:
         ledger = platform_for(store).imports
         for record in ledger.list_imports():
@@ -395,7 +473,13 @@ def consistent_backup(
     begin = begin_maintenance(store, reason=reason)
     try:
         _snapshot_sqlite(Path(db_path), snapshot)
-        refs = _referenced_artifact_hashes(store)
+        # Read references and counts from the immutable DB snapshot, not the live
+        # store.  This prevents an in-flight worker from producing a mixed
+        # database/artifact manifest after the online backup point-in-time.
+        from .run_store import SQLiteRunStore
+
+        snapshot_store = SQLiteRunStore(snapshot)
+        refs = _referenced_artifact_hashes(snapshot_store)
         artifacts_section: dict[str, Any] | None = None
         missing: list[str] = []
         mismatched: list[str] = []
@@ -406,8 +490,8 @@ def consistent_backup(
                 refs, Path(artifacts_root), artifact_dir
             )
             artifacts_section = {"dir": artifact_dir.name, "files": files}
-        counts = _store_counts(store)
-        ended = end_maintenance(store)
+        counts = _store_counts(snapshot_store)
+        ended_at = _utc_now_iso()
         manifest = _write_manifest_v2(
             target,
             stamp,
@@ -419,13 +503,14 @@ def consistent_backup(
             },
             artifacts_section=artifacts_section,
             counts=counts,
-            maintenance_window={"started_at": begin["started_at"], "ended_at": ended["ended_at"]},
+            maintenance_window={"started_at": begin["started_at"], "ended_at": ended_at},
             schema_version=_sqlite_schema_fingerprint(),
             alembic_revision=None,  # SQLite 不走 Alembic；schema 用 DDL 指纹对齐
             missing=missing,
             mismatched=mismatched,
             warnings=warnings,
         )
+        end_maintenance(store, owner=begin["owner"])
         if missing or mismatched:
             raise BackupIncomplete(
                 "backup incomplete: referenced artifacts missing or hash-mismatched",
@@ -435,7 +520,7 @@ def consistent_backup(
             )
         return manifest
     finally:
-        end_maintenance(store)  # 幂等：成功路径已解除，这里兜底异常路径
+        end_maintenance(store, owner=begin["owner"])
 
 
 def consistent_backup_postgres(
@@ -492,7 +577,7 @@ def consistent_backup_postgres(
             alembic_revision = _alembic_current(dsn)
         except Exception:  # noqa: BLE001 - 版本读取失败按未知登记，不阻断备份
             alembic_revision = None
-        ended = end_maintenance(store)
+        ended_at = _utc_now_iso()
         manifest = _write_manifest_v2(
             target,
             stamp,
@@ -504,13 +589,14 @@ def consistent_backup_postgres(
             },
             artifacts_section=artifacts_section,
             counts=counts,
-            maintenance_window={"started_at": begin["started_at"], "ended_at": ended["ended_at"]},
+            maintenance_window={"started_at": begin["started_at"], "ended_at": ended_at},
             schema_version=None,
             alembic_revision=alembic_revision,
             missing=missing,
             mismatched=mismatched,
             warnings=warnings,
         )
+        end_maintenance(store, owner=begin["owner"])
         if missing or mismatched:
             raise BackupIncomplete(
                 "backup incomplete: referenced artifacts missing or hash-mismatched",
@@ -520,7 +606,7 @@ def consistent_backup_postgres(
             )
         return manifest
     finally:
-        end_maintenance(store)
+        end_maintenance(store, owner=begin["owner"])
 
 
 # ---------------------------------------------------------- staging 恢复
@@ -731,7 +817,7 @@ def backup_sqlite(
         "artifacts": None,
     }
     if artifacts_root is not None:
-        root = Path(artifacts_root)
+        root = Path(artifacts_root).resolve()
         if root.exists():
             artifact_snapshot = target / f"artifacts-{stamp}"
             shutil.copytree(root, artifact_snapshot)

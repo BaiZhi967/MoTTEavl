@@ -219,7 +219,7 @@ def test_task_and_trial_drilldown_keeps_errors(client: TestClient) -> None:
 
     tasks = client.get(f"/api/v1/runs/{run_id}/tasks").json()
     assert tasks["total"] == 2, "both tasks appear even with partial results"
-    row = next(item for item in tasks["items"] if item["planned_trials"] == 2)
+    row = next(item for item in tasks["items"] if item["task_key"] == first["task_key"])
     assert row["valid_trials"] == 1
     assert row["invalid_trials"] == 1
     assert row["valid_trial_pass_rate"] == 0.0

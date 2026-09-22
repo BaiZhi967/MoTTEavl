@@ -19,6 +19,7 @@ Compose 的这两种语义是"把 compose 进程的宿主同名变量传进容�
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -109,8 +110,12 @@ def test_runner_child_env_is_minimal_and_keeps_declared_credential(
     assert SYNTHETIC_HOME_SECRET not in child_env.values()
 
     # 2) Runner 自己运行需要的白名单变量仍然在（否则 Runner 根本起不来）。
-    for name in ("PATH", "HOME"):
-        assert child_env.get(name), name
+    assert child_env.get("PATH")
+    if os.name == "nt":
+        assert child_env.get("USERPROFILE")
+        assert child_env.get("SystemRoot") or child_env.get("SYSTEMROOT")
+    else:
+        assert child_env.get("HOME")
     # 3) 显式注入（平台受控配置）仍然下发。
     assert child_env["MOTTE_FAKE_MODE"] == "ok"
     # 4) 声明的凭据引用照旧可用（真实 Claude Agent 必需）。

@@ -47,6 +47,9 @@ class SandboxPolicy:
     pids_limit: int = 64
     disk_mb: int = 256
     max_output_bytes: int = 1_000_000
+    max_artifacts: int = 200
+    max_artifact_bytes: int = 10_000_000
+    max_total_artifact_bytes: int = 50_000_000
     timeout_seconds: int = 60
     environment: tuple[str, ...] = ()
     privileged: bool = False
@@ -68,5 +71,12 @@ class SandboxPolicy:
             raise PolicyViolationError("workspace escape")
         if self.memory_mb <= 0 or self.pids_limit <= 0 or self.disk_mb <= 0:
             raise PolicyViolationError("resource limits must be positive")
+        if (
+            self.max_output_bytes <= 0
+            or self.max_artifacts <= 0
+            or self.max_artifact_bytes <= 0
+            or self.max_total_artifact_bytes <= 0
+        ):
+            raise PolicyViolationError("output and artifact limits must be positive")
         if self.timeout_seconds <= 0:
             raise PolicyViolationError("timeout must be positive")

@@ -48,10 +48,13 @@ def fixture(name):
     return json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
 
 
-def make_provider(opener, *, parameters=None, price_table=None):
+def make_provider(opener, *, parameters=None, price_table=None, idempotency_key=None):
     transport = HTTPTransport(
         "https://api.anthropic.test/v1", SECRET, opener=opener, sleep=lambda _: None,
-        auth="x-api-key", default_headers={"anthropic-version": ANTHROPIC_VERSION},
+        auth="x-api-key", default_headers={
+            "anthropic-version": ANTHROPIC_VERSION,
+            **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+        },
     )
     return AnthropicMessagesProvider(transport, "claude-sonnet-4-5", parameters=parameters, price_table=price_table)
 
@@ -172,6 +175,35 @@ def test_tool_round_trip_messages_convert_to_blocks():
     }
 
 
+def test_flat_canonical_tool_history_and_malformed_response():
+    captured = []
+
+    def opener(request, *, timeout):
+        captured.append(json.loads(request.data))
+        return FakeResponse(fixture("anthropic_messages_text"))
+
+    provider = make_provider(opener)
+    complete_with(provider, ModelRequest(
+        model="claude-sonnet-4-5",
+        messages=[
+            Message(role="assistant", content="", tool_calls=[
+                {"id": "call_1", "name": "get_weather", "arguments": '{"city":"SF"}'},
+            ]),
+            Message(role="tool", content="sunny", tool_call_id="call_1"),
+        ],
+    ))
+    assert captured[0]["messages"][0]["content"] == [
+        {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "SF"}},
+    ]
+    from motte_provider.base import ProviderCallError
+
+    invalid = make_provider(lambda request, *, timeout: FakeResponse({"content": {}}))
+    with pytest.raises(ProviderCallError) as failure:
+        complete_with(invalid)
+    assert failure.value.error_class == "protocol"
+    assert failure.value.evidence["canonical"]["response"]["body"] == {"content": {}}
+
+
 def test_error_body_refines_classification():
     body = {"type": "error", "error": {"type": "rate_limit_error", "message": "Number of requests too high"}}
 
@@ -187,7 +219,7 @@ def test_error_body_refines_classification():
             raise HTTPError(request.full_url, 529, "Overloaded", {}, None)
         return FakeResponse(fixture("anthropic_messages_text"))
 
-    envelope = complete_with(make_provider(overloaded_then_ok))
+    envelope = complete_with(make_provider(overloaded_then_ok, idempotency_key="test-key") )
     assert envelope["metering"]["attempts"] == 2  # 529 overloaded 可重试
     assert envelope["metering"]["retry_count"] == 1
     assert body["error"]["type"] == "rate_limit_error"  # 错误体形状与映射表一致

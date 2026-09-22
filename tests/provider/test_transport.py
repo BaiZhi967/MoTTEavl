@@ -4,11 +4,12 @@ import threading
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
 import pytest
 
-from motte_provider.errors import ProviderHTTPError
-from motte_provider.transport import HTTPTransport
+from motte_provider.errors import ProviderHTTPError, ProviderRedirectError
+from motte_provider.transport import HTTPTransport, _SafeRedirectHandler
 
 
 class FakeResponse:
@@ -24,6 +25,18 @@ class FakeResponse:
 
     def read(self):
         return json.dumps(self.payload).encode()
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    location = ""
+
+    def do_POST(self):  # noqa: N802
+        self.send_response(302)
+        self.send_header("Location", self.location)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        return
 
 
 def test_post_json_joins_base_url_and_injects_redacted_authorization():
@@ -60,7 +73,7 @@ def test_429_is_retried_and_succeeds_without_network():
             raise HTTPError(request.full_url, 429, "busy", {"Retry-After": "0"}, None)
         return FakeResponse({"done": True})
 
-    transport = HTTPTransport("https://example.test", max_retries=1, opener=opener, sleep=lambda _: None)
+    transport = HTTPTransport("https://example.test", max_retries=1, opener=opener, sleep=lambda _: None, default_headers={"Idempotency-Key": "test-key"})
     assert transport.post_json("chat", {}) == {"done": True}
     assert len(calls) == 2
 
@@ -85,7 +98,8 @@ def test_transient_network_error_is_retried_with_backoff():
         return FakeResponse({"done": True})
 
     transport = HTTPTransport(
-        "https://example.test", max_retries=1, opener=opener, sleep=delays.append
+        "https://example.test", max_retries=1, opener=opener, sleep=delays.append,
+        default_headers={"Idempotency-Key": "test-key"},
     )
     assert transport.post_json("chat", {}) == {"done": True}
     assert len(calls) == 2
@@ -141,6 +155,7 @@ def test_retry_after_http_date_is_honored_for_transient_status():
         opener=opener,
         sleep=delays.append,
         wall_clock=lambda: 990.0,
+        default_headers={"Idempotency-Key": "test-key"},
     )
     assert transport.post_json("chat", {}) == {"ok": True}
     assert delays == [10.0]
@@ -175,9 +190,107 @@ def test_local_http_server_retries_503_with_retry_after():
             f"http://127.0.0.1:{server.server_port}",
             max_retries=1,
             sleep=lambda _: None,
+            default_headers={"Idempotency-Key": "test-key"},
         )
         assert transport.post_json("chat", {}) == {"ok": True}
         assert state["calls"] == 2
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_post_json_does_not_retry_without_idempotency_key():
+    calls = []
+
+    def opener(request, *, timeout):
+        calls.append(request)
+        raise URLError("connection reset after dispatch")
+
+    with pytest.raises(ProviderHTTPError) as failure:
+        HTTPTransport("https://example.test", max_retries=3, opener=opener).post_json("chat", {})
+    assert failure.value.error_class == "network"
+    assert len(calls) == 1
+
+
+def test_post_json_does_not_replay_server_error_without_idempotency_key():
+    calls = []
+
+    def opener(request, *, timeout):
+        calls.append(request)
+        raise HTTPError(request.full_url, 503, "busy", {}, None)
+
+    with pytest.raises(ProviderHTTPError) as failure:
+        HTTPTransport("https://example.test", max_retries=3, opener=opener).post_json("chat", {})
+    assert failure.value.error_class == "server"
+    assert len(calls) == 1
+
+
+def test_https_to_http_redirect_is_refused():
+    request = Request("https://provider.example/v1/messages", method="POST")
+    with pytest.raises(ProviderRedirectError, match="redirect refused"):
+        _SafeRedirectHandler().redirect_request(
+            request, None, 302, "Found", {}, "http://provider.example/v1/messages"
+        )
+
+
+def test_post_json_redirect_refuses_cross_origin_without_forwarding_credentials():
+    first = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    second_state = {"authorization": None}
+
+    class CaptureHandler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            second_state["authorization"] = self.headers.get("Authorization")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            return
+
+    second = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHandler)
+    first.RequestHandlerClass.location = f"http://127.0.0.1:{second.server_port}/json"
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (first, second)]
+    for thread in threads:
+        thread.start()
+    try:
+        transport = HTTPTransport(f"http://127.0.0.1:{first.server_port}", "TOPSECRET")
+        with pytest.raises(ProviderRedirectError, match="redirect refused"):
+            transport.post_json("json", {})
+        assert second_state["authorization"] is None
+    finally:
+        for server in (first, second):
+            server.shutdown()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
+def test_post_sse_redirect_refuses_cross_origin_without_forwarding_credentials():
+    first = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    second_state = {"authorization": None}
+
+    class CaptureHandler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            second_state["authorization"] = self.headers.get("Authorization")
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    second = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHandler)
+    first.RequestHandlerClass.location = f"http://127.0.0.1:{second.server_port}/events"
+    threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (first, second)]
+    for thread in threads:
+        thread.start()
+    try:
+        transport = HTTPTransport(
+            f"http://127.0.0.1:{first.server_port}", "TOPSECRET", max_retries=0,
+        )
+        with pytest.raises(Exception, match="redirect refused"):
+            list(transport.post_sse("events", {}))
+        assert second_state["authorization"] is None
+    finally:
+        for server in (first, second):
+            server.shutdown()
+        for thread in threads:
+            thread.join(timeout=2)

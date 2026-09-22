@@ -78,6 +78,7 @@ def _stage_partial_trial(work_dir: Path, job_name: str, *, task_path: str,
     return trial_name
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX SIGTERM contract")
 def test_real_sigterm_keeps_location_and_partial_trial(tmp_path: Path) -> None:
     """真实 SIGTERM：定位文件 + 完成标记（143）落盘，已完成 Trial 不丢。"""
     inputs = _inputs(tmp_path)

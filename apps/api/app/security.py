@@ -24,6 +24,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "testserver")
+DEFAULT_ALLOWED_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 WRITE_METHODS = ("POST", "PUT", "DELETE", "PATCH")
 #: token 豁免路径：探活与能力握手必须先于认证可用（协议 §10）。
 TOKEN_EXEMPT_PATHS = ("/health", "/api/v1/capabilities")
@@ -38,6 +39,32 @@ def _hostname(raw: str) -> str:
         return (urlsplit(candidate).hostname or "").lower()
     except ValueError:
         return ""
+
+
+def _canonical_origin(raw: str, *, default_scheme: str | None = None) -> tuple[str, str, int] | None:
+    """Return an exact browser origin tuple; paths, credentials and invalid ports are rejected."""
+    if not raw:
+        return None
+    candidate = raw if "://" in raw else f"{default_scheme or 'http'}://{raw}"
+    try:
+        parsed = urlsplit(candidate)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+        if scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
+            return None
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        return None
+    return scheme, hostname, port
+
+
+def _origin_text(origin: tuple[str, str, int]) -> str:
+    scheme, hostname, port = origin
+    default_port = 443 if scheme == "https" else 80
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    return f"{scheme}://{host}" + ("" if port == default_port else f":{port}")
 
 
 def _json_response(
@@ -77,7 +104,12 @@ class SingleUserSecurityMiddleware:
     ) -> None:
         self.app = app
         self.allowed_hosts = {host.lower() for host in (allowed_hosts or DEFAULT_ALLOWED_HOSTS)}
-        self.allowed_origins = {origin.lower() for origin in (allowed_origins or set())}
+        configured_origins = allowed_origins if allowed_origins is not None else set(DEFAULT_ALLOWED_ORIGINS)
+        self.allowed_origins = {
+            _origin_text(parsed)
+            for origin in configured_origins
+            if (parsed := _canonical_origin(str(origin))) is not None
+        }
         self.api_token = api_token
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -96,10 +128,13 @@ class SingleUserSecurityMiddleware:
         if method in WRITE_METHODS:
             origin = headers.get("origin")
             if origin:
-                origin_host = _hostname(origin)
-                same_site = origin_host and origin_host in self.allowed_hosts
-                explicit = origin.lower().rstrip("/") in self.allowed_origins
-                if not (same_site or explicit):
+                parsed_origin = _canonical_origin(origin)
+                request_origin = _canonical_origin(
+                    headers.get("host", ""), default_scheme=str(scope.get("scheme") or "http"),
+                )
+                explicit = parsed_origin is not None and _origin_text(parsed_origin) in self.allowed_origins
+                same_origin = parsed_origin is not None and parsed_origin == request_origin
+                if not (same_origin or explicit):
                     await _json_response(
                         send, 403, "ORIGIN_REJECTED",
                         f"origin {origin!r} is not allowed; configure MOTTE_ALLOWED_ORIGINS"
@@ -167,7 +202,7 @@ def security_config_from_env(
         raw = os.environ.get("MOTTE_ALLOWED_ORIGINS", "")
         allowed_origins = {
             origin.strip().lower() for origin in raw.split(",") if origin.strip()
-        }
+        } or set(DEFAULT_ALLOWED_ORIGINS)
     else:
         allowed_origins = {
             origin.strip().lower() for origin in allowed_origins if str(origin).strip()

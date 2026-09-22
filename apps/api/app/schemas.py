@@ -96,6 +96,8 @@ class EventsSnapshotResponse(APIModel):
 
     events: list[dict[str, Any]]
     last_seq: int | None = None
+    next_after: int | None = None
+    has_more: bool = False
     run_status: str
     partial: bool
 

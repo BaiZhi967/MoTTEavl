@@ -65,6 +65,16 @@ class EngineError(RuntimeError):
         self.code = code
 
 
+class EvidenceBoundaryError(RuntimeError):
+    """Durable evidence failed; execution must fail closed and be reviewed."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.error_class = code
+        self.quarantine = True
+
+
 class FixturePort(Protocol):
     """引擎需要的 fixture 能力（由 fixtures 模块实现，本模块不复制实现）。"""
 
@@ -257,10 +267,7 @@ class WorkflowEngine:
             "attempt_id": self.attempt_id,
             "step_seq": self._seq,
         }
-        try:
-            self._event_sink({"type": event_type, **identity, **payload})
-        except Exception:  # noqa: BLE001 - 证据通道故障不阻断执行
-            pass
+        self._event_sink({"type": event_type, **identity, **payload})
 
     # ---------------------------------------------------------------- 上下文
 
@@ -383,6 +390,8 @@ class WorkflowEngine:
         assertions: list[dict[str, Any]] = []
         try:
             status, detail, assertions = self._dispatch(step, deadline=deadline, depth=depth)
+        except EvidenceBoundaryError:
+            raise
         except EngineError as error:
             status, detail = STEP_FAILED, f"{error.code}: {error}"
         except ConditionError as error:

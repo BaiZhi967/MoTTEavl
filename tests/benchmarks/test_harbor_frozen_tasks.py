@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -148,7 +149,12 @@ def test_added_removed_and_replaced_paths_are_refused(tmp_path: Path) -> None:
     target.unlink()
     outside = tmp_path / "outside.sh"
     outside.write_text("#!/bin/bash\necho pwned\n", encoding="utf-8")
-    target.symlink_to(outside)
+    try:
+        target.symlink_to(outside)
+    except OSError as error:
+        if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or symlink privilege")
+        raise
     with pytest.raises(Exception) as swapped:
         adapter.prepare(_spec(inputs, tmp_path))
     assert getattr(swapped.value, "code", None) == "HARBOR_TASK_CONTENT_DRIFT"

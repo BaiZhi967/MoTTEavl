@@ -8,7 +8,9 @@ receipt + current 指针）、事务中断全有或全无、崩溃恢复隔离 j
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 
@@ -586,6 +588,65 @@ def test_postgres_scoring_job_transactions():
     )
     assert published["outcome"] == "published"
     assert len(store.score_sets.list_for_pass(record["reserved_pass_id"])) == 1
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOTTE_PG_DSN"),
+    reason="set MOTTE_PG_DSN to run the PostgreSQL scoring-job race test",
+)
+def test_postgres_submit_same_key_same_fingerprint_race_is_idempotent():
+    from motte_storage.migrations import upgrade
+    from motte_storage.postgres import create_postgres_run_store
+
+    dsn = os.environ["MOTTE_PG_DSN"]
+    upgrade(dsn)
+    jobs = scoring_jobs_for(create_postgres_run_store(dsn))
+    suffix = f"{os.getpid()}-{uuid4().hex}"
+    records = [
+        job_record(
+            request_key="pg-race-request-" + suffix,
+            fingerprint=FINGERPRINT,
+            job_id="sjob-pg-race-a-" + suffix,
+            reserved_pass_id="pass-pg-race-a-" + suffix,
+        ),
+        job_record(
+            request_key="pg-race-request-" + suffix,
+            fingerprint=FINGERPRINT,
+            job_id="sjob-pg-race-b-" + suffix,
+            reserved_pass_id="pass-pg-race-b-" + suffix,
+        ),
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(jobs.submit, record) for record in records]
+        outcomes = [future.result(timeout=15) for future in futures]
+    assert sorted(item["created"] for item in outcomes) == [False, True]
+    assert len({item["job"]["job_id"] for item in outcomes}) == 1
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOTTE_PG_DSN"),
+    reason="set MOTTE_PG_DSN to run the PostgreSQL recovery race test",
+)
+def test_postgres_recovery_race_does_not_indeterminate_requeued_prepared_job():
+    from motte_storage.migrations import upgrade
+    from motte_storage.postgres import create_postgres_run_store
+
+    dsn = os.environ["MOTTE_PG_DSN"]
+    upgrade(dsn)
+    jobs = scoring_jobs_for(create_postgres_run_store(dsn))
+    suffix = f"{os.getpid()}-{uuid4().hex}"
+    record = job_record(
+        request_key="pg-recovery-race-" + suffix,
+        job_id="sjob-pg-recovery-race-" + suffix,
+        reserved_pass_id="pass-pg-recovery-race-" + suffix,
+    )
+    jobs.submit(record)
+    jobs.claim(record["job_id"])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(jobs.recover_interrupted) for _ in range(2)]
+        outcomes = [future.result(timeout=15) for future in futures]
+    assert sum(items.count(record["job_id"]) for items in outcomes) == 1
+    assert jobs.get(record["job_id"])["status"] == "queued"
 
 
 def test_repeated_submit_of_a_settled_job_does_not_re_run(store):

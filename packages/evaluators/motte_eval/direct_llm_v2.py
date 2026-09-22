@@ -22,6 +22,7 @@ _MAX_NORMALIZED_NUMBER_LENGTH = 1_024
 _NUMERIC_DIVISION_PRECISION = _MAX_NUMBER_SIGNIFICANT_DIGITS
 _NUMERIC_OPERATION_PRECISION = 256
 _NUMERIC_OPERATION_EXPONENT_LIMIT = 4_096
+_MAX_JSON_DEPTH = 128
 
 
 def _numeric_context(precision: int) -> Context:
@@ -414,18 +415,36 @@ def _reject_json_constant(value: str) -> Any:
     raise _NonFiniteJson(value)
 
 
+def _within_json_depth(value: Any) -> bool:
+    pending: list[tuple[Any, int]] = [(value, 1)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > _MAX_JSON_DEPTH:
+            return False
+        if isinstance(current, dict):
+            pending.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            pending.extend((child, depth + 1) for child in current)
+    return True
+
+
 def _parse_json(content: Any) -> Any | ParseFailure:
     if not isinstance(content, str):
         return ParseFailure("output_not_text")
     try:
-        return json.loads(content, parse_int=Decimal, parse_float=Decimal,
-                          parse_constant=_reject_json_constant, object_pairs_hook=_json_object)
+        parsed = json.loads(content, parse_int=Decimal, parse_float=Decimal,
+                             parse_constant=_reject_json_constant, object_pairs_hook=_json_object)
+    except RecursionError:
+        return ParseFailure("max_depth_exceeded")
     except _DuplicateJsonKey:
         return ParseFailure("duplicate_key")
     except _NonFiniteJson:
         return ParseFailure("non_finite_number")
     except (json.JSONDecodeError, TypeError, ValueError):
         return ParseFailure("invalid_json")
+    if not _within_json_depth(parsed):
+        return ParseFailure("max_depth_exceeded")
+    return parsed
 
 
 def _json_equal(left: Any, right: Any) -> bool:

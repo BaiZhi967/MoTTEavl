@@ -17,6 +17,7 @@ from motte_scenario.engine import (
     STATUS_FAILED,
     STATUS_NEEDS_REVIEW,
     STEP_SKIPPED,
+    EvidenceBoundaryError,
     WorkflowEngine,
 )
 
@@ -676,3 +677,24 @@ def test_a_tool_overrunning_the_global_wall_time_reports_budget_exceeded():
     assert outcome.status == STATUS_BUDGET_EXCEEDED
     assert outcome.step("cancel").status == "failed"
     assert "wall_time_sec" in (outcome.reason or "")
+
+
+def test_event_persistence_failure_is_not_swallowed():
+    steps = [{"step_id": "one", "kind": "send_message", "message": "1"}]
+    engine, _fixture, _target = build(steps)
+    engine._event_sink = lambda _event: (_ for _ in ()).throw(
+        EvidenceBoundaryError("EVENT_PERSISTENCE_FAILED", "event store unavailable")
+    )
+    with pytest.raises(EvidenceBoundaryError, match="event store unavailable"):
+        engine.run()
+
+
+def test_scenario_event_sink_none_return_is_fatal():
+    from types import SimpleNamespace
+
+    from motte_scenario.executor import ScenarioCaseExecutor
+
+    executor = ScenarioCaseExecutor({"id": "run-fault"})
+    executor.bind_service(SimpleNamespace(emit_run_event=lambda *_args, **_kwargs: None))
+    with pytest.raises(EvidenceBoundaryError, match="no durable event"):
+        executor._persist_event("case-1", "step_start", {"type": "step_start"}, None)

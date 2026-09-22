@@ -136,6 +136,7 @@ def test_timeout_settle_failure_freezes_invocation(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------- #2 父目录替换竞态
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dir-fd race injection")
 def test_parent_swap_during_creation_cannot_redirect(tmp_path, monkeypatch):
     """父目录校验后、子目录创建前，把父目录换成指向 victim 的 symlink：
     创建基于受信 fd 执行，绝不落到外部目录。"""

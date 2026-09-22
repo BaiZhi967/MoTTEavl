@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError, cancelRun, createBenchmarkRun, createRun, dryRunDirectLlm, getBenchmarkCases,
-  getDirectLlmSources, getRuns, getRunTrialArtifact, getSourceDetail, importBenchmark, publishModel,
-  setCredential, updateModel, updateProvider, sendRuntimeCommand,
+  fetchRunEventsSnapshot, getDirectLlmSources, getRuns, getRunTrialArtifact, getSourceDetail, importBenchmark, publishModel,
+  setApiToken, setCredential, updateModel, updateProvider, sendRuntimeCommand,
 } from "../src/api/client";
 
 const mockFetch = (status: number, payload: unknown) => {
@@ -16,6 +16,7 @@ const mockFetch = (status: number, payload: unknown) => {
 };
 
 afterEach(() => {
+  setApiToken("");
   vi.unstubAllGlobals();
 });
 
@@ -33,6 +34,31 @@ describe("api client", () => {
     await expect(sendRuntimeCommand("run-1", { kind: "interrupt", case_id: "c", session_id: "s",
       expected_session_revision: 1, dedupe_key: "key-1" })).rejects.toThrow("提交结果未知");
   });
+  it("普通请求携带会话级 Bearer token", async () => {
+    setApiToken("remote-secret");
+    const fetchMock = mockFetch(200, { items: [], total: 0 });
+    await getRuns();
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer remote-secret");
+    expect(localStorage.getItem("motte-api-token")).toBeNull();
+  });
+
+  it("事件快照按服务端游标读取全部分页", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+        events: [{ run_id: "run-1", seq: 1, type: "queued", payload: {} }],
+        last_seq: 2, run_status: "running", partial: true, next_after: 1, has_more: true,
+      }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+        events: [{ run_id: "run-1", seq: 2, type: "completed", payload: { status: "completed" } }],
+        last_seq: 2, run_status: "completed", partial: false, next_after: 2, has_more: false,
+      }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const snapshot = await fetchRunEventsSnapshot("run-1", 0, 1);
+    expect(snapshot.events.map((event) => event.seq)).toEqual([1, 2]);
+    expect(fetchMock.mock.calls[1][0]).toContain("after=1");
+  });
+
   it("GET runs 返回列表", async () => {
     const fetchMock = mockFetch(200, { items: [{ id: "run-1", status: "queued" }], total: 1 });
     const payload = await getRuns("queued");

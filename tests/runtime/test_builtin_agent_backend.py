@@ -303,3 +303,21 @@ def test_workspace_policy_violation_terminates_with_error(tmp_path, monkeypatch)
         if call["tool_name"] == "write_file"
     ]
     assert failed_calls and failed_calls[0]["status"] == "failed"
+
+
+def test_agent_event_sink_failure_is_fatal_and_incomplete():
+    from types import SimpleNamespace
+
+    from motte_agent.errors import AgentFatalError
+    from motte_sdk.agent_backend import AgentCaseExecutor, _CaseEvidence
+
+    executor = object.__new__(AgentCaseExecutor)
+    executor.run = {"id": "run-fault"}
+    executor._service = SimpleNamespace(emit_run_event=lambda *_args, **_kwargs: None)
+    evidence = _CaseEvidence()
+    sink = executor._event_sink("case-1", evidence)
+
+    with pytest.raises(AgentFatalError) as raised:
+        sink({"type": "model_request", "step": 1})
+    assert raised.value.code == "EVENT_PERSISTENCE_FAILED"
+    assert evidence.errors

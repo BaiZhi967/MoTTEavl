@@ -8,6 +8,7 @@
 """
 import json
 import os
+import subprocess
 import time
 
 import pytest
@@ -246,6 +247,12 @@ def test_nonzero_exit_maps_partial_dispositions(tmp_path):
 
 
 def _pid_alive(pid):
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        return f'"{pid}"' in result.stdout
     try:
         os.kill(pid, 0)
         return True

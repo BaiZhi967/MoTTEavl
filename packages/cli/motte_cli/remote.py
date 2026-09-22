@@ -43,7 +43,7 @@ def add_mode_arguments(parser: argparse.ArgumentParser) -> None:
     """给一个子命令挂上 §3 的模式路由参数（argparse 子解析器不共享顶层参数）。"""
     group = parser.add_argument_group("mode", "local/server 路由（协议 §3：参数 > 环境变量 > 默认 local）")
     group.add_argument(
-        "--mode", choices=("local", "server"),
+        "--mode", dest="cli_mode", choices=("local", "server"),
         help=f"执行模式（默认取 {MODE_ENV}，否则 local）",
     )
     group.add_argument(
@@ -64,8 +64,12 @@ def _arg_or_env(args: argparse.Namespace, name: str, env: str) -> str | None:
 
 
 def resolved_mode(args: argparse.Namespace) -> str:
-    mode = _arg_or_env(args, "mode", MODE_ENV)
-    return mode or "local"
+    mode = (_arg_or_env(args, "cli_mode", MODE_ENV) or "local").strip().lower()
+    if mode not in {"local", "server"}:
+        raise ValueError(
+            f"{MODE_ENV} must be one of local or server, got {mode!r}"
+        )
+    return mode
 
 
 def resolved_api_url(args: argparse.Namespace) -> str | None:

@@ -11,6 +11,7 @@ from psycopg.types.json import Json
 
 from .audit_store import _attempt_trial_id, _indexed_attempt, _pass_record
 from .benchmark_datasets import RevisionConflictError, _content_identity, _record_id, _validate
+from .external_jobs import _job_defaults, _validate_import_args, _validate_job
 from .integrity import (
     ATTEMPT_TRANSITIONS,
     COMMAND_TRANSITIONS,
@@ -690,22 +691,37 @@ class PgExternalJobs:
         self._dsn = dsn
 
     def begin_job(self, record: dict[str, Any]) -> dict[str, Any]:
-        stored = deepcopy(record)
-        job_id = str(stored.get("job_id"))
-        run_id = str(stored.get("run_id"))
-        status = str(stored.get("status"))
-        launch_token = str(stored.get("launch_token"))
-        message = "job already exists: " + job_id
+        stored = _job_defaults(_validate_job(record))
+        job_id = stored["job_id"]
+        run_id = stored["run_id"]
+        status = stored["status"]
+        launch_token = stored["launch_token"]
+        message = (
+            "job " + job_id + " already exists with a different launch token; "
+            "a job is never started twice"
+        )
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT 1 FROM external_jobs WHERE job_id = %s", (job_id,))
-                if cursor.fetchone() is not None:
-                    raise RunConflictError(message)
                 cursor.execute(
-                    "INSERT INTO external_jobs(job_id, run_id, status, launch_token, payload) VALUES (%s, %s, %s, %s, %s)",
+                    "INSERT INTO external_jobs(job_id, run_id, status, launch_token, payload) "
+                    "VALUES (%s, %s, %s, %s, %s) "
+                    "ON CONFLICT (job_id) DO NOTHING RETURNING payload",
                     (job_id, run_id, status, launch_token, Json(stored)),
                 )
-        return deepcopy(stored)
+                inserted = cursor.fetchone()
+                if inserted is not None:
+                    return deepcopy(_as_payload(inserted[0]))
+                cursor.execute(
+                    "SELECT payload FROM external_jobs WHERE job_id = %s FOR UPDATE",
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:  # pragma: no cover - the conflicting row cannot vanish
+                    raise RunConflictError("job insert raced without a persisted row: " + job_id)
+                existing = _as_payload(row[0])
+                if existing.get("launch_token") != launch_token:
+                    raise RunConflictError(message)
+                return deepcopy(existing)
 
     def update_job(
         self, job_id: str, changes: dict[str, Any],
@@ -766,9 +782,13 @@ class PgExternalJobs:
         content_hash: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        _validate_import_args(job_id, source_record_key, parser_version, content_hash)
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT payload FROM external_jobs WHERE job_id = %s", (job_id,))
+                cursor.execute(
+                    "SELECT payload FROM external_jobs WHERE job_id = %s FOR UPDATE",
+                    (job_id,),
+                )
                 job_row = cursor.fetchone()
                 if job_row is None:
                     raise KeyError(job_id)

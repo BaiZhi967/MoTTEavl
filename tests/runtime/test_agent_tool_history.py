@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from motte_agent.budget import ExecutionBudget
 from motte_agent.builtin_react import BuiltinReActRuntime, PROMPT_VERSIONS
 
@@ -251,3 +253,47 @@ def test_unknown_mode_rejected_at_construction():
 
     with pytest.raises(ValueError, match="mode"):
         BuiltinReActRuntime(scripted_complete([]), mode="auto-magic")
+
+
+
+def test_cancellation_after_model_response_rejects_final_answer():
+    cancelled = {"value": False}
+
+    def complete(_request):
+        cancelled["value"] = True
+        return {"content": json.dumps({"action": "final", "answer": "late"})}
+
+    runtime = BuiltinReActRuntime(complete, should_cancel=lambda: cancelled["value"])
+    result = runtime.run_agent("x")
+    assert result["termination_reason"] == "cancelled"
+    assert result["final_output"] is None
+    assert result["termination_detail"] == "cancelled after model response"
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1, 1.5])
+def test_invalid_integer_budget_values_are_rejected(value):
+    with pytest.raises(ValueError):
+        ExecutionBudget.from_config({"max_tool_calls": value})
+
+
+def test_invalid_budget_observations_are_rejected():
+    budget = ExecutionBudget(max_steps=2)
+    with pytest.raises(ValueError):
+        budget.record_usage({"total_tokens": -1}, None)
+    with pytest.raises(ValueError):
+        budget.record_usage({"total_tokens": 1.5}, None)
+    with pytest.raises(ValueError):
+        budget.record_usage(None, {"total": float("nan")})
+    with pytest.raises(ValueError):
+        budget.record_usage(None, {"total": -0.1})
+
+
+def test_event_sink_failure_aborts_builtin_execution():
+    complete = scripted_complete([json.dumps({"action": "final", "answer": "x"})])
+
+    def broken_sink(_event):
+        raise RuntimeError("event store unavailable")
+
+    runtime = BuiltinReActRuntime(complete, event_sink=broken_sink)
+    with pytest.raises(RuntimeError, match="event store unavailable"):
+        runtime.run_agent("x")

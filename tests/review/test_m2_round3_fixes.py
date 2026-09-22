@@ -146,7 +146,7 @@ def test_r3_01_generated_config_resolves_and_uses_pinned_shapes(tmp_path, monkey
     # 本地数据集的 load 样板与导出文件契约一致。
     assert "path=" in source and "infer_cfg=" in source
     assert "data_file=" not in source and "few_shot_file=" not in source
-    rows = [json.loads(line) for line in data_files["logic"].read_text().splitlines()]
+    rows = [json.loads(line) for line in data_files["logic"].read_text(encoding="utf-8").splitlines()]
     assert [row["id"] for row in rows] == ["logic-1", "logic-2"]
 
 
@@ -181,7 +181,7 @@ def test_r3_02_bridge_exports_real_production_rows(tmp_path):
     export_subject_files(work, config)
     exported = [
         json.loads(line)
-        for line in (work / "data" / "logic.jsonl").read_text().splitlines()
+        for line in (work / "data" / "logic.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     # 非空题目与选项（不再是全空兜底），顺序与冻结选样一致。
     assert [row["id"] for row in exported] == ["logic-1", "logic-2"]
@@ -198,7 +198,7 @@ def test_r3_02_bridge_exports_few_shot_examples_file(tmp_path):
     work = tmp_path / "job"
     work.mkdir()
     data_files = export_subject_files(work, config)
-    examples = json.loads((work / "data" / "few_shot.json").read_text())
+    examples = json.loads((work / "data" / "few_shot.json").read_text(encoding="utf-8"))
     assert examples == [{
         "question": "示例题干XYZ",
         "options": {"A": "1", "B": "2", "C": "3", "D": "4"},
@@ -223,6 +223,7 @@ def _sleep_stub(tmp_path: Path) -> Path:
     return stub
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable stub contract")
 def test_r3_03_entry_keeps_token_in_argv_for_cross_instance_claim(tmp_path, monkeypatch):
     stub = _sleep_stub(tmp_path)
     monkeypatch.setenv("MOTTE_RUNNER_PYTHON", str(stub))
@@ -269,6 +270,7 @@ def test_r3_03_entry_keeps_token_in_argv_for_cross_instance_claim(tmp_path, monk
         pytest.fail("claimed process was not interrupted")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sh wrapper contract")
 def test_r3_03_wrapper_passes_token_into_entry_argv(tmp_path):
     import subprocess
     import sys as _sys
@@ -308,13 +310,13 @@ def test_r3_03_wrapper_passes_token_into_entry_argv(tmp_path):
         ["bash", str(wrapper)], env=env, check=True, timeout=60,
         capture_output=True, text=True,
     )
-    argv = (work / "entry-argv.txt").read_text().split()
+    argv = (work / "entry-argv.txt").read_text(encoding="utf-8").split()
     identity_args = argv[argv.index("--launch-token"):]
     assert identity_args == [
         "--launch-token", "launch-r3", "--job-id", "job-r3", "--run-id", "run-r3",
     ]
     # 真实 entry 执行：身份文件落工作目录（审计）。
-    identity = json.loads((work / "launch-identity.json").read_text())
+    identity = json.loads((work / "launch-identity.json").read_text(encoding="utf-8"))
     assert identity["launch_token"] == "launch-r3"
     assert identity["job_id"] == "job-r3"
 
@@ -373,6 +375,7 @@ def test_r3_04_symlink_component_rejected_by_fd_walk(tmp_path):
         adapter.read_output_files(handle)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX dir-fd race injection")
 def test_r3_04_fd_walk_survives_parent_replacement_race(tmp_path):
     """父目录在清单之后、读取之前被替换：fd 链打开拒绝，不读外部内容。"""
     import shutil
@@ -455,7 +458,7 @@ def test_r3_06_mapping_bound_to_frozen_config_not_work_dir(tmp_path):
     assert "runner-config.json" in frozen
     # 冻结后反转工作目录里的 cases 顺序：同一冻结输出的归属不变。
     config_path = Path(handle.work_dir) / "runner-config.json"
-    tampered = json.loads(config_path.read_text())
+    tampered = json.loads(config_path.read_text(encoding="utf-8"))
     tampered["cases"].reverse()
     config_path.write_text(json.dumps(tampered), encoding="utf-8")
     rows, _ = adapter.collect_from_files(handle, {}, frozen)

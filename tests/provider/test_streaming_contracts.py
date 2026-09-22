@@ -267,6 +267,31 @@ class TestAnthropicStreaming:
         assert finish["usage"]["input_tokens"] == 42
         assert finish["usage"]["output_tokens"] == 3
 
+    def test_interleaved_streams_keep_usage_and_stop_reason_per_call(self):
+        first = _sse_lines([
+            {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"},
+             "usage": {"output_tokens": 2}},
+            {"type": "message_stop"},
+        ])
+        second = _sse_lines([
+            {"type": "message_start", "message": {"usage": {"input_tokens": 11}}},
+            {"type": "message_delta", "delta": {"stop_reason": "max_tokens"},
+             "usage": {"output_tokens": 7}},
+            {"type": "message_stop"},
+        ])
+        responses = iter((FakeSSEResponse(first), FakeSSEResponse(second)))
+        transport = HTTPTransport("https://fake.invalid", opener=lambda request, *, timeout: next(responses))
+        provider = AnthropicMessagesProvider(transport, "m1")
+        stream_a = provider.stream(_request())
+        stream_b = provider.stream(_request())
+        assert next(stream_a)["payload"]["usage"] == {"input_tokens": 5}
+        assert next(stream_b)["payload"]["usage"] == {"input_tokens": 11}
+        assert list(stream_b)[-1]["payload"]["finish_reason"] == "max_tokens"
+        finish_a = list(stream_a)[-1]["payload"]
+        assert finish_a["finish_reason"] == "tool_use"
+        assert finish_a["usage"] == {"input_tokens": 5, "output_tokens": 2}
+
     def test_consumer_abort_closes_stream(self):
         provider, response = self._provider(_sse_lines(ANTHROPIC_STREAM))
         generator = provider.stream(_request())

@@ -1,229 +1,249 @@
-# MoTTEavl Web 控制台设计规范（DESIGN.md）
+# MoTTEavl Web 控制台设计规范（DESIGN.md · v2 任务控制）
 
 本文件是 `apps/web` 所有 UI 工作的唯一设计依据。任何 UI 改动前先读本文。
 修改任何设计决策时，必须同步修改 `src/index.css` 中的对应 token，并放在同一个提交里。
 token 与本文冲突时，以本文为准并立即修正 token。
 
+本文取代 v1（暖灰文档式体系）。v1 中仍然有效的遗产——`STATUS_META` 唯一状态来源、
+Radix 无头原语 + token 手写 CSS、证据诚实性规则——原样保留并在第 4、7、9 节登记。
+
 ## 0. 设计语言与基调
 
-一句话：**安静、密集、精确的文档式工作台**（Linear / Notion 一系的 utilitarian minimalism）。
+一句话：**亮色的任务控制终端**——数据密集、状态优先、仪表读数式的评测工作台。
 
-- 审美锚点：项目内 skill `minimalist-ui`（`.agents/skills/minimalist-ui/SKILL.md`）
-- 生成新界面时的拨盘（skill `design-taste-frontend`）：`DESIGN_VARIANCE 3 / MOTION_INTENSITY 2 / VISUAL_DENSITY 7`
-- 气质关键词：暖灰单色画布、扁平、1px 细边框、留白来自间距而非阴影、颜色只用于表达语义
+- 气质关键词：冷灰纸面、发丝线分区、语义色即信号、等宽数据层、呼吸 LED
+- 隐喻：评测操作员盯着的一块飞行仪表板。颜色不装饰，只报告；动效不表演，只指示存活
+- 单一亮色主题，不提供暗色变体；所有组件只维护一套取值
 
 ## 1. 设计原则
 
-1. **颜色是稀缺资源。** 只有语义（运行状态、通过/失败、警告）才允许用色，禁止装饰性用色。
-2. **扁平。** 无渐变、无重阴影。阴影只允许一种：hover 时 `0 2px 8px rgba(0,0,0,0.04)`。
-3. **卡片只做分组。** 白底 + `1px solid var(--border)` + 8px 圆角，禁止卡片套卡片。
-4. **留白来自间距**（8 的倍数刻度），不来自描边层数和阴影。
-5. **动效只到 hover 级**：200ms，只动 `transform` / `opacity` / 背景色。
-6. **数据密度优先。** 表格 13px、紧凑行高，所有数字等宽（tabular-nums），ID / seq / JSON 一律 mono 字体。
-7. **中文为第一语言。** UI 文案全部中文；Provider、Case、Manifest 等领域术语保留英文原文。
+1. **状态色是一等公民。** 语义五语气（info / success / warning / error / neutral）只表达状态与语气，禁止装饰性用色；其中 info 语气使用 accent 色。同一信息的状态表达全站唯一：徽章、LED、进度、信号格、时间线条、通知条共用同一组语气 token。
+2. **层级来自结构与间距，不来自阴影。** 全站无阴影（下拉浮层除外，见 5.16）；面板之间靠 12px 网格留白与 1px 发丝线区分。
+3. **数据层用等宽字体。** Run ID、模型名、数字、成本、时间戳、JSON、代码、徽章文字一律 mono；正文用中文黑体栈。数字全程 `tabular-nums`。
+4. **扁平 + 一层描边。** 控件与面板只有「默认底 + 1px 边框」和「强调边框」两档，禁止渐变填充（品牌方块除外）、禁止投影按钮。
+5. **动效只指示状态变化。** 只允许 200ms 内的 transform / opacity / 背景色 / 边框色过渡，外加两类环境动效：LED 呼吸（进行中）、进度流光（进行中）。`prefers-reduced-motion` 下全部降级为静态。
+6. **诚实优先。** 未知显示「未知」，缺数据显示「缺工件」，不填 0、不伪造、不静默隐藏（第 9 节）。
 
 ## 2. 设计 token
 
 唯一取值来源是 `src/index.css` 的 `:root`。写样式时只能引用 `var(--…)`；
 需要新值时，先在本文登记，再加进 `:root`，然后才能使用。
 
-### 2.1 色彩：暖灰单色一家
-
-禁止混入冷灰或 Tailwind 默认灰阶（`#f5f6f8`、`#1f2937`、`#6b7280` 系全部弃用）。
+### 2.1 色彩（冷灰纸面 + 语义信号色）
 
 | Token | 值 | 用途 |
 |---|---|---|
-| `--bg-canvas` | `#F7F6F3` | 页面画布（暖骨白） |
-| `--bg-surface` | `#FFFFFF` | 卡片 / 面板 / 顶栏 |
-| `--bg-subtle` | `#FAFAF9` | 次级面：时间线条目、行 hover、tab hover |
-| `--border` | `#EAEAEA` | 一切边框与分隔线，永远 1px |
-| `--text-primary` | `#2F3437` | 正文与标题（禁止纯黑 `#000`） |
-| `--text-secondary` | `#787774` | 标签、说明文字、表头 |
-| `--text-faint` | `#A8A7A3` | 序号、占位、空状态 |
-| `--ink` | `#111111` | 主按钮实底、active 强调 |
-| `--ink-hover` | `#333333` | 主按钮 hover |
-| `--text-on-ink` | `#FFFFFF` | `--ink` 实底上的文字（主按钮） |
+| `--bg-canvas` | `#F4F6FA` | 页面画布（冷灰纸面） |
+| `--bg-surface` | `#FFFFFF` | 卡片 / 面板 / 侧栏 / 顶栏 |
+| `--bg-subtle` | `#F0F3F8` | 行 hover、次级面、tab 容器底、徽章 dim 底 |
+| `--bg-inset` | `#E9EDF4` | 输入控件底、终端底、进度条轨道、tab 未选中底 |
+| `--border` | `#DCE2EC` | 一切默认边框与分隔线，永远 1px |
+| `--border-strong` | `#C3CCDC` | 控件边框、hover 提亮、虚线空态框 |
+| `--text-primary` | `#1B2331` | 正文与标题 |
+| `--text-secondary` | `#5A6580` | 标签、说明、表头 |
+| `--text-faint` | `#98A2B5` | 序号、占位、空状态、次级时间戳 |
+| `--accent` | `#0E9BB8` | 主操作、链接、进行中（live）、焦点 |
+| `--accent-hover` | `#0B7E96` | 主按钮 hover、链接 hover |
+| `--on-accent` | `#FFFFFF` | accent 实底上的文字 |
+| `--success` | `#15875A` | 通过、完成 |
+| `--warning` | `#A96F00` | 需人工处理、证据不足 |
+| `--error` | `#C6403C` | 失败、安全阻断、破坏性操作 |
+| `--neutral` | `#667085` | 排队、取消、未运行、禁用 |
 
-### 2.2 语义色（全站唯一的彩色，低饱和粉彩）
+### 2.2 语气底（bg + 描边 + 前景三件套，成对使用）
 
-| 语气 | 背景 token | 前景 token | 值 |
+| 语气 | dim 底 | 35% 透明描边 | 前景 |
 |---|---|---|---|
-| success | `--tone-success-bg` | `--tone-success-fg` | `#EDF3EC` / `#346538` |
-| error | `--tone-error-bg` | `--tone-error-fg` | `#FDEBEC` / `#9F2F2D` |
-| info | `--tone-info-bg` | `--tone-info-fg` | `#E1F3FE` / `#1F6C9F` |
-| warning | `--tone-warning-bg` | `--tone-warning-fg` | `#FBF3DB` / `#956400` |
-| neutral | `--tone-neutral-bg` | `--tone-neutral-fg` | `#EFEFED` / `#5F5E5B` |
+| info（accent 色） | `rgba(14,155,184,.10)` | `rgba(14,155,184,.35)` | `--accent` |
+| success | `rgba(21,135,90,.10)` | `rgba(21,135,90,.35)` | `--success` |
+| warning | `rgba(169,111,0,.10)` | `rgba(169,111,0,.35)` | `--warning` |
+| error | `rgba(198,64,60,.10)` | `rgba(198,64,60,.35)` | `--error` |
+| neutral | `rgba(102,112,133,.10)` | `rgba(102,112,133,.35)` | `--neutral` |
+
+徽章、信号格、通知条、时间线条、钻取条统一从这张表取三件套，**禁止单独发明搭配**。
+token 命名为 `--tone-<语气>-bg` / `--tone-<语气>-border` / `--tone-<语气>-fg`。
 
 ### 2.3 字体
 
 | Token | 值 | 说明 |
 |---|---|---|
-| `--font-sans` | `"PingFang SC", "Microsoft YaHei", system-ui, sans-serif` | 中文优先系统栈；未来可自托管 Geist Sans，禁止引入 Inter / Roboto / Open Sans |
-| `--font-mono` | `ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace` | run ID、seq、版本号、JSON、数字 |
+| `--font-sans` | `"PingFang SC","Microsoft YaHei",system-ui,sans-serif` | 中文与阅读文字；系统栈，不引入网络中文字体 |
+| `--font-mono` | `"JetBrains Mono","PingFang SC","Microsoft YaHei",ui-monospace,monospace` | 数据层：ID、模型名、数字、JSON、徽章、表头标签、终端 |
 
-字号阶梯：26 指标卡数值 / 18 顶栏标题 / 15 面板标题（weight 600）/ 14 正文 / 13 表格与表单 / 12 徽章。
-行高：正文 1.6，数据行 1.5。全局开启 `font-variant-numeric: tabular-nums`。
+- JetBrains Mono 自托管（woff2，400/500/600/700 置于 `apps/web/src/assets/fonts/`，
+  `@font-face` 声明在 `index.css`，`font-display: swap`）。中文落入栈内中文字体，禁止用纯拉丁 display 字体渲染中文。
+- 中文禁止斜体；强调用字重、颜色或字号。
+- 字号阶梯：26 指标数值（mono 600）/ 18 品牌与页面大标题 / 15 面板标题（600）/ 14 正文 / 13 表格与表单 / 12.5 数据 mono / 12 徽章与辅助 / 11 大写分节标签（mono、字距 .14–.18em、uppercase）/ 10 表头与 seq（mono、字距 .14em、uppercase）。
+- 行高：正文 1.6，数据行 1.5。全局 `font-variant-numeric: tabular-nums`。
 
 ### 2.4 间距、圆角、边框
 
-- 间距刻度：`4 / 8 / 12 / 16 / 24 / 32`（8 的倍数，个别 4 的半步）
-- 圆角：`6px` 控件（按钮、输入框）/ `8px` 卡片 / `9999px` 徽章 pill
-- 边框：一律 `1px solid var(--border)`，不存在第二种边框
+- 基础网格 12px；间距刻度：`4 / 8 / 12 / 16 / 20 / 24 / 32`（侧栏与页边距用 20/24）
+- 圆角：`6px` 控件（按钮、输入、tab）/ `8px` 卡片与面板 / `9999px` 徽章 pill、进度条、开关
+- 边框一律 `1px solid var(--border)`；控件与 hover 强调用 `var(--border-strong)`。全站不存在第二种边框宽度，不存在投影
+- 焦点环：双层 `box-shadow: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--accent)`，替代原生 outline
 
-### 2.5 模型配置分组 token
+### 2.5 动效
 
-| Token | 值 | 用途 |
-|---|---|---|
-| `--space-none` | `0` | 内嵌分组清除原生边距 |
-| `--space-sm` | `8px` | 选项行间距 |
-| `--space-md` | `12px` | 分组内留白 |
-| `--size-full` | `100%` | 分组占满表单宽度 |
-| `--border-width` | `1px` | 分组分隔线 |
-| `--font-label` | `13px` | 分组标题字号 |
-| `--weight-semibold` | `600` | 分组标题字重 |
-
-模型配置沿用 Provider 内联表单，不另开页面：基础限制、输入类型、模型能力、推理等级用无外框 fieldset 分组；选项描述在左、Radix Switch 在右。文本输入类型固定开启。高级采样参数用 details 默认折叠；CEL 多行编辑器使用 mono 字体，附接口示例、变量和合并语义说明。保存期间禁用提交，错误就地显示并保留输入。
-
-## 3. 状态语义（唯一映射来源：`src/components/statusMeta.ts`）
-
-10 种运行状态收敛为 5 种语气，**全站（徽章、时间线、过滤下拉）只从这一张表取值**：
-
-| 状态 | 语气 |
+| 场景 | 参数 |
 |---|---|
-| `queued`、`cancelled` | neutral（取消是用户行为，不是故障） |
-| `preparing`、`running`、`collecting`、`scoring` | info（进行中） |
-| `completed` | success |
-| `failed` | error |
-| `unsupported`、`profile_stale`、`needs_review` | warning（环境 / 配置或调用结果不确定，需人工处理） |
+| hover / 状态过渡 | `200ms ease`，只动 transform / opacity / 背景色 / 边框色 |
+| 按钮 active | `scale(.98)`，100ms |
+| LED 呼吸（仅进行中语气） | 1.5s ease-in-out 无限，外晕 0.35 不透明度缩放 |
+| 进度流光（仅进行中进度条） | 1.8s linear 无限，一道 35% 白高光扫过 |
+| 折叠展开 | `max-height + opacity`，0.42s cubic-bezier(.4,0,.2,1) |
 
-M5 追加的非 Run 状态（同表登记，`scope` 标明归属，运行总览的过滤下拉只列 `scope: "run"`）：
+`@media (prefers-reduced-motion: reduce)` 下：LED 恒亮、流光静止、过渡时长归零。
 
-| 状态 | 语气 | scope | 含义 |
-|---|---|---|---|
-| `pending` | neutral | step | 步骤待执行 |
-| `skipped` | neutral | step | 步骤已跳过 |
-| `unknown` | warning | step | 结果未知（服务端没有结论，不得当作成功） |
-| `cleanup_failed` | error | step | fixture 清理失败 |
-| `passed` | success | resource | 校验 / 验证范围通过 |
-| `not_run` | neutral | resource | 未运行（不是通过） |
-| `unavailable` | warning | resource | 能力不可用 |
-| `calibrated` | success | resource | Judge 已校准，可用于正式阻断 Gate |
-| `experimental` | warning | resource | Judge 实验性，不进入正式阻断 Gate |
+## 3. 界面结构与布局规则
 
-M6 追加的非 Run 状态（实验 / 比较 / 基线 / 门禁页面，全部带 `scope`）：
+### 3.1 应用骨架
 
-| 状态 | 语气 | scope | 含义 |
-|---|---|---|---|
-| `allocated` | success | experiment | Cell 已分配 initial Run |
-| `allocating` | info | experiment | Cell 分配进行中（崩溃恢复窗口） |
-| `comparable` | success | comparison | 报告可比 |
-| `partially_comparable` | warning | comparison | 部分可比（如仅费用未知，逐指标资格） |
-| `not_comparable` | error | comparison | 不可比（结构性条件变化未被政策允许） |
-| `formal` | success | baseline | 正式基线（可进正式门禁） |
-| `diagnostic` | warning | baseline | 诊断基线（证据不完整，不进正式门禁） |
-| `pass` | success | gate | 门禁通过 |
-| `quality_fail` | error | gate | 质量失败（CLI 退出码 1） |
-| `insufficient_evidence` | warning | gate | 证据不足（退出码 5） |
-| `execution_error` | warning | gate | 执行错误（退出码 3） |
-| `safety_block` | error | gate | 安全阻断（退出码 6） |
-| `draft` | info | gate | GatePolicy 草案 |
-| `published` | success | gate | GatePolicy 已发布（不可变） |
-| `deprecated` | neutral | gate | GatePolicy 已弃用（历史可读） |
-| `insufficient` | warning | rule | 规则证据不足（不是通过） |
-| `not_applicable` | neutral | rule | 规则不适用 |
-| `skipped_diagnostic` | neutral | rule | 规则被诊断跳过（整体不得显示为通过） |
+```
+┌──────────┬──────────────────────────────────────────────┐
+│ 侧栏 236 │ 顶栏 56（面包屑 · 分段页签 · 右状态/操作区） │
+│ sticky   ├──────────────────────────────────────────────┤
+│ 全高     │ 工作台（独立滚动，padding 20/24，底部 48）    │
+└──────────┴──────────────────────────────────────────────┘
+```
 
-规则：新增状态时先在 `statusMeta.ts` 的 `STATUS_META` 登记语气与中文标签，
-徽章、时间线、过滤选项自动继承。**禁止在任何组件里手写状态颜色。**
-非 Run 状态必须写 `scope`，避免污染运行总览的状态过滤。
+- `.app-shell`：fixed 定位 `inset: 0`，外框不滚动；flex 行布局，gap 20，padding 20
+- 侧栏 `sticky top:0 height:100vh` 独立滚动；工作台 `flex:1 min-width:0` 独立滚动
+- 顶栏 `sticky top:0 z-index:10`，毛玻璃提亮（`backdrop-filter: blur(8px)` + 80% 不透明 `--bg-surface`），底 1px `--border`
 
-## 4. 组件规范
+### 3.2 两级导航
+
+侧栏只放**分区入口**，共四区；套件的五段页面**不在侧栏平铺**，选中套件后由顶栏分段页签承担。全站约 45 条路由收敛为「分区 → 页签 / 页面」两层。
+
+| 分区 | 侧栏项 |
+|---|---|
+| 总览 | 运行总览 |
+| 评测套件 | Agent 文件任务 / CMMLU / Terminal-Bench / C-Eval / GSM8K / Direct LLM / Replay / 外部 Runtime（来自 `EVAL_SUITES` 注册表） |
+| 资源 | Provider 与模型 / Agent·Harness / 场景 Workflow / Skill 校验 / Judge 校准 |
+| 实验体系 | 实验 / 比较 / 基线 / 门禁 |
+
+- 分区标签：11px mono、uppercase、字距 .18em、`--text-faint`，上下留白 14/6
+- 导航项：16px 图标 + 13px 文字，padding 8/10，圆角 6；hover `--bg-subtle`；active **accent 语气三件套**（dim 底 + 35% 描边 + accent 前景 + 500 字重）
+- 侧栏底部：连接状态条（LED + 11px mono 文案，如 `API 已连接 · v0.9.2`），永远可见
+- 顶栏三段：左 = 面包屑（12px mono faint，如 `评测套件 / gsm8k / monitor`）；中 = 分段页签（套件页）或页面标题（全局页）；右 = 会话级状态（进行中计数 + LED）与操作（刷新、主题无关的全局动作）
+- 分段页签：`.tabs-list` inset 底 + 1px 边框 + 6px 圆角，trigger 12.5px，active `--bg-surface` + accent 前景 + 1px `--border-strong` 描边
+
+### 3.3 面板系统（`.page` 内的宽度分级）
+
+| 类 | 宽度 | 用途 |
+|---|---|---|
+| `.panel` | 弹性占满剩余 | 默认内容面板 |
+| `.panel.form-panel` | 340px 固定，max 340 | 付费提交、创建表单等辅助列；窄屏自动换行单列 |
+| `.panel.list-panel` | 240px 固定 | 导航型清单列（Provider / Judge / Workflow 版本） |
+| `.panel.wide-panel` + `.panel.narrow-panel` | flex 2 : 1 | 不对称双表；**禁止两个内容面板 50/50 平分** |
+| `.panel.detail` / 通栏节 | flex-basis 100% | 时间线、终端、指标卡等横向整块 |
+
+- 面板：白底 + 1px `--border` + 8px 圆角 + padding 16/18；**卡片只做分组，禁止卡片套卡片**；卡内分节用 `.embed-title`（14px 600，无壳）
+- `.page`：flex wrap、gap 16、顶对齐（`align-items: flex-start`）、高度随内容不强制等高
+
+### 3.4 四种页面模式
+
+| 模式 | 结构 | 适用 |
+|---|---|---|
+| A 操作页 | 卡片栅格（`operate-grid` flex wrap，顶对齐不等高）：数据集 / 题目 / 模型 / 参数 / 导入等卡；底部通栏主动作条（primary 按钮 + 后果说明） | 各套件 operate |
+| B 主从分栏 | `list-panel`（清单 + 选中态）+ 弹性详情区；详情空态给引导文案 | Provider、Judge、Workflow、实验 |
+| C 全宽表格页 | 面板头内联过滤（`.inline-field`）+ 通栏表格 + 底部分页与批量操作 | 运行总览、题目清单、评分历史 |
+| D 指标 + 钻取 | 指标卡行（5 列，见 5.11）→ 逐题信号格 / 表格 → `.drill-detail` 下钻 | 结果、对比、Terminal-Bench |
+
+跨模式通则：主动作每屏一个（primary），次操作 secondary/ghost，破坏性操作永远 danger-ghost 行内两步确认；过滤行永远在表格上方同一面板头内。
+
+### 3.5 响应式
+
+| 断点 | 规则 |
+|---|---|
+| ≤1100px | 指标卡 5→3 列；双栏（时间线+终端等）降为单列；`wide/narrow` 降为单列 |
+| ≤760px | 侧栏改为顶部横向滚动导航条（隐藏品牌与分区标签，导航项单行）；面板全部通栏；表格自身横向滚动，禁止页面级横向溢出；Dialog 占满视口宽；`form-panel`/`list-panel` 通栏 |
+
+## 4. 状态语义（唯一映射来源：`src/components/statusMeta.ts`）
+
+全站运行 / 步骤 / 资源 / 实验 / 比较 / 基线 / 门禁 / 规则状态收敛为 5 种语气，
+**全站（徽章、LED、时间线、过滤下拉、信号格、通知条）只从这一张表取值**：
+
+| 语气 | 状态（现行登记） |
+|---|---|
+| neutral | queued、cancelled、pending、skipped、not_run、deprecated、not_applicable、skipped_diagnostic |
+| accent(info) | preparing、running、collecting、scoring、draft、allocating |
+| success | completed、passed、calibrated、allocated、comparable、formal、pass、published |
+| warning | unsupported、profile_stale、needs_review、unknown、experimental、partially_comparable、diagnostic、insufficient_evidence、execution_error、insufficient、unavailable |
+| error | failed、cleanup_failed、not_comparable、quality_fail、safety_block |
+
+规则：
+
+1. 新增状态先在 `STATUS_META` 登记语气、中文标签与 `scope`（run / step / resource / experiment / comparison / baseline / gate / rule），徽章、过滤选项自动继承；运行总览的状态过滤只列 `scope: "run"`。
+2. **禁止在任何组件里手写状态颜色**；非 Run 状态必须写 `scope`，避免污染运行总览过滤。
+3. 进行中语气（accent 档）的徽章 LED 带呼吸脉冲；终态（success / warning / error / neutral 的已定态）LED 恒亮；`unknown` 视为需人工处理，不得当作成功展示。
+
+## 5. 组件规范
 
 | 组件 | 规范 |
 |---|---|
-| 应用骨架 | `.app-shell` 使用 fixed 定位与 `inset: var(--space-none)` 固定在视口内，外框不滚动；左侧悬浮导航栏（216px 白卡、1px 边框、8px 圆角、品牌区 + 路由侧边栏，图标 + 文字，导航项由 react-router `NavLink` 驱动、active 态 `aria-current="page"` 同 Radix active 观感），分组标签「评测类型」「通用」用 `.nav-group-label`（11px `--text-faint`）；右侧全屏工作台独立滚动（`.page` 通栏铺满、padding 16/32） |
-| 面板宽度分级 | `.page` 内 `.panel` 默认占满剩余宽度；辅助表单列用 `.panel.form-panel`（340px 固定窄列，窄屏自动换行为单列）；导航型清单列用 `.panel.list-panel`（240px 固定窄列）；不对称双表布局用 `.panel.wide-panel`（flex 2）/ `.panel.narrow-panel`（flex 1）——禁止两个内容面板 50/50 平分 |
-| Provider 清单 | 列表头 `.panel-head`（15px 标题 + `icon-btn` 刷新 + link「添加」）；列表项 `.provider-item`（Phosphor Plug 16px + mono 名称 + 会话内测试状态点），选中态同导航 active（`--tone-neutral-bg` + 500 字重），禁用项名称弱化为 `--text-faint` |
-| 测试状态点 | `.state-dot`（8px 圆点）：只映射本次会话内真实测试结果（pass 用 success 前景色 / fail 用 error 前景色），无数据不渲染；禁止装饰性常亮 |
-| Provider 详情头 | `.detail-head`：mono 名称 + kind 徽章（neutral pill）+ 启用 Switch（随行 `.field-label`，包在 `.inline-field` 里且清零其下边距，与操作 link 同一中心线）+ link 操作组（更新密钥 / 两步确认删除） |
-| 连接分节 | `.connection-form`：`.embed-title`「连接」+ `.connection-grid` 双列（协议 select + Base URL 输入，窄屏换行）；凭据 profile / 密钥 hint 用 `.kv` 只读；表单脏状态才显示「保存连接」 |
-| 模型紧凑行 | `.model-row`：mono ID + neutral pill 徽章（上下文格式化 256000→256K、1000000→1M；能力如「工具」）+ 参数摘要 12px mono 次色；行尾启用 Switch + link 操作（测试/编辑/删除）；行 hover `--bg-subtle`；测试结果用 `.model-test-result` 行内反馈（`--bg-subtle` 底、12px、pass/fail 前景色） |
-| 导航项 | 图标（Phosphor Bold 16px）+ 13px 文字，静默态次色，hover `--bg-subtle`，active `--tone-neutral-bg` + 主文字色 + 500 字重 |
-| 表格 | 无外框，仅行间 1px 分隔线；表头 12-13px 次色 weight 500、表头不换行；行 hover `--bg-subtle`；行高 1.5；ID / 数字列加 `.mono`，单值 ID 列加 `.nowrap` 防连字符折行；操作列统一 `td.row-actions` 右对齐（不得使用 `.actions`，该类是 flex 工具类） |
-| 行内反馈行 | 即时操作结果（如连通性测试）用 `colSpan` 整行嵌在目标行下方：`--bg-subtle` 底、12px、成功 `pass` / 失败 `fail` 前景色；进行中用 `--text-faint` 文案 |
-| 状态徽章 | pill（9999px）、12px、语义粉彩底 + 对应前景色 |
-| 时间线 | 左侧 3px 语气色条 + `--bg-subtle` 底；seq 用 `--text-faint` mono，事件时间戳列（recorded_at，`MM-DD HH:mm:ss` mono `--text-faint`）；无内层滚动，由所在容器统一滚动 |
-| 表单 | label 13px 次色在控件上方；控件白底 1px 边框 6px 圆角；focus-visible 2px info 色描边（`.operate-card` 内的字段同规格，见「卡片内字段」） |
-| 行内过滤控件 | 表单体系之外的控件用 `.control`（与表单控件同款）+ `.field-label` + `.inline-field`（label 与控件并排），禁止浏览器默认外观裸奔 |
-| 嵌入分节 | 已有卡片壳的容器（滑出面板等）内部分节用 `embedded` 组件 + `.embed-title`（14px 标题、无壳），禁止卡片套卡片 |
-| 按钮 | primary：`--ink` 实底白字，hover `--ink-hover`，active `scale(0.98)`；主动作用 `button.primary` 类显式声明，`type="submit"` 不再隐式获得主按钮外观；secondary：白底 1px 边框；link：文字按钮用 info 前景色 |
-| 空状态 | 居中、`--text-faint`，文案「暂无 X」 |
-| 错误提示 | 内联 alert：`--tone-error-bg` 底 + 前景色，禁止 `window.alert`；逐模型失败清单用 `.failure-list`（无原生列表样式） |
-| 键值展示 | `<dl class="kv">` 两列网格，dt 次色 |
-| 滑出面板（Dialog） | 富视图详情与创建表单（运行详情、创建 Provider）用右侧滑出：`min(720px, 100vw - 280px)` 宽、左边框 1px、200ms 右滑入场；遮罩 `rgba(17,17,17,0.32)`；标题左侧、X 关闭按钮右侧 |
-| 下拉菜单（DropdownMenu） | 行操作收敛为 `···` 触发；白底 1px 边框 8px 圆角 + 极淡阴影 `0 4px 16px rgba(0,0,0,0.05)`；破坏性操作文字用 error 前景色 |
-| 下拉选择（Select） | Radix Select，trigger 与原生输入控件同规格（168px 起、1px 边框、6px 圆角），选中项右侧 Check 指示；简单过滤场景可用同款样式的原生 `<select>`（如时间线事件过滤、表单内固定选项的协议类型） |
-| 开关（Switch） | 32×18 pill（`padding: 0`，并显式压掉全局 `button` 的 hover 底色——Radix Switch.Root 本身就是 `<button>`），关闭态 `--tone-neutral-bg`，开启态 `--ink` 实色；thumb 12px 绝对定位、离边 2px，位移只用 `transform` 200ms，禁止把滑块写成 flex 流内元素（会被压扁并顶出胶囊） |
-| 破坏性确认 | 行内两步确认：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项用 error 前景色；禁止弹窗与 `window.confirm` |
-| kind 徽章 | Provider 协议标识复用状态徽章 neutral pill（12px、mono），置于名称右侧；不是运行状态，不得手写新颜色 |
-| 密钥更新行 | 已有卡片内嵌一行 `.control` 密码输入 + 保存/取消（`--bg-subtle` 底、1px 边框、6px 圆角），不另开卡片 |
-| 类型操作页卡片 | `.operate-grid` / `.operate-card`：flex 换行布局、1px 边框 8px 圆角白卡（GSM8K 为数据集 / 题目 / 模型 / 参数 / 下载并导入五卡；Direct LLM 为数据集 / 题目 / 模型 / 跑测参数 / 内置样例 / 导入本地 JSONL 六卡）；卡内分节用 `.embed-title`，不套第二层卡片；卡内数据集选择与表单内的范围选择用原生 `<select class="control">`（与过滤控件同规格，选项为固定枚举）；卡片顶对齐、高度随内容，不强行等高 |
-| 卡片内字段 | `.operate-card` 内的 `label` 与 `input/select/textarea` 与 `form` 内同规格（13px 次色 label、白底 1px 边框 6px 圆角控件），禁止浏览器默认外观裸奔 |
-| 卡片内高级设置 | `.disclosure`（`<details>`）：默认收起，summary 13px 600 主文字色 + pointer；展开后才是次级表单字段，间距走 `--space-sm` |
-| 本地文件选择 | 全部走「标准按钮 + 隐藏 `<input type="file" hidden>`」模式（按钮点击触发 `ref.click()`），文件名用 `.hint .mono` 行内回显；**禁止把原生 file 控件直接暴露在表单里**（原生外观无法与 token 体系对齐）。多行输入用 `<textarea class="mono">` |
-| 判定词汇（结果页 / 对比页） | 每种套件的结果页各自声明 outcome 词汇与语气，唯一来源是对应页面文件里的 `OUTCOME_LABELS`：GSM8K 为 答对 / 答错 / 解析失败 / 调用失败 / 未尝试（`src/evalTypes/gsm8k/Gsm8kResult.tsx`）；Direct LLM 为 通过 / 不通过 / 无判定 / 调用失败 / 未尝试（`src/evalTypes/directllm/DirectLlmResult.tsx`）。语气只允许 success / error / neutral 三档，禁止自造色 |
-| Terminal-Bench（Harbor）页面 | 操作页沿用 `.operate-grid` / `.operate-card`：任务筛选（多选清单）、Agent Profile 与重复次数（Agent Profile 卡内含 Agent 选择 oracle / claude-code、真实 Agent 的显式版本输入与模型必填规则、凭据引用行「名称 → 环境变量名」）、预算与限制（期限字段名就是提交给 API 的 `timeouts.*`，资源限制放 `.disclosure` 默认收起）、预检与创建四卡；凭据只有引用输入（`.control` 文本行 + `.link` 增删，无值字段、无密码框、无回显），本地只做「env: 前缀 / 名称非空 / 与 Agent 要求的变量名有交集」校验，预检与创建必须带同一组引用；请求被 4xx 拒绝时照实显示服务端错误码 + 消息 + 允许取值（`.error` + `.hint mono`，不吞掉结构）。监控页 `.tb-tree` 呈 Job（Run）→ Task → Trial 三层嵌套清单，`.tb-node` 为单行节点（刷新用 `icon-btn`），queued 且无 Trial 用 `.empty` 显式空态。结果页 6 张指标卡（通过率 / 有效 Trial / 有效 Task / 无效 Trial / 已知成本 / 每成功成本），其中成本卡消费**全 Run** `aggregate.cost`（不随所选 Task 变化，卡标签写明范围），Task 范围的已报道成本小计单独用 `.hint mono` 标注「Task 范围」；`per_success_usd` 为 null 时按 `per_success_usd_basis` 说明原因（无成功 Trial 才显示「不适用」），小计一律写明是小计。Trial 钻取用 `.drill-detail` + 通用表格，终端文本与工件内容用 `.terminal-log`（`--bg-subtle` 底、1px 边框、mono 12px、内部滚动、`white-space: pre-wrap`）；工件按引用请求内容（含斜杠的 artifact_id 逐段编码），终端/内容区固定展示 sha256 / 大小 / 编码 / 校验状态，截断用 `.hint.fail` 提示，`verified=false` 只显示不可读原因（`.error`），`encoding=binary` 只说明需下载原始工件，都不渲染伪造正文。未知身份 / 成本 / reward 一律显示「未知」，缺工件显示「缺工件」，绝不填 0；Trial 或 Task 切换（含同 Trial 内换工件）时按 run+Trial+工件身份重挂载下钻视图，晚到响应不得覆盖新选择 |
-| 题目清单页 | 沿用通用表格规范（Case 用 mono、期望答案用 mono、行 hover `--bg-subtle`）；首列原生 checkbox 做多选，工具栏用 `.inline-field`（数据集下拉 / 搜索 / 全选本页 / 清空 / 已选题数），底部 `.actions` 放翻页与「用所选 N 题发起…」；Direct LLM 额外展示每题生效的评分器列 |
-| 步进与批次行 | `.batch-row-head`：run ID link + mono 模型名 + 状态徽章 + `RunProgress`（x/N 进度条）+ 操作区；排队提示用 `.hint` |
-| 逐题格子 | `.progress-grid`（`auto-fill` 28px 格）+ `.grid-cell-pass/fail/pending`：语义粉彩底 + 对应前景/描边（pass/fail 用语义 token，pending 用 neutral 底 + `--text-faint`），禁止新色 |
-| 指标卡 | `.metric-cards` / `.metric-card`：flex 换行、内容居中、26px mono 数值、12px 次色标签；success / error 语气只染数值色；指标语气跟随运行整体状态，仅 completed 用 success，失败/取消等终态降为 neutral |
-| 钻取行 | `.drill-detail`：3px 左语气条 + `--bg-subtle` 底、6px 圆角右侧；字段前缀用 `.field-label` |
-| 对比页 | 模型列 × 指标行表格沿用通用表格规范；`.compare-case-list` 逐题下钻用 link 按钮 + `.drill-detail` |
-| 能力不可用提示 | `.notice`：3px 左 warning 语气条 + `--bg-subtle` 底、13px 次色；说明「端点未注册 / 能力关闭 / 入口禁用原因」。只读说明（零费用、只读历史）用 `.notice-info`（info 语气条）。能力缺失时入口保留并禁用 + 就地原因，禁止静默隐藏，也禁止伪造结果 |
-| 分段切换（Tabs） | `.tabs-list`（inline-flex、1px 边框 6px 圆角、`--bg-subtle` 底）+ `.tabs-trigger`（13px 次色，active 白底主文字色 500 字重）；用于同一份草案的文本 / Schema 两种编辑视图 |
-| 场景 Workflow 页面 | 左侧版本清单（`.list-panel`，`workflow_id@version` mono + lifecycle 徽章）+ 右侧编辑器（`.wide-panel`）：Tabs 切换文本（JSON，mono textarea）与 Schema 字段，二者编辑同一份草案；逐字段错误就地在字段下方（`.hint.fail`，`data-testid="field-error-<locator>"`）并附完整 `.failure-list`；「校验（只读）」不发布不建 Run，「发布版本」在未通过校验或文本已改动时禁用并说明原因 |
-| 场景 Run 步骤页 | 步骤表（#/step_id/类型/状态/工具模式/断言/耗时/详情），展开行用 `.drill-detail` 显示 checkpoint、断言明细、错误与结果；未知结果、未隔离、清理失败必须显式显示（未知不计入成功）；fixture 分节单列隔离 / 快照 / 清理证据；步骤明细端点不可用时保留运行自身状态并说明能力不可用 |
-| Skill 页面 | 三种验证范围（静态校验 / executable fixture / 固定 Agent 行为测试）平铺为三行表格，逐行给出「能证明 / 不能证明 / 状态 / 操作」；无受控入口或未固定 Agent 与模型时该行禁用并就地给出原因。三臂对照页（`/skill/compare`）按条件行 × 臂列输出条件差异、Skill token 开销、工具调用次数与报道 / 估算 / 未知成本，缺证据一律「未知」不填 0 |
-| Judge 页面 | 左侧清单（`judge_id@version` + 校准状态徽章）+ 右侧详情（证据 / rubric / 校准状态 / 独立成本四节，`.embed-title` 分节不套卡）。付费提交独占 `.form-panel`：必须显示用途、模型、样本数、最大调用次数、已知 / 未知费用与预算，先「读取预检（只读，零调用）」再显式确认 Switch 才可提交；GET 历史、切换 pass、刷新零调用零费用（`.notice-info` 明示），迟到响应不得覆盖新 pass |
+| 状态徽章 | pill（9999px）+ 12px mono + 语气三件套；左内嵌 7px LED（右距 7px）；进行中语气 LED 呼吸，终态恒亮；无数据不渲染徽章而是显示「未知」文案 |
+| 测试状态点 `.state-dot` | 8px 圆点，只映射本次会话内真实测试结果（pass=success / fail=error），无数据不渲染，禁止装饰性常亮 |
+| 按钮 | primary：`--accent` 实底 `--on-accent` 字，hover `--accent-hover`，active `scale(.98)`；secondary：透明底 + `--border-strong` 描边 + 次色字，hover 提亮为 `--text-primary` + accent 描边；ghost：无框次色，hover `--bg-subtle`；danger-ghost：error 前景，hover error dim 底。主动作用 `button.primary` 显式声明，`type="submit"` 不隐式获得主按钮外观 |
+| 破坏性确认 | 行内两步：首次点「删除」原地切换为「确认删除 / 取消」两个 link 按钮，确认项 error 前景；禁止弹窗与 `window.confirm` |
+| 链接 | accent 前景、无下划线，hover 加下划线；表格内 Run ID 等单值标识用 link 样式 mono |
+| 表单 | label 13px 次色在控件上方；控件 `--bg-inset` 底 + 1px `--border-strong` + 6px 圆角 + 12.5px 文字；focus-visible 双层焦点环；行内过滤用 `.control` + `.field-label` + `.inline-field`，禁止浏览器默认外观裸奔 |
+| 开关 Switch | 32×18 pill；关闭 `--bg-inset` + `--border-strong`，开启 `--accent`；thumb 12px 离边 2px，只 transform 200ms；显式压掉全局 button hover 底（Radix Root 是 button） |
+| 分段页签 Tabs | 见 3.2；用于套件五段与同一份草案的文本/Schema 双视图 |
+| 表格 | 无外框，仅行间 1px `--border`；表头 10px mono uppercase 字距 .14em `--text-faint` 不换行 weight 500；行高 1.5，行 hover `--bg-subtle`；ID / 数字列 `.mono`，单值 ID 列 `.nowrap`；操作列 `td.row-actions` 右对齐 |
+| 行内反馈行 | 即时操作结果（连通性测试等）用 `colSpan` 整行嵌在目标行下：`--bg-subtle` 底、12px、success/error 前景；进行中用 `--text-faint` 文案 |
+| 指标卡 | `.metric-cards` 5 列等宽（≤1100px 变 3 列）；白卡 + 左侧 2px 语气条（默认 `--border-strong`）；26px mono 600 数值 + 10px uppercase 标签 + 11px mono 副注；**数值只染语气色（success/error/accent），标签永远是 faint**；指标语气跟随运行整体状态，仅 completed 用 success，失败/取消降为 neutral |
+| 进度条 | 4px 胶囊，`--bg-inset` 轨道；进行中 accent 填充 + 流光，终态按语气纯色无流光；行内配 11px mono `x/N` 文本 |
+| 逐题信号格 | `.progress-grid`（auto-fill 28px 格，gap 4）：pass/fail/warn 用语义三件套（dim 底 + 35% 描边 + 前景编号），pending 用 `--bg-inset` 底 + `--border` 描边 + faint 编号；禁止新色 |
+| 时间线 | 条目 `--bg-subtle` 底 + 1px `--border` + 左侧 3px 语气条；seq 10px mono faint；事件时间戳 `MM-DD HH:mm:ss` mono faint 右对齐；无内层滚动，随容器统一滚动 |
+| 钻取 `.drill-detail` | 3px 左语气条 + `--bg-subtle` 底 + 右侧 6px 圆角；字段前缀 `.field-label` |
+| 通知条 `.notice` | 3px 左语气条 + 对应 dim 底 + 6px 右侧圆角 + 12.5px 次色；warning=需人工处理、info(accent)=只读说明、error=失败原因；服务端 4xx 照实显示错误码 + 消息 + 允许取值（`.error` + `.hint mono`），不吞结构 |
+| 骨架屏 `.skeleton` | 高 12–14px 圆角 4px，渐变扫描 1.4s ease-in-out；列表/表格/详情加载态统一使用，替代裸空表 |
+| 空状态 | 1.5px `--border-strong` 虚线框 + 居中 faint 文案 + 16px 图标 + 可选 primary 引导按钮 |
+| 终端日志 `.terminal-log` | inset 深底（`--bg-inset`）+ 1px `--border` + 8px 圆角；窗口栏：10px mono uppercase + 左三点 + sha256/大小/编码/校验状态；正文 12px mono 行高 1.7 `pre-wrap`，内部滚动，6px 细滚动条；截断用 `.hint.fail`，`verified=false` 只显示不可读原因，`encoding=binary` 只说明需下载，不渲染伪造正文 |
+| 滑出面板 Dialog | 右侧滑出 `min(720px, 100vw - 280px)`，左边框 1px，200ms 右滑入场；遮罩 `rgba(27,35,49,.32)`；标题左、X 关闭右；内容分区用 `.embed-title`，不套第二层卡片 |
+| 下拉菜单 | 行操作收敛 `···` 触发；白底 1px `--border` 8px 圆角 + 极淡阴影 `0 4px 16px rgba(27,35,49,.08)`（**唯一允许阴影处**）；破坏性操作 error 前景 |
+| 下拉选择 | Radix Select，trigger 与原生控件同规格（168px 起）；简单固定枚举可用同款原生 `<select class="control">` |
+| 键值 `.kv` | `dl` 两列网格，dt faint、dd 12px mono |
+| 本地文件选择 | 标准按钮 + 隐藏 `input[type=file]`，文件名 `.hint mono` 行内回显；多行输入 `<textarea class="mono">`；禁止原生 file 控件暴露在表单里 |
+| 模型紧凑行 `.model-row` | mono ID + neutral pill 徽章（256000→256K）+ 12px mono 参数摘要；行尾 Switch + link 操作；行 hover `--bg-subtle`；测试结果 `.model-test-result` 行内反馈 |
+| 步进与批次行 `.batch-row-head` | run ID link + mono 模型名 + 状态徽章 + `RunProgress` + 操作区；排队提示 `.hint` |
+| 操作页卡片 `.operate-card` | 模式 A 用卡：白底 1px 8px 圆角，卡内 `.embed-title` 分节，卡内字段与表单同规格；高级设置 `.disclosure`（details 默认收起，summary 13px 600）；卡片顶对齐、高度随内容 |
+| 密钥更新行 | 已有卡片内嵌 `.control` 密码输入 + 保存/取消，不另开卡片 |
 
-## 5. 图标
+## 6. 图标
 
-- 库：`@phosphor-icons/react`，统一 **Bold** 字重做操作图标、**Fill** 字重做状态点缀
-- 导入一律用带 `Icon` 后缀的导出名（如 `ActivityIcon`）；不带后缀的名字在新版 barrel 中不存在，会构建失败
-- 尺寸 14-16px，与文字光学对齐
-- 禁止：emoji 当图标、Lucide / Feather / Heroicons、混合字重
+- 库：`@phosphor-icons/react`，**Bold** 字重做操作图标、**Fill** 字重做状态点缀；导入一律带 `Icon` 后缀导出名
+- 尺寸：侧栏/面板 16px，行内操作 14px，空状态 16–22px；与文字光学对齐（translateY 微调）
+- 禁止：emoji 当图标、Lucide / Feather / Heroicons、混合字重、彩色填充图标（图标颜色跟随文字色或语气前景）
 
-## 6. 组件库
+## 7. 组件库与技术约束
 
-- 交互行为与无障碍原语用 **Radix UI**（无头库，视觉零主见）。常备集已装：
-  `@radix-ui/react-tabs`、`react-dialog`（滑出面板）、`react-dropdown-menu`（行操作菜单）、
-  `react-select`（下拉选择）、`react-switch`（开关）；其余（tooltip、popover 等）按需加装，样式全部用本规范 token 手写
-- **禁止引入带视觉主见的组件库**（Ant Design、MUI、shadcn/ui 等），它们的默认外观会架空本规范
-- 路由用 react-router-dom（纯导航行为、无视觉输出），不违反「禁带视觉主见组件库」
-- 不引入 Tailwind；样式只写在 `index.css`（token + 既有类名体系）
+- 交互行为与无障碍原语用 **Radix UI**（无头库，视觉零主见）：常备 tabs / dialog / dropdown-menu / select / switch，tooltip / popover / accordion 按需加装，样式全部用本规范 token 手写
+- **禁止引入带视觉主见的组件库**（Ant Design、MUI、shadcn/ui 等）与 Tailwind；样式只写在 `index.css`
+- 路由 react-router-dom（纯导航行为，不违反上条）
+- 资源与结果只从既有 API 客户端模块取值；服务端未注册端点（404/405/501）统一渲染「能力不可用」——入口保留、明确禁用并给出原因，不静默隐藏也不伪造结果
 
-## 7. 禁止清单
+## 8. 禁止清单
 
-渐变（尤其紫蓝 AI 渐变）、重阴影、卡片套卡片、大面积纯色背景、整页暗色段落、
-emoji、em-dash（——用中文标点或重写句子）、Inter / Roboto / Open Sans、
-Lucide / Feather / Heroicons 图标、`window.alert`、Lorem Ipsum 与假占位数据、
-自造状态颜色、绕过 token 直接写十六进制色值。
+装饰性用色、渐变填充（品牌方块除外）、任何投影（5.16 下拉除外）、卡片套卡片、
+emoji、Lucide / Feather / Heroicons、Inter / Roboto / Open Sans、中文斜体、
+`window.alert` / `window.confirm`、Lorem Ipsum 与假占位数据、自造状态颜色、
+绕过 token 直接写十六进制色值、进行中超时无反馈的静默轮询。
 
-## 8. 变更流程
+## 9. 数据与文案诚实性规则（沿用，不随风格变更）
 
-M4 交互控制区复用现有 panel、kv、表格、hint/error 与按钮样式，不新增视觉 token。仅呈现当前会话的可执行操作；持久接收、已投递、原生确认、请求已处理、结果未知分别说明。审批明确展示请求摘要与有效期；未知提交保留原去重键并等待查询核对，终态只读。Run 状态仍统一读取 STATUS_META。
+- 未知身份 / 成本 / reward 一律显示「未知」，缺工件显示「缺工件」，绝不填 0
+- 付费提交（Judge 校准等）独占 `form-panel`：用途、模型、样本数、最大调用次数、已知/未知费用与预算齐全，先「读取预检（只读）」再显式确认才可提交
+- GET 历史、切换 pass、刷新零调用零费用，用 info 通知条明示
+- 迟到响应按请求序号丢弃，不得覆盖新的 Run / Case / pass / Skill / 版本选择；切换选择（含同 Trial 换工件）时按下钻身份重挂载视图
+- 小计一律写明「小计」，成本卡标注统计范围（Run 范围 / Task 范围）
+- UI 文案全中文；Provider、Case、Manifest、Run、Judge 等领域术语保留英文原文
 
-1. 改设计 = 改 `DESIGN.md` = 改 `:root` token，三者同一个提交。
-2. 新增页面 / 新增界面区块：走 `design-taste-frontend` 流程（读需求 → 定方向 → 拨盘已在 0 节锁定）。
-3. 修改现有界面：走 `redesign-existing-projects` 流程（先审计 → 列问题 → 增量改，不重写）。
-4. 审美争议以 `minimalist-ui` 协议为准裁决。
-5. 完成后必须跑：`pnpm --dir apps/web test` 与 `pnpm --dir apps/web build`（CI 同款门禁）。
+## 10. 变更流程与完工门禁
 
-### 8.1 M5 资源与结果页面（T11）
-
-场景、Skill、Judge 三组页面共用同一条实现约定：资源与结果只从既有 API 客户端模块取值；
-服务端尚未注册的端点（404/405/501）统一渲染为「能力不可用」——入口保留、明确禁用并给出原因，
-既不静默隐藏也不伪造结果；缺字段一律显示「未知」，不填 0。付费 Judge 提交与发布等写操作
-只在操作员显式动作后发生，失败保留表单内容，迟到响应按请求序号丢弃，不得覆盖新的
-Run / Case / pass / Skill / 版本选择。步骤状态、校验状态与校准状态的中文标签与语气
-一律取自 STATUS_META（第 3 节已登记 M5 追加状态）。
+1. 改设计 = 改 `DESIGN.md` = 改 `:root` token，三者同一个提交；规范文档与代码不脱节
+2. 新增页面 / 新增界面区块：先按第 3 节确定页面模式（A/B/C/D），再按第 5 节取组件
+3. 修改现有界面：先对照本文审计差异，增量改，不重写
+4. 审美争议以「状态优先、密度优先、诚实优先」三条原则裁决
+5. 完工必须跑：`pnpm --dir apps/web test` 与 `pnpm --dir apps/web build`（CI 同款门禁）

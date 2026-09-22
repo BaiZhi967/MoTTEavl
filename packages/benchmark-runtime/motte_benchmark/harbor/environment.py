@@ -42,7 +42,11 @@ SUPPORTED_DOCKER_PLATFORMS: tuple[str, ...] = ("linux/amd64", "linux/arm64")
 
 def _mount_source(spec: str) -> str:
     """挂载规格的宿主侧路径（``host:container[:opts]``，无冒号即宿主路径）。"""
-    head = spec.split(":", 1)[0]
+    if len(spec) >= 3 and spec[0].isalpha() and spec[1] == ":" and spec[2] in "\\/":
+        separator = spec.find(":", 2)
+        head = spec if separator < 0 else spec[:separator]
+    else:
+        head = spec.split(":", 1)[0]
     return os.path.normpath(os.path.expanduser(head))
 
 

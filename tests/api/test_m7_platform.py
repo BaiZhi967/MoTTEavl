@@ -183,8 +183,40 @@ def test_events_snapshot_endpoint(tmp_path):
         "/api/v1/runs/run-snap/events/snapshot", params={"after": 0, "limit": 1}
     ).json()
     assert len(limited["events"]) == 1
+    assert limited["has_more"] is True
+    assert limited["next_after"] == 1
+    tail = client.get(
+        "/api/v1/runs/run-snap/events/snapshot",
+        params={"after": limited["next_after"], "limit": 1},
+    ).json()
+    assert [event["seq"] for event in tail["events"]] == [2]
+    assert tail["has_more"] is False
+    assert tail["next_after"] is None
     missing = client.get("/api/v1/runs/run-nope/events/snapshot")
     assert missing.status_code == 404
+
+
+def test_terminal_sse_drains_more_than_one_server_page(tmp_path):
+    app, store = _sqlite_app(tmp_path)
+    client = TestClient(app)
+    run = store.runs.create(
+        {"id": "run-many-events", "status": "queued", "revision": 1,
+         "scenario_version": "replay@1", "manifest": {}, "case_ids": []},
+        event={"run_id": "run-many-events", "type": "queued", "status": "queued"},
+    )
+    for index in range(525):
+        store.events.append({
+            "run_id": run["id"], "type": "model_response",
+            "payload": {"case_id": f"case-{index}"},
+        })
+    current = store.runs.get(run["id"])
+    store.runs.save({**current, "status": "completed"})
+
+    stream_text = _stream(client, run["id"])
+    ids = [int(line.removeprefix("id: ")) for line in stream_text.splitlines() if line.startswith("id: ")]
+    assert len(ids) == 526
+    assert ids[0] == 1
+    assert ids[-1] == 526
 
 
 # --------------------------------------------------------------------- security

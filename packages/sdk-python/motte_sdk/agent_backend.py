@@ -197,6 +197,7 @@ class _CaseEvidence:
     def __init__(self) -> None:
         self.event_refs: list[EvidenceRef] = []
         self.invocation_refs: list[EvidenceRef] = []
+        self.errors: list[str] = []
 
 
 class AgentCaseExecutor:
@@ -210,6 +211,7 @@ class AgentCaseExecutor:
         self.provider_complete = provider_complete
         self._service = service
         self._model_name = (self.manifest.get("provider") or {}).get("model") or "agent-model"
+        self._active_evidence: _CaseEvidence | None = None
 
     def bind_service(self, service: Any) -> None:
         """Dispatcher 在执行前接入 RunService（事件 / 调用日志 / 取消探测）。"""
@@ -241,6 +243,7 @@ class AgentCaseExecutor:
         before = workspace.snapshot()
 
         evidence = _CaseEvidence()
+        self._active_evidence = evidence
         state = {"step": 0}
 
         def complete_with_logging(request):  # noqa: ANN001
@@ -458,16 +461,26 @@ class AgentCaseExecutor:
         def sink(event: dict[str, Any]) -> None:
             if service is None:
                 return
+            from motte_agent.errors import AgentFatalError
+
             payload = redact(deepcopy(event))
             payload.pop("type", None)
-            stored = service.emit_run_event(
-                self.run["id"], str(event.get("type") or "agent_event"),
-                {"case_id": case_id, **payload},
-            )
-            if stored is not None and isinstance(stored.get("seq"), int):
-                evidence.event_refs.append(EvidenceRef(
-                    kind="event", run_id=self.run["id"], locator=str(stored["seq"]),
-                ))
+            try:
+                stored = service.emit_run_event(
+                    self.run["id"], str(event.get("type") or "agent_event"),
+                    {"case_id": case_id, **payload},
+                )
+            except Exception as error:  # noqa: BLE001 - evidence boundary
+                detail = f"event persistence failed: {type(error).__name__}: {error}"
+                evidence.errors.append(detail)
+                raise AgentFatalError(detail, code="EVENT_PERSISTENCE_FAILED") from error
+            if not isinstance(stored, dict) or not isinstance(stored.get("seq"), int):
+                detail = "event persistence failed: no durable event returned"
+                evidence.errors.append(detail)
+                raise AgentFatalError(detail, code="EVENT_PERSISTENCE_FAILED")
+            evidence.event_refs.append(EvidenceRef(
+                kind="event", run_id=self.run["id"], locator=str(stored["seq"]),
+            ))
 
         return sink
 
@@ -483,7 +496,12 @@ class AgentCaseExecutor:
 
         invocations = self._invocations()
         if invocations is None:
-            return None
+            if self._service is None:
+                return None
+            from motte_agent.errors import AgentFatalError
+            detail = "invocation persistence unavailable"
+            self._active_evidence.errors.append(detail)
+            raise AgentFatalError(detail, code="INVOCATION_PERSISTENCE_FAILED")
         try:
             record = invocations.create({
                 "id": f"inv-{uuid4().hex}",
@@ -497,17 +515,22 @@ class AgentCaseExecutor:
                 "request_summary": redact(deepcopy(summary)),
                 "prepared_at": datetime.now(UTC).isoformat(),
             })
-            return invocations.transition(
+            dispatched = invocations.transition(
                 record["id"], expected_revision=record["revision"],
                 expected_status="prepared", status="dispatching",
                 changes={"dispatched_at": datetime.now(UTC).isoformat()},
             )
+            self._active_evidence.invocation_refs.append(EvidenceRef(
+                kind="invocation", run_id=self.run["id"], locator=str(dispatched["id"]),
+            ))
+            return dispatched
         except AgentFatalError:
             raise
         except Exception as error:  # noqa: BLE001 - 证据边界失败：不确定状态
+            detail = f"invocation prepared/dispatching boundary failed: {error}"
+            self._active_evidence.errors.append(detail)
             raise AgentFatalError(
-                f"invocation prepared/dispatching boundary failed: {error}",
-                code="INVOCATION_PERSISTENCE_FAILED",
+                detail, code="INVOCATION_PERSISTENCE_FAILED",
             ) from error
 
     def _settle_invocation(
@@ -518,7 +541,11 @@ class AgentCaseExecutor:
 
         invocations = self._invocations()
         if invocations is None or invocation is None:
-            return
+            if self._service is None:
+                return
+            detail = "invocation settlement unavailable"
+            self._active_evidence.errors.append(detail)
+            raise AgentFatalError(detail, code="INVOCATION_SETTLE_FAILED")
         try:
             invocations.transition(
                 invocation["id"], expected_revision=invocation["revision"],
@@ -529,12 +556,14 @@ class AgentCaseExecutor:
                     "settled_at": datetime.now(UTC).isoformat(),
                 },
             )
-        except AgentFatalError:
+        except AgentFatalError as error:
+            self._active_evidence.errors.append(f"invocation settle failed: {error}")
             raise
         except Exception as error:  # noqa: BLE001 - settle 失败：不确定状态
+            detail = f"invocation settle failed after dispatch: {error}"
+            self._active_evidence.errors.append(detail)
             raise AgentFatalError(
-                f"invocation settle failed after dispatch: {error}",
-                code="INVOCATION_SETTLE_FAILED",
+                detail, code="INVOCATION_SETTLE_FAILED",
             ) from error
 
     # ------------------------------------------------------------ Observation
@@ -589,9 +618,10 @@ class AgentCaseExecutor:
             for index, event in enumerate(events) if event.get("type") == "tool_call"
         ]
         usage = outcome.get("usage") or {}
+        evidence_errors = list(evidence.errors)
         capture_complete = (
             bool(before.get("complete", True)) and bool(after.get("complete", True))
-            and not errors
+            and not errors and not evidence_errors
         )
         observation_payload: dict[str, Any] = {
             "observation_id": f"obs-{uuid4().hex}",
@@ -610,7 +640,7 @@ class AgentCaseExecutor:
                 "events_captured": len(events),
                 "artifacts_captured": len([a for a in artifacts if a.get("available")]),
                 "artifacts_expected": len(after_files),
-                "missing": errors,
+                "missing": errors + evidence_errors,
             },
             "usage": {
                 "reported": bool(usage.get("reported")),

@@ -336,8 +336,15 @@ class RunService:
         # （review R2-01/R05）。终态本身不复活，也不自动重跑。
         already_terminal = self._load(run_id)["status"] in self.TERMINAL
         if not already_terminal:
-            self._transition(run_id, "collecting")
-            self._transition(run_id, "scoring")
+            try:
+                self._transition(run_id, "collecting")
+                self._transition(run_id, "scoring")
+            except RunConflictError:
+                # Operator cancellation may win between the terminal check and either
+                # transition. Keep importing late evidence, but never revive the Run.
+                already_terminal = self._load(run_id)["status"] in self.TERMINAL
+                if not already_terminal:
+                    raise
         trial_records, task_rows, unmapped = self._external_job_records(run_id, run, outcome)
         # 先按 trial_id 完整导入全部 Trial 结果（含失败/取消/未尝试的处置）：
         # 任务级 Case 聚合不能替代 Trial 原始结果存储（review R01，P0）。

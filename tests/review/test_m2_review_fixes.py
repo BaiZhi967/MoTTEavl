@@ -8,6 +8,7 @@ R14 入队预检。贯穿性端到端样例见 test_m2_review_e2e_sample.py。
 """
 import json
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -36,6 +37,22 @@ from motte_storage.artifacts import ArtifactStore
 from motte_storage.external_jobs import SQLiteExternalJobs
 from motte_storage.run_store import SQLiteRunStore
 from motte_contracts.external_job import ExternalJobHandle, ExternalJobSpec
+
+
+def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        return f'"{pid}"' in result.stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
 
 
 # ------------------------------------------------------------------ 共享夹具
@@ -569,11 +586,7 @@ def test_r05_cross_instance_cancel_interrupts_hanging_job(tmp_path, monkeypatch)
 
     stopped = time.monotonic() + 5
     while time.monotonic() < stopped:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            break
-        except PermissionError:
+        if not _pid_alive(pid):
             break
         time.sleep(0.05)
     else:

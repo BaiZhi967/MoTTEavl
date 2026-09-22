@@ -301,6 +301,12 @@ class BuiltinReActRuntime(AgentRuntime):
                 self._record("model_response", step=step, finish_reason=envelope.get("finish_reason"))
                 termination_reason, detail = stop, "observed after model response"
                 break
+            # A cancellation can arrive while the provider is returning. Never
+            # accept a final answer (or dispatch its tools) after that boundary.
+            if self._cancelled():
+                termination_reason = "cancelled"
+                detail = "cancelled after model response"
+                break
 
             if self.mode == "native-tool":
                 tool_calls = envelope.get("tool_calls") or []
@@ -662,7 +668,6 @@ class BuiltinReActRuntime(AgentRuntime):
             event = {"type": event_type, **payload}
             self._orphan_events.append(event)
         if self._event_sink is not None:
-            try:
-                self._event_sink(event)
-            except Exception:  # noqa: BLE001 - 证据通道故障不阻断执行
-                pass
+            # Event persistence is part of the control boundary. A missing or
+            # failed sink must abort the turn instead of producing false coverage.
+            self._event_sink(event)

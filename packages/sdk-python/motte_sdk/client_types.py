@@ -115,6 +115,8 @@ class EventsSnapshot:
     last_seq: int | None
     run_status: str
     partial: bool
+    next_after: int | None = None
+    has_more: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -125,7 +127,14 @@ class EventsSnapshot:
             last_seq=int(last_seq) if isinstance(last_seq, int) else None,
             run_status=str(payload.get("run_status", "")),
             partial=bool(payload.get("partial", False)),
-            extra=_split(payload, ("events", "last_seq", "run_status", "partial")),
+            next_after=(
+                int(payload["next_after"]) if isinstance(payload.get("next_after"), int) else None
+            ),
+            has_more=bool(payload.get("has_more", False)),
+            extra=_split(
+                payload,
+                ("events", "last_seq", "run_status", "partial", "next_after", "has_more"),
+            ),
         )
 
 

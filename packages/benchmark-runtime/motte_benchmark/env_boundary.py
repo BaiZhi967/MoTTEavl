@@ -44,6 +44,9 @@ RUNNER_ENV_ALLOWLIST: tuple[str, ...] = (
     # 进程运行必需。
     "PATH", "HOME", "SHELL", "USER", "LOGNAME", "TERM", "TZ", "PWD",
     "TMPDIR", "TEMP", "TMP",
+    # Windows loader, Python stdlib and Winsock provider discovery.
+    "SystemRoot", "SYSTEMROOT", "windir", "WINDIR", "ComSpec", "COMSPEC", "PATHEXT",
+    "USERPROFILE",
     # Python 解释器（Runner 与它的 wrapper 都是 python 进程）。
     "PYTHONPATH", "PYTHONHOME", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE",
     "PYTHONHASHSEED", "VIRTUAL_ENV",

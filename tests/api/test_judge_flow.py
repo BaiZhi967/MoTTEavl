@@ -193,6 +193,51 @@ def environment(tmp_path, *, factory=True, provider=None):
     return store, resources, provider, api_factory, client
 
 
+def test_judge_spec_catalog_drives_existing_preflight_contract(tmp_path):
+    _store, resources, _provider, _factory, client = environment(tmp_path)
+    seed_model(
+        resources, model_id="replay-judge", provider_name="replay-conn",
+        kind="replay", with_price=False,
+    )
+    resources.providers.put({
+        "name": "disabled-conn", "kind": "openai_compatible", "generation": 1,
+        "enabled": False, "base_url": BASE_URL, "credentials": "disabled-cred",
+    })
+    resources.models.put({
+        "id": "disabled-judge", "provider": "disabled-conn", "model": WIRE_MODEL,
+        "capabilities": {"text": True}, "parameters": {}, "max_output_tokens": 4096,
+        "lifecycle": "published", "published_at": "2026-09-21T00:00:00+00:00",
+        "generation": 1,
+    })
+
+    listing = client.get("/api/v1/judge-specs")
+    assert listing.status_code == 200
+    items = listing.json()["items"]
+    assert len(items) == 3
+    assert {item["model_resource_id"] for item in items} == {"judge-model"}
+    assert all(item["modes"] == ["single"] for item in items)
+    selected = next(item for item in items if item["rubric"]["rubric_id"] == "answer-quality")
+    assert selected["model_resource_id"] == "judge-model"
+    assert selected["spec"]["model"] == "judge-model"
+
+    detail = client.get(f"/api/v1/judge-specs/{selected['judge_id']}")
+    assert detail.status_code == 200
+    assert detail.json() == selected
+    calibration = client.get(
+        f"/api/v1/judge-specs/{selected['judge_id']}/calibration"
+    )
+    assert calibration.status_code == 200
+    assert calibration.json()["status"] == "not_run"
+
+    preflight = client.post(
+        "/api/v1/judges/preflight",
+        json=preflight_body(spec=selected["spec"]),
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["model_resource_id"] == "judge-model"
+    assert preflight.json()["executed"] is False
+
+
 def jobs_of(store):
     """durable ScoringJob 仓库（存储层工厂）：断言"没有落作业"时使用。"""
     from motte_storage.scoring_jobs import scoring_jobs_for

@@ -1378,6 +1378,11 @@
             "title": "Events",
             "type": "array"
           },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
           "last_seq": {
             "anyOf": [
               {
@@ -1388,6 +1393,17 @@
               }
             ],
             "title": "Last Seq"
+          },
+          "next_after": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After"
           },
           "partial": {
             "title": "Partial",
@@ -7893,6 +7909,96 @@
           }
         },
         "summary": "Import Inspect"
+      }
+    },
+    "/api/v1/judge-specs": {
+      "get": {
+        "operationId": "list_judge_specs_api_v1_judge_specs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Judge Specs"
+      }
+    },
+    "/api/v1/judge-specs/{judge_id}": {
+      "get": {
+        "operationId": "get_judge_spec_api_v1_judge_specs__judge_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "judge_id",
+            "required": true,
+            "schema": {
+              "title": "Judge Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Judge Spec"
+      }
+    },
+    "/api/v1/judge-specs/{judge_id}/calibration": {
+      "get": {
+        "operationId": "get_judge_calibration_api_v1_judge_specs__judge_id__calibration_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "judge_id",
+            "required": true,
+            "schema": {
+              "title": "Judge Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Judge Calibration"
       }
     },
     "/api/v1/judges": {

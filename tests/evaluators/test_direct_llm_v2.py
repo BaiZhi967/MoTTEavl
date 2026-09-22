@@ -321,6 +321,16 @@ def test_json_equal_rejects_ambiguous_or_non_json_output(content, code):
     assert content not in str(result["details"])
 
 
+def test_json_equal_rejects_excessive_nesting_with_stable_failure():
+    expected = '[1]'
+    deeply_nested = '[' * 2000 + '1' + ']' * 2000
+    outcome = score({"content": deeply_nested}, expected, JSON_EQUAL)
+    assert outcome["outcome"] == "invalid_format"
+    assert outcome["details"]["parse_failure"] == {"code": "max_depth_exceeded"}
+    with pytest.raises(ValueError, match="max_depth_exceeded"):
+        validate_expected(deeply_nested, JSON_EQUAL)
+
+
 def test_json_equal_rejects_bad_expected_at_validation_time():
     with pytest.raises(ValueError, match="duplicate_key"):
         validate_expected('{"a":1,"a":2}', JSON_EQUAL)

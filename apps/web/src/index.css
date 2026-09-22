@@ -1410,3 +1410,55 @@ td.row-actions .link {
 .case-card p {
   margin: 2px 0;
 }
+
+/* ---------- 移动端：顶部横向导航 + 单列工作台 ---------- */
+
+@media (max-width: 760px) {
+  .app-shell {
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+  }
+
+  .sidebar {
+    width: var(--size-full);
+    padding: var(--space-sm);
+  }
+
+  .brand,
+  .nav-group-label {
+    display: none;
+  }
+
+  .side-nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .tab {
+    width: auto;
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .workbench,
+  .page,
+  .panel {
+    width: var(--size-full);
+    min-width: var(--space-none);
+  }
+
+  .page {
+    padding: var(--space-sm);
+  }
+
+  .dialog-content {
+    width: var(--size-full);
+  }
+
+  table {
+    display: block;
+    max-width: var(--size-full);
+    overflow-x: auto;
+  }
+}

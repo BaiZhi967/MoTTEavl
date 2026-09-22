@@ -14,6 +14,7 @@ include/extends、不可解析的 compose，以及"有 compose 文件但没有�
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,15 @@ from motte_benchmark.harbor.environment import evaluate_preflight, reason_messag
 from motte_benchmark.harbor.tasks import prepare_task_manifest
 
 PROFILE = {"agent_id": "oracle", "agent_version": "1.0.0", "environment": {"type": "docker"}}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows drive-letter compose syntax")
+def test_windows_drive_volume_source_is_a_bind_mount() -> None:
+    from motte_benchmark.harbor.compose import _volume_entry
+
+    assert _volume_entry(r"C:\Users\operator\.ssh:/root/.ssh:ro") == (
+        r"C:\Users\operator\.ssh", "bind",
+    )
 HEALTHY_DOCKER = {
     "available": True,
     "server_version": "27.4.0",

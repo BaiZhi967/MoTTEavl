@@ -6,17 +6,21 @@
 - 永不 privileged，drop ALL capabilities + no-new-privileges，以非 root 运行；
 - 只挂载受控 workspace 目录（绝不挂 Docker socket）；
 - 只有显式声明的环境变量会传入容器；
-- CPU / 内存 / PID / 磁盘(tmpfs) / 输出 / TTL 限制；
+- CPU / 内存 / PID / 磁盘(tmpfs for /tmp and /workspace) / 输出 / TTL 限制；
 - cleanup 在成功、失败、超时、取消路径上都必须执行。
 """
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import shutil
+import stat
+import tarfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from uuid import uuid4
 
 from .policy import PolicyViolationError, SandboxPolicy
 
@@ -42,6 +46,8 @@ class DockerSandbox:
         self._clock = clock
         self._container: Any = None
         self._host_workspace: Path | None = None
+        self._workspace_anchor_real: Path | None = None
+        self._archive_workspace = False
         self._events: list[dict[str, Any]] = []
         self._prepared = False
         self._collected = False
@@ -51,15 +57,28 @@ class DockerSandbox:
 
     def prepare(self, files: dict[str, str] | None = None) -> dict[str, Any]:
         """创建受控 host workspace 并物化输入文件；返回执行 spec。"""
+        if self._prepared or self._host_workspace is not None:
+            raise PolicyViolationError("sandbox already prepared")
         base = self._workspace_root or Path(os.environ.get("MOTTE_SANDBOX_ROOT", "var/sandboxes"))
         base.mkdir(parents=True, exist_ok=True)
-        self._host_workspace = base / self.policy.workspace
+        # Never reuse the policy workspace name: concurrent instances and repeated
+        # runs must not be able to remove or observe one another's staging tree.
+        workspace_parent = base / self.policy.workspace
+        workspace_parent.mkdir(parents=True, exist_ok=True)
+        self._workspace_anchor_real = workspace_parent.resolve()
         for name in files or {}:
             if Path(name).is_absolute() or ".." in Path(name).parts:
                 raise PolicyViolationError(f"file path escape: {name}")
-        if self._host_workspace.exists():
-            shutil.rmtree(self._host_workspace)
-        self._host_workspace.mkdir(parents=True)
+        for _ in range(3):
+            candidate = workspace_parent / f"run-{uuid4().hex}"
+            try:
+                candidate.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                continue
+            self._host_workspace = candidate
+            break
+        else:
+            raise PolicyViolationError("could not allocate a unique workspace")
         for name, content in (files or {}).items():
             target = self._host_workspace / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -75,23 +94,40 @@ class DockerSandbox:
         argv = self.policy.commands.validate_command(command)
         if self._container is not None:
             raise PolicyViolationError("container already started")
-        self._container = self._docker_client().containers.run(
-            self.image,
-            command=argv,
-            detach=True,
-            network_mode=self.policy.network,
-            privileged=False,
-            user="nobody",
-            working_dir="/workspace",
-            mem_limit=f"{self.policy.memory_mb}m",
-            nano_cpus=int(self.policy.cpu_limit * 1_000_000_000),
-            pids_limit=self.policy.pids_limit,
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges"],
-            tmpfs={"/tmp": f"size={self.policy.disk_mb}m"},
-            environment=self._declared_environment(),
-            volumes={str(self._host_workspace): {"bind": "/workspace", "mode": "rw"}},
-        )
+        kwargs = {
+            "command": argv,
+            "network_mode": self.policy.network,
+            "privileged": False,
+            "user": "nobody",
+            "working_dir": "/workspace",
+            "mem_limit": f"{self.policy.memory_mb}m",
+            "nano_cpus": int(self.policy.cpu_limit * 1_000_000_000),
+            "pids_limit": self.policy.pids_limit,
+            "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges"],
+            # /workspace is a tmpfs as well as /tmp; a writable host bind cannot
+            # be bounded by Docker's tmpfs limit and is therefore not used here.
+            "tmpfs": {
+                "/tmp": f"size={self.policy.disk_mb}m",
+                "/workspace": f"size={self.policy.disk_mb}m",
+            },
+            "environment": self._declared_environment(),
+        }
+        containers = self._docker_client().containers
+        if hasattr(containers, "create"):
+            self._container = containers.create(self.image, **kwargs)
+            self._put_input_archive()
+            self._container.start()
+            self._archive_workspace = True
+        else:
+            # Minimal fake clients used by offline tests predate create/start.
+            # Real Docker clients always take the bounded tmpfs path above.
+            kwargs["detach"] = True
+            kwargs["volumes"] = {
+                str(self._host_workspace): {"bind": "/workspace", "mode": "rw"}
+            }
+            self._container = containers.run(self.image, **kwargs)
+            self._archive_workspace = False
         self._record("started", program=argv[0], container=self._container.id)
         return {"container_id": self._container.id}
 
@@ -152,9 +188,31 @@ class DockerSandbox:
                 pass
             self._container = None
         removed_workspace = False
-        if self._host_workspace is not None and self._host_workspace.exists():
-            shutil.rmtree(self._host_workspace, ignore_errors=True)
-            removed_workspace = True
+        workspace = self._host_workspace
+        if workspace is not None:
+            # Never follow a replaced workspace symlink or remove another run's
+            # directory. The path is unique and must still be a real directory.
+            try:
+                resolved = workspace.resolve(strict=False)
+            except OSError:
+                resolved = None
+            owned = (
+                resolved is not None
+                and self._workspace_anchor_real is not None
+                and (resolved == self._workspace_anchor_real or self._workspace_anchor_real in resolved.parents)
+            )
+            if workspace.is_symlink() or not owned:
+                self._record("workspace_cleanup_refused", workspace=str(workspace))
+            elif workspace.exists() and workspace.is_dir():
+                try:
+                    shutil.rmtree(workspace, ignore_errors=False)
+                except OSError:
+                    self._record("workspace_cleanup_failed", workspace=str(workspace))
+                else:
+                    removed_workspace = True
+        self._host_workspace = None
+        self._workspace_anchor_real = None
+        self._archive_workspace = False
         self._prepared = False
         self._collected = False
         self._record("cleaned_up", container_removed=removed_container, workspace_removed=removed_workspace)
@@ -170,6 +228,36 @@ class DockerSandbox:
             self.cleanup()
 
     # ------------------------------------------------------------------ 内部
+
+    def _put_input_archive(self) -> None:
+        """Copy prepared inputs into the bounded container tmpfs."""
+        if self._host_workspace is None or not hasattr(self._container, "put_archive"):
+            return
+        entries: list[tuple[Path, str, int]] = []
+        total = 0
+        for source in sorted(self._host_workspace.rglob("*")):
+            relative = source.relative_to(self._host_workspace).as_posix()
+            if source.is_symlink():
+                raise PolicyViolationError(f"input symlink is not allowed: {relative}")
+            if not source.is_file():
+                continue
+            info = source.stat()
+            if not stat.S_ISREG(info.st_mode):
+                raise PolicyViolationError(f"input is not a regular file: {relative}")
+            total += info.st_size
+            self._validate_artifact_limits(len(entries) + 1, total, info.st_size, relative)
+            entries.append((source, relative, info.st_size))
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w") as archive:
+            for source, relative, size in entries:
+                info = tarfile.TarInfo(relative)
+                info.size = size
+                info.mode = 0o644
+                info.uid = 65534
+                info.gid = 65534
+                with source.open("rb") as handle:
+                    archive.addfile(info, handle)
+        self._container.put_archive("/workspace", payload.getvalue())
 
     def _docker_client(self):
         if self._client is None:
@@ -187,29 +275,153 @@ class DockerSandbox:
         return environment
 
     def _capped_output(self) -> str:
+        """Consume Docker logs incrementally and retain only the tail."""
         try:
-            raw = self._container.logs()
+            try:
+                stream = self._container.logs(stream=True, stdout=True, stderr=True)
+            except TypeError:
+                # Compatibility with the tiny offline fake container.
+                stream = self._container.logs()
         except Exception:
             return ""
-        if len(raw) > self.policy.max_output_bytes:
-            raw = raw[-self.policy.max_output_bytes :]
-        return raw.decode("utf-8", errors="replace")
+        cap = self.policy.max_output_bytes
+        tail = bytearray()
+        if isinstance(stream, (bytes, bytearray, str)):
+            chunks = (stream,)
+        else:
+            chunks = stream
+        try:
+            for chunk in chunks:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode()
+                if not chunk:
+                    continue
+                tail.extend(chunk[-cap:])
+                if len(tail) > cap:
+                    del tail[:-cap]
+        except Exception:
+            # A log stream can close while a container is being removed.
+            pass
+        return bytes(tail).decode("utf-8", errors="replace")
 
     def _collect_artifacts(self) -> list[dict[str, Any]]:
-        artifacts = []
+        if self._archive_workspace:
+            return self._collect_archive_artifacts()
+        return self._collect_host_artifacts()
+
+    def _validate_artifact_limits(self, count: int, total: int, size: int, name: str) -> None:
+        if count > self.policy.max_artifacts:
+            raise PolicyViolationError(
+                f"artifact count exceeds limit {self.policy.max_artifacts}"
+            )
+        if size > self.policy.max_artifact_bytes:
+            raise PolicyViolationError(
+                f"artifact {name!r} is {size} bytes > limit {self.policy.max_artifact_bytes}"
+            )
+        if total > self.policy.max_total_artifact_bytes:
+            raise PolicyViolationError(
+                f"artifact total exceeds limit {self.policy.max_total_artifact_bytes}"
+            )
+
+    @staticmethod
+    def _hash_file(path: Path, expected_size: int, limit: int) -> str:
+        digest = hashlib.sha256()
+        seen = 0
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise PolicyViolationError(f"artifact is not a regular file: {path.name}")
+            with os.fdopen(fd, "rb") as handle:
+                fd = -1
+                while chunk := handle.read(min(1 << 16, limit - seen + 1)):
+                    seen += len(chunk)
+                    if seen > limit:
+                        raise PolicyViolationError(f"artifact grew beyond limit {limit}")
+                    digest.update(chunk)
+        except OSError as error:
+            raise PolicyViolationError(f"cannot read artifact {path.name!r}: {error}") from error
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        if seen != expected_size:
+            raise PolicyViolationError("artifact changed while it was collected")
+        return digest.hexdigest()
+
+    def _collect_host_artifacts(self) -> list[dict[str, Any]]:
         if self._host_workspace is None:
-            return artifacts
+            return []
+        entries: list[tuple[Path, str, int]] = []
+        total = 0
         for path in sorted(self._host_workspace.rglob("*")):
-            if path.is_file():
-                data = path.read_bytes()
-                artifacts.append(
-                    {
-                        "name": str(path.relative_to(self._host_workspace)),
-                        "size": len(data),
-                        "sha256": hashlib.sha256(data).hexdigest(),
-                    }
-                )
+            relative = path.relative_to(self._host_workspace).as_posix()
+            try:
+                link_info = path.lstat()
+            except OSError as error:
+                raise PolicyViolationError(f"cannot inspect artifact {relative!r}: {error}") from error
+            if stat.S_ISLNK(link_info.st_mode):
+                raise PolicyViolationError(f"artifact symlink rejected: {relative}")
+            if stat.S_ISDIR(link_info.st_mode):
+                continue
+            try:
+                info = path.stat()
+            except OSError as error:
+                raise PolicyViolationError(f"cannot stat artifact {relative!r}: {error}") from error
+            if not path.is_file():
+                raise PolicyViolationError(f"artifact is not a regular file: {relative}")
+            total += info.st_size
+            self._validate_artifact_limits(len(entries) + 1, total, info.st_size, relative)
+            entries.append((path, relative, info.st_size))
+        artifacts = []
+        for path, relative, size in entries:
+            artifacts.append({
+                "name": relative,
+                "size": size,
+                "sha256": self._hash_file(path, size, self.policy.max_artifact_bytes),
+            })
         return artifacts
+
+    def _collect_archive_artifacts(self) -> list[dict[str, Any]]:
+        try:
+            stream, _ = self._container.get_archive("/workspace")
+        except Exception as error:
+            raise PolicyViolationError(f"cannot collect workspace archive: {error}") from error
+        if isinstance(stream, (bytes, bytearray)):
+            stream = io.BytesIO(stream)
+        artifacts: list[dict[str, Any]] = []
+        total = 0
+        try:
+            with tarfile.open(fileobj=stream, mode="r|*") as archive:
+                for member in archive:
+                    name = PurePosixPath(member.name).as_posix()
+                    if name in (".", "") or name.endswith("/"):
+                        continue
+                    if member.issym() or member.islnk():
+                        raise PolicyViolationError(f"artifact symlink rejected: {name}")
+                    if member.isdev() or not member.isfile():
+                        raise PolicyViolationError(f"artifact is not a regular file: {name}")
+                    if name.startswith("/") or ".." in PurePosixPath(name).parts:
+                        raise PolicyViolationError(f"artifact path escape: {name}")
+                    total += member.size
+                    self._validate_artifact_limits(len(artifacts) + 1, total, member.size, name)
+                    source = archive.extractfile(member)
+                    if source is None:
+                        raise PolicyViolationError(f"cannot read artifact: {name}")
+                    digest = hashlib.sha256()
+                    seen = 0
+                    while chunk := source.read(min(1 << 16, self.policy.max_artifact_bytes - seen + 1)):
+                        seen += len(chunk)
+                        if seen > self.policy.max_artifact_bytes:
+                            raise PolicyViolationError(f"artifact grew beyond limit {self.policy.max_artifact_bytes}")
+                        digest.update(chunk)
+                    if seen != member.size:
+                        raise PolicyViolationError(f"artifact changed while it was collected: {name}")
+                    artifacts.append({"name": name, "size": member.size, "sha256": digest.hexdigest()})
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
+        return sorted(artifacts, key=lambda item: item["name"])
 
     def _record(self, event_type: str, **payload: Any) -> None:
         self._events.append({"type": event_type, **payload})

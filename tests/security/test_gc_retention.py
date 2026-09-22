@@ -77,6 +77,41 @@ def _make_artifacts(root: Path):
         os.utime(path, (stamp_epoch, stamp_epoch))
 
 
+def test_gc_plan_keeps_child_only_case_artifact_reference(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    store.case_runs.upsert({
+        "run_id": "run-live", "case_id": "child-only",
+        "artifact_refs": [{"id": "child/only.bin"}],
+    })
+    root = tmp_path / "artifacts"
+    _make_artifacts(root)
+    child = root / "child/only.bin"
+    child.parent.mkdir(parents=True, exist_ok=True)
+    child.write_bytes(b"x")
+    old = (datetime.now(UTC) - timedelta(days=200)).timestamp()
+    os.utime(child, (old, old))
+
+    plan = plan_gc(store, root, artifact_ttl_days=90)
+    assert "child/only.bin" not in {item["artifact_id"] for item in plan.deletable}
+    assert any(item["artifact_id"] == "child/only.bin" and item["reason"] == "referenced"
+               for item in plan.protected)
+
+
+def test_gc_plan_does_not_swallow_repository_type_error(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    original = store.case_runs.list_for_run
+
+    def broken(_run_id):
+        raise TypeError("repository API shape changed")
+
+    store.case_runs.list_for_run = broken
+    try:
+        with pytest.raises(TypeError, match="repository API shape changed"):
+            plan_gc(store, tmp_path / "artifacts")
+    finally:
+        store.case_runs.list_for_run = original
+
+
 def test_gc_plan_dry_run_protects_pins_and_references(tmp_path):
     store = _make_store_with_evidence(tmp_path)
     root = tmp_path / "artifacts"

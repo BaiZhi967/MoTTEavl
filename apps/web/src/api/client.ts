@@ -133,10 +133,41 @@ export function describeApiError(error: unknown): {
   return { code: null, message, allowed: [], status: null };
 }
 
+const API_TOKEN_KEY = "motte-api-token";
+
+export function getApiToken(): string {
+  try {
+    return sessionStorage.getItem(API_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiToken(token: string): void {
+  try {
+    const value = token.trim();
+    if (value) sessionStorage.setItem(API_TOKEN_KEY, value);
+    else sessionStorage.removeItem(API_TOKEN_KEY);
+  } catch {
+    // Disabled storage still supports unauthenticated local deployments.
+  }
+}
+
+function authenticatedHeaders(initial?: HeadersInit): Headers {
+  const headers = new Headers(initial);
+  const token = getApiToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return headers;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = authenticatedHeaders(init?.headers);
+  if (init?.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers,
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -691,37 +722,88 @@ export interface TraceEvent {
   recorded_at?: string | null;
 }
 
-/** 订阅运行事件流；显式携带 after 游标，浏览器自动重连时继续发送 Last-Event-ID。 */
+/** 订阅运行事件流；fetch 允许携带 Bearer header，并保留游标/gap 语义。 */
 export function subscribeRunEvents(
   runId: string,
   handlers: {
     onEvent: (event: TraceEvent) => void;
     onError?: () => void;
-    /** 服务端事件被清理后按命名事件 motte-gap 通知（协议 sdk-and-migration §2）。 */
     onGap?: (gap: { type: "gap"; after: number; next_seq: number; partial: boolean }) => void;
   },
   options?: { after?: number },
 ): () => void {
-  const query = options?.after && options.after > 0 ? `?after=${options.after}` : "";
-  const source = new EventSource(`/api/v1/runs/${runId}/events${query}`);
-  source.onmessage = (message) => {
+  const controller = new AbortController();
+  let cursor = Math.max(0, options?.after ?? 0);
+  let reconnectTimer: number | null = null;
+  const terminal = new Set(["completed", "failed", "cancelled", "unsupported", "profile_stale", "needs_review"]);
+
+  const dispatch = (frame: string) => {
+    let eventType = "message";
+    const data: string[] = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (line.startsWith("event:")) eventType = line.slice(6).trim();
+      else if (line.startsWith("id:")) {
+        const parsed = Number(line.slice(3).trim());
+        if (Number.isFinite(parsed)) cursor = Math.max(cursor, parsed);
+      } else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return false;
     try {
-      handlers.onEvent(JSON.parse(message.data));
+      const payload = JSON.parse(data.join("\n"));
+      if (eventType === "motte-gap") {
+        handlers.onGap?.(payload);
+        return false;
+      }
+      const event = payload as TraceEvent;
+      if (typeof event.seq === "number") cursor = Math.max(cursor, event.seq);
+      handlers.onEvent(event);
+      const eventStatus = event.payload?.status;
+      return typeof eventStatus === "string" && terminal.has(eventStatus);
     } catch {
-      // 忽略无法解析的帧
+      return false;
     }
   };
-  if (handlers.onGap) {
-    source.addEventListener("motte-gap", (message) => {
-      try {
-        handlers.onGap?.(JSON.parse((message as MessageEvent).data));
-      } catch {
-        // 缺口通知帧损坏时忽略；下一次重连仍会重发
+
+  const connect = async () => {
+    try {
+      const query = cursor > 0 ? "?after=" + cursor : "";
+      const response = await fetch(
+        "/api/v1/runs/" + encodeURIComponent(runId) + "/events" + query,
+        {
+          headers: authenticatedHeaders({ Accept: "text/event-stream" }),
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok || !response.body) throw new Error("SSE HTTP " + response.status);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let reachedTerminal = false;
+      while (!controller.signal.aborted && !reachedTerminal) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          reachedTerminal = dispatch(buffer.slice(0, boundary)) || reachedTerminal;
+          buffer = buffer.slice(boundary + 2);
+          boundary = buffer.indexOf("\n\n");
+        }
+        if (done) break;
       }
-    });
-  }
-  source.onerror = () => handlers.onError?.();
-  return () => source.close();
+      if (reachedTerminal) controller.abort();
+    } catch {
+      if (!controller.signal.aborted) handlers.onError?.();
+    }
+    if (!controller.signal.aborted) {
+      reconnectTimer = window.setTimeout(() => void connect(), 1_000);
+    }
+  };
+
+  void connect();
+  return () => {
+    controller.abort();
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+  };
 }
 
 export interface EventsSnapshot {
@@ -729,6 +811,8 @@ export interface EventsSnapshot {
   last_seq: number | null;
   run_status: string;
   partial: boolean;
+  next_after?: number | null;
+  has_more?: boolean;
 }
 
 /** SSE 断线/缺口的持久查询：一次性拉取 seq > after 的事件（协议 §2）。 */
@@ -737,9 +821,20 @@ export async function fetchRunEventsSnapshot(
   after: number,
   limit = 500,
 ): Promise<EventsSnapshot> {
-  return request<EventsSnapshot>(
-    `/api/v1/runs/${runId}/events/snapshot?after=${after}&limit=${limit}`,
-  );
+  const events: TraceEvent[] = [];
+  let cursor = Math.max(0, after);
+  let latest: EventsSnapshot | null = null;
+  while (latest === null || latest.has_more === true) {
+    latest = await request<EventsSnapshot>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/events/snapshot?after=${cursor}&limit=${limit}`,
+    );
+    events.push(...latest.events);
+    if (!latest.has_more) break;
+    const next = latest.next_after ?? latest.last_seq;
+    if (next == null || next <= cursor) throw new Error("事件快照游标没有前进");
+    cursor = next;
+  }
+  return { ...latest, events };
 }
 
 // ---------------------------------------------------------------------------
@@ -1426,7 +1521,8 @@ export interface JudgeCostView {
 }
 
 export interface JudgeCriterionView {
-  id: string;
+  id?: string;
+  criterion_id?: string;
   description?: string | null;
   scale?: string | null;
   weight?: number | null;
@@ -1484,6 +1580,7 @@ export interface JudgeSpecView {
   rubric?: JudgeRubricView | null;
   calibration?: JudgeCalibrationView | null;
   cost?: JudgeCostView | null;
+  spec?: JudgeSpecRequest["spec"] | null;
 }
 
 /** Judge 预检（只读）：返回将调用的 profile、最大次数与费用是否可估计。 */
@@ -1513,27 +1610,45 @@ export interface JudgePreflightView {
   authorisation?: Record<string, unknown> | null;
 }
 
+export interface JudgeSpecRequest {
+  judge_profile_id: string;
+  model: string;
+  rubric_id: string;
+  rubric_version: string;
+  criteria?: string[];
+  parameters?: Record<string, unknown>;
+  input_selector?: Record<string, unknown> | null;
+  missing_evidence_policy?: "insufficient_evidence" | "not_applicable" | "fail" | null;
+  calibration_version?: string | null;
+  budget: {
+    max_calls: number;
+    max_prompt_tokens?: number;
+    max_completion_tokens?: number;
+    hard_cost_cap_usd?: number | null;
+  };
+}
+
 export interface JudgePreflightRequest {
-  judge_id: string;
-  version: string;
-  /** 用途（judge profile 声明的 mode）。 */
-  purpose: string;
-  run_id?: string;
+  run_id: string;
+  mode: "single" | "pairwise";
+  spec: JudgeSpecRequest;
   source_pass_id?: string;
-  sample_count: number;
   repeats?: number;
   case_ids?: string[];
+  authorisation?: JudgeAuthorisationRequest | null;
+  publish_policy?: "all_scored" | "allow_non_scored";
 }
 
 export interface JudgeAuthorisationRequest {
   authorised: true;
-  purpose: string;
+  actor: string;
   max_calls: number;
   max_total_tokens?: number | null;
   hard_cost_cap_usd?: number | null;
 }
 
 export interface JudgeSubmitRequest extends JudgePreflightRequest {
+  request_key: string;
   /** 显式授权：没有它服务端必须零调用。 */
   authorisation: JudgeAuthorisationRequest;
 }
@@ -1557,17 +1672,17 @@ export interface JudgeJobRecord {
 }
 
 export const getJudges = () =>
-  request<{ items: JudgeSpecView[]; total: number }>("/api/v1/judges");
+  request<{ items: JudgeSpecView[]; total: number }>("/api/v1/judge-specs");
 
 export const getJudge = (judgeId: string, version?: string) =>
   request<JudgeSpecView>(
-    `/api/v1/judges/${encodeURIComponent(judgeId)}${version ? `?version=${encodeURIComponent(version)}` : ""}`,
+    `/api/v1/judge-specs/${encodeURIComponent(judgeId)}${version ? `?version=${encodeURIComponent(version)}` : ""}`,
   );
 
 /** 校准报告（只读，零模型调用）。 */
 export const getJudgeCalibration = (judgeId: string, version?: string) =>
   request<JudgeCalibrationView>(
-    `/api/v1/judges/${encodeURIComponent(judgeId)}/calibration${version ? `?version=${encodeURIComponent(version)}` : ""}`,
+    `/api/v1/judge-specs/${encodeURIComponent(judgeId)}/calibration${version ? `?version=${encodeURIComponent(version)}` : ""}`,
   );
 
 /** 只读预检：只算预算与费用覆盖，不发送任何 Judge 调用。 */
@@ -1576,17 +1691,19 @@ export const preflightJudge = (body: JudgePreflightRequest) =>
 
 /** 付费提交：仅在操作员显式确认后调用；成功后返回同一 ScoringJob / pass 引用。 */
 export const submitJudgeJob = (body: JudgeSubmitRequest) =>
-  request<JudgeJobRecord>("/api/v1/judges/jobs", jsonBody(body));
+  request<JudgeJobRecord>("/api/v1/judges", jsonBody(body));
 
 export const getJudgeJob = (jobId: string) =>
-  request<JudgeJobRecord>(`/api/v1/judges/jobs/${encodeURIComponent(jobId)}`);
+  request<JudgeJobRecord>(`/api/v1/judges/${encodeURIComponent(jobId)}`);
 
 /** 幂等取消：重复取消返回同一状态，不影响已完成的评分批次。 */
-export const cancelJudgeJob = (jobId: string) =>
-  request<JudgeJobRecord>(
-    `/api/v1/judges/jobs/${encodeURIComponent(jobId)}/cancel`,
+export const cancelJudgeJob = async (jobId: string) => {
+  const result = await request<{ job: JudgeJobRecord }>(
+    `/api/v1/judges/${encodeURIComponent(jobId)}/cancel`,
     jsonBody({}),
   );
+  return result.job;
+};
 
 // ---------------------------------------------------------------------------
 // M6：实验 / 比较 / Baseline / 门禁（experiments-and-comparison 协议）。

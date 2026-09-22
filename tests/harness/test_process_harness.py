@@ -4,6 +4,9 @@ import json
 import os
 import sys
 
+import psutil
+import pytest
+
 from motte_harness.claude import ClaudeHarness
 from motte_harness.codex import CodexHarness
 from motte_harness.process import ProcessRunner
@@ -70,6 +73,45 @@ def test_process_runner_timeout_kills_process_group():
     assert result["status"] == "timeout"
     assert result["exit_code"] != 0
     assert "late" not in result["stdout"]
+
+
+def test_process_runner_falls_back_when_event_loop_lacks_subprocess(monkeypatch):
+    async def unsupported(*args, **kwargs):
+        raise NotImplementedError
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unsupported)
+    result = asyncio.run(
+        ProcessRunner(timeout=5).run([sys.executable, "-c", "print('fallback-ok')"])
+    )
+    assert result["status"] == "exited"
+    assert result["exit_code"] == 0
+    assert result["stdout"] == "fallback-ok\n"
+
+
+def test_process_runner_cancellation_kills_child(tmp_path):
+    pid_file = tmp_path / "child.pid"
+
+    async def scenario():
+        command = [
+            sys.executable, "-c",
+            "import os,pathlib,time; "
+            f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+            "time.sleep(30)",
+        ]
+        task = asyncio.create_task(ProcessRunner(timeout=60).run(command))
+        for _ in range(100):
+            if pid_file.exists():
+                break
+            await asyncio.sleep(0.02)
+        assert pid_file.exists()
+        pid = int(pid_file.read_text(encoding="utf-8"))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return pid
+
+    pid = asyncio.run(scenario())
+    assert not psutil.pid_exists(pid)
 
 
 def test_claude_probe_and_run_with_fake_binary(tmp_path):

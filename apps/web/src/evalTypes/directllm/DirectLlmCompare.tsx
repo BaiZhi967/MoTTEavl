@@ -102,9 +102,13 @@ export function DirectLlmCompare() {
   const [openCase, setOpenCase] = useState<string | null>(null);
 
   useEffect(() => {
+    let alive = true;
+    setColumns(null);
+    setError("");
     Promise.all(runIds.map((id) => Promise.all([getRun(id), getReport(id).catch(() => null)])))
-      .then((entries) => setColumns(entries.map(([run, report]) => collect(run, report))))
-      .catch((e) => setError(String(e)));
+      .then((entries) => { if (alive) setColumns(entries.map(([run, report]) => collect(run, report))); })
+      .catch((caught) => { if (alive) setError(String(caught)); });
+    return () => { alive = false; };
   }, [runIds.join(",")]);
 
   if (runIds.length === 0) {

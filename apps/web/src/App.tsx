@@ -1,16 +1,20 @@
+import { useState, type FormEvent } from "react";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   ActivityIcon,
   ArrowsLeftRightIcon,
   FlowArrowIcon,
   FlagCheckeredIcon,
   FlaskIcon,
+  KeyIcon,
   MagicWandIcon,
   PlugIcon,
   PuzzlePieceIcon,
   PushPinIcon,
   ScalesIcon,
   StackIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { RunsOverviewPage } from "./pages/RunsOverviewPage";
 import { HarnessesPage, ProvidersPage } from "./pages/ResourcesPage";
@@ -49,6 +53,7 @@ import {
   TerminalBenchResult,
   TerminalBenchTasks,
 } from "./evalTypes/terminalbench/TerminalBenchPages";
+import { getApiToken, setApiToken } from "./api/client";
 
 const CmmluPages = makeExternalPages("cmmlu", {
   title: "CMMLU（独立身份的外部基准）",
@@ -68,6 +73,64 @@ const GENERAL_NAV = [
   { to: "/baselines", label: "基线", icon: PushPinIcon },
   { to: "/gate", label: "门禁", icon: FlagCheckeredIcon },
 ] as const;
+
+function ApiTokenDialog() {
+  const [open, setOpen] = useState(false);
+  const [token, setToken] = useState("");
+  const configured = getApiToken() !== "";
+
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    setApiToken(token);
+    setOpen(false);
+    window.location.reload();
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => {
+      setOpen(next);
+      if (next) setToken(getApiToken());
+    }}>
+      <Dialog.Trigger asChild>
+        <button type="button" className="tab">
+          <KeyIcon size={16} weight="bold" aria-hidden />
+          <span>{configured ? "API 已认证" : "API 认证"}</span>
+        </button>
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content className="dialog-content" aria-describedby="api-token-description">
+          <div className="dialog-header">
+            <Dialog.Title className="dialog-title">API Bearer token</Dialog.Title>
+            <Dialog.Close asChild>
+              <button type="button" className="icon-button" aria-label="关闭 API 认证设置">
+                <XIcon size={16} weight="bold" aria-hidden />
+              </button>
+            </Dialog.Close>
+          </div>
+          <Dialog.Description id="api-token-description" className="hint">
+            令牌仅保存在当前标签页会话中，并用于普通请求和事件流。留空可清除。
+          </Dialog.Description>
+          <form onSubmit={save}>
+            <label htmlFor="api-token">
+              Bearer token
+              <input
+                id="api-token"
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            </label>
+            <div className="actions">
+              <button type="submit" className="primary">应用并重新连接</button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
 
 export default function App() {
   return (
@@ -95,6 +158,8 @@ export default function App() {
               <span>{label}</span>
             </NavLink>
           ))}
+          <p className="nav-group-label">连接</p>
+          <ApiTokenDialog />
         </nav>
       </aside>
       <div className="workbench">

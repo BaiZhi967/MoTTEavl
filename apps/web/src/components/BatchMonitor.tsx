@@ -17,6 +17,8 @@ function BatchRow({ runId, resultPath, renderDetail }: {
   const [run, setRun] = useState<RunRecord | null>(null);
   const { events, status } = useRunEvents(activeRunId);
   const [expanded, setExpanded] = useState(false);
+  const [action, setAction] = useState<"cancel" | "retry" | null>(null);
+  const [actionError, setActionError] = useState("");
   const current = status ?? run?.status ?? "queued";
   const terminal = isTerminal(current);
 
@@ -34,10 +36,31 @@ function BatchRow({ runId, resultPath, renderDetail }: {
   const total = run?.case_ids?.length ?? 0;
   const done = terminal ? (run?.cases?.length ?? total) : Math.max(countDone(events), run?.cases?.length ?? 0);
 
-  const followRetry = (child: RunRecord) => {
-    setRun(child);
-    setActiveRunId(child.id);
-    setExpanded(false);
+  const retry = async () => {
+    setAction("retry");
+    setActionError("");
+    try {
+      const child = await retryRun(activeRunId);
+      setRun(child);
+      setActiveRunId(child.id);
+      setExpanded(false);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const cancel = async () => {
+    setAction("cancel");
+    setActionError("");
+    try {
+      setRun(await cancelRun(activeRunId, "web 控制台取消"));
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setAction(null);
+    }
   };
 
   return (
@@ -53,13 +76,18 @@ function BatchRow({ runId, resultPath, renderDetail }: {
           <>
             <Link className="link" to={resultPath(activeRunId)}>结果</Link>
             {RETRYABLE.includes(current) && (
-              <button type="button" onClick={() => void retryRun(activeRunId).then(followRetry)}>重试</button>
+              <button type="button" disabled={action !== null} onClick={() => void retry()}>
+                {action === "retry" ? "重试中…" : "重试"}
+              </button>
             )}
           </>
         ) : (
-          <button type="button" onClick={() => void cancelRun(activeRunId, "web 控制台取消")}>取消</button>
+          <button type="button" disabled={action !== null} onClick={() => void cancel()}>
+            {action === "cancel" ? "取消中…" : "取消"}
+          </button>
         )}
       </div>
+      {actionError && <p className="error" role="alert">{actionError}</p>}
       {current === "queued" && <p className="hint">等待 Worker 领取；若长期排队，请在服务端启动 Worker（make worker）。</p>}
       {terminal && run?.error && <RunErrorBanner run={run} monitor />}
       {expanded && renderDetail?.(activeRunId)}

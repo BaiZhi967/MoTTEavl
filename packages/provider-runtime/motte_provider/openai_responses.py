@@ -12,6 +12,7 @@ from typing import Any
 from motte_contracts.messages import Message, ModelRequest, ModelResponse
 
 from .base import BaseHTTPProvider, validate_http_provider_config
+from .errors import ProviderProtocolError
 from .normalization import normalize_finish_reason, normalize_usage_details
 
 SUPPORTED_PARAMETERS = {
@@ -142,16 +143,23 @@ class OpenAIResponsesProvider(BaseHTTPProvider):
                 items.append({"role": "assistant", "content": message.content})
             for call in message.tool_calls:
                 function = call.get("function") or {}
+                name = call.get("name") or function.get("name")
+                arguments = call.get("arguments")
+                if arguments is None:
+                    arguments = function.get("arguments")
                 items.append({
                     "type": "function_call",
                     "call_id": call.get("id"),
-                    "name": function.get("name"),
-                    "arguments": function.get("arguments") or "",
+                    "name": name,
+                    "arguments": arguments or "",
                 })
             return items
         return [{"role": message.role, "content": message.content}]
 
     def normalize_response(self, data: dict[str, Any]) -> ModelResponse:
+        output = data.get("output")
+        if not isinstance(output, list) or not output or not all(isinstance(item, dict) for item in output):
+            raise ProviderProtocolError("malformed provider response: missing output")
         texts: list[str] = []
         tool_calls: list[dict[str, Any]] = []
         for output in data.get("output") or []:

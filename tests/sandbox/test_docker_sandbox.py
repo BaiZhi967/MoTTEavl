@@ -75,9 +75,10 @@ def test_container_security_invariants_are_encoded_in_run_kwargs(tmp_path):
     assert kwargs["security_opt"] == ["no-new-privileges"]
     assert kwargs["mem_limit"] == "512m"
     assert kwargs["pids_limit"] == 64
-    assert kwargs["tmpfs"] == {"/tmp": "size=256m"}
+    assert kwargs["tmpfs"] == {"/tmp": "size=256m", "/workspace": "size=256m"}
     assert kwargs["environment"] == {"SAFE_VAR": "visible"}  # 未声明变量绝不透传
-    assert list(kwargs["volumes"]) == [str(sandbox._host_workspace)]  # 只挂 workspace，无 docker socket
+    assert len(kwargs["volumes"]) == 1  # offline fake compatibility path only
+    assert "run-" in next(iter(kwargs["volumes"]))
     assert kwargs["command"] == ["echo", "hi"]
     assert result["status"] == "exited" and result["exit_code"] == 0
 
@@ -169,6 +170,86 @@ def test_send_is_unsupported_and_interrupt_is_idempotent(tmp_path):
     with pytest.raises(UnsupportedOperation):
         sandbox.send("line")
     assert sandbox.interrupt() == {"interrupted": False}
+
+
+def test_workspaces_are_unique_across_instances_and_repeated_prepare(tmp_path):
+    first = make_sandbox(FakeDockerClient(), tmp_path=tmp_path)
+    second = make_sandbox(FakeDockerClient(), tmp_path=tmp_path)
+    first.prepare({"same.txt": "first"})
+    second.prepare({"same.txt": "second"})
+    assert first._host_workspace != second._host_workspace
+    assert (first._host_workspace / "same.txt").read_text() == "first"
+    assert (second._host_workspace / "same.txt").read_text() == "second"
+    first.cleanup()
+    assert second._host_workspace.exists()
+    second.cleanup()
+    first.prepare({"again.txt": "new"})
+    assert first._host_workspace.exists()
+    first.cleanup()
+
+
+def test_artifact_symlink_is_rejected_without_reading_target(tmp_path):
+    sandbox = make_sandbox(FakeDockerClient(), tmp_path=tmp_path)
+    sandbox.prepare()
+    victim = tmp_path / "victim.txt"
+    victim.write_text("secret", encoding="utf-8")
+    link = sandbox._host_workspace / "link.txt"
+    try:
+        link.symlink_to(victim)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    sandbox.start(["echo", "ok"])
+    with pytest.raises(PolicyViolationError, match="symlink"):
+        sandbox.collect()
+    sandbox.cleanup()
+
+
+def test_artifact_limits_are_checked_before_file_read(tmp_path):
+    client = FakeDockerClient()
+    sandbox = make_sandbox(client, tmp_path=tmp_path, max_artifacts=1, max_artifact_bytes=3,
+                           max_total_artifact_bytes=3)
+    sandbox.prepare()
+    (sandbox._host_workspace / "too-big.txt").write_bytes(b"1234")
+    sandbox.start(["echo", "ok"])
+    with pytest.raises(PolicyViolationError, match="bytes"):
+        sandbox.collect()
+    sandbox.cleanup()
+
+
+def test_artifact_count_limit_is_checked_before_reads(tmp_path):
+    sandbox = make_sandbox(FakeDockerClient(), tmp_path=tmp_path, max_artifacts=1)
+    sandbox.prepare()
+    (sandbox._host_workspace / "one.txt").write_bytes(b"1")
+    (sandbox._host_workspace / "two.txt").write_bytes(b"2")
+    sandbox.start(["echo", "ok"])
+    with pytest.raises(PolicyViolationError, match="count"):
+        sandbox.collect()
+    sandbox.cleanup()
+
+
+def test_artifact_total_limit_is_checked_before_reads(tmp_path):
+    sandbox = make_sandbox(FakeDockerClient(), tmp_path=tmp_path, max_artifact_bytes=3,
+                           max_total_artifact_bytes=3)
+    sandbox.prepare()
+    (sandbox._host_workspace / "one.txt").write_bytes(b"12")
+    (sandbox._host_workspace / "two.txt").write_bytes(b"34")
+    sandbox.start(["echo", "ok"])
+    with pytest.raises(PolicyViolationError, match="total"):
+        sandbox.collect()
+    sandbox.cleanup()
+
+
+class StreamLogContainer(FakeContainer):
+    def logs(self, **kwargs):
+        assert kwargs.get("stream") is True
+        return iter((b"a" * 100, b"b" * 100, b"c" * 100))
+
+
+def test_logs_are_consumed_as_bounded_stream(tmp_path):
+    sandbox = make_sandbox(FakeDockerClient(StreamLogContainer()), tmp_path=tmp_path,
+                           max_output_bytes=100)
+    result = sandbox.run(["echo", "ok"])
+    assert result["output"] == "c" * 100
 
 
 def test_adapter_contract_methods_exist():

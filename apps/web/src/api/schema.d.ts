@@ -1069,6 +1069,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/judge-specs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Judge Specs */
+        get: operations["list_judge_specs_api_v1_judge_specs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-specs/{judge_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Judge Spec */
+        get: operations["get_judge_spec_api_v1_judge_specs__judge_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-specs/{judge_id}/calibration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Judge Calibration */
+        get: operations["get_judge_calibration_api_v1_judge_specs__judge_id__calibration_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/judges": {
         parameters: {
             query?: never;
@@ -2644,8 +2695,15 @@ export interface components {
             events: {
                 [key: string]: unknown;
             }[];
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
             /** Last Seq */
             last_seq?: number | null;
+            /** Next After */
+            next_after?: number | null;
             /** Partial */
             partial: boolean;
             /** Run Status */
@@ -5887,6 +5945,88 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_judge_specs_api_v1_judge_specs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_judge_spec_api_v1_judge_specs__judge_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                judge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_judge_calibration_api_v1_judge_specs__judge_id__calibration_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                judge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

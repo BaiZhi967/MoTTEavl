@@ -13,6 +13,15 @@ from motte_storage.run_store import InMemoryRunStore
 from tests.provider.test_openai_compatible import FakeResponse
 
 
+
+def valid_response(kind):
+    if kind == "anthropic_messages":
+        return {"model": "m", "content": [{"type": "text", "text": ""}]}
+    if kind == "openai_responses":
+        return {"model": "m", "output": [{"type": "message", "content": [{"type": "output_text", "text": ""}]}]}
+    return {"model": "m", "choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}
+
+
 @pytest.fixture
 def resources():
     store = InMemoryResourceStore()
@@ -37,7 +46,7 @@ def test_output_limit_end_to_end(resources, kind, key, canonical, expected):
 
     def opener(request, **kwargs):
         captured.append(json.loads(request.data))
-        return FakeResponse({})
+        return FakeResponse(valid_response(kind))
 
     provider.transport._opener = opener
     provider.complete(ModelRequest(model="m", messages=[]))
@@ -70,7 +79,7 @@ def test_reasoning_snapshot_and_final_http_body(resources, kind, expression, key
 
     def opener(request, **kwargs):
         captured.append(json.loads(request.data))
-        return FakeResponse({})
+        return FakeResponse(valid_response(kind))
 
     provider.transport._opener = opener
     provider.complete(ModelRequest(model="m", messages=[]))

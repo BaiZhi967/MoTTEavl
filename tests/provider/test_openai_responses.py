@@ -106,6 +106,36 @@ def test_request_body_flattens_tools_and_maps_tool_choice():
     assert body["max_output_tokens"] == 256
 
 
+def test_flat_canonical_tool_history_and_malformed_response():
+    captured = []
+
+    def opener(request, *, timeout):
+        captured.append(json.loads(request.data))
+        return FakeResponse(fixture("openai_responses_text"))
+
+    complete_with(make_provider(opener), ModelRequest(
+        model="gpt-4o-mini",
+        messages=[
+            Message(role="assistant", content="", tool_calls=[
+                {"id": "call_1", "name": "get_weather", "arguments": '{"city":"SF"}'},
+            ]),
+            Message(role="tool", content="sunny", tool_call_id="call_1"),
+        ],
+    ))
+    assert captured[0]["input"] == [
+        {"type": "function_call", "call_id": "call_1",
+         "name": "get_weather", "arguments": '{"city":"SF"}'},
+        {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+    ]
+    from motte_provider.base import ProviderCallError
+
+    invalid = make_provider(lambda request, *, timeout: FakeResponse({"output": {}}))
+    with pytest.raises(ProviderCallError) as failure:
+        complete_with(invalid)
+    assert failure.value.error_class == "protocol"
+    assert failure.value.evidence["canonical"]["response"]["body"] == {"output": {}}
+
+
 def test_seed_and_stop_are_strictly_rejected():
     with pytest.raises(UnsupportedParameterError):
         OpenAIResponsesProvider(

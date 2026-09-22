@@ -297,6 +297,17 @@ def test_spec_put_rejects_different_content_for_same_key(m6):
     assert m6.experiments.get_spec("exp-a", "1") == _spec()
 
 
+def test_m6_postgres_uses_the_canonical_write_validators(m6):
+    with pytest.raises(ValueError, match="experiment spec requires"):
+        m6.experiments.put_spec({"experiment_id": "exp-a", "version": ""})
+    with pytest.raises(ValueError, match="experiment cell requires"):
+        m6.experiments.put_cell({"cell_id": "cell-invalid"})
+    with pytest.raises(ValueError, match="gate policy requires"):
+        m6.gates.put_policy({"policy_id": "policy-invalid", "version": "1", "rules": []})
+    with pytest.raises(ValueError, match="gate result requires"):
+        m6.gates.put_result({"policy_id": "policy-invalid"})
+
+
 # -- experiments: cell -------------------------------------------------------
 
 

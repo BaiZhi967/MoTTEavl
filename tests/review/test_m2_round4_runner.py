@@ -122,6 +122,7 @@ def test_r4_parser_rejects_result_prediction_from_different_models():
         }, experiment="stamp")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sh wrapper contract")
 def test_r4_installed_wrapper_uses_and_exports_adjacent_interpreter(tmp_path):
     root = Path(__file__).resolve().parents[2]
     bindir = tmp_path / "runner" / "bin"

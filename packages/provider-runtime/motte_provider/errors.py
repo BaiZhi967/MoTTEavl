@@ -14,6 +14,10 @@ class ProviderHTTPError(ProviderError):
             self.error_class = classify_status(status)
 
 
+class ProviderRedirectError(ProviderError):
+    error_class = "redirect"
+
+
 class ProviderProtocolError(ProviderError):
     error_class = "protocol"
 

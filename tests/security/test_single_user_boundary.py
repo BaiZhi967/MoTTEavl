@@ -80,6 +80,32 @@ def test_allowed_origins_config_enables_cross_site_writes():
     assert blocked.status_code == 403
 
 
+def test_same_hostname_different_port_or_scheme_is_not_same_origin():
+    client = _client(
+        allowed_hosts=["localhost", "testserver"],
+        allowed_origins=["http://localhost:3080"],
+    )
+    for origin in ("http://localhost:9999", "https://localhost:4443"):
+        blocked = client.post(
+            "/api/v1/runs", json=CREATE_BODY,
+            headers={"Host": "localhost:8000", "Origin": origin},
+        )
+        assert blocked.status_code == 403, origin
+        assert blocked.json()["error"]["code"] == "ORIGIN_REJECTED"
+
+    explicitly_allowed = client.post(
+        "/api/v1/runs", json=CREATE_BODY,
+        headers={"Host": "localhost:8000", "Origin": "http://localhost:3080"},
+    )
+    assert explicitly_allowed.status_code == 202
+
+    same_origin = client.post(
+        "/api/v1/runs", json=CREATE_BODY,
+        headers={"Host": "localhost:8000", "Origin": "http://localhost:8000"},
+    )
+    assert same_origin.status_code == 202
+
+
 def test_cors_preflight_only_served_for_allowed_origins():
     client = _client(allowed_origins=["https://console.internal"])
     allowed = client.options(

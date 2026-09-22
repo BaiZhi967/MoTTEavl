@@ -157,7 +157,13 @@ def _write_file(root: Path, relative_parts: list[str], data: bytes) -> None:
         raise BenchmarkRuntimeError(
             "HARBOR_FROZEN_WRITE_ESCAPE", f"frozen task file is a symlink: {target}",
         )
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
     fd = os.open(target, flags, 0o644)
     try:
         os.write(fd, data)

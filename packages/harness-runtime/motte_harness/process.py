@@ -32,7 +32,11 @@ class ProcessRunner:
             options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             options["start_new_session"] = True
-        process = await asyncio.create_subprocess_exec(*command, **options)
+        try:
+            process = await asyncio.create_subprocess_exec(*command, **options)
+        except NotImplementedError:
+            # Uvicorn can select an event loop without subprocess support on Windows.
+            return await asyncio.to_thread(self._run_sync, command, timeout, started)
         status = "exited"
         try:
             deadline = self.timeout if timeout is None else timeout
@@ -41,6 +45,38 @@ class ProcessRunner:
             self._kill_group(process.pid, process=process)
             await process.wait()
             stdout, stderr = await process.communicate()
+            status = "timeout"
+        except asyncio.CancelledError:
+            self._kill_group(process.pid, process=process)
+            await asyncio.shield(process.wait())
+            raise
+        return {
+            "status": status,
+            "exit_code": process.returncode,
+            "stdout": stdout.decode("utf-8", errors="replace").replace("\r\n", "\n"),
+            "stderr": stderr.decode("utf-8", errors="replace").replace("\r\n", "\n"),
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "command": list(command),
+        }
+
+    def _run_sync(
+        self, command: list[str], timeout: float | None, started: float,
+    ) -> dict[str, Any]:
+        options: dict[str, Any] = {
+            "cwd": self.cwd, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
+        }
+        if os.name == "nt":
+            options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            options["start_new_session"] = True
+        process = subprocess.Popen(command, **options)  # noqa: S603 - argv is explicit
+        status = "exited"
+        try:
+            deadline = self.timeout if timeout is None else timeout
+            stdout, stderr = process.communicate(timeout=deadline)
+        except subprocess.TimeoutExpired:
+            self._kill_group(process.pid, process=process)
+            stdout, stderr = process.communicate()
             status = "timeout"
         return {
             "status": status,

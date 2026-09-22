@@ -271,6 +271,64 @@ def test_server_run_create_wait_events_report_happy_path(capsys, server_env):
     assert report["scoring_pass_id"]
 
 
+def test_server_events_snapshot_reads_all_pages(capsys, server_env):
+    store = server_env["store"]
+    store.runs.create({
+        "id": "run-many-events", "schema_version": 2, "revision": 1,
+        "scenario_version": "replay@1", "status": "completed",
+        "manifest": {}, "requested_manifest": {}, "case_ids": [],
+    }, event={"run_id": "run-many-events", "type": "queued", "status": "completed"})
+    for index in range(525):
+        store.events.append({
+            "run_id": "run-many-events", "type": "model_response",
+            "payload": {"case_id": f"case-{index}"},
+        })
+
+    code, out, err = run_cli(
+        capsys, "run-events", "run-many-events", "--snapshot", *SERVER_ARGS,
+    )
+    assert code == 0, err
+    events = json.loads(out)
+    assert len(events) == 526
+    assert events[-1]["seq"] == 526
+    assert server_env["transport"].count(
+        "GET", "/api/v1/runs/run-many-events/events/snapshot",
+    ) == 2
+
+
+def test_local_and_server_report_shapes_match(tmp_path, capsys, server_env):
+    spec = json.dumps(replay_spec())
+    local_db = tmp_path / "report-local.db"
+    SQLiteRunStore(local_db)
+    common = ("--request-key", "report-parity")
+
+    code, out, err = run_cli(capsys, "run", "--spec", spec, *SERVER_ARGS, *common)
+    assert code == 0, err
+    server_run = json.loads(out)
+    code, out, err = run_cli(
+        capsys, "run", "--spec", spec, "--db", str(local_db), *common,
+    )
+    assert code == 0, err
+    local_run = json.loads(out)
+    assert local_run["id"] == server_run["id"]
+
+    _dispatch_to_completion(server_env["store"], server_run["id"])
+    _dispatch_to_completion(SQLiteRunStore(local_db), local_run["id"])
+    code, out, err = run_cli(capsys, "run-report", server_run["id"], *SERVER_ARGS)
+    assert code == 0, err
+    server_report = json.loads(out)
+    code, out, err = run_cli(
+        capsys, "run-report", local_run["id"], "--db", str(local_db),
+    )
+    assert code == 0, err
+    local_report = json.loads(out)
+    server_report.pop("generated_at", None)
+    local_report.pop("generated_at", None)
+    assert server_report.pop("scoring_pass_id")
+    assert local_report.pop("scoring_pass_id")
+    assert local_report == server_report
+
+
 def test_run_wait_timeout_never_cancels_the_run(capsys, server_env):
     code, out, err = run_cli(capsys, "run", "--spec", json.dumps(replay_spec()), *SERVER_ARGS)
     assert code == 0, err
@@ -309,6 +367,29 @@ def test_env_mode_server_routes_to_remote(tmp_path, capsys, server_env, monkeypa
     assert code == 2
     assert stderr_error(err)["code"] == "RUN_NOT_FOUND"
     assert server_env["transport"].count("GET", "/api/v1/runs/run-nope") >= 1
+
+
+def test_invalid_env_mode_fails_closed_without_local_side_effect(tmp_path, capsys, monkeypatch):
+    local_db = tmp_path / "must-not-exist.db"
+    monkeypatch.setenv("MOTTE_CLI_MODE", "serer")
+    monkeypatch.setenv("MOTTE_DB_PATH", str(local_db))
+    code, out, err = run_cli(capsys, "run-list")
+    assert code == 2
+    assert out == ""
+    assert stderr_error(err)["code"] == "MODE_CONFIG_INVALID"
+    assert not local_db.exists()
+
+
+def test_local_run_invalid_json_has_stable_error(tmp_path, capsys):
+    db_path = tmp_path / "invalid-json.db"
+    code, out, err = run_cli(
+        capsys, "run", "--spec", "{not-json", "--db", str(db_path),
+    )
+    assert code == 2
+    assert out == ""
+    assert stderr_error(err)["code"] == "RUN_SPEC_INVALID"
+    assert "Traceback" not in err
+    assert not db_path.exists()
 
 
 def test_request_key_idempotency_parity(tmp_path, capsys, server_env):
@@ -408,13 +489,16 @@ def test_maintenance_begin_status_end(tmp_path, capsys):
     code, out, err = run_cli(
         capsys, "maintenance", "begin", "--reason", "cli test", "--db", str(db_path))
     assert code == 0, err
-    assert json.loads(out)["active"] is True
+    begun = json.loads(out)
+    assert begun["active"] is True
 
     code, out, err = run_cli(capsys, "maintenance", "status", "--db", str(db_path))
     assert code == 0, err
     assert json.loads(out)["active"] is True
 
-    code, out, err = run_cli(capsys, "maintenance", "end", "--db", str(db_path))
+    code, out, err = run_cli(
+        capsys, "maintenance", "end", "--owner", begun["owner"], "--db", str(db_path),
+    )
     assert code == 0, err
     assert json.loads(out)["active"] is False
 

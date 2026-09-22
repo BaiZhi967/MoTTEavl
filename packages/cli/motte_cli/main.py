@@ -2663,6 +2663,10 @@ def _run_create_remote(args) -> int:
 
 def main(argv=None):
     args = _build_parser().parse_args(argv)
+    try:
+        remote.resolved_mode(args)
+    except ValueError as error:
+        return remote.cli_error("MODE_CONFIG_INVALID", str(error))
 
     if args.command in (None, "doctor"):
         result = {"status": "ok", "checks": {"python": "ok", "harnesses": _harness_installations()}}
@@ -2760,7 +2764,12 @@ def main(argv=None):
 
         if remote.is_server(args):
             return _run_create_remote(args)
-        spec = _load_json(args.spec)
+        try:
+            spec = _load_json(args.spec)
+        except (OSError, json.JSONDecodeError) as error:
+            return remote.cli_error("RUN_SPEC_INVALID", f"invalid run spec: {error}")
+        if not isinstance(spec, dict):
+            return remote.cli_error("RUN_SPEC_INVALID", "run spec must be a JSON object")
         service = _service(args)
         requested_manifest = spec.get("manifest", {})
         manifest = requested_manifest
