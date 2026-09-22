@@ -92,10 +92,10 @@ describe("AgentOperate", () => {
     fireEvent.change(modelSelect, { target: { value: "published-plain" } });
     await waitFor(() => {
       expect(screen.getByText(/supports_tools=false/)).toBeTruthy();
-      expect(screen.getByText("预检")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "预检" })).toBeTruthy();
     });
-    expect((screen.getByText("预检") as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("创建运行") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "预检" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "创建运行" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("预算非法输入就地报错且输入保留", async () => {
@@ -116,7 +116,7 @@ describe("AgentOperate", () => {
     clientMocks.dryRunAgentTasks.mockRejectedValue(new Error("scenario not found: missing@9"));
     renderAt("/agent-tasks", <AgentOperate />);
     await screen.findByDisplayValue(/published-tools/);
-    fireEvent.click(screen.getByText("预检"));
+    fireEvent.click(screen.getByRole("button", { name: "预检" }));
     await waitFor(() => expect(screen.getByText(/scenario not found/)).toBeTruthy());
     // 表单仍在
     expect(screen.getByDisplayValue(/published-tools/)).toBeTruthy();
@@ -126,7 +126,7 @@ describe("AgentOperate", () => {
       prompt_version: "builtin-react-native@1", selected_cases: 2,
       backend: "builtin-agent", budget: {},
     });
-    fireEvent.click(screen.getByText("预检"));
+    fireEvent.click(screen.getByRole("button", { name: "预检" }));
     await waitFor(() => expect(screen.getByText("预检摘要")).toBeTruthy());
     expect(screen.getByText(/builtin-agent/)).toBeTruthy();
   });

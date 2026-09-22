@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeftIcon, MagnifyingGlassIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
+import Input from "@douyinfe/semi-ui/lib/es/input";
+import Button from "@douyinfe/semi-ui/lib/es/button";
 import {
   getBenchmarkCases, getBenchmarkOverview, type BenchmarkCase, type BenchmarkPreset,
 } from "../../api/client";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { IssueBar } from "../../board/FieldGrid";
 import { suiteRoutes } from "../registry";
 import { scopeLabel, sortPresets } from "./presets";
 import { clearCaseSelection, loadCaseSelection, MAX_CASE_IDS, saveCaseSelection } from "./selection";
@@ -104,146 +109,139 @@ export function Gsm8kCases() {
   };
 
   return (
-    <div className="page">
+    <div className="page fill">
       <section className="panel detail" aria-label="GSM8K 题目">
+        {/* 工具条：读数居左、过滤与批量操作居右；页面身份由顶栏页签承担，不再重复标题 */}
         <div className="panel-head">
-          <h2>GSM8K · 题目</h2>
+          <p className="panel-summary">
+            <span className="selection-count">已选 {selected.length} 题</span>
+            {page && (
+              <span className="hint mono">
+                匹配 {page.total} / 数据集 {page.dataset_total} 题 · 第 {currentPage}/{pages} 页
+              </span>
+            )}
+          </p>
           <div className="panel-head-actions">
-            <button type="button" onClick={() => navigate(ROUTES.operate)}>
+            <div className="inline-field">
+              <span className="field-label">数据集</span>
+              <select
+                className="control"
+                aria-label="题目数据集"
+                value={preset?.dataset ?? ""}
+                onChange={(change) => { setDataset(change.target.value); setOffset(0); }}
+              >
+                {presets.map((item) => (
+                  <option key={item.dataset} value={item.dataset}>
+                    {item.dataset} · {scopeLabel(item.scope)} · {item.cases} 题
+                  </option>
+                ))}
+              </select>
+            </div>
+            <form className="inline-field" onSubmit={submitSearch} aria-label="搜索题目">
+              <span className="field-label">搜索</span>
+              <Input
+                value={pendingQuery}
+                onChange={(value) => setPendingQuery(value)}
+                placeholder="题面关键词或 case id"
+                aria-label="搜索题目关键词"
+              />
+              <Button htmlType="submit">
+                <MagnifyingGlassIcon size={14} weight="bold" aria-hidden />
+                搜索
+              </Button>
+              {query && (
+                <button type="button" className="link" onClick={() => { setPendingQuery(""); setQuery(""); setOffset(0); }}>
+                  清除
+                </button>
+              )}
+            </form>
+            <Button onClick={togglePage} disabled={pageIds.length === 0}>
+              {allOnPageSelected ? "取消本页" : "全选本页"}
+            </Button>
+            <Button
+              onClick={() => { setSelected([]); clearCaseSelection(); setNotice(""); }}
+              disabled={selected.length === 0}
+            >
+              清空已选
+            </Button>
+            <Button onClick={() => navigate(ROUTES.operate)}>
               <ArrowLeftIcon size={14} weight="bold" aria-hidden />
               返回操作页
-            </button>
+            </Button>
           </div>
         </div>
-        <p className="hint">
-          浏览数据集里的全部题目（题面与期望答案只读，数据集版本不可变）。勾选后回到操作页，题目卡会自动切到
-          「指定题目」；也可以用「随机 N 题」按种子抽样。
-        </p>
         {error && <p className="error">{error}</p>}
-
-        <div className="inline-field">
-          <span className="field-label">数据集</span>
-          <select
-            className="control"
-            aria-label="题目数据集"
-            value={preset?.dataset ?? ""}
-            onChange={(change) => { setDataset(change.target.value); setOffset(0); }}
-          >
-            {presets.map((item) => (
-              <option key={item.dataset} value={item.dataset}>
-                {item.dataset} · {scopeLabel(item.scope)} · {item.cases} 题
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <form className="inline-field" onSubmit={submitSearch} aria-label="搜索题目">
-          <span className="field-label">搜索</span>
-          <input
-            className="control"
-            value={pendingQuery}
-            onChange={(change) => setPendingQuery(change.target.value)}
-            placeholder="题面关键词或 case id"
-            aria-label="搜索题目关键词"
-          />
-          <button type="submit">
-            <MagnifyingGlassIcon size={14} weight="bold" aria-hidden />
-            搜索
-          </button>
-          {query && (
-            <button type="button" className="link" onClick={() => { setPendingQuery(""); setQuery(""); setOffset(0); }}>
-              清除
-            </button>
-          )}
-        </form>
-
-        <div className="inline-field">
-          <button type="button" onClick={togglePage} disabled={pageIds.length === 0}>
-            {allOnPageSelected ? "取消本页" : "全选本页"}
-          </button>
-          <button type="button" onClick={() => { setSelected([]); clearCaseSelection(); setNotice(""); }} disabled={selected.length === 0}>
-            清空已选
-          </button>
-          <span className="field-label">已选 {selected.length} 题</span>
-          {page && (
-            <span className="hint mono">
-              匹配 {page.total} / 数据集 {page.dataset_total} 题 · 第 {currentPage}/{pages} 页
-            </span>
-          )}
-        </div>
-
         {notice && <p className="hint">{notice}</p>}
 
-        <table>
-          <thead>
-            <tr>
-              <th aria-label="选择" />
-              <th>Case</th>
+        <Board
+          label="题目板面"
+          head={
+            <>
+              <th className="w-[44px]" aria-label="选择" />
+              <th className="w-[168px]">Case</th>
               <th>题目</th>
-              <th>期望</th>
+              <th className="w-[220px]">期望</th>
+            </>
+          }
+        >
+          {(page?.items ?? []).map((item) => (
+            <tr key={item.case_id}>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(item.case_id)}
+                  onChange={() => toggle(item.case_id)}
+                  aria-label={`选择 ${item.case_id}`}
+                />
+              </td>
+              <td className="data board-id">{item.case_id}</td>
+              <td className="truncate" title={item.input}>{item.input}</td>
+              <td className="data truncate" title={item.expected}>{item.expected}</td>
             </tr>
-          </thead>
-          <tbody>
-            {(page?.items ?? []).map((item) => (
-              <tr key={item.case_id}>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(item.case_id)}
-                    onChange={() => toggle(item.case_id)}
-                    aria-label={`选择 ${item.case_id}`}
-                  />
-                </td>
-                <td className="mono nowrap">{item.case_id}</td>
-                <td>{item.input}</td>
-                <td className="mono">{item.expected}</td>
-              </tr>
-            ))}
-            {page && page.items.length === 0 && (
-              <tr><td colSpan={4} className="empty">没有匹配的题目</td></tr>
-            )}
-          </tbody>
-        </table>
+          ))}
+          {page && page.items.length === 0 && (
+            <tr>
+              <td colSpan={4} style={{ height: "auto", padding: "16px" }}>
+                <EmptyBoard
+                  reason={query ? `没有匹配「${query}」的题目` : "这个数据集还没有题目"}
+                  next={query ? "换关键词，或清除搜索看全部" : "先回操作页导入数据集"}
+                />
+              </td>
+            </tr>
+          )}
+        </Board>
 
-        <div className="actions">
-          <button type="button" onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0}>
+        {/* 翻页与粘贴：板面下方的次级操作带，不挤占板面宽度 */}
+        <div className="board-foot">
+          <Button onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0}>
             上一页
-          </button>
-          <button type="button" onClick={() => setOffset(offset + PAGE_SIZE)} disabled={currentPage >= pages}>
+          </Button>
+          <Button onClick={() => setOffset(offset + PAGE_SIZE)} disabled={currentPage >= pages}>
             下一页
-          </button>
-        </div>
-
-        <div className="inline-field">
+          </Button>
+          <span className="board-foot-sep" aria-hidden />
           <span className="field-label">粘贴 case ID</span>
-          <input
-            className="control"
+          <Input
             value={paste}
-            onChange={(change) => setPaste(change.target.value)}
+            onChange={(value) => setPaste(value)}
             placeholder="gsm8k-test-0001, gsm8k-test-0042"
             aria-label="粘贴 case ID"
           />
-          <button type="button" onClick={addPasted} disabled={!paste.trim()}>
-            加入
-          </button>
+          <Button onClick={addPasted} disabled={!paste.trim()}>加入</Button>
+          <span className="hint">按 case id 精确匹配数据集，可一次粘贴多个</span>
         </div>
-        <p className="hint">粘贴按 case id 精确匹配数据集（如 gsm8k-test-0001），可一次粘贴多个。</p>
 
-        <div className="actions">
-          <button type="button" onClick={launch} disabled={selected.length === 0 || !preset}>
+        <IssueBar note="回到操作页后选择模型与思考强度再发起；真实调用 · 产生费用">
+          <Button
+            theme="solid"
+            type="primary"
+            onClick={launch}
+            disabled={selected.length === 0 || !preset}
+          >
             <PlayIcon size={14} weight="bold" aria-hidden />
             用所选 {selected.length} 题发起跑测
-          </button>
-          <span className="hint">回到操作页后选择模型与思考强度再发起；真实调用 · 产生费用</span>
-        </div>
-        {selected.length > 0 && (
-          <p className="hint">
-            已选题目来自 {preset?.dataset}；操作页若切到别的数据集，需要回来重新选择。
-            <button type="button" className="link" onClick={() => { setSelected([]); clearCaseSelection(); }}>
-              <XIcon size={12} weight="bold" aria-hidden /> 清空
-            </button>
-          </p>
-        )}
+          </Button>
+        </IssueBar>
       </section>
     </div>
   );

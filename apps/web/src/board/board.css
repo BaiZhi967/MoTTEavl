@@ -1,0 +1,627 @@
+/* 板面基础件（REDESIGN-PLAN.md §6）
+ *
+ * 世界语法就靠这几个自研件钉住：方角、2px 表头带横线、DIN 窄体大写列名、
+ * tabular 等宽数字、状态是"翻牌格"而不是圆 pill。
+ * 页面级的列宽用 Tailwind 工具类写在页面里；这里只放共享的语法。
+ */
+
+/* ---------- 板面容器：整幅工作页，滚动在板面内部 ---------- */
+.board {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.board-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.board-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+/* ---------- 表头带：窄体大写列名 + 2px 横线（导向牌的横线重量） ---------- */
+.board-band th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 12px;
+  background: var(--board-band);
+  border-bottom: 2px solid var(--board-rule-strong);
+  font-family: var(--font-board);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.board-band th.num {
+  text-align: right;
+}
+
+/* ---------- 行：行高由密度令牌驱动 ---------- */
+.board-table tbody td {
+  height: var(--row-h);
+  padding: 0 10px;
+  border-bottom: 1px solid var(--board-rule);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-primary);
+  vertical-align: middle;
+}
+
+.board-table tbody tr:hover td {
+  background: rgba(242, 245, 247, 0.03);
+}
+
+.board-table tbody td.num {
+  text-align: right;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-table tbody td.data {
+  font-family: var(--font-data);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 长文本列收成一行省略号：宽度由 table-layout: fixed 的列宽决定 */
+/* 标识列：等宽 + 不溢出到邻列；缩略时保留尾部唯一性（shortRunId） */
+.board-table td.board-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-table td.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 命名空间：旧样式里 .actions 是 flex 工具类，会误伤表头单元格，所以这里用 board- 前缀 */
+.board-table th.board-actions,
+.board-table td.board-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 就地展开行（来自球鞋档案墙的 raise）：把这一行抽出来，不跳走 */
+.board-table tr.board-detail > td {
+  height: auto;
+  padding: 12px;
+  background: var(--board-cell);
+  border-bottom: 1px solid var(--board-rule-strong);
+}
+
+/* ---------- 翻牌格 StatusFlap ---------- */
+/* 就地展开按钮：板面上的裸图标钮（旧世界的 button 有边框与内边距，必须显式压掉） */
+.board-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-cell);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.board-open:hover {
+  background: rgba(242, 245, 247, 0.08);
+  color: var(--ink-primary);
+}
+
+.flap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--board-rule);
+  border-left: 2px solid var(--flap-tone, var(--tone-neutral));
+  border-radius: var(--radius-cell);
+  background: var(--board-cell);
+  font-family: var(--font-board);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--ink-primary);
+  white-space: nowrap;
+}
+
+.flap[data-tone="info"] { --flap-tone: var(--tone-info); }
+.flap[data-tone="success"] { --flap-tone: var(--tone-success); }
+.flap[data-tone="warning"] { --flap-tone: var(--tone-warning); }
+.flap[data-tone="error"] { --flap-tone: var(--tone-error); }
+.flap[data-tone="neutral"] { --flap-tone: var(--tone-neutral); }
+
+.flap-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--flap-tone, var(--tone-neutral));
+}
+
+/* 只有进行中才呼吸：终态恒亮，未知不装成成功 */
+.flap-live .flap-dot {
+  animation: flap-breathe 1.5s ease-in-out infinite;
+}
+
+@keyframes flap-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* 翻牌：状态真变化时两段换字（全站唯一的签名动效） */
+.flap-word {
+  display: inline-block;
+}
+
+.flap-changing .flap-word {
+  animation: flap-swap 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes flap-swap {
+  0% { transform: translateY(0); opacity: 1; }
+  45% { transform: translateY(-7px); opacity: 0; }
+  55% { transform: translateY(7px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* ---------- 标识铭牌 IdentityPlate：端面标签栅格 ---------- */
+.plate {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.plate dt {
+  font-family: var(--font-board);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  align-self: center;
+}
+
+.plate dd {
+  margin: 0;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+
+.plate-id {
+  font-family: var(--font-data);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tone-info);
+  white-space: nowrap;
+}
+
+.plate-copy {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--board-rule);
+  border-radius: var(--radius-cell);
+  background: transparent;
+  font-family: var(--font-board);
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.plate-copy:hover {
+  color: var(--ink-primary);
+  border-color: var(--board-rule-strong);
+}
+
+/* ---------- 空态：必须写原因，不留纯空白 ---------- */
+.empty-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 24px;
+  border: 1px dashed var(--board-rule-strong);
+  border-radius: var(--radius-panel);
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.empty-board-reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.empty-board-next {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flap-live .flap-dot,
+  .flap-changing .flap-word {
+    animation: none;
+  }
+}
+
+/* ---------- 签发台：字段栅格 + 主动作条（REDESIGN-PLAN.md §5 P3） ----------
+ * 控件样式由 .field-grid 这个显式原语给定（不是靠 form 这种隐式祖先），
+ * 因此"忘了 className 就掉回 UA 默认样式"在新系统里不可能发生。 */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--field-cols, 2), minmax(0, 1fr));
+  gap: 16px 20px;
+  align-items: start;
+}
+
+.field-grid[data-columns="1"] {
+  --field-cols: 1;
+}
+
+.field-grid[data-columns="3"] {
+  --field-cols: 3;
+}
+
+@media (max-width: 1100px) {
+  .field-grid {
+    --field-cols: 1;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: 420px;
+  margin: 0;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+  max-width: none;
+}
+
+.field-name {
+  font-family: var(--font-board);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.field-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+/* 控件：显式原语内的按上下文样式（含原生控件，也含 Semi 控件的外壳） */
+.field-grid input:not([type="checkbox"]):not([type="radio"]),
+.field-grid select,
+.field-grid textarea,
+.field-grid .semi-input-wrapper,
+.field-grid .semi-select {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--board-rule-strong);
+  border-radius: var(--radius-cell);
+  background: var(--board-cell);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.field-grid textarea {
+  padding: 8px 10px;
+  font-family: var(--font-data);
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.field-grid .semi-select,
+.field-grid .semi-input-wrapper {
+  display: flex;
+  align-items: center;
+  padding: 0;
+}
+
+.field-grid .semi-select-selection,
+.field-grid .semi-input {
+  background: transparent;
+  color: var(--ink-primary);
+  font-size: 13px;
+}
+
+.field-grid input:focus-visible,
+.field-grid select:focus-visible,
+.field-grid textarea:focus-visible {
+  outline: none;
+  border-color: var(--tone-info);
+  box-shadow: 0 0 0 3px rgba(87, 182, 217, 0.2);
+}
+
+/* 字段里的只读值（跑测参数这类派生读数）：不是控件，所以只给字，不给控件壳 */
+.field-value {
+  font-size: 13px;
+  color: var(--ink-primary);
+}
+
+/* 主动作条：吸底、左侧唯一 primary、右侧后果说明 */
+.issue-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: auto calc(-1 * var(--panel-pad-x)) 0;
+  padding: 16px var(--panel-pad-x) 12px;
+  background: var(--board-panel);
+  border-top: 1px solid var(--board-rule);
+}
+
+.issue-note {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+
+/* 板面上的链接动作：默认安静，hover 才提亮（旧世界的裸 <Link> 是浏览器蓝） */
+.board-link {
+  font-family: var(--font-board);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--tone-info);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.board-link:hover {
+  text-decoration: underline;
+}
+
+/* 页首读数行：替代"与顶栏重复的页面大标题" */
+.page-lead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.page-lead strong {
+  font-family: var(--font-data);
+  color: var(--ink-primary);
+  font-weight: 600;
+}
+
+/* 面板头（新世界版本）：工具条 + 发丝线 */
+.panel-head {
+  border-bottom-color: var(--board-rule);
+}
+
+.panel-head h2 {
+  font-family: var(--font-board);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-primary);
+}
+
+/* ---------- 转录面（REDESIGN-PLAN.md §5 P4） ----------
+ * 事件与日志是一条连续的文本面：不装卡片壳，层级靠缩进与整宽横线。
+ * 只设左边框的宽度与样式，**不设颜色**——语气色由 .event-tone-* 提供，别把它压掉。 */
+.transcript {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--board-rule);
+}
+
+.transcript .event {
+  display: grid;
+  grid-template-columns: 56px 92px 148px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  margin: 0;
+  padding: 5px 10px;
+  border-left-width: 2px;
+  border-left-style: solid;
+  border-bottom: 1px solid var(--board-rule);
+  background: transparent;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.transcript .event:hover {
+  background: rgba(242, 245, 247, 0.04);
+}
+
+.transcript .seq,
+.transcript .time {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+.transcript .type {
+  font-family: var(--font-board);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-primary);
+}
+
+.transcript .detail {
+  font-family: var(--font-data);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+
+.transcript .empty {
+  border: none;
+  border-bottom: 1px solid var(--board-rule);
+  border-radius: 0;
+  padding: 10px;
+  text-align: left;
+}
+
+/* 展开键列：窄、居中、不占板面视觉重量 */
+.board-table td.board-caret {
+  padding: 0 4px;
+  text-align: center;
+}
+
+/* 构建标识：截图自带的"这是哪个构建"证据（见 vite.config.mts 的 __BUILD_ID__） */
+.build-stamp {
+  margin-left: auto;
+  font-family: var(--font-data);
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* 只给屏幕阅读器的文本（表头里那种无文字的功能列） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+
+/* 就绪格：板面上的二值能力读数。它不是状态语气——用点 + 词，
+ * 不去借五种语气冒充"状态"，否则状态色就被稀释了。 */
+.ready {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-board);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.ready-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.ready-on {
+  color: var(--tone-success);
+}
+
+.ready-on .ready-dot {
+  background: var(--tone-success);
+}
+
+.ready-off {
+  color: var(--ink-faint);
+}
+
+.ready-off .ready-dot {
+  background: var(--tone-neutral);
+}
+
+/* 路由懒加载的落位（诚实：写清在等什么） */
+.board-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--board-rule);
+  border-radius: var(--radius-panel);
+  background: var(--board-panel);
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+/* 板面下方的次级操作带（翻页 / 粘贴）：不挤占板面宽度 */
+.board-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--board-rule);
+}
+
+.board-foot .semi-input-wrapper {
+  width: 260px;
+}
+
+.board-foot-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--board-rule);
+  margin: 0 4px;
+}
+
+/* 工具条左主语里的"已选 N 题"：读数要能被一眼扫到 */
+.selection-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-primary);
+}
+
+/* 工具条里的 Semi 控件按板面规格收口（过滤行不该比板面更宽） */
+.panel-head .control {
+  width: auto;
+  min-width: 168px;
+  min-height: 30px;
+  margin-top: 0;
+  padding: 0 10px;
+  border: 1px solid var(--board-rule-strong);
+  border-radius: var(--radius-cell);
+  background: var(--board-cell);
+  color: var(--ink-primary);
+  font-size: 13px;
+}
+
+.panel-head .semi-input-wrapper,
+.panel-head .semi-select {
+  width: 220px;
+  min-height: 30px;
+  border-radius: var(--radius-cell);
+}
+
+

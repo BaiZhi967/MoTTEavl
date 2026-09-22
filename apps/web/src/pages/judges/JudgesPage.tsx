@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { StatusFlap } from "../../board/StatusFlap";
+import { formatTimestamp } from "../../components/runFormat";
 import * as Switch from "@radix-ui/react-switch";
 import {
   ArrowClockwiseIcon,
@@ -544,53 +548,91 @@ function JudgeHistory() {
       </div>
       {error && <p className="error" role="alert" data-testid="judge-history-error">{error}</p>}
       {passes && (
-        <table>
-          <thead><tr><th>pass</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
-          <tbody>
-            {passes.map((pass) => {
-              const passId = String(pass.id ?? pass.scoring_pass_id ?? "");
-              return (
-                <tr key={passId}>
-                  <td className="mono nowrap">{passId}</td>
-                  <td>{pass.status ? <StatusBadge status={String(pass.status)} /> : <UnknownValue reason="服务端未给出批次状态" />}</td>
-                  <td className="mono nowrap">{pass.created_at ?? UNKNOWN_TEXT}</td>
-                  <td className="row-actions">
-                    <button type="button" className="link" disabled={passId === ""} onClick={() => void selectPass(passId)}>
-                      查看（只读）
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-            {passes.length === 0 && <tr><td colSpan={4} className="empty">该运行没有评分批次</td></tr>}
-          </tbody>
-        </table>
+        <Board
+          label="评分批次板面"
+          head={
+            <>
+              <th className="w-[260px]">pass</th>
+              <th className="w-[120px]">状态</th>
+              <th className="w-[140px]">创建时间</th>
+              <th className="board-actions w-[120px]">操作</th>
+            </>
+          }
+        >
+          {passes.map((pass) => {
+            const passId = String(pass.id ?? pass.scoring_pass_id ?? "");
+            return (
+              <tr key={passId}>
+                <td className="data board-id" title={passId}>{passId}</td>
+                <td>
+                  {pass.status
+                    ? <StatusFlap status={String(pass.status)} />
+                    : <UnknownValue reason="服务端未给出批次状态" />}
+                </td>
+                <td className="data">{formatTimestamp(pass.created_at) ?? UNKNOWN_TEXT}</td>
+                <td className="board-actions">
+                  <button type="button" className="link row-action" disabled={passId === ""} onClick={() => void selectPass(passId)}>
+                    查看（只读）
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+          {passes.length === 0 && (
+            <tr>
+              <td colSpan={4} style={{ height: "auto", padding: "16px" }}>
+                <EmptyBoard reason="该运行没有评分批次" next="先跑一次运行并生成评分批次" />
+              </td>
+            </tr>
+          )}
+        </Board>
       )}
       {selectedPass && (
         <>
           <h3 className="embed-title">pass {selectedPass} 的分数（只读）</h3>
-          <table data-testid="judge-history-scores">
-            <thead><tr><th>case</th><th>metric</th><th>状态</th><th>判定</th><th>理由</th></tr></thead>
-            <tbody>
-              {(scores ?? []).map((score, index) => (
-                <tr key={score.case_id + "-" + score.metric_id + "-" + index}>
-                  <td className="mono nowrap">{score.case_id}</td>
-                  <td className="mono nowrap">{score.metric_id}</td>
-                  <td className="mono">{score.metric_status}</td>
-                  <td>
-                    {score.passed === true
-                      ? <span className="pass">通过</span>
-                      : score.passed === false
-                        ? <span className="fail">未通过</span>
-                        : <UnknownValue reason="没有判定（insufficient / error 等）" />}
-                  </td>
-                  <td>{score.reason ?? "—"}</td>
-                </tr>
-              ))}
-              {scores === null && <tr><td colSpan={5} className="empty">加载中…</td></tr>}
-              {scores !== null && scores.length === 0 && <tr><td colSpan={5} className="empty">该批次没有可显示的分数</td></tr>}
-            </tbody>
-          </table>
+          <Board
+            label="批次分数板面"
+            testId="judge-history-scores"
+            head={
+              <>
+                <th className="w-[220px]">case</th>
+                <th className="w-[180px]">metric</th>
+                <th className="w-[120px]">状态</th>
+                <th className="w-[120px]">判定</th>
+                <th>理由</th>
+              </>
+            }
+          >
+            {(scores ?? []).map((score, index) => (
+              <tr key={score.case_id + "-" + score.metric_id + "-" + index}>
+                <td className="data board-id" title={score.case_id}>{score.case_id}</td>
+                <td className="data" title={score.metric_id}>{score.metric_id}</td>
+                <td className="data">{score.metric_status}</td>
+                <td>
+                  {score.passed === true
+                    ? <span className="ready ready-on"><span className="ready-dot" aria-hidden />通过</span>
+                    : score.passed === false
+                      ? <span className="ready ready-off"><span className="ready-dot" aria-hidden />未通过</span>
+                      : <UnknownValue reason="没有判定（insufficient / error 等）" />}
+                </td>
+                <td className="truncate" title={score.reason ?? undefined}>{score.reason ?? "—"}</td>
+              </tr>
+            ))}
+            {scores === null && (
+              <tr>
+                <td colSpan={5} style={{ height: "auto", padding: "16px" }}>
+                  <EmptyBoard reason="加载中…" />
+                </td>
+              </tr>
+            )}
+            {scores !== null && scores.length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ height: "auto", padding: "16px" }}>
+                  <EmptyBoard reason="该批次没有可显示的分数" />
+                </td>
+              </tr>
+            )}
+          </Board>
         </>
       )}
     </section>

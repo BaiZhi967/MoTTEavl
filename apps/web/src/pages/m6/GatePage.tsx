@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { StatusFlap } from "../../board/StatusFlap";
 import { ArrowClockwiseIcon, FlagCheckeredIcon } from "@phosphor-icons/react";
 import {
   deprecateGatePolicy,
@@ -65,21 +68,30 @@ function GateResultCard({ result }: { result: GateResultFullView }) {
       </dl>
 
       <h3 className="embed-title">逐规则结果</h3>
-      <table data-testid="gate-rules-table">
-        <thead><tr><th>rule</th><th>kind</th><th>状态</th><th>severity</th><th>reason</th></tr></thead>
-        <tbody>
+      <Board
+        testId="gate-rules-table"
+        label="逐规则结果板面"
+        head={
+          <>
+            <th className="w-[220px]">rule</th>
+            <th className="w-[180px]">kind</th>
+            <th className="w-[130px]">状态</th>
+            <th className="w-[110px]">severity</th>
+            <th>reason</th>
+          </>
+        }
+      >
           {rules.map((rule) => (
             <tr key={rule.rule_id}>
               <td className="mono nowrap">{rule.rule_id}</td>
               <td className="mono nowrap">{rule.kind}</td>
-              <td><StatusBadge status={ruleBadgeStatus(rule.status)} /></td>
+              <td><StatusFlap status={ruleBadgeStatus(rule.status)} /></td>
               <td className="mono">{rule.severity ?? UNKNOWN_TEXT}</td>
               <td>{rule.reason}</td>
             </tr>
           ))}
           {rules.length === 0 && <tr><td colSpan={5} className="empty">暂无规则结果</td></tr>}
-        </tbody>
-      </table>
+      </Board>
       <p className="hint">JSON 永远保留全部 rule results；warn 规则失败只记录，不改决策；退出码只是稳定摘要。</p>
 
       {(result.suggested_actions ?? []).length > 0 && (

@@ -1,0 +1,43 @@
+/* Tailwind 入口（只做两件事：preflight + 设计令牌）
+ *
+ * 载入顺序（main.tsx）：semi.css → tailwind.css → index.css（冻结的旧样式）→ theme.css
+ * preflight 必须排在旧样式之前：旧页面依赖 UA 默认的 h1/h2 字号与裸控件外观，
+ * 让 preflight 压在上面会当场把未迁移的页面打坏。主题令牌与旧 token 的桥接放在 theme.css（最后）。
+ */
+
+@import "tailwindcss";
+
+@theme {
+  /* 深色搪瓷信息板：承诺过的底色，不做灰上加灰（REDESIGN-PLAN.md §3.2） */
+  --color-board-void: #0b0f14;
+  --color-board-panel: #131a22;
+  --color-board-band: #1b242e;
+  --color-board-cell: #101820;
+  --color-board-rule: #2a3641;
+  --color-board-rule-strong: #3c4b59;
+
+  --color-ink-primary: #f2f5f7;
+  --color-ink-secondary: #a9b6c2;
+  --color-ink-faint: #6f7e8c;
+  --color-ink-inverse: #0b0f14;
+
+  /* 五语气（深色底重调；语义不变，仍是唯一信号系统） */
+  --color-tone-info: #57b6d9;
+  --color-tone-success: #4cc38a;
+  --color-tone-warning: #e3a63c;
+  --color-tone-error: #e8695f;
+  --color-tone-neutral: #7e8c9a;
+
+  /* 字体：DIN 血统窄体做板面标签，等宽做数据，中文走系统栈 */
+  --font-board: "Barlow Semi Condensed", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-data: "JetBrains Mono", "PingFang SC", "Microsoft YaHei", ui-monospace, monospace;
+  --font-sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  /* 方角：与旧世界（6/8/9999px）的切割点 */
+  --radius-cell: 2px;
+  --radius-panel: 4px;
+
+  /* 密度：单人专家用的一档切换 */
+  --spacing-row: 40px;
+  --spacing-row-compact: 32px;
+}

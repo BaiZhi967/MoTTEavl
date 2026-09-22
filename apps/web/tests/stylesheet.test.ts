@@ -45,10 +45,16 @@ describe("全局样式完整性", () => {
     expect(css.match(/\.run-progress\s*\{/g)).toHaveLength(1);
   });
 
-  it("操作卡不强行等高", () => {
+  it("操作卡走 12 列栅格并按语义跨列（不再等宽平分）", () => {
     const start = css.indexOf(".operate-grid {");
     const end = css.indexOf(".operate-card {");
-    expect(css.slice(start, end)).toContain("align-items: flex-start");
+    const grid = css.slice(start, end);
+    expect(grid).toContain("grid-template-columns: repeat(12, minmax(0, 1fr))");
+    // 行内卡片同高 → 行与行之间没有参差的底边
+    expect(grid).toContain("align-items: stretch");
+    expect(css).toContain(".operate-card.wide {");
+    expect(css).toContain(".operate-card.rail {");
+    expect(css).toContain(".operate-card.full {");
   });
 
   it("主按钮由 .primary 语义类驱动", () => {

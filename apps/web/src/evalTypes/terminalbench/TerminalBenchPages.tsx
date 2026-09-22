@@ -9,6 +9,8 @@
  * - 切 Task/Trial 一律重置下钻视图（按 run+Trial+工件身份 key），晚到的旧响应被丢弃。
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeftIcon,
@@ -734,7 +736,7 @@ export function TerminalBenchOperate() {
   };
 
   return (
-    <div className="page">
+    <div className="page operate">
       <Panel title="Terminal-Bench（Harbor）" actions={<Link className="link" to={TASKS_ROUTE}>任务清单</Link>}>
         {loadError && <p className="error">{loadError}</p>}
         <dl className="kv">
@@ -1170,33 +1172,49 @@ export function TerminalBenchTasks() {
           许可证以任务集自身声明（declared_license）为准：未声明 {undeclared} 个，
           列表按「未声明」原样显示，不用默认许可代替人工确认。
         </p>
-        {tasks === null && <p className="hint">读取中…</p>}
-        {tasks?.length === 0 && <p className="empty">暂无已准备的任务集，请先用 CLI/API 准备 Terminal-Bench 任务集。</p>}
+        {tasks === null && (
+          <EmptyBoard reason="正在读取任务清单…" />
+        )}
+        {tasks?.length === 0 && (
+          <EmptyBoard
+            reason="暂无已准备的任务集"
+            next="先用 CLI 或 API 准备 Terminal-Bench 任务集，再回到本页"
+          />
+        )}
         {tasks !== null && tasks.length > 0 && (
-          <table aria-label="任务清单">
-            <thead>
-              <tr>
-                <th>任务</th><th>相对路径</th><th>文件数</th><th>大小</th>
-                <th>tests（Verifier）</th><th>solution</th><th>许可证</th>
+          <Board
+            label="任务清单板面"
+            head={
+              <>
+                <th className="w-[220px]">任务</th>
+                <th>相对路径</th>
+                <th className="num w-[90px]">文件数</th>
+                <th className="num w-[90px]">大小</th>
+                <th className="w-[130px]">tests（Verifier）</th>
+                <th className="w-[100px]">solution</th>
+                <th className="w-[120px]">许可证</th>
+              </>
+            }
+          >
+            {filtered.map((task) => (
+              <tr key={task.task_key} data-testid={`tb-task-${task.task_key}`}>
+                <td className="data board-id" title={task.task_key}>{task.task_key}</td>
+                <td className="data truncate" title={task.normalized_relative_path}>{task.normalized_relative_path}</td>
+                <td className="num">{formatCount(task.file_count)}</td>
+                <td className="num">{formatBytes(task.total_bytes)}</td>
+                <td className="data">{task.has_tests === null || task.has_tests === undefined ? "未知" : task.has_tests ? "有" : "无"}</td>
+                <td className="data">{task.has_solution === null || task.has_solution === undefined ? "未知" : task.has_solution ? "有" : "无"}</td>
+                <td className="data">{task.declared_license ?? "未声明"}</td>
               </tr>
-            </thead>
-            <tbody>
-              {filtered.map((task) => (
-                <tr key={task.task_key} data-testid={`tb-task-${task.task_key}`}>
-                  <td className="mono nowrap" title={task.task_key}>{task.task_key.slice(0, 16)}…</td>
-                  <td className="mono">{task.normalized_relative_path}</td>
-                  <td className="mono">{formatCount(task.file_count)}</td>
-                  <td className="mono">{formatBytes(task.total_bytes)}</td>
-                  <td className="mono">{task.has_tests === null || task.has_tests === undefined ? "未知" : task.has_tests ? "有" : "无"}</td>
-                  <td className="mono">{task.has_solution === null || task.has_solution === undefined ? "未知" : task.has_solution ? "有" : "无"}</td>
-                  <td className="mono">{task.declared_license ?? "未声明"}</td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr><td colSpan={7} className="empty">没有匹配的任务。</td></tr>
-              )}
-            </tbody>
-          </table>
+            ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={7} style={{ height: "auto", padding: "16px" }}>
+                  <EmptyBoard reason={"没有匹配「" + query + "」的任务"} next="换个关键词，或清空搜索看全部" />
+                </td>
+              </tr>
+            )}
+          </Board>
         )}
       </Panel>
     </div>

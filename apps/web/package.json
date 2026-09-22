@@ -9,6 +9,8 @@
     "gen:api": "openapi-typescript ../../api/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
+    "@douyinfe/semi-icons": "2.103.0",
+    "@douyinfe/semi-ui": "2.103.0",
     "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-dropdown-menu": "^2.1.24",
@@ -22,12 +24,14 @@
     "vite": "^8.3.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "happy-dom": "^20.14.5",
     "openapi-typescript": "^7.13.0",
+    "tailwindcss": "4.3.3",
     "typescript": "^5.9.3",
     "vitest": "^5.0.0"
   }

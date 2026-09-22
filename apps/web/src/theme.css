@@ -1,0 +1,365 @@
+@import "./board/board.css";
+
+/* MoTTEavl 主题层（新世界：深色信息板 / Board）——载入顺序的最后一环
+ *
+ * 载入顺序（main.tsx）：semi.css → tailwind.css → index.css（冻结的旧样式）→ theme.css
+ *
+ * 这一层干三件事：
+ *  1. 板面令牌别名：CSS 与 Tailwind 共用一套取值；
+ *  2. 把板面调色板装进 Semi（覆盖语义 token，Semi 全部组件都消费它们）；
+ *  3. **迁移桥**：把旧 token 名（--bg-canvas / --text-primary …）映射到板面调色板，
+ *     于是未迁移的页面立刻进入深色世界，不会出现"深色外壳 + 浅色页面"的半成品期。
+ *
+ * 主题化机制已在第 0 步实测确认（REDESIGN-PLAN.md §3.1）：
+ * Semi 2.103 的编译产物用 2744 处 var(--semi-*) 消费 690 个变量，深色主题就是 body[theme-mode=dark]
+ * 里重定义这些变量；语义 token 从不被 rgba() 二次包装（实测 0 处），因此可直接覆盖为任意 CSS 颜色。
+ * 结论：走运行期 CSS 变量，不需要编译 SCSS 主题包。
+ */
+
+/* 板面字：DIN 血统的窄体（交通导向的母语）。自托管 latin 子集，中文仍走系统栈。
+ * 由 Google Fonts 取回 woff2 落在 src/assets/fonts/，许可为 SIL OFL。 */
+@font-face {
+  font-family: "Barlow Semi Condensed";
+  src: url("./assets/fonts/barlow-semi-condensed-500-latin.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow Semi Condensed";
+  src: url("./assets/fonts/barlow-semi-condensed-600-latin.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow Semi Condensed";
+  src: url("./assets/fonts/barlow-semi-condensed-700-latin.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------- 1. 令牌别名 ---------- */
+:root {
+  --board-void: var(--color-board-void);
+  --board-panel: var(--color-board-panel);
+  --board-band: var(--color-board-band);
+  --board-cell: var(--color-board-cell);
+  --board-rule: var(--color-board-rule);
+  --board-rule-strong: var(--color-board-rule-strong);
+  --ink-primary: var(--color-ink-primary);
+  --ink-secondary: var(--color-ink-secondary);
+  --ink-faint: var(--color-ink-faint);
+  --ink-inverse: var(--color-ink-inverse);
+  --tone-info: var(--color-tone-info);
+  --tone-success: var(--color-tone-success);
+  --tone-warning: var(--color-tone-warning);
+  --tone-error: var(--color-tone-error);
+  --tone-neutral: var(--color-tone-neutral);
+  --row-h: var(--spacing-row);
+
+  color-scheme: dark;
+}
+
+/* ---------- 2. 把板面调色板装进 Semi ----------
+ * 只覆盖语义 token，不动 ramp：Semi 全部组件都消费这些变量，一处覆盖即全站换肤。 */
+body[theme-mode="dark"] {
+  --semi-color-bg-0: var(--board-void);
+  --semi-color-bg-1: var(--board-panel);
+  --semi-color-bg-2: var(--board-band);
+  --semi-color-bg-3: var(--board-band);
+  --semi-color-bg-4: var(--board-cell);
+  --semi-color-nav-bg: var(--board-band);
+
+  --semi-color-fill-0: rgba(242, 245, 247, 0.06);
+  --semi-color-fill-1: rgba(242, 245, 247, 0.1);
+  --semi-color-fill-2: rgba(242, 245, 247, 0.14);
+
+  --semi-color-text-0: var(--ink-primary);
+  --semi-color-text-1: var(--ink-secondary);
+  --semi-color-text-2: var(--ink-secondary);
+  --semi-color-text-3: var(--ink-faint);
+
+  --semi-color-border: var(--board-rule);
+  --semi-color-focus-border: var(--tone-info);
+
+  --semi-color-primary: var(--tone-info);
+  --semi-color-primary-hover: #6cc4e3;
+  --semi-color-primary-active: #45a6c9;
+  --semi-color-primary-disabled: rgba(87, 182, 217, 0.35);
+  --semi-color-primary-light-default: rgba(87, 182, 217, 0.14);
+  --semi-color-primary-light-hover: rgba(87, 182, 217, 0.22);
+  --semi-color-primary-light-active: rgba(87, 182, 217, 0.3);
+
+  --semi-color-success: var(--tone-success);
+  --semi-color-success-light-default: rgba(76, 195, 138, 0.14);
+  --semi-color-warning: var(--tone-warning);
+  --semi-color-warning-light-default: rgba(227, 166, 60, 0.14);
+  --semi-color-danger: var(--tone-error);
+  --semi-color-danger-light-default: rgba(232, 105, 95, 0.14);
+  --semi-color-info: var(--tone-info);
+  --semi-color-info-light-default: rgba(87, 182, 217, 0.14);
+
+  --semi-color-link: var(--tone-info);
+  --semi-color-link-hover: #6cc4e3;
+  --semi-color-link-active: #45a6c9;
+  --semi-color-link-visited: var(--tone-info);
+
+  --semi-color-disabled-bg: rgba(242, 245, 247, 0.04);
+  --semi-color-disabled-fill: rgba(242, 245, 247, 0.06);
+  --semi-color-disabled-border: var(--board-rule);
+  --semi-color-disabled-text: var(--ink-faint);
+
+  --semi-color-overlay-bg: rgba(11, 15, 20, 0.72);
+  --semi-color-shadow: rgba(0, 0, 0, 0.4);
+  --semi-color-highlight: var(--tone-info);
+  --semi-color-highlight-bg: rgba(87, 182, 217, 0.2);
+}
+
+/* ---------- 3. 迁移桥：旧 token 名 → 板面调色板 ----------
+ * 未迁移的页面继续用旧类名与旧 token，但取值已经换到深色信息板。
+ * 每迁移一个页面，就从这里删掉对应的一行；第 7 步整块删除。 */
+:root {
+  --bg-canvas: var(--board-void);
+  --bg-surface: var(--board-panel);
+  --bg-subtle: var(--board-band);
+  --bg-inset: var(--board-cell);
+  --border: var(--board-rule);
+  --border-strong: var(--board-rule-strong);
+  --text-primary: var(--ink-primary);
+  --text-secondary: var(--ink-secondary);
+  --text-faint: var(--ink-faint);
+  --accent: var(--tone-info);
+  --accent-hover: #6cc4e3;
+  --on-accent: #0b0f14;
+  --success: var(--tone-success);
+  --warning: var(--tone-warning);
+  --error: var(--tone-error);
+  --neutral: var(--tone-neutral);
+
+  --tone-info-fg: var(--tone-info);
+  --tone-info-border: rgba(87, 182, 217, 0.4);
+  --tone-info-bg: rgba(87, 182, 217, 0.14);
+  --tone-success-fg: var(--tone-success);
+  --tone-success-border: rgba(76, 195, 138, 0.4);
+  --tone-success-bg: rgba(76, 195, 138, 0.14);
+  --tone-warning-fg: var(--tone-warning);
+  --tone-warning-border: rgba(227, 166, 60, 0.4);
+  --tone-warning-bg: rgba(227, 166, 60, 0.14);
+  --tone-error-fg: var(--tone-error);
+  --tone-error-border: rgba(232, 105, 95, 0.4);
+  --tone-error-bg: rgba(232, 105, 95, 0.14);
+  --tone-neutral-fg: var(--tone-neutral);
+  --tone-neutral-border: rgba(126, 140, 154, 0.4);
+  --tone-neutral-bg: rgba(126, 140, 154, 0.14);
+}
+
+/* ---------- 4. 板选择器：顶栏的分段页签 ----------
+ * 修的是审计第 1 条：旧页签是"inset 底 + 白色激活块"，视觉权重低于右侧心跳，而它是套件的主导航。
+ * 信息板的做法是导向牌上的分区选择器：填充翻牌格 + 2px 底线（info 色）+ 字重，不靠阴影。
+ * 这一层在 theme.css（最后载入），因此压得住 index.css 里的旧 .tabs-list / .tabs-trigger。 */
+.topbar-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin: 0 0 0 4px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.topbar-tabs .tabs-trigger {
+  position: relative;
+  padding: 5px 12px;
+  border: none;
+  border-radius: var(--radius-cell);
+  background: transparent;
+  font-family: var(--font-board);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.topbar-tabs .tabs-trigger:hover {
+  background: rgba(242, 245, 247, 0.06);
+  color: var(--ink-secondary);
+}
+
+.topbar-tabs .tabs-trigger-active,
+.topbar-tabs .tabs-trigger[aria-current="page"] {
+  background: var(--board-cell);
+  box-shadow: none;
+  color: var(--ink-primary);
+}
+
+/* 激活项的 2px 底线：导向牌上的"你在这里" */
+.topbar-tabs .tabs-trigger-active::after,
+.topbar-tabs .tabs-trigger[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -2px;
+  height: 2px;
+  background: var(--tone-info);
+}
+
+/* ---------- 5. 浏览器表面（craft floor） ---------- */
+::selection {
+  background: rgba(87, 182, 217, 0.28);
+  color: var(--ink-primary);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--board-rule-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background: var(--board-rule-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- 6. 迁移桥（组件层） ----------
+ * 未迁移的页面继续用旧类名（.panel / .operate-card / .status-badge / .kv / .control …），
+ * 但外观已经换到板面语法：方角、2px 语气条、DIN 大写标签、板面控件。
+ * 类名一律保留——页面与测试都按类名选择，这里只改外观、不改契约。
+ * 每迁移一个页面就删掉对应规则；第 7 步整块删除。 */
+
+/* 状态徽章 → 翻牌格：方角 + 2px 左语气条 + 板面字。
+ * 这一条让**所有**尚未迁移页面的状态显示立刻与板面一致。 */
+.status-badge {
+  padding: 3px 10px 3px 8px;
+  border-radius: var(--radius-cell);
+  border-left: 2px solid currentColor;
+  background: var(--board-cell);
+  font-family: var(--font-board);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+/* 面板、卡片、浮层 → 方角 */
+.panel,
+.operate-card,
+.metric-card,
+.notice,
+.empty,
+.terminal-log,
+.key-edit,
+.dialog-content,
+.menu-content,
+.select-content,
+.drill-detail,
+.import-feedback,
+.model-test-result {
+  border-radius: var(--radius-panel);
+}
+
+/* 分节标题与字段标签 → DIN 大写（板面的标签语言） */
+.embed-title,
+.panel h2,
+.field-label,
+.kv dt {
+  font-family: var(--font-board);
+  letter-spacing: 0.06em;
+}
+
+.embed-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* 表格头 → 板面带（板面内的表头由 .board-band th 自己接管，优先级更高） */
+th {
+  background: var(--board-band);
+  border-bottom: 2px solid var(--board-rule-strong);
+  font-family: var(--font-board);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+/* 控件收口：把旧世界散落的控件统一到板面规格。
+ * 这是"控件样式靠祖先选择器"那条结构性缺陷的全站性补丁——未迁移页面也一并修好。 */
+.control,
+form input:not([type="checkbox"]):not([type="radio"]),
+form select,
+form textarea,
+.operate-card input,
+.operate-card select,
+.operate-card textarea {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--board-rule-strong);
+  border-radius: var(--radius-cell);
+  background: var(--board-cell);
+  color: var(--ink-primary);
+  font-size: 13px;
+}
+
+form textarea,
+.operate-card textarea {
+  padding: 8px 10px;
+  font-family: var(--font-data);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 旧 operate 卡片 → 板面卡片 */
+.operate-card {
+  background: var(--board-panel);
+  border: 1px solid var(--board-rule);
+  padding: 14px var(--panel-pad-x);
+}
+
+/* 面板中段的动作行：与 IssueBar 同规格，但不吸底（它在内容中间，吸底会挡内容） */
+.panel > .actions:last-child,
+.operate-card > .actions:last-child,
+.operate-section > .actions:last-child {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--board-rule);
+}
+
+/* 指标卡标签与旧清单项：方角与标签字 */
+.metric-label {
+  font-family: var(--font-board);
+  letter-spacing: 0.1em;
+}
+
+.tab,
+.provider-item,
+.nav-group-label {
+  border-radius: var(--radius-cell);
+}
+
+/* 旧空态：虚线框与板面同色（1.5px 虚线来自旧层，保留） */
+.empty {
+  color: var(--ink-faint);
+}
+

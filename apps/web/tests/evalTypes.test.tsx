@@ -672,8 +672,8 @@ describe("Gsm8kResult", () => {
     expect(screen.getByText(/应答 2/)).toBeTruthy();
     expect(screen.getByText("case-2").textContent).toBeTruthy();
     /* 词汇表对齐真实 scorer：wrong_answer 显示答错，not_attempted 显示未尝试 */
-    expect(screen.getByText("答错", { selector: ".status-badge" })).toBeTruthy();
-    expect(screen.getByText("未尝试", { selector: ".status-badge" })).toBeTruthy();
+    expect(screen.getByText("答错", { selector: ".flap" })).toBeTruthy();
+    expect(screen.getByText("未尝试", { selector: ".flap" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "case-2" }));
     expect(screen.getByText(/无法解析数字/)).toBeTruthy();
@@ -1619,9 +1619,9 @@ describe("DirectLlmResult", () => {
 
     expect(await screen.findByText(/通过率 · 1\/2/)).toBeTruthy();
     expect(screen.getByText("50%", { selector: ".metric-value" })).toBeTruthy();
-    expect(screen.getByText("格式无效").classList.contains("status-tone-error")).toBe(true);
-    expect(screen.getByText("调用失败").classList.contains("status-tone-error")).toBe(true);
-    expect(screen.getByText("未尝试").classList.contains("status-tone-neutral")).toBe(true);
+    expect(screen.getByText("格式无效").closest(".flap")?.getAttribute("data-tone")).toBe("error");
+    expect(screen.getByText("调用失败").closest(".flap")?.getAttribute("data-tone")).toBe("error");
+    expect(screen.getByText("未尝试").closest(".flap")?.getAttribute("data-tone")).toBe("neutral");
   });
 
   it("v2 report 的覆盖率、完成率与尝试率沿用指标卡展示", async () => {
@@ -1659,7 +1659,7 @@ describe("DirectLlmResult", () => {
       </MemoryRouter>
     );
     await waitFor(() => expect(screen.getByText("case-3")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: /case-3/ }));
+    fireEvent.click(screen.getByRole("button", { name: "case-3" }));
     const detail = document.querySelector(".drill-detail") as HTMLElement;
     expect(within(detail).getByText("工单 3：开放问题")).toBeTruthy();
     expect(within(detail).getByText("（无判定）")).toBeTruthy();
@@ -1679,7 +1679,7 @@ describe("DirectLlmResult", () => {
     );
 
     await screen.findByText("v2-case-1");
-    fireEvent.click(screen.getByRole("button", { name: /v2-case-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "v2-case-1" }));
     const detail = document.querySelector(".drill-detail") as HTMLElement;
     expect(within(detail).getByText("V2 快照题面：2 + 2 = ?")).toBeTruthy();
     expect(within(detail).getByText("GOLD-ANSWER-FOUR")).toBeTruthy();
@@ -1703,7 +1703,7 @@ describe("DirectLlmResult", () => {
     );
     expect(await screen.findByText("调用失败")).toBeTruthy();
     expect(screen.getByText(/通过率 · 0\/1/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /case-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: "case-1" }));
     expect(screen.getByText(/auth：denied/)).toBeTruthy();
   });
 

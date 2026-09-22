@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { StatusFlap } from "../../board/StatusFlap";
 import { Link } from "react-router-dom";
 import { ArrowClockwiseIcon, FlaskIcon } from "@phosphor-icons/react";
 import {
@@ -210,11 +213,20 @@ function ExperimentStatusPanel({
         )}
       </div>
 
-      <table data-testid="experiment-cells-table">
-        <thead>
-          <tr><th>cell</th><th>因素分配</th><th>repeat</th><th>Run</th><th>分配状态</th><th>操作</th></tr>
-        </thead>
-        <tbody>
+      <Board
+        testId="experiment-cells-table"
+        label="实验单元板面"
+        head={
+          <>
+            <th className="w-[150px]">cell</th>
+            <th>因素分配</th>
+            <th className="num w-[80px]">repeat</th>
+            <th className="w-[280px]">Run</th>
+            <th className="w-[130px]">分配状态</th>
+            <th className="board-actions w-[110px]">操作</th>
+          </>
+        }
+      >
           {status.cells.map((cell) => (
             <tr key={cell.cell_id}>
               <td className="mono nowrap" title={cell.cell_id}>{shortCellId(cell.cell_id)}</td>
@@ -225,7 +237,7 @@ function ExperimentStatusPanel({
                   ? <Link className="link" to={`/runs/${cell.run_id}/monitor`}>{cell.run_id}</Link>
                   : <span className="hint">{UNKNOWN_TEXT}</span>}
               </td>
-              <td><StatusBadge status={cell.allocation_status} /></td>
+              <td><StatusFlap status={cell.allocation_status} /></td>
               <td className="row-actions">
                 {cell.allocation_status === "allocated" && cell.run_id && (
                   <button
@@ -247,8 +259,7 @@ function ExperimentStatusPanel({
             </tr>
           ))}
           {status.cells.length === 0 && <tr><td colSpan={6} className="empty">暂无 cell</td></tr>}
-        </tbody>
-      </table>
+      </Board>
     </section>
   );
 }

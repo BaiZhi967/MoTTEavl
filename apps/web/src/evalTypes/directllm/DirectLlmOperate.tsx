@@ -360,9 +360,9 @@ export function DirectLlmOperate() {
   };
 
   return (
-    <div className="page">
-      <section className="panel detail" aria-label="Direct LLM 操作页">
-        <div className="panel-head"><h2>Direct LLM 评测 · 操作</h2></div>
+    <div className="page operate">
+      {/* 外层只做布局：顶栏页签已经报了「Direct LLM / 操作」，页内不再重复标题 */}
+      <section className="operate-section" aria-label="Direct LLM 操作页">
         {error && <p className="error">{error}</p>}
 
         <div className="operate-grid">
@@ -391,9 +391,12 @@ export function DirectLlmOperate() {
                     </select>
                   </div>
                 )}
-                <p className="mono">{preset.scenario}</p>
-                <p className="hint mono">
-                  {preset.dataset} · {preset.cases} 题 · {scorerLabel(datasetScorer(preset))}
+                {/* 数据集身份与事实合成一行：identity 加粗，其余跟在后面。
+                     dataset 与 scenario 同名时只写一次，不复述。 */}
+                <p className="hint mono dataset-line">
+                  <b className="mono">{preset.scenario}</b>
+                  {preset.dataset && preset.dataset !== preset.scenario ? " · " + preset.dataset : ""}
+                  {" · "}{preset.cases} 题 · {scorerLabel(datasetScorer(preset))}
                 </p>
                 <p className="hint mono">
                   来源 {String(preset.provenance?.source ?? "—")}
@@ -620,7 +623,6 @@ export function DirectLlmOperate() {
             )}
             {caseMode === "all" && (
               <p className="hint">
-                整份数据集（{preset?.cases ?? 0} 题）。
                 <Link className="link" to={ROUTES.cases}>浏览 / 勾选题目</Link>
               </p>
             )}

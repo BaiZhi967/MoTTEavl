@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { OutcomeFlap } from "../../board/OutcomeFlap";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowClockwiseIcon,
@@ -31,6 +32,13 @@ import { BatchMonitor } from "../../components/BatchMonitor";
 import { MetricCards } from "../../components/MetricCards";
 import { StatusBadge } from "../../components/StatusBadge";
 import { statusLabel } from "../../components/statusMeta";
+import { formatTimestamp, shortRunId } from "../../components/runFormat";
+import Input from "@douyinfe/semi-ui/lib/es/input";
+import Button from "@douyinfe/semi-ui/lib/es/button";
+import { Board } from "../../board/Board";
+import { StatusFlap } from "../../board/StatusFlap";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { FieldGrid, Field, IssueBar } from "../../board/FieldGrid";
 import { suiteRoutes } from "../registry";
 
 export const ROUTES = suiteRoutes("agent-tasks");
@@ -166,108 +174,151 @@ export function AgentOperate() {
     }
   };
 
-  if (loading) return <div className="page"><p className="empty-state">加载中…</p></div>;
+  if (loading) {
+    return (
+      <div className="page">
+        <EmptyBoard reason="正在读取 Agent 任务数据集…" />
+      </div>
+    );
+  }
+
   return (
-    <div className="page">
-      <h1 className="page-title">Agent 文件任务</h1>
+    <div className="page operate">
+      {/* 页面身份由顶栏（面包屑 + 激活页签）承担，页内不再重复标题 */}
       {loadError && (
-        <div role="alert" className="banner error">
+        <div role="alert" className="error">
           <WarningCircleIcon size={16} weight="bold" aria-hidden />
           加载失败：{loadError}
         </div>
       )}
-      <Panel title="任务与模型">
-        {overview?.items.length === 0 && <EmptyState text="还没有 Agent 任务数据集：先用 CLI 或 API 导入（agent-tasks import）。" />}
-        <label className="field">
-          <span>任务数据集</span>
-          <select value={scenario} onChange={(event) => setScenario(event.target.value)}>
-            {(overview?.items ?? []).map((item) => (
-              <option key={item.scenario} value={item.scenario}>
-                {item.scenario}（{item.cases} 题）
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>已发布模型</span>
-          <select value={modelId} onChange={(event) => setModelId(event.target.value)}>
-            <option value="">选择模型…</option>
-            {(models ?? []).map((item) => (
-              <option key={item.id} value={item.id} disabled={item.lifecycle !== "published"}>
-                {item.id}
-                {item.lifecycle !== "published" ? "（未发布）" : ""}
-                {item.supports_tools === false ? "（不支持工具）" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>执行模式</span>
-          <select
-            value={mode}
-            onChange={(event) => setMode(event.target.value as "native-tool" | "legacy-json")}
-          >
-            <option value="native-tool">{MODE_LABELS["native-tool"]}</option>
-            <option value="legacy-json">{MODE_LABELS["legacy-json"]}</option>
-          </select>
-        </label>
+      <section className="panel" aria-label="任务与模型">
+        <div className="panel-head">
+          <h2>任务与模型</h2>
+        </div>
+        {overview?.items.length === 0 && (
+          <EmptyBoard
+            reason="还没有 Agent 任务数据集"
+            next="先用 CLI 或 API 导入：agent-tasks import"
+          />
+        )}
+        <FieldGrid>
+          <Field label="任务数据集">
+            <select value={scenario} onChange={(event) => setScenario(event.target.value)} aria-label="任务数据集">
+              {(overview?.items ?? []).map((item) => (
+                <option key={item.scenario} value={item.scenario}>
+                  {item.scenario}（{item.cases} 题）
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="已发布模型">
+            <select value={modelId} onChange={(event) => setModelId(event.target.value)} aria-label="已发布模型">
+              <option value="">选择模型…</option>
+              {(models ?? []).map((item) => (
+                <option key={item.id} value={item.id} disabled={item.lifecycle !== "published"}>
+                  {item.id}
+                  {item.lifecycle !== "published" ? "（未发布）" : ""}
+                  {item.supports_tools === false ? "（不支持工具）" : ""}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="执行模式" hint="native-tool 走规范工具调用；legacy-json 走 JSON 动作协议">
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as "native-tool" | "legacy-json")}
+              aria-label="执行模式"
+            >
+              <option value="native-tool">{MODE_LABELS["native-tool"]}</option>
+              <option value="legacy-json">{MODE_LABELS["legacy-json"]}</option>
+            </select>
+          </Field>
+        </FieldGrid>
         {nativeUnsupported && (
           <p className="hint warning" role="note">
             <ProhibitIcon size={14} weight="bold" aria-hidden />
             模型 {modelId} 声明不支持工具（supports_tools=false），native-tool 模式不可用；不会自动切换到 legacy-json。
           </p>
         )}
-        <fieldset className="field-row">
-          <legend>预算</legend>
-          <label className="field"><span>最大步数</span>
-            <input value={maxSteps} onChange={(e) => setMaxSteps(e.target.value)} inputMode="numeric" /></label>
-          <label className="field"><span>最大工具次数</span>
-            <input value={maxToolCalls} onChange={(e) => setMaxToolCalls(e.target.value)} inputMode="numeric" /></label>
-          <label className="field"><span>时长（秒）</span>
-            <input value={wallTimeSec} onChange={(e) => setWallTimeSec(e.target.value)} inputMode="decimal" /></label>
-        </fieldset>
+        <div className="section-head">
+          <h3 className="embed-title">预算</h3>
+        </div>
+        <FieldGrid columns={3}>
+          <Field label="最大步数">
+            <Input value={maxSteps} onChange={(v) => setMaxSteps(v)} inputMode="numeric" aria-label="最大步数" />
+          </Field>
+          <Field label="最大工具次数">
+            <Input value={maxToolCalls} onChange={(v) => setMaxToolCalls(v)} inputMode="numeric" aria-label="最大工具次数" />
+          </Field>
+          <Field label="时长（秒）">
+            <Input value={wallTimeSec} onChange={(v) => setWallTimeSec(v)} inputMode="decimal" aria-label="时长（秒）" />
+          </Field>
+        </FieldGrid>
         {budgetInvalid && <p className="hint warning" role="alert">{budgetInvalid}</p>}
         {formError && (
-          <div role="alert" className="banner error">
+          <div role="alert" className="error">
             <XCircleIcon size={16} weight="bold" aria-hidden />
             {formError}
           </div>
         )}
-        <div className="actions">
-          <button type="button" onClick={runPreflight} disabled={submitDisabled}>预检</button>
-          <button type="button" onClick={submit} disabled={submitDisabled}>
-            {submitting ? "提交中…" : "创建运行"}
-          </button>
-        </div>
-      </Panel>
+      </section>
       {dryRun && (
-        <Panel title="预检摘要">
+        <section className="panel" aria-label="预检摘要">
+          <div className="panel-head">
+            <h2>预检摘要</h2>
+          </div>
           <dl className="kv">
-            <div><dt>后端</dt><dd>{dryRun.backend}</dd></div>
-            <div><dt>模式</dt><dd>{dryRun.mode}（{dryRun.prompt_version}）</dd></div>
-            <div><dt>选中任务数</dt><dd>{dryRun.selected_cases}</dd></div>
-            <div><dt>数据集</dt><dd>{dryRun.dataset}</dd></div>
+            <div><dt>后端</dt><dd className="mono">{dryRun.backend}</dd></div>
+            <div><dt>模式</dt><dd className="mono">{dryRun.mode}（{dryRun.prompt_version}）</dd></div>
+            <div><dt>选中任务数</dt><dd className="mono">{dryRun.selected_cases}</dd></div>
+            <div><dt>数据集</dt><dd className="mono">{dryRun.dataset}</dd></div>
           </dl>
-        </Panel>
+        </section>
       )}
       {(overview?.items.length ?? 0) > 0 && (
-        <Panel title="最近运行">
-          <table className="table">
-            <thead><tr><th>Run</th><th>状态</th><th>模式</th><th>创建时间</th><th /></tr></thead>
-            <tbody>
-              {overview!.items.flatMap((item) => item.runs.slice(0, 5).map((run) => (
-                <tr key={run.id}>
-                  <td className="mono">{run.id.slice(0, 18)}…</td>
-                  <td><StatusBadge status={run.status} /></td>
-                  <td>{run.mode ?? "—"}</td>
-                  <td>{run.created_at ?? "—"}</td>
-                  <td><Link to={ROUTES.result(run.id)}>查看结果</Link></td>
-                </tr>
-              )))}
-            </tbody>
-          </table>
-        </Panel>
+        <section className="panel" aria-label="最近运行">
+          <div className="panel-head">
+            <h2>最近运行</h2>
+          </div>
+          <Board
+            label="最近运行板面"
+            head={
+              <>
+                <th className="w-[132px]">Run</th>
+                <th className="w-[110px]">状态</th>
+                <th className="w-[124px]">模式</th>
+                <th>创建时间</th>
+                <th className="board-actions w-[104px]">操作</th>
+              </>
+            }
+          >
+            {overview!.items.flatMap((item) => item.runs.slice(0, 5).map((run) => (
+              <tr key={run.id}>
+                <td className="data board-id" title={run.id}>{shortRunId(run.id)}</td>
+                <td><StatusFlap status={run.status} /></td>
+                <td className="data">{run.mode ?? "—"}</td>
+                <td className="data">{formatTimestamp(run.created_at) ?? "—"}</td>
+                <td className="board-actions">
+                  <Link className="board-link" to={ROUTES.result(run.id)}>查看结果</Link>
+                </td>
+              </tr>
+            )))}
+            {overview!.items.every((item) => item.runs.length === 0) && (
+              <tr>
+                <td colSpan={5} style={{ height: "auto", padding: "16px" }}>
+                  <EmptyBoard reason="这个数据集还没有运行记录" next="选好模型后点右下角「创建运行」" />
+                </td>
+              </tr>
+            )}
+          </Board>
+        </section>
       )}
+      <IssueBar note="预检只做静态检查（零模型调用）；创建运行会真实调用模型并产生费用">
+        <Button onClick={runPreflight} disabled={submitDisabled}>预检</Button>
+        <Button theme="solid" type="primary" onClick={submit} disabled={submitDisabled}>
+          {submitting ? "提交中…" : "创建运行"}
+        </Button>
+      </IssueBar>
     </div>
   );
 }
@@ -408,7 +459,7 @@ export function AgentResult() {
   if (error) {
     return (
       <div className="page">
-        <div role="alert" className="banner error">读取失败：{error}</div>
+        <div role="alert" className="error">读取失败：{error}</div>
         <button type="button" className="link" onClick={() => void reload()}>重试读取</button>
       </div>
     );
@@ -424,7 +475,6 @@ export function AgentResult() {
 
   return (
     <div className="page">
-      <h1 className="page-title">Agent 运行结果</h1>
       <Panel
         title="运行概览"
         actions={
@@ -459,7 +509,7 @@ export function AgentResult() {
           <div><dt>终止</dt><dd>{TERMINATION_LABELS[run.status] ?? statusLabel(run.status)}</dd></div>
         </dl>
         {run.error?.message && (
-          <div role="alert" className="banner error">运行错误：{run.error.message}</div>
+          <div role="alert" className="error">运行错误：{run.error.message}</div>
         )}
       </Panel>
 
@@ -487,24 +537,32 @@ export function AgentResult() {
         {scores.length === 0
           ? <EmptyState text={active ? "运行进行中，还没有评分。" : "本运行没有多指标分数（可能是未评分的终态）。"} />
           : (
-            <table className="table">
-              <thead><tr><th>任务</th><th>指标</th><th>状态</th><th>判定</th><th>原因</th></tr></thead>
-              <tbody>
-                {scores.map((score) => (
-                  <tr key={`${score.case_id}:${score.metric_id}`}>
-                    <td className="mono">{score.case_id}</td>
-                    <td className="mono">{score.metric_id}</td>
-                    <td><MetricStatusBadge status={score.metric_status} /></td>
-                    <td>
-                      {score.passed === true && <span className="badge tone-success"><CheckCircleIcon size={12} weight="bold" aria-hidden /> 通过</span>}
-                      {score.passed === false && <span className="badge tone-error"><XCircleIcon size={12} weight="bold" aria-hidden /> 未通过</span>}
-                      {score.passed == null && <span className="badge tone-neutral">未判定</span>}
-                    </td>
-                    <td>{score.reason ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Board
+              label="多指标结果板面"
+              head={
+                <>
+                  <th className="w-[220px]">任务</th>
+                  <th className="w-[180px]">指标</th>
+                  <th className="w-[130px]">状态</th>
+                  <th className="w-[120px]">判定</th>
+                  <th>原因</th>
+                </>
+              }
+            >
+              {scores.map((score) => (
+                <tr key={`${score.case_id}:${score.metric_id}`}>
+                  <td className="data board-id" title={score.case_id}>{score.case_id}</td>
+                  <td className="data" title={score.metric_id}>{score.metric_id}</td>
+                  <td><MetricStatusBadge status={score.metric_status} /></td>
+                  <td>
+                    {score.passed === true && <OutcomeFlap label="通过" tone="success" />}
+                    {score.passed === false && <OutcomeFlap label="未通过" tone="error" />}
+                    {score.passed == null && <OutcomeFlap label="未判定" tone="neutral" />}
+                  </td>
+                  <td className="truncate" title={score.reason ?? undefined}>{score.reason ?? "—"}</td>
+                </tr>
+              ))}
+            </Board>
           )}
       </Panel>
 

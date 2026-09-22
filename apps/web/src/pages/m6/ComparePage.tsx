@@ -1,4 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { StatusFlap } from "../../board/StatusFlap";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react";
 import {
   COMPARISON_FACTORS,
@@ -81,9 +84,16 @@ function CompareResult({ result }: { result: ComparabilityView }) {
       {metricEligibility.length === 0 ? (
         <p className="empty">暂无指标资格数据</p>
       ) : (
-        <table data-testid="compare-metric-eligibility">
-          <thead><tr><th>metric</th><th>资格</th></tr></thead>
-          <tbody>
+        <Board
+          testId="compare-metric-eligibility"
+          label="指标资格板面"
+          head={
+            <>
+              <th className="w-[280px]">metric</th>
+              <th>资格</th>
+            </>
+          }
+        >
             {metricEligibility.map(([metric, eligible]) => (
               <tr key={metric}>
                 <td className="mono nowrap">{metric}</td>
@@ -96,8 +106,7 @@ function CompareResult({ result }: { result: ComparabilityView }) {
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
+        </Board>
       )}
 
       <h3 className="embed-title">Case 差异（按内容 hash 对齐）</h3>

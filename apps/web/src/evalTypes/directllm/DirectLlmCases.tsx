@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeftIcon, MagnifyingGlassIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
 import {
@@ -118,7 +120,7 @@ export function DirectLlmCases() {
   };
 
   return (
-    <div className="page">
+    <div className="page fill">
       <section className="panel detail" aria-label="Direct LLM 题目">
         <div className="panel-head">
           <h2>Direct LLM · 题目</h2>
@@ -198,38 +200,45 @@ export function DirectLlmCases() {
 
         {notice && <p className="hint">{notice}</p>}
 
-        <table>
-          <thead>
-            <tr>
-              <th aria-label="选择" />
-              <th>Case</th>
+        <Board
+          label="题目板面"
+          head={
+            <>
+              <th className="w-[44px]" aria-label="选择" />
+              <th className="w-[220px]">Case</th>
               <th>题面</th>
-              <th>期望</th>
-              <th>评分器</th>
+              <th className="w-[200px]">期望</th>
+              <th className="w-[160px]">评分器</th>
+            </>
+          }
+        >
+          {(page?.items ?? []).map((item) => (
+            <tr key={item.case_id}>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(item.case_id)}
+                  onChange={() => toggle(item.case_id)}
+                  aria-label={`选择 ${item.case_id}`}
+                />
+              </td>
+              <td className="data board-id" title={item.case_id}>{item.case_id}</td>
+              <td className="truncate" title={item.input}>{item.input}</td>
+              <td className="data truncate" title={item.expected ?? undefined}>{item.expected ?? "（无判定）"}</td>
+              <td className="data truncate" title={scorerShort(item.scorer)}>{scorerShort(item.scorer)}</td>
             </tr>
-          </thead>
-          <tbody>
-            {(page?.items ?? []).map((item) => (
-              <tr key={item.case_id}>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(item.case_id)}
-                    onChange={() => toggle(item.case_id)}
-                    aria-label={`选择 ${item.case_id}`}
-                  />
-                </td>
-                <td className="mono nowrap">{item.case_id}</td>
-                <td>{item.input}</td>
-                <td className="mono">{item.expected ?? "（无判定）"}</td>
-                <td className="mono">{scorerShort(item.scorer)}</td>
-              </tr>
-            ))}
-            {page && page.items.length === 0 && (
-              <tr><td colSpan={5} className="empty">没有匹配的题目</td></tr>
-            )}
-          </tbody>
-        </table>
+          ))}
+          {page && page.items.length === 0 && (
+            <tr>
+              <td colSpan={5} style={{ height: "auto", padding: "16px" }}>
+                <EmptyBoard
+                  reason={query ? "没有匹配「" + query + "」的题目" : "这个数据集还没有题目"}
+                  next={query ? "换关键词，或清除搜索看全部" : "先回操作页导入数据集"}
+                />
+              </td>
+            </tr>
+          )}
+        </Board>
 
         <div className="actions">
           <button type="button" onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0}>

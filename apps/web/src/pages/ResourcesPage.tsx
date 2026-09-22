@@ -35,6 +35,8 @@ import {
   type ProviderKindMeta,
   type ProviderRecord,
 } from "../api/client";
+import { Board } from "../board/Board";
+import { EmptyBoard } from "../board/EmptyBoard";
 import { formatContext } from "../components/ModelPicker";
 
 /** 目录接口不可用时的兜底：至少能创建本地兼容端点。 */
@@ -90,8 +92,8 @@ export function ProvidersPage() {
   const selectedProvider = providers.find((provider) => provider.name === selected) ?? providers[0] ?? null;
 
   return (
-    <div className="page">
-      <aside className="panel list-panel" aria-label="Provider 清单">
+    <div className="page fill">
+      <aside className="panel list-panel pane" aria-label="Provider 清单">
         <div className="panel-head">
           <h2>Provider</h2>
           <div className="panel-head-actions">
@@ -152,7 +154,7 @@ export function ProvidersPage() {
         />
       ) : (
         loaded && (
-          <section className="panel provider-detail">
+          <section className="panel provider-detail pane">
             <p className="empty">暂无 Provider，点击左侧「添加」创建第一个连接</p>
           </section>
         )
@@ -538,7 +540,7 @@ function ProviderDetail({
   };
 
   return (
-    <section className="panel provider-detail" aria-label={`Provider ${provider.name} 详情`}>
+    <section className="panel provider-detail pane" aria-label={`Provider ${provider.name} 详情`}>
       <header className="detail-head">
         <h2 className="mono">{provider.name}</h2>
         <span className="status-badge status-tone-neutral kind-badge">{provider.kind}</span>
@@ -888,59 +890,95 @@ export function HarnessesPage() {
 
   return (
     <div className="page">
-      <section className="panel wide-panel" aria-label="Harness 安装情况">
-        <h2>Harness 安装情况</h2>
+      <section className="panel detail" aria-label="Harness 安装情况">
+        <div className="panel-head">
+          <h2>Harness 安装情况</h2>
+          <p className="panel-summary">
+            已安装 <b className="mono">{harnesses.filter((h) => h.installed).length}</b> / {harnesses.length}
+            {" · "}评测执行就绪 <b className="mono">{harnesses.filter((h) => h.execution_ready).length}</b>
+          </p>
+        </div>
         {error && <p className="error">{error}</p>}
-        <table>
-          <thead>
-            <tr>
-              <th>Harness</th>
-              <th>已安装</th>
-              <th>版本</th>
-              <th>本机可运行</th>
-              <th>协议就绪</th>
+        <Board
+          label="Harness 板面"
+          head={
+            <>
+              <th className="w-[180px]">Harness</th>
+              <th className="w-[96px]">已安装</th>
+              <th className="w-[120px]">版本</th>
+              <th className="w-[112px]">本机可运行</th>
+              <th className="w-[104px]">协议就绪</th>
               <th>评测执行就绪</th>
+            </>
+          }
+        >
+          {harnesses.map((harness) => (
+            <tr key={harness.name}>
+              <td className="data">{harness.name}</td>
+              <td><Ready ok={harness.installed} /></td>
+              <td className="data">{harness.version ?? "—"}</td>
+              <td><Ready ok={harness.runnable} /></td>
+              <td><Ready ok={harness.protocol_ready} /></td>
+              <td><Ready ok={harness.execution_ready} /></td>
             </tr>
-          </thead>
-          <tbody>
-            {harnesses.map((harness) => (
-              <tr key={harness.name}>
-                <td>{harness.name}</td>
-                <td className={harness.installed ? "pass" : "fail"}>{harness.installed ? "是" : "否"}</td>
-                <td className="mono">{harness.version ?? "—"}</td>
-                <td className={harness.runnable ? "pass" : "fail"}>{harness.runnable ? "是" : "否"}</td>
-                <td className={harness.protocol_ready ? "pass" : "fail"}>{harness.protocol_ready ? "是" : "否"}</td>
-                <td className={harness.execution_ready ? "pass" : "fail"}>{harness.execution_ready ? "是" : "否"}</td>
-              </tr>
-            ))}
-            {harnesses.length === 0 && (
-              <tr><td colSpan={6} className="empty">暂无 Harness 数据</td></tr>
-            )}
-          </tbody>
-        </table>
+          ))}
+          {harnesses.length === 0 && (
+            <tr>
+              <td colSpan={6} style={{ height: "auto", padding: "16px" }}>
+                <EmptyBoard reason="暂无 Harness 数据" next="装好 CLI 后刷新本页；运行器与协议状态分开判定" />
+              </td>
+            </tr>
+          )}
+        </Board>
       </section>
-      <section className="panel narrow-panel" aria-label="Agent 运行时">
-        <h2>Agent 运行时</h2>
-        <table>
-          <thead>
-            <tr><th>Agent</th><th>类型</th><th>协议就绪</th><th>评测执行就绪</th><th>说明</th></tr>
-          </thead>
-          <tbody>
-            {agents.map((agent) => (
-              <tr key={agent.id}>
-                <td className="mono">{agent.id}</td>
-                <td className="mono">{agent.kind}</td>
-                <td className={agent.protocol_ready ? "pass" : "fail"}>{agent.protocol_ready ? "是" : "否"}</td>
-                <td className={agent.execution_ready ? "pass" : "fail"}>{agent.execution_ready ? "是" : "否"}</td>
-                <td>{agent.description}</td>
-              </tr>
-            ))}
-            {agents.length === 0 && (
-              <tr><td colSpan={5} className="empty">暂无 Agent</td></tr>
-            )}
-          </tbody>
-        </table>
+
+      <section className="panel detail" aria-label="Agent 运行时">
+        <div className="panel-head">
+          <h2>Agent 运行时</h2>
+          <p className="panel-summary">
+            共 <b className="mono">{agents.length}</b> 个
+          </p>
+        </div>
+        <Board
+          label="Agent 运行时板面"
+          head={
+            <>
+              <th className="w-[160px]">Agent</th>
+              <th className="w-[140px]">类型</th>
+              <th className="w-[104px]">协议就绪</th>
+              <th className="w-[128px]">评测执行就绪</th>
+              <th>说明</th>
+            </>
+          }
+        >
+          {agents.map((agent) => (
+            <tr key={agent.id}>
+              <td className="data">{agent.id}</td>
+              <td className="data">{agent.kind}</td>
+              <td><Ready ok={agent.protocol_ready} /></td>
+              <td><Ready ok={agent.execution_ready} /></td>
+              <td className="truncate" title={agent.description}>{agent.description}</td>
+            </tr>
+          ))}
+          {agents.length === 0 && (
+            <tr>
+              <td colSpan={5} style={{ height: "auto", padding: "16px" }}>
+                <EmptyBoard reason="暂无 Agent" next="在 bridges/ 下装好桥接后刷新本页" />
+              </td>
+            </tr>
+          )}
+        </Board>
       </section>
     </div>
+  );
+}
+
+/** 就绪格：板面上的"是/否"读数。不是状态语气——它是二值能力，用点 + 词，不用五种语气去冒充状态。 */
+function Ready({ ok }: { ok: boolean }) {
+  return (
+    <span className={ok ? "ready ready-on" : "ready ready-off"}>
+      <span className="ready-dot" aria-hidden />
+      {ok ? "是" : "否"}
+    </span>
   );
 }

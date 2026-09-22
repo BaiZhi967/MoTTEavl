@@ -81,6 +81,17 @@
   --space-sm: 12px;
   --size-full: 100%;
 
+  /* 骨架尺寸（DESIGN.md 2.4）：桌面 16:9 基准；品牌条与顶栏同高，顶部发丝线贯穿全窗 */
+  --shell-sidebar-w: 240px;
+  --shell-topbar-h: 52px;
+  --pane-gap: 16px;
+  --page-pad-x: 24px;
+  --page-pad-y: 20px;
+  --panel-pad-x: 18px;
+  --panel-pad-y: 16px;
+  --measure: 68ch;
+  --rail-w: 260px;
+
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.6;
@@ -98,6 +109,33 @@ body {
   margin: 0;
   background: var(--bg-canvas);
   color: var(--text-primary);
+}
+
+/* 浏览器表面也归设计系统管：选中色、滚动条（DESIGN.md 2.1 取值） */
+::selection {
+  background: var(--tone-info-bg);
+  color: var(--text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .mono {
@@ -118,31 +156,33 @@ body {
 
 /* ---------- 应用骨架：左侧全高导航栏 + 右侧工作台（DESIGN.md 3.1） ---------- */
 
+/* 侧栏齐窗边、品牌条与顶栏同高：顶部一条发丝线贯穿全窗，导航不是浮在画布上的卡片 */
 .app-shell {
   position: fixed;
   inset: 0;
   overflow: hidden;
   display: flex;
-  gap: 20px;
-  padding: 20px;
   background: var(--bg-canvas);
 }
 
 .sidebar {
-  overflow-y: auto;
   flex: none;
-  width: 236px;
+  width: var(--shell-sidebar-w);
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
-  padding: 20px 12px;
 }
 
 .brand {
-  padding: 0 10px 16px;
+  flex: none;
+  height: var(--shell-topbar-h);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 14px;
 }
 
 .brand h1 {
@@ -152,20 +192,42 @@ body {
   font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 600;
+  line-height: 1.2;
   margin: 0;
   color: var(--text-primary);
 }
 
 .brand p {
-  margin: 2px 0 0;
+  margin: 3px 0 0;
   font-family: var(--font-mono);
   font-size: 10px;
+  line-height: 1.2;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-faint);
 }
 
+/* 分组可折叠（DESIGN.md 3.2）：入口装不下一屏时，滚动只发生在导航区，状态条永远可见 */
 .side-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 14px;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group + .nav-group {
+  margin-top: 8px;
+}
+
+.nav-group-items {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -176,7 +238,7 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
@@ -206,37 +268,59 @@ body {
 }
 
 .nav-group-label {
-  margin: 14px 10px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0 0 2px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--text-faint);
+  text-align: left;
+  cursor: pointer;
 }
 
-.nav-group-label:first-child {
-  margin-top: 0;
+.nav-group-label:hover {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
 }
 
+.nav-group-caret {
+  margin-left: auto;
+  transition: transform 200ms ease;
+}
+
+.nav-group-label[aria-expanded="false"] .nav-group-caret {
+  transform: rotate(-90deg);
+}
+
+/* 滚动归 .page 所有：顶栏是工作台的固定第一行，不参与内容滚动 */
 .workbench {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* ---------- 顶栏（DESIGN.md 3.1）：面包屑 + 分段页签 / 页面标题 ---------- */
+/* ---------- 顶栏（DESIGN.md 3.1）：身份（分区/套件 + 页面标题）· 分段页签 · 会话心跳 ---------- */
 
 .topbar {
-  position: sticky;
-  top: 0;
+  flex: none;
   z-index: 10;
   display: flex;
   align-items: center;
   gap: 16px;
-  height: 56px;
-  padding: 0 24px;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(8px);
+  height: var(--shell-topbar-h);
+  padding: 0 var(--page-pad-x);
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
 }
 
@@ -257,10 +341,61 @@ body {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .topbar-tabs {
   margin-bottom: 0;
+  margin-left: 4px;
+}
+
+/* 顶栏右区：会话级状态。进行中才带语气色，读不到就写未知（DESIGN.md 9） */
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.session-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.session-status b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.session-status.is-live {
+  border-color: var(--tone-info-border);
+  background: var(--tone-info-bg);
+  color: var(--accent);
+}
+
+.session-status.is-live b {
+  color: var(--accent);
+}
+
+/* 进行中 LED 呼吸：与徽章同一条 keyframe（DESIGN.md 2.5） */
+.led-live {
+  background: var(--tone-info-fg);
+  animation: led-pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .led-live {
+    animation: none;
+  }
 }
 
 /* 顶栏页签激活：与 Radix data-state=active 同规格 */
@@ -275,12 +410,12 @@ body {
 /* ---------- 侧栏底部连接状态条（DESIGN.md 3.2） ---------- */
 
 .sidebar-foot {
-  margin-top: auto;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 14px 10px 4px;
+  padding: 12px 16px;
   border: none;
   border-top: 1px solid var(--border);
   border-radius: 0;
@@ -336,9 +471,26 @@ body {
     display: none;
   }
 
+  .sidebar {
+    overflow: visible;
+  }
+
   .side-nav {
     flex-direction: row;
     align-items: center;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .nav-group,
+  .nav-group-items {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .nav-group + .nav-group {
+    margin-top: 0;
   }
 
   .tab {
@@ -360,21 +512,99 @@ body {
   }
 }
 
-/* ---------- 页面与面板（DESIGN.md 3.3） ---------- */
+/* ---------- 页面容器与面板（DESIGN.md 3.3） ---------- */
 
+/* .page 是工作台里唯一的滚动区：顶栏固定，内容自己滚 */
 .page {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  padding: 20px 24px 48px;
+  gap: var(--pane-gap);
+  padding: var(--page-pad-y) var(--page-pad-x) 40px;
   align-items: flex-start;
+  /* 关键：多行 flex 容器的 align-content 默认是 stretch——工作台有余高时它会把每一行撑开，
+     于是面板之间凭空出现大片空隙（实测约 210px）。行必须按内容高度收口。 */
+  align-content: flex-start;
+}
+
+/* 操作页外层容器：只负责布局，不再画第二层卡片（DESIGN.md 3.4 模式 A） */
+.operate-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0;
+}
+
+/* 整幅工作页（模式 B 主从 / C 全宽表格）：面板撑满工作台高度，滚动下沉进面板内部 */
+.page.fill {
+  overflow: hidden;
+  align-items: stretch;
+  padding-bottom: var(--page-pad-y);
+}
+
+.page.fill > .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 操作页（模式 A）：单列到底，底部主动作条吸底 */
+.page.operate {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  padding-bottom: 0;
+}
+
+/* 面板内部滚动区：清单列、表格、时间线各自滚，不推走面板头 */
+.pane-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 模式 B 主从详情：面板本体滚动，面板头/详情头吸附在面板顶部。
+ * 不需要额外包一层滚动容器，长清单与长详情各自滚。 */
+.page.fill > .panel.pane {
+  display: block;
+  overflow: auto;
+}
+
+.page.fill > .panel.pane > .panel-head,
+.page.fill > .panel.pane > .detail-head {
+  position: sticky;
+  top: calc(-1 * var(--panel-pad-y));
+  z-index: 2;
+  margin: calc(-1 * var(--panel-pad-y)) calc(-1 * var(--panel-pad-x)) 12px;
+  padding: var(--panel-pad-y) var(--panel-pad-x) 10px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 表格贴到面板两边、表头在面板内滚动时保持可见 */
+.table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 calc(-1 * var(--panel-pad-x));
+}
+
+.table-scroll th,
+.table-scroll td {
+  padding-left: var(--panel-pad-x);
+  padding-right: var(--panel-pad-x);
 }
 
 .panel {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 16px 18px;
+  padding: var(--panel-pad-y) var(--panel-pad-x);
   min-width: 320px;
   flex: 1 1 0;
 }
@@ -544,19 +774,49 @@ a.link {
   font-family: var(--font-mono);
 }
 
-/* 清单窄列：Provider 等导航型列表 */
+/* 清单窄列：Provider 等导航型列表；在整幅工作页里撑满高度，滚动落在自己身上 */
 .panel.list-panel {
-  flex: 0 0 240px;
-  min-width: 240px;
-  max-width: 240px;
+  flex: 0 0 var(--rail-w);
+  min-width: var(--rail-w);
+  max-width: var(--rail-w);
 }
 
+/* 面板头 = 工具条：标题 / 摘要居左，过滤与操作居右，一条发丝线与主体分开 */
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-head .inline-field {
+  margin-bottom: 0;
+}
+
+/* 工具条左主语：一行读数，顶栏已经报过页面名，面板头不再重复标题 */
+.panel-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.panel-summary b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.panel-summary-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--tone-info-fg);
 }
 
 .panel-head h2 {
@@ -695,8 +955,10 @@ a.link {
   flex-wrap: wrap;
 }
 
+/* 详情表单不铺满整幅工作台：一行两列、单列上限 420px（可读行宽） */
 .connection-grid label {
-  flex: 1 1 200px;
+  flex: 1 1 240px;
+  max-width: 420px;
 }
 
 .connection-form .kv {
@@ -898,6 +1160,7 @@ td {
   line-height: 1.5;
 }
 
+/* 表头吸附：长表滚到哪一屏都还知道每列是什么；必须在滚动容器内，且底色不透明 */
 th {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -906,14 +1169,26 @@ th {
   color: var(--text-faint);
   font-weight: 500;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-surface);
 }
 
 tbody tr:hover {
   background: var(--bg-subtle);
 }
 
+/* 数字列右对齐：读数只有从右缘对齐才能被竖着扫读 */
+th.num,
+td.num {
+  text-align: right;
+}
+
+th.row-actions,
 td.row-actions {
   text-align: right;
+  white-space: nowrap;
 }
 
 td.row-actions .link {
@@ -923,6 +1198,67 @@ td.row-actions .link {
 /* 单值 ID 列不折行（case id 的连字符不是断行点） */
 .nowrap {
   white-space: nowrap;
+}
+
+/* 长文本列收成一行省略号，行高不被换行撑成两行。
+ * 宽度由 table-layout: fixed 的列宽决定，不靠 max-width:0 把列压到最小。 */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 运行总览列宽：固定布局，数值列窄、场景/模型吃掉余量——列宽不再随数据长短抖动 */
+.runs-table {
+  table-layout: fixed;
+}
+
+.runs-table .col-id {
+  width: 152px;
+}
+
+.runs-table .col-type {
+  width: 112px;
+}
+
+.runs-table .col-status {
+  width: 100px;
+}
+
+.runs-table .col-progress {
+  width: 120px;
+}
+
+.runs-table .col-start {
+  width: 100px;
+}
+
+.runs-table .col-cost {
+  width: 80px;
+}
+
+.runs-table .col-actions {
+  width: 108px;
+}
+
+/* 首列身份：Run ID 是整行的入口，比其余 mono 值多半档字重 */
+.run-id {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* 行内操作保持安静：默认次色，hover 才提亮，不与状态徽章抢主权 */
+.row-action {
+  color: var(--text-secondary);
+}
+
+.row-action:hover {
+  color: var(--accent);
+}
+
+/* 表格里的进度条收窄：单元格里它只是读数的一部分，不是主角 */
+.table-scroll .progress-bar {
+  width: 56px;
 }
 
 /* ---------- 键值列表 ---------- */
@@ -1390,6 +1726,26 @@ td.row-actions .link {
   margin-top: 16px;
 }
 
+/* 操作页主动作条（模式 A）：贴在滚动区底部，主操作不随内容滚走。
+ * margin-top:auto 吃掉剩余高度——内容不足一屏时也落位在工作台底部，不会浮在中间。 */
+.action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: auto calc(-1 * var(--page-pad-x)) 0;
+  padding: 16px var(--page-pad-x) 12px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+.action-bar .hint {
+  margin: 0;
+}
+
 .summary {
   font-size: 13px;
   color: var(--text-secondary);
@@ -1476,21 +1832,98 @@ td.row-actions .link {
   accent-color: var(--accent);
 }
 
-/* ---------- 类型操作页三卡布局 ---------- */
+/* ---------- 操作页栅格（DESIGN.md 3.4 模式 A）----------
+ * 卡片按语义跨列，不再等宽平分：行内卡片同高，行与行之间没有参差的底边。
+ * 跨列类：wide 7 / rail 5 / half 6 / full 12，默认 4（一屏三张）。 */
 
 .operate-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--pane-gap);
+  align-items: stretch;
 }
 
 .operate-card {
-  flex: 1 1 280px;
-  min-width: 260px;
+  grid-column: span 4;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px;
+  padding: 14px var(--panel-pad-x);
+  background: var(--bg-surface);
+}
+
+.operate-card.wide {
+  grid-column: span 7;
+}
+
+.operate-card.rail {
+  grid-column: span 5;
+}
+
+.operate-card.half {
+  grid-column: span 6;
+}
+
+.operate-card.full {
+  grid-column: span 12;
+}
+
+/* 卡片内长说明保持可读行宽（68ch），不让一行铺满整个工作台 */
+.operate-card .hint {
+  max-width: var(--measure);
+}
+
+/* 数据集身份行：identity 用主色加粗，事实跟在同一行，不在别处复述 */
+.dataset-line {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+}
+
+.dataset-line b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* 维护带：不属于「本次运行定义」的次级操作，横向一条放到底部 */
+.maintenance-band {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  align-items: flex-start;
+  margin-top: var(--pane-gap);
+  padding: 16px var(--panel-pad-x);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.maintenance-band .maintenance-copy {
+  flex: 1 1 380px;
+  min-width: 0;
+}
+
+.maintenance-band .maintenance-copy .hint {
+  max-width: var(--measure);
+}
+
+.maintenance-band form {
+  flex: 0 1 340px;
+  margin-left: auto;
+}
+
+@media (max-width: 1100px) {
+  .operate-card,
+  .operate-card.half {
+    grid-column: span 6;
+  }
+
+  .operate-card.wide,
+  .operate-card.rail,
+  .operate-card.full {
+    grid-column: span 12;
+  }
 }
 
 /* ---------- 批次过程与逐题信号格 ---------- */

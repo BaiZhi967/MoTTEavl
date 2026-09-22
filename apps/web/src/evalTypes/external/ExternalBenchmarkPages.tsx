@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { StatusFlap } from "../../board/StatusFlap";
+import { OutcomeFlap } from "../../board/OutcomeFlap";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import {
@@ -14,6 +18,10 @@ import {
   prepareExternalDataset,
   type ExternalJobRecord,
 } from "../../api/client";
+import Input from "@douyinfe/semi-ui/lib/es/input";
+import Select from "@douyinfe/semi-ui/lib/es/select";
+import Button from "@douyinfe/semi-ui/lib/es/button";
+import { FieldGrid, Field, IssueBar } from "../../board/FieldGrid";
 import { suiteRoutes } from "../registry";
 
 const SCOPE_LABELS: Record<string, string> = {
@@ -100,15 +108,13 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
         .catch((e) => setError(String(e)));
     };
 
-    const submitPreflight = (event: FormEvent) => {
-      event.preventDefault();
+    const submitPreflight = () => {
       getExternalPreflight(benchmarkId, { model, scope })
         .then(setPreflight)
         .catch((e) => setError(String(e)));
     };
 
-    const submitRun = (event: FormEvent) => {
-      event.preventDefault();
+    const submitRun = () => {
       setRunError("");
       createExternalRun(benchmarkId, { model, scope })
         .then((run) => navigate(ROUTES.monitor([run.id])))
@@ -116,48 +122,83 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
     };
 
     return (
-      <div className="page">
-        <section className="panel detail" aria-label={text.operateAria}>
-          <div className="panel-head"><h2>{text.title}</h2></div>
+      <div className="page operate">
+        <section className="panel" aria-label={text.operateAria}>
+          <div className="panel-head">
+            <h2>{text.title}</h2>
+          </div>
           {error && <p className="error">{error}</p>}
-          <p className="hint">
+          <p className="page-lead">
             Catalog 状态：<strong data-testid="catalog-status">{catalog?.status ?? "…"}</strong>
-            {catalog?.blockers?.length ? `；阻塞：${catalog.blockers.join("、")}` : ""}
-            {catalog?.dataset ? `（来源 ${catalog.dataset.provenance}，${catalog.dataset.rows} 题）` : ""}
+            {catalog?.blockers?.length ? `阻塞：${catalog.blockers.join("、")}` : ""}
+            {catalog?.dataset ? `来源 ${catalog.dataset.provenance} · ${catalog.dataset.rows} 题` : ""}
           </p>
-          <p className="hint">一次 Run 只启动一个外部 Job；Runner 未注册/数据未准备时创建会在提交前被拒绝，不产生模型调用。</p>
+          <p className="hint">
+            一次 Run 只启动一个外部 Job；Runner 未注册或数据未准备时，创建会在提交前被拒绝，不产生模型调用。
+          </p>
+        </section>
 
-          <form className="inline-field" onSubmit={submitPrepare} aria-label="准备本地数据">
-            <span className="field-label">数据准备</span>
-            <input className="control" value={revision} onChange={(e) => setRevision(e.target.value)} aria-label="数据 revision" />
-            <textarea className="control" rows={4} value={fileText} onChange={(e) => setFileText(e.target.value)}
-              placeholder={text.preparePlaceholder} aria-label="JSONL 内容" />
-            <button className="button" type="submit">校验并准备</button>
-            {prepareNotice && <span className="hint" data-testid="prepare-notice">{prepareNotice}</span>}
+        <section className="panel" aria-label="准备本地数据">
+          <div className="panel-head">
+            <h2>数据准备</h2>
+          </div>
+          <form onSubmit={(event) => { event.preventDefault(); submitPrepare(event); }}>
+            <FieldGrid>
+              <Field label="数据 revision" hint="写进不可变数据集，评分分母随之固定">
+                <Input value={revision} onChange={(v) => setRevision(v)} aria-label="数据 revision" />
+              </Field>
+              <Field label="JSONL 内容" wide hint={text.preparePlaceholder}>
+                <textarea
+                  rows={6}
+                  value={fileText}
+                  onChange={(e) => setFileText(e.target.value)}
+                  placeholder={text.preparePlaceholder}
+                  aria-label="JSONL 内容"
+                />
+              </Field>
+            </FieldGrid>
+            <div className="actions">
+              <Button theme="solid" type="primary" htmlType="submit">校验并准备</Button>
+              {prepareNotice && <span className="hint" data-testid="prepare-notice">{prepareNotice}</span>}
+            </div>
           </form>
+        </section>
 
-          <form className="inline-field" onSubmit={submitPreflight} aria-label="静态预检">
-            <span className="field-label">静态预检</span>
-            <input className="control" value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型档案 id" aria-label="模型" />
-            <button className="button" type="submit">预检（不触发模型调用）</button>
+        <section className="panel" aria-label="运行参数">
+          <div className="panel-head">
+            <h2>运行参数</h2>
+          </div>
+          <form onSubmit={(event) => { event.preventDefault(); submitPreflight(); }} aria-label="静态预检">
+            <FieldGrid>
+              <Field label="模型档案 id" hint="预检与创建运行共用这一个字段">
+                <Input
+                  value={model}
+                  onChange={(v) => setModel(v)}
+                  placeholder="模型档案 id"
+                  aria-label="模型"
+                />
+              </Field>
+              <Field label="范围">
+                <Select
+                  value={scope}
+                  onChange={(v) => setScope(String(v))}
+                  aria-label="范围"
+                  optionList={Object.entries(SCOPE_LABELS).map(([value, label]) => ({ value, label }))}
+                />
+              </Field>
+            </FieldGrid>
+            <IssueBar note="预检只做静态检查（零模型调用）；排队执行会启动外部 Job">
+              <Button htmlType="submit">预检（不触发模型调用）</Button>
+              <Button theme="solid" type="primary" onClick={() => submitRun()}>排队执行</Button>
+            </IssueBar>
+            {runError && <span className="error" data-testid="run-error">{runError}</span>}
           </form>
           {preflight && (
             <div data-testid="preflight-panel">
               <p className="hint">{preflight.ok ? "预检通过" : `预检未通过：${preflight.reasons.join("；")}`}</p>
-              <p className="hint">静态能力与真实已验证状态分开；打开页面/预检不会发起付费调用。</p>
+              <p className="hint">静态能力与真实已验证状态分开；打开页面与预检都不会发起付费调用。</p>
             </div>
           )}
-
-          <form className="inline-field" onSubmit={submitRun} aria-label="创建运行">
-            <span className="field-label">创建运行</span>
-            <select className="control" value={scope} onChange={(e) => setScope(e.target.value)} aria-label="范围">
-              {Object.entries(SCOPE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
-              ))}
-            </select>
-            <button className="button" type="submit">排队执行</button>
-            {runError && <span className="error" data-testid="run-error">{runError}</span>}
-          </form>
         </section>
       </div>
     );
@@ -195,19 +236,27 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
             <input className="control" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="搜索" />
           </div>
           {page && page.cases.length > 0 ? (
-            <table className="table" aria-label="样本清单">
-              <thead><tr><th>case</th><th>学科</th><th>gold</th></tr></thead>
-              <tbody>
-                {page.cases.map((row) => (
-                  <tr key={row.case_id}>
-                    <td className="mono">{row.case_id}</td>
-                    <td>{row.subject}</td>
-                    <td>{row.has_gold ? "有" : "无（unscored）"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p className="hint">尚无已准备的数据集。</p>}
+            <Board
+              label="样本清单板面"
+              head={
+                <>
+                  <th className="w-[260px]">case</th>
+                  <th>学科</th>
+                  <th className="w-[160px]">gold</th>
+                </>
+              }
+            >
+              {page.cases.map((row) => (
+                <tr key={row.case_id}>
+                  <td className="data board-id" title={row.case_id}>{row.case_id}</td>
+                  <td>{row.subject}</td>
+                  <td className="data">{row.has_gold ? "有" : "无（unscored）"}</td>
+                </tr>
+              ))}
+            </Board>
+          ) : (
+            <EmptyBoard reason="尚无已准备的数据集" next="先在操作页「校验并准备」导入本地 JSONL" />
+          )}
         </section>
       </div>
     );
@@ -239,22 +288,40 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
       <div className="page">
         <section className="panel detail" aria-label={`${benchmarkId} 运行监控`}>
           <div className="panel-head"><h2>运行监控</h2><BackLink /></div>
-          {runs.length === 0 && <p className="hint">暂无 {benchmarkId}-external 运行。</p>}
-          <table className="table" aria-label="运行列表">
-            <thead><tr><th>Run</th><th>状态</th><th>Job</th><th>scope</th></tr></thead>
-            <tbody>
+          {runs.length === 0 && (
+            <EmptyBoard
+              reason={"暂无 " + benchmarkId + "-external 运行"}
+              next="在操作页选好模型与范围后「排队执行」"
+            />
+          )}
+          {runs.length > 0 && (
+            <Board
+              label="运行列表板面"
+              head={
+                <>
+                  <th className="w-[300px]">Run</th>
+                  <th className="w-[130px]">状态</th>
+                  <th>Job</th>
+                  <th className="w-[160px]">scope</th>
+                </>
+              }
+            >
               {runs.map((run) => (
                 <tr key={run.id}>
-                  <td className="mono">
-                    <button type="button" className="link" onClick={() => navigate(ROUTES.result(run.id))}>{run.id}</button>
+                  <td className="data board-id" title={run.id}>
+                    <button type="button" className="link run-id" onClick={() => navigate(ROUTES.result(run.id))}>
+                      {run.id}
+                    </button>
                   </td>
-                  <td>{run.status}</td>
-                  <td className="mono">{(jobs[run.id] ?? []).map((job) => job.status).join(",") || "—"}</td>
-                  <td>{scopeLabel(run.manifest?.scope)}</td>
+                  <td><StatusFlap status={String(run.status)} /></td>
+                  <td className="data truncate" title={(jobs[run.id] ?? []).map((job) => job.status).join(",") || undefined}>
+                    {(jobs[run.id] ?? []).map((job) => job.status).join(",") || "—"}
+                  </td>
+                  <td className="data">{scopeLabel(run.manifest?.scope)}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+            </Board>
+          )}
         </section>
       </div>
     );
@@ -325,19 +392,26 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
                   {notAttempted.length} 条未尝试（not_attempted，计入分母不消失）：{notAttempted.map((row: any) => row.case_id).join("、")}
                 </p>
               )}
-              <table className="table" aria-label="样本结果">
-                <thead><tr><th>case</th><th>处置</th><th>预测</th><th>gold</th></tr></thead>
-                <tbody>
-                  {cases.map((row: any) => (
-                    <tr key={row.case_id}>
-                      <td className="mono">{row.case_id}</td>
-                      <td>{row.outcome}</td>
-                      <td className="mono">{row.result?.prediction ?? "—"}</td>
-                      <td className="mono">{row.result?.gold ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <Board
+                label="样本结果板面"
+                head={
+                  <>
+                    <th className="w-[260px]">case</th>
+                    <th className="w-[150px]">处置</th>
+                    <th>预测</th>
+                    <th className="w-[180px]">gold</th>
+                  </>
+                }
+              >
+                {cases.map((row: any) => (
+                  <tr key={row.case_id}>
+                    <td className="data board-id" title={row.case_id}>{row.case_id}</td>
+                    <td className="data">{row.outcome}</td>
+                    <td className="data truncate" title={row.result?.prediction ?? undefined}>{row.result?.prediction ?? "—"}</td>
+                    <td className="data truncate" title={row.result?.gold ?? undefined}>{row.result?.gold ?? "—"}</td>
+                  </tr>
+                ))}
+              </Board>
               <div data-testid="metric-columns">
                 <p className="hint">指标双栏（互不覆盖）：</p>
                 <div className="inline-field">

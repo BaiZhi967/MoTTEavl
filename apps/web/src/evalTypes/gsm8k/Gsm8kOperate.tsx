@@ -6,6 +6,7 @@ import {
   type BenchmarkOverview, type BenchmarkPreset, type ModelRecord,
 } from "../../api/client";
 import { ModelPicker } from "../../components/ModelPicker";
+import { FieldGrid, Field, IssueBar } from "../../board/FieldGrid";
 import { suiteRoutes } from "../registry";
 import { DATASET_NAME, SCOPE_OPTIONS, scopeLabel, sortPresets } from "./presets";
 import {
@@ -145,83 +146,84 @@ export function Gsm8kOperate() {
     }
   };
 
-  return (
-    <div className="page">
-      <section className="panel detail" aria-label="GSM8K 操作页">
-        <div className="panel-head">
-          <h2>GSM8K 数学评测 · 操作</h2>
-        </div>
-        {error && <p className="error">{error}</p>}
+  const revisionShort = preset?.provenance?.revision ? String(preset.provenance.revision).slice(0, 7) : "";
 
-        <div className="operate-grid">
-          <div className="operate-card">
-            <h3 className="embed-title">数据集（版本固定）</h3>
+  return (
+    <div className="page operate">
+      {/* 签发台：本次运行定义 / 模型 / 数据集维护。顶栏页签已经报了「操作」，页内不再重复标题。 */}
+      <section className="panel" aria-label="本次运行定义">
+        <div className="panel-head">
+          <h2>本次运行定义</h2>
+          <p className="panel-summary">
+            本次将跑 <b className="mono">{runSize}</b> 题 · 输出上限 <b className="mono">1024</b>
+          </p>
+        </div>
+        <FieldGrid>
+          <Field label="数据集（版本固定）">
             {preset ? (
               <>
                 {presets.length > 1 && (
-                  <div className="inline-field">
-                    <span className="field-label">运行数据集</span>
-                    <select
-                      className="control"
-                      aria-label="运行数据集"
-                      value={preset.scenario}
-                      onChange={(change) => setChosenScenario(change.target.value)}
-                    >
-                      {presets.map((item) => (
-                        <option key={item.scenario} value={item.scenario}>
-                          {item.scenario} · {scopeLabel(item.scope)} · {item.cases} 题
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <select
+                    className="control"
+                    aria-label="运行数据集"
+                    value={preset.scenario}
+                    onChange={(change) => setChosenScenario(change.target.value)}
+                  >
+                    {presets.map((item) => (
+                      <option key={item.scenario} value={item.scenario}>
+                        {item.scenario} · {item.cases} 题
+                      </option>
+                    ))}
+                  </select>
                 )}
-                <p className="mono">{preset.scenario}</p>
-                <p className="hint mono">
-                  {preset.dataset} · {scopeLabel(preset.scope)} · {preset.cases} 题
-                  {preset.provenance?.revision ? ` · revision ${String(preset.provenance.revision).slice(0, 7)}` : ""}
-                </p>
+                {/* 数据集身份与事实合成一行：identity 加粗，其余跟在后面，不在别处再复述一遍。
+                     dataset 与 scenario 同名时只写一次。 */}
+                <span className="hint mono dataset-line">
+                  <b className="mono">{preset.scenario}</b>
+                  {preset.dataset && preset.dataset !== preset.scenario ? " · " + preset.dataset : ""}
+                  {" · "}{scopeLabel(preset.scope)} · {preset.cases} 题
+                  {revisionShort ? ` · revision ${revisionShort}` : ""}
+                </span>
                 {preset.provenance?.synthetic === true && (
-                  <p className="hint">合成夹具（synthetic）：题面为占位数据，不是官方题目。</p>
+                  <span className="hint">合成夹具（synthetic）：题面为占位数据，不是官方题目。</span>
                 )}
               </>
             ) : (
-              <p className="hint">尚未导入数据集。用「下载并导入数据集」卡从官方仓库按 pinned commit 取题。</p>
+              <span className="hint">尚未导入数据集。用下方「下载并导入数据集」从官方仓库按 pinned commit 取题。</span>
             )}
-          </div>
+          </Field>
 
-          <div className="operate-card">
-            <h3 className="embed-title">题目（本次运行跑哪些题）</h3>
-            <label>
-              本次运行题目
-              <select
-                className="control"
-                value={caseMode}
-                onChange={(change) => setCaseMode(change.target.value === "ids" ? "ids"
-                  : change.target.value === "random" ? "random" : "all")}
-              >
-                <option value="all">全部（{preset?.cases ?? 0} 题）</option>
-                <option value="random">随机 N 题</option>
-                <option value="ids">指定题目（题目页勾选）</option>
-              </select>
-            </label>
-            {caseMode === "random" && (
-              <>
-                <label>
-                  随机题数
-                  <input
-                    type="number" min={1} max={preset?.cases ?? 1} value={randomCount}
-                    onChange={(change) => setRandomCount(change.target.value)}
-                  />
-                </label>
-                <label>
-                  随机种子（写进运行快照，可复现）
-                  <input className="mono" value={seed} onChange={(change) => setSeed(change.target.value)} />
-                </label>
-                <button type="button" className="link" onClick={() => setSeed(randomSeed())}>重新生成种子</button>
-              </>
-            )}
-            {caseMode === "ids" && (
-              <p className="hint">
+          <Field label="本次运行题目">
+            <select
+              className="control"
+              aria-label="本次运行题目"
+              value={caseMode}
+              onChange={(change) => setCaseMode(change.target.value === "ids" ? "ids"
+                : change.target.value === "random" ? "random" : "all")}
+            >
+              <option value="all">全部（{preset?.cases ?? 0} 题）</option>
+              <option value="random">随机 N 题</option>
+              <option value="ids">指定题目（题目页勾选）</option>
+            </select>
+          </Field>
+
+          {caseMode === "random" && (
+            <>
+              <Field label="随机题数">
+                <input
+                  type="number" min={1} max={preset?.cases ?? 1} value={randomCount}
+                  onChange={(change) => setRandomCount(change.target.value)}
+                  aria-label="随机题数"
+                />
+              </Field>
+              <Field label="随机种子" hint="写进运行快照，可复现">
+                <input className="mono" value={seed} onChange={(change) => setSeed(change.target.value)} aria-label="随机种子" />
+              </Field>
+            </>
+          )}
+          {caseMode === "ids" && (
+            <Field label="指定题目" wide>
+              <span className="hint">
                 {usablePicked
                   ? `已选 ${usablePicked.caseIds.length} 题（${usablePicked.dataset}）`
                   : pickedMismatch
@@ -237,29 +239,59 @@ export function Gsm8kOperate() {
                     清除
                   </button>
                 )}
-              </p>
-            )}
-            {caseMode === "all" && (
-              <p className="hint">
-                整份数据集（{preset?.cases ?? 0} 题）。
+              </span>
+            </Field>
+          )}
+          {caseMode === "all" && (
+            <Field label="题目明细" wide>
+              <span className="hint">
                 <Link className="link" to={ROUTES.cases}>浏览 / 勾选题目</Link>
-              </p>
-            )}
-          </div>
+              </span>
+            </Field>
+          )}
 
-          <div className="operate-card">
-            <h3 className="embed-title">模型（可多选对比）</h3>
-            <ModelPicker
-              models={models}
-              selected={selected}
-              onToggle={(id) => setSelected((current) =>
-                current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
-            />
+        </FieldGrid>
+        {/* 只读派生读数：不是可编辑字段，单独三列排开，不跟可编辑字段抢两列 */}
+        <FieldGrid columns={3}>
+          <Field label="题数（本次）">
+            <span className="field-value mono">
+              {caseMode === "random" ? `${randomCount || 0} / ${preset?.cases ?? 0}`
+                : caseMode === "ids" ? `${usablePicked?.caseIds.length ?? 0} / ${preset?.cases ?? 0}`
+                  : preset?.cases ?? "—"}
+            </span>
+          </Field>
+          <Field label="输出上限"><span className="field-value mono">1024</span></Field>
+          <Field label="重试"><span className="field-value mono">0</span></Field>
+        </FieldGrid>
+        {reasoningModels.length > 0 && (
+          <p className="hint">输出上限固定 1024：高思考强度会把预算耗在思考上，正文可能为空并记为解析失败。</p>
+        )}
+      </section>
+
+      <section className="panel" aria-label="模型">
+        <div className="panel-head">
+          <h2>模型（可多选对比）</h2>
+          <p className="panel-summary">
+            已选 <b className="mono">{selected.length}</b> 个
+          </p>
+        </div>
+        <ModelPicker
+          models={models}
+          selected={selected}
+          onToggle={(id) => setSelected((current) =>
+            current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+        />
+        {reasoningModels.length > 0 && (
+          <FieldGrid>
             {reasoningModels.map((model) => (
-              <label key={model.id}>
-                {model.id} 的思考强度（默认 {model.reasoning?.default_level ?? "无"}）
+              <Field
+                key={model.id}
+                label={model.id + " 的思考强度"}
+                hint={"默认 " + (model.reasoning?.default_level ?? "无")}
+              >
                 <select
                   className="control mono"
+                  aria-label={model.id + " 的思考强度"}
                   value={levels[model.id] ?? ""}
                   onChange={(change) => setLevels((current) => ({ ...current, [model.id]: change.target.value }))}
                 >
@@ -268,112 +300,97 @@ export function Gsm8kOperate() {
                     <option key={level} value={level}>{level}</option>
                   ))}
                 </select>
-              </label>
+              </Field>
             ))}
-            {reasoningModels.length > 0 && (
-              <p className="hint">
-                输出上限固定 1024：高思考强度会把预算耗在思考上，正文可能为空并记为解析失败。
-              </p>
-            )}
-          </div>
-
-          <div className="operate-card">
-            <h3 className="embed-title">跑测参数（preset 固定）</h3>
-            <dl className="kv">
-              <dt>题数</dt>
-              <dd className="mono">
-                {caseMode === "random" ? `${randomCount || 0} / ${preset?.cases ?? 0}`
-                  : caseMode === "ids" ? `${usablePicked?.caseIds.length ?? 0} / ${preset?.cases ?? 0}`
-                    : preset?.cases ?? "—"}
-              </dd>
-              <dt>输出上限</dt><dd className="mono">1024</dd>
-              <dt>重试</dt><dd className="mono">0</dd>
-            </dl>
-          </div>
-
-          <div className="operate-card">
-            <h3 className="embed-title">下载并导入数据集</h3>
-            <p className="hint">
-              默认解析官方仓库数据文件的最新 commit，下载整个 test split（全量）并校验全文件；源文件存到
-              var/datasets/gsm8k/，题数写进不可变数据集，评分分母随之为该题数。需要冒烟子集、指定 commit
-              或指定版本时展开高级设置。
-            </p>
-            <form onSubmit={doImport} aria-label="下载并导入数据集">
-              <button type="submit" disabled={importing}>
-                <DownloadSimpleIcon size={14} weight="bold" aria-hidden />
-                {importing ? "下载中…"
-                  : revision.trim() ? `按指定 commit 下载${scopeLabel(scope)}数据集`
-                    : `下载最新${scopeLabel(scope)}数据集`}
-              </button>
-              <details className="disclosure">
-                <summary>高级设置</summary>
-                <label>
-                  题目范围
-                  <select
-                    className="control"
-                    value={scope}
-                    onChange={(change) => setScope(change.target.value === "smoke" ? "smoke" : "full")}
-                  >
-                    {SCOPE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  官方仓库 commit（40 位）
-                  <input
-                    value={revision}
-                    onChange={(change) => setRevision(change.target.value)}
-                    placeholder="留空 = 自动解析官方最新"
-                  />
-                </label>
-                <label>
-                  数据集名
-                  <input value={name} onChange={(change) => setName(change.target.value)} />
-                </label>
-                <label>
-                  数据集版本
-                  <input
-                    value={version}
-                    onChange={(change) => setVersion(change.target.value)}
-                    placeholder="留空 = 自动（同内容复用，否则下一个空号）"
-                  />
-                </label>
-                <label>
-                  License
-                  <input value={license} onChange={(change) => setLicense(change.target.value)} />
-                </label>
-              </details>
-              {message && <p className="import-feedback pass">{message}</p>}
-            </form>
-          </div>
-        </div>
-
-        <div className="actions">
-          <button
-            type="button"
-            className="primary"
-            onClick={() => void doRun()}
-            disabled={running || selected.length === 0 || !preset || runSize <= 0}
-          >
-            {running ? "创建中…" : `发起跑测（${selected.length} 个模型 × ${runSize} 题）`}
-          </button>
-          <span className="hint">真实调用 · 产生费用 · 发起后自动进入过程页</span>
-        </div>
-        {failures.length > 0 && (
-          <ul className="failure-list">
-            {failures.map((failure) => (
-              <li key={failure.model} className="error">{failure.model}：{failure.error}</li>
-            ))}
-          </ul>
-        )}
-        {launched.length > 0 && (
-          <p>
-            已创建 {launched.length} 个运行 ·{" "}
-            <Link className="link" to={ROUTES.monitor(launched)}>查看批次进度</Link>
-          </p>
+          </FieldGrid>
         )}
       </section>
+
+      <section className="panel" aria-label="数据集维护">
+        <div className="panel-head">
+          <h2>下载并导入数据集</h2>
+        </div>
+        <p className="hint">
+          默认解析官方仓库数据文件的最新 commit，下载整个 test split（全量）并校验全文件；源文件存到
+          var/datasets/gsm8k/，题数写进不可变数据集，评分分母随之为该题数。需要冒烟子集、指定 commit
+          或指定版本时展开高级设置。
+        </p>
+        <form onSubmit={doImport} aria-label="下载并导入数据集">
+          <div className="actions">
+            <button type="submit" disabled={importing}>
+              <DownloadSimpleIcon size={14} weight="bold" aria-hidden />
+              {importing ? "下载中…"
+                : revision.trim() ? `按指定 commit 下载${scopeLabel(scope)}数据集`
+                  : `下载最新${scopeLabel(scope)}数据集`}
+            </button>
+          </div>
+          <details className="disclosure">
+            <summary>高级设置</summary>
+            <FieldGrid>
+              <Field label="题目范围">
+                <select
+                  className="control"
+                  aria-label="题目范围"
+                  value={scope}
+                  onChange={(change) => setScope(change.target.value === "smoke" ? "smoke" : "full")}
+                >
+                  {SCOPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="官方仓库 commit（40 位）" hint="留空 = 自动解析官方最新">
+                <input
+                  value={revision}
+                  onChange={(change) => setRevision(change.target.value)}
+                  aria-label="官方仓库 commit"
+                  placeholder="40 位 sha"
+                />
+              </Field>
+              <Field label="数据集名">
+                <input value={name} onChange={(change) => setName(change.target.value)} aria-label="数据集名" />
+              </Field>
+              <Field label="数据集版本" hint="留空 = 自动（同内容复用，否则下一个空号）">
+                <input
+                  value={version}
+                  onChange={(change) => setVersion(change.target.value)}
+                  aria-label="数据集版本"
+                />
+              </Field>
+              <Field label="License">
+                <input value={license} onChange={(change) => setLicense(change.target.value)} aria-label="License" />
+              </Field>
+            </FieldGrid>
+          </details>
+          {message && <p className="import-feedback pass">{message}</p>}
+        </form>
+      </section>
+
+      <IssueBar note="真实调用 · 产生费用 · 发起后自动进入过程页">
+        <button
+          type="button"
+          className="primary"
+          onClick={() => void doRun()}
+          disabled={running || selected.length === 0 || !preset || runSize <= 0}
+        >
+          {running ? "创建中…" : `发起跑测（${selected.length} 个模型 × ${runSize} 题）`}
+        </button>
+        {launched.length > 0 && (
+          <span className="hint">
+            已创建 {launched.length} 个运行 ·{" "}
+            <Link className="link" to={ROUTES.monitor(launched)}>查看批次进度</Link>
+          </span>
+        )}
+      </IssueBar>
+
+      {error && <p className="error">{error}</p>}
+      {failures.length > 0 && (
+        <ul className="failure-list">
+          {failures.map((failure) => (
+            <li key={failure.model} className="error">{failure.model}：{failure.error}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

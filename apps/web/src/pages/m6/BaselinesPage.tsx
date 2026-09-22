@@ -1,4 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
+import { EmptyBoard } from "../../board/EmptyBoard";
+import { StatusFlap } from "../../board/StatusFlap";
 import { Link } from "react-router-dom";
 import { ArrowClockwiseIcon, PushPinIcon } from "@phosphor-icons/react";
 import {
@@ -71,9 +74,17 @@ function BaselineDetail({
       </dl>
 
       <h3 className="embed-title">固定 entries</h3>
-      <table data-testid="baseline-entries-table">
-        <thead><tr><th>cell_key</th><th>Run</th><th>ScoringPass</th></tr></thead>
-        <tbody>
+      <Board
+        testId="baseline-entries-table"
+        label="基线固定条目板面"
+        head={
+          <>
+            <th className="w-[220px]">cell_key</th>
+            <th className="w-[300px]">Run</th>
+            <th>ScoringPass</th>
+          </>
+        }
+      >
           {(baseline.entries ?? []).map((entry, index) => (
             <tr key={index}>
               <td className="mono">{entry.cell_key ?? "（单 Run）"}</td>
@@ -88,8 +99,7 @@ function BaselineDetail({
           {(baseline.entries ?? []).length === 0 && (
             <tr><td colSpan={3} className="empty">服务端未返回 entries</td></tr>
           )}
-        </tbody>
-      </table>
+      </Board>
 
       <h3 className="embed-title">指标</h3>
       {metrics.length === 0 ? (
