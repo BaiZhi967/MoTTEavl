@@ -79,6 +79,7 @@ token 命名为 `--tone-<语气>-bg` / `--tone-<语气>-border` / `--tone-<语�
 ### 2.4 间距、圆角、边框
 
 - 基础网格 12px；间距刻度：`4 / 8 / 12 / 16 / 20 / 24 / 32`（侧栏与页边距用 20/24）
+- 响应式辅助 token：`--space-none: 0`、`--space-sm: 12px`、`--size-full: 100%`；移动端单列与横向导航统一使用
 - 圆角：`6px` 控件（按钮、输入、tab）/ `8px` 卡片与面板 / `9999px` 徽章 pill、进度条、开关
 - 边框一律 `1px solid var(--border)`；控件与 hover 强调用 `var(--border-strong)`。全站不存在第二种边框宽度，不存在投影
 - 焦点环：双层 `box-shadow: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--accent)`，替代原生 outline

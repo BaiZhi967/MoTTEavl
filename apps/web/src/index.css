@@ -1,45 +1,85 @@
 /* MoTTEavl web console stylesheet.
- * Token 唯一来源，与 apps/web/DESIGN.md 第 2 节一一对应；改值必须同步改文档。 */
+ * Token 唯一来源，与 apps/web/DESIGN.md 第 2 节一一对应（v2 任务控制）；改值必须同步改文档。 */
+
+/* JetBrains Mono 自托管（DESIGN.md 2.3）：数据层字体，中文回退栈内中文字体 */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/jetbrains-mono-latin-700-normal.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   color-scheme: light;
 
-  /* 灰阶（暖灰一家，禁止混入冷灰） */
-  --bg-canvas: #f7f6f3;
+  /* 冷灰纸面（DESIGN.md 2.1） */
+  --bg-canvas: #f4f6fa;
   --bg-surface: #ffffff;
-  --bg-subtle: #fafaf9;
-  --border: #eaeaea;
-  --text-primary: #2f3437;
-  --text-secondary: #787774;
-  --text-faint: #a8a7a3;
-  --ink: #111111;
-  --ink-hover: #333333;
-  --text-on-ink: #ffffff;
+  --bg-subtle: #f0f3f8;
+  --bg-inset: #e9edf4;
+  --border: #dce2ec;
+  --border-strong: #c3ccdc;
+  --text-primary: #1b2331;
+  --text-secondary: #5a6580;
+  --text-faint: #98a2b5;
+  --accent: #0e9bb8;
+  --accent-hover: #0b7e96;
+  --on-accent: #ffffff;
 
-  /* 语义色（全站唯一彩色） */
-  --tone-success-bg: #edf3ec;
-  --tone-success-fg: #346538;
-  --tone-error-bg: #fdebec;
-  --tone-error-fg: #9f2f2d;
-  --tone-info-bg: #e1f3fe;
-  --tone-info-fg: #1f6c9f;
-  --tone-warning-bg: #fbf3db;
-  --tone-warning-fg: #956400;
-  --tone-neutral-bg: #efefed;
-  --tone-neutral-fg: #5f5e5b;
+  /* 语义信号色（全站唯一彩色；语气三件套见 DESIGN.md 2.2，成对使用） */
+  --success: #15875a;
+  --warning: #a96f00;
+  --error: #c6403c;
+  --neutral: #667085;
+  --tone-info-bg: rgba(14, 155, 184, 0.1);
+  --tone-info-border: rgba(14, 155, 184, 0.35);
+  --tone-info-fg: var(--accent);
+  --tone-success-bg: rgba(21, 135, 90, 0.1);
+  --tone-success-border: rgba(21, 135, 90, 0.35);
+  --tone-success-fg: var(--success);
+  --tone-error-bg: rgba(198, 64, 60, 0.1);
+  --tone-error-border: rgba(198, 64, 60, 0.35);
+  --tone-error-fg: var(--error);
+  --tone-warning-bg: rgba(169, 111, 0, 0.1);
+  --tone-warning-border: rgba(169, 111, 0, 0.35);
+  --tone-warning-fg: var(--warning);
+  --tone-neutral-bg: rgba(102, 112, 133, 0.1);
+  --tone-neutral-border: rgba(102, 112, 133, 0.35);
+  --tone-neutral-fg: var(--neutral);
 
-  --space-none: 0;
-  --space-sm: 8px;
-  --space-md: 12px;
-  --size-full: 100%;
-  --border-width: 1px;
-  --font-label: 13px;
-  --font-metric-value: 26px;
-  --weight-semibold: 600;
-
-  /* 字体 */
+  /* 字体（DESIGN.md 2.3）：数据层 JetBrains Mono 自托管 + 中文系统栈 */
   --font-sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --font-mono: "JetBrains Mono", "PingFang SC", "Microsoft YaHei", ui-monospace, monospace;
+
+  /* 响应式布局辅助（DESIGN.md 2.4） */
+  --space-none: 0;
+  --space-sm: 12px;
+  --size-full: 100%;
 
   font-family: var(--font-sans);
   font-size: 14px;
@@ -68,46 +108,49 @@ body {
   color: var(--text-faint);
 }
 
+/* 焦点环：双层 box-shadow（画布色 2px + accent 2px），暗线在白底上更清晰 */
 :focus-visible {
-  outline: 2px solid var(--tone-info-fg);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--bg-canvas),
+    0 0 0 4px var(--accent);
 }
 
-/* ---------- 应用骨架：左侧悬浮导航 + 右侧工作台 ---------- */
+/* ---------- 应用骨架：左侧全高导航栏 + 右侧工作台（DESIGN.md 3.1） ---------- */
 
 .app-shell {
   position: fixed;
-  inset: var(--space-none);
+  inset: 0;
   overflow: hidden;
   display: flex;
-  gap: 16px;
-  padding: 16px;
+  gap: 20px;
+  padding: 20px;
   background: var(--bg-canvas);
 }
 
 .sidebar {
   overflow-y: auto;
   flex: none;
-  width: 216px;
+  width: 236px;
   display: flex;
   flex-direction: column;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px 12px;
+  border-right: 1px solid var(--border);
+  padding: 20px 12px;
 }
 
 .brand {
-  padding: 0 8px 12px;
+  padding: 0 10px 16px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .brand h1 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 18px;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 15px;
   font-weight: 600;
   margin: 0;
   color: var(--text-primary);
@@ -115,8 +158,11 @@ body {
 
 .brand p {
   margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
 }
 
 .side-nav {
@@ -131,7 +177,7 @@ body {
   gap: 8px;
   width: 100%;
   padding: 8px 10px;
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
   border-radius: 6px;
@@ -140,7 +186,10 @@ body {
   font-size: 13px;
   text-align: left;
   text-decoration: none;
-  transition: background-color 200ms ease, color 200ms ease;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
 }
 
 .tab:hover {
@@ -148,15 +197,20 @@ body {
   color: var(--text-primary);
 }
 
+/* active = info 语气三件套（dim 底 + 35% 描边 + accent 前景） */
 .tab[aria-current="page"] {
-  background: var(--tone-neutral-bg);
-  color: var(--text-primary);
+  background: var(--tone-info-bg);
+  border-color: var(--tone-info-border);
+  color: var(--accent);
   font-weight: 500;
 }
 
 .nav-group-label {
-  margin: 12px 8px 4px;
+  margin: 14px 10px 6px;
+  font-family: var(--font-mono);
   font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   color: var(--text-faint);
 }
 
@@ -170,13 +224,13 @@ body {
   overflow-y: auto;
 }
 
-/* ---------- 页面与面板 ---------- */
+/* ---------- 页面与面板（DESIGN.md 3.3） ---------- */
 
 .page {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  padding: 16px 16px 32px;
+  padding: 20px 24px 48px;
   align-items: flex-start;
 }
 
@@ -184,7 +238,7 @@ body {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 16px;
+  padding: 16px 18px;
   min-width: 320px;
   flex: 1 1 0;
 }
@@ -199,7 +253,7 @@ body {
   flex-basis: 100%;
 }
 
-/* 不对称双表布局：宽表占大头，禁止两个内容面板 50/50 平分（DESIGN.md 第 4 节） */
+/* 不对称双表布局：宽表占大头，禁止两个内容面板 50/50 平分（DESIGN.md 3.3） */
 .panel.wide-panel {
   flex: 2 1 0;
 }
@@ -249,9 +303,9 @@ form select,
   width: 100%;
   margin-top: 4px;
   padding: 6px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: var(--bg-surface);
+  background: var(--bg-inset);
   color: var(--text-primary);
   font: inherit;
 }
@@ -290,7 +344,10 @@ button {
   background: var(--bg-surface);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background-color 200ms ease, border-color 200ms ease, transform 100ms ease;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    transform 100ms ease;
 }
 
 button:hover {
@@ -309,14 +366,15 @@ button:disabled {
 
 /* 主动作显式声明（语义驱动）；type=submit 不再自动获得主按钮外观 */
 button.primary {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--text-on-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
 }
 
 button.primary:hover {
-  background: var(--ink-hover);
-  border-color: var(--ink-hover);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 button.link {
@@ -337,7 +395,7 @@ button.link.danger {
   color: var(--tone-error-fg);
 }
 
-/* 路由内链接（react-router Link）沿用 link 语气：info 前景色 */
+/* 路由内链接（react-router Link）沿用 link 语气：accent 前景色 */
 a.link {
   color: var(--tone-info-fg);
   font-size: 13px;
@@ -397,7 +455,9 @@ a.link {
   font: inherit;
   font-size: 13px;
   text-align: left;
-  transition: background-color 200ms ease, color 200ms ease;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease;
 }
 
 .provider-item:hover {
@@ -406,8 +466,8 @@ a.link {
 }
 
 .provider-item[data-state="active"] {
-  background: var(--tone-neutral-bg);
-  color: var(--text-primary);
+  background: var(--tone-info-bg);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -581,18 +641,18 @@ a.link {
 
 /* 卡片内的高级设置折叠：默认收起，展开后才是次级表单字段 */
 .disclosure {
-  padding: var(--space-sm) var(--space-none) var(--space-none);
+  padding: 8px 0 0;
 }
 
 .disclosure summary {
   cursor: pointer;
-  font-size: var(--font-label);
-  font-weight: var(--weight-semibold);
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
 .disclosure[open] summary {
-  margin-bottom: var(--space-sm);
+  margin-bottom: 8px;
 }
 
 /* 更新密钥行：卡片内非 form 容器，控件走 .control 体系 */
@@ -629,18 +689,18 @@ a.link {
 }
 
 .model-config-group {
-  flex-basis: var(--size-full);
-  min-width: var(--space-none);
-  margin: var(--space-none);
-  padding: var(--space-md) var(--space-none);
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 0;
   border: none;
-  border-top: var(--border-width) solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .model-config-group legend,
 .model-config-group summary {
-  font-size: var(--font-label);
-  font-weight: var(--weight-semibold);
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -652,20 +712,20 @@ a.link {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-md);
-  padding: var(--space-sm) var(--space-none);
+  gap: 12px;
+  padding: 8px 0;
 }
 
 .model-option .hint {
-  margin: var(--space-none);
+  margin: 0;
 }
 
 .model-option .switch {
-  flex-shrink: var(--space-none);
+  flex-shrink: 0;
 }
 
 .model-config-group textarea {
-  max-width: var(--size-full);
+  max-width: 100%;
   resize: vertical;
 }
 
@@ -686,7 +746,7 @@ a.link {
   color: var(--text-primary);
 }
 
-/* ---------- 表格 ---------- */
+/* ---------- 表格（DESIGN.md 5：表头 10px mono uppercase 宽字距） ---------- */
 
 table {
   width: 100%;
@@ -703,9 +763,12 @@ td {
 }
 
 th {
-  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
   font-weight: 500;
-  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -741,7 +804,7 @@ td.row-actions .link {
 }
 
 .kv dd {
-  min-width: var(--space-none);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -758,7 +821,7 @@ td.row-actions .link {
   display: flex;
   gap: 12px;
   padding: 4px 8px;
-  border-left: 3px solid var(--tone-neutral-bg);
+  border-left: 3px solid var(--tone-neutral-border);
   margin-bottom: 2px;
   background: var(--bg-subtle);
 }
@@ -800,39 +863,93 @@ td.row-actions .link {
   color: var(--text-secondary);
 }
 
-/* ---------- 状态徽章 ---------- */
+/* ---------- 状态徽章：LED + pill + 语气三件套（DESIGN.md 5） ---------- */
 
 .status-badge {
-  display: inline-block;
-  padding: 1px 10px;
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid transparent;
   border-radius: 9999px;
+  font-family: var(--font-mono);
   font-size: 12px;
+  letter-spacing: 0.06em;
   background: var(--tone-neutral-bg);
+  border-color: var(--tone-neutral-border);
   color: var(--tone-neutral-fg);
+  white-space: nowrap;
+}
+
+/* LED 圆点：颜色跟随徽章前景；info（进行中）语气带呼吸外晕 */
+.status-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.status-badge::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes led-pulse {
+  0%,
+  100% {
+    transform: scale(0.7);
+    opacity: 0.1;
+  }
+  50% {
+    transform: scale(2.2);
+    opacity: 0.35;
+  }
 }
 
 .status-tone-success {
   background: var(--tone-success-bg);
+  border-color: var(--tone-success-border);
   color: var(--tone-success-fg);
 }
 
 .status-tone-error {
   background: var(--tone-error-bg);
+  border-color: var(--tone-error-border);
   color: var(--tone-error-fg);
 }
 
 .status-tone-info {
   background: var(--tone-info-bg);
+  border-color: var(--tone-info-border);
   color: var(--tone-info-fg);
+}
+
+/* info = 进行中语气：LED 呼吸脉冲（终态恒亮，无动画） */
+.status-tone-info::after {
+  animation: led-pulse 1.5s ease-in-out infinite;
 }
 
 .status-tone-warning {
   background: var(--tone-warning-bg);
+  border-color: var(--tone-warning-border);
   color: var(--tone-warning-fg);
 }
 
 .status-tone-neutral {
   background: var(--tone-neutral-bg);
+  border-color: var(--tone-neutral-border);
   color: var(--tone-neutral-fg);
 }
 
@@ -841,7 +958,7 @@ td.row-actions .link {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(17, 17, 17, 0.32);
+  background: rgba(27, 35, 49, 0.32);
   animation: fade-in 200ms ease;
 }
 
@@ -880,7 +997,8 @@ td.row-actions .link {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+  /* 全站唯一允许阴影处（DESIGN.md 5） */
+  box-shadow: 0 4px 16px rgba(27, 35, 49, 0.08);
 }
 
 .menu-item {
@@ -915,9 +1033,9 @@ td.row-actions .link {
   gap: 8px;
   min-width: 168px;
   padding: 6px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: var(--bg-surface);
+  background: var(--bg-inset);
   color: var(--text-primary);
   font: inherit;
   font-size: 13px;
@@ -925,7 +1043,7 @@ td.row-actions .link {
 }
 
 .select-trigger[data-state="open"] {
-  border-color: var(--text-faint);
+  border-color: var(--border-strong);
 }
 
 .select-content {
@@ -936,7 +1054,8 @@ td.row-actions .link {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+  /* 全站唯一允许阴影处（DESIGN.md 5） */
+  box-shadow: 0 4px 16px rgba(27, 35, 49, 0.08);
 }
 
 .select-item {
@@ -981,21 +1100,23 @@ td.row-actions .link {
   width: 32px;
   height: 18px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 9999px;
-  background: var(--tone-neutral-bg);
+  background: var(--bg-inset);
   cursor: pointer;
-  transition: background-color 200ms ease, border-color 200ms ease;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease;
 }
 
 .switch:hover {
-  background: var(--tone-neutral-bg);
+  background: var(--bg-inset);
 }
 
 .switch[data-state="checked"],
 .switch[data-state="checked"]:hover {
-  background: var(--ink);
-  border-color: var(--ink);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .switch-thumb {
@@ -1014,7 +1135,7 @@ td.row-actions .link {
   transform: translate(14px, -50%);
 }
 
-/* ---------- 分段切换（Radix Tabs：同一份草案的两种编辑视图） ---------- */
+/* ---------- 分段切换（Radix Tabs：套件五段与草案双视图） ---------- */
 
 .tabs-list {
   display: inline-flex;
@@ -1023,7 +1144,7 @@ td.row-actions .link {
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-subtle);
+  background: var(--bg-inset);
 }
 
 .tabs-trigger {
@@ -1044,8 +1165,9 @@ td.row-actions .link {
 
 .tabs-trigger[data-state="active"] {
   background: var(--bg-surface);
-  color: var(--text-primary);
+  color: var(--accent);
   font-weight: 500;
+  box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 /* ---------- 结果与提示 ---------- */
@@ -1058,10 +1180,14 @@ td.row-actions .link {
   color: var(--tone-error-fg);
 }
 
+/* 空状态：虚线框 + 居中 faint 文案（DESIGN.md 5） */
 .empty {
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 18px;
   color: var(--text-faint);
   text-align: center;
-  padding: 12px 0;
+  font-size: 12.5px;
 }
 
 .error {
@@ -1092,13 +1218,13 @@ td.row-actions .link {
   color: var(--text-primary);
 }
 
-/* 能力不可用 / 禁用原因 / 零费用说明：3px 左语气条 + --bg-subtle 底（DESIGN.md 第 4 节） */
+/* 语气条通知：3px 左语气条 + dim 底（DESIGN.md 5；warning / info / error 三档） */
 .notice {
   margin: 8px 0 0;
   padding: 6px 10px;
   border-left: 3px solid var(--tone-warning-fg);
   border-radius: 0 6px 6px 0;
-  background: var(--bg-subtle);
+  background: var(--tone-warning-bg);
   color: var(--text-secondary);
   font-size: 13px;
   overflow-wrap: anywhere;
@@ -1111,6 +1237,13 @@ td.row-actions .link {
 /* 只读说明（零费用 / 只读历史）：info 语气条，与警告分开 */
 .notice-info {
   border-left-color: var(--tone-info-fg);
+  background: var(--tone-info-bg);
+}
+
+/* 失败原因：error 语气条 */
+.notice-error {
+  border-left-color: var(--tone-error-fg);
+  background: var(--tone-error-bg);
 }
 
 .actions {
@@ -1126,7 +1259,30 @@ td.row-actions .link {
   color: var(--text-secondary);
 }
 
-/* ---------- 动效（只允许 transform / opacity） ---------- */
+/* 骨架屏：列表 / 表格 / 详情加载态统一使用（DESIGN.md 5） */
+.skeleton {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-subtle) 25%,
+    var(--border) 50%,
+    var(--bg-subtle) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-scan 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-scan {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ---------- 动效（只允许 transform / opacity；呼吸与流光见 2.5） ---------- */
 
 @keyframes fade-in {
   from {
@@ -1181,7 +1337,7 @@ td.row-actions .link {
 .model-picker-item input[type="checkbox"] {
   width: auto;
   margin: 0;
-  accent-color: var(--ink);
+  accent-color: var(--accent);
 }
 
 /* ---------- 类型操作页三卡布局 ---------- */
@@ -1201,7 +1357,7 @@ td.row-actions .link {
   padding: 12px;
 }
 
-/* ---------- 批次过程与逐题格子 ---------- */
+/* ---------- 批次过程与逐题信号格 ---------- */
 
 .run-progress {
   display: inline-flex;
@@ -1213,15 +1369,15 @@ td.row-actions .link {
 .progress-bar {
   display: inline-block;
   width: 120px;
-  height: 6px;
+  height: 4px;
   border-radius: 9999px;
-  background: var(--tone-neutral-bg);
+  background: var(--bg-inset);
   overflow: hidden;
 }
 
 .progress-fill {
   display: block;
-  height: 6px;
+  height: 4px;
   border-radius: 9999px;
   background: var(--tone-info-fg);
 }
@@ -1259,30 +1415,32 @@ td.row-actions .link {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 24px;
-  border-radius: 4px;
+  height: 28px;
+  border-radius: 5px;
   font-size: 11px;
   font-family: var(--font-mono);
 }
 
+/* 信号格：语气三件套；pending 用 inset 底 */
 .grid-cell-pass {
   background: var(--tone-success-bg);
+  border: 1px solid var(--tone-success-border);
   color: var(--tone-success-fg);
-  border: 1px solid var(--tone-success-fg);
 }
 
 .grid-cell-fail {
   background: var(--tone-error-bg);
+  border: 1px solid var(--tone-error-border);
   color: var(--tone-error-fg);
-  border: 1px solid var(--tone-error-fg);
 }
 
 .grid-cell-pending {
-  background: var(--tone-neutral-bg);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
   color: var(--text-faint);
 }
 
-/* ---------- 指标卡与钻取行 ---------- */
+/* ---------- 指标卡与钻取行（DESIGN.md 5：左 2px 语气条） ---------- */
 
 .metric-cards {
   display: flex;
@@ -1292,12 +1450,32 @@ td.row-actions .link {
 }
 
 .metric-card {
+  position: relative;
+  overflow: hidden;
   flex: 1 1 140px;
   min-width: 130px;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   text-align: center;
+}
+
+.metric-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border-strong);
+}
+
+.metric-card[data-tone="success"]::before {
+  background: var(--tone-success-fg);
+}
+
+.metric-card[data-tone="error"]::before {
+  background: var(--tone-error-fg);
 }
 
 .metric-card[data-tone="success"] .metric-value {
@@ -1310,14 +1488,18 @@ td.row-actions .link {
 
 .metric-value {
   margin: 0;
-  font-size: var(--font-metric-value);
+  font-family: var(--font-mono);
+  font-size: 26px;
   font-weight: 600;
 }
 
 .metric-label {
   margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
 }
 
 .drill-detail {
@@ -1379,12 +1561,12 @@ td.row-actions .link {
   padding: 8px 10px;
   max-height: 320px;
   overflow: auto;
-  background: var(--bg-subtle);
+  background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text-primary);
@@ -1460,5 +1642,18 @@ td.row-actions .link {
     display: block;
     max-width: var(--size-full);
     overflow-x: auto;
+  }
+}
+
+/* ---------- 动效降级：尊重系统减少动态偏好（DESIGN.md 2.5） ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .status-tone-info::after {
+    animation: none;
+    opacity: 0;
+  }
+
+  .skeleton {
+    animation: none;
   }
 }
