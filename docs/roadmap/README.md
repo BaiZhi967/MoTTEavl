@@ -1,7 +1,7 @@
 # MoTTEavl M1–M7 阶段规划索引与实施约束
 
 日期：2026-09-19（UTC+08:00）  
-状态：规划文档已写入专项分支；M1–M7 的功能目标均待实现/验收。  
+状态：M1–M6 已有不同层级的实现/验收记录；M7 规划已细化，功能目标仍待实施与验收。
 规划分支：`docs/roadmap-m1-m7-20260919`  
 实现基线：`a668d13ee5ea0c3613648f8992ecaa4a148d3855`  
 旧平台参考：`BaiZhi967/llm_agent__evaluation_platform@b661bcdf83e1c3dfb8d6062ee78817d249e86a4c`
@@ -10,7 +10,9 @@
 
 M5 后续开发入口：[2026-09-21 详细执行计划](../superpowers/plans/2026-09-21-m5-execution.md)、[开工交接](../superpowers/plans/2026-09-21-m5-kickoff.md)、[开发 Agent 完整提示词](../prompts/M5-development-agent.md)。计划状态与实际验收记录分开维护。
 
-M6 开发入口：[2026-09-21 权威执行计划](../superpowers/plans/2026-09-21-m6-execution.md)、[开工交接](../superpowers/plans/2026-09-21-m6-kickoff.md)、[开发 Agent 完整提示词](../prompts/M6-development-agent.md)。M6 当前仍为 planned；以 `docs/verification/M6.md` 的 current summary 和实际证据为准。
+M6 开发入口：[2026-09-21 权威执行计划](../superpowers/plans/2026-09-21-m6-execution.md)、[开工交接](../superpowers/plans/2026-09-21-m6-kickoff.md)、[开发 Agent 完整提示词](../prompts/M6-development-agent.md)。M6 已合入主干，实际完成层级和遗留限制以 `docs/verification/M6.md` 与 `docs/PROGRESS.md` 为准。
+
+M7 开发入口：[2026-09-22 权威执行计划](../superpowers/plans/2026-09-22-m7-execution.md)、[开工交接](../superpowers/plans/2026-09-22-m7-kickoff.md)、[开发 Agent 完整提示词](../prompts/M7-development-agent.md)、[验证记录](../verification/M7.md)。M7 当前仍为 planned；stable/cutover 结论必须以实际支持矩阵、迁移、恢复和替代场景证据为准。
 
 后续执行细化（2026-09-19）：[M1–M7 开发执行总计划](../superpowers/plans/2026-09-19-m1-m7/README.md)已按更新后的代码基线编排逐包任务、依赖、文件触点、测试反例、完整覆盖表与阶段 review；[计划审阅记录](../superpowers/plans/2026-09-19-m1-m7/REVIEW.md)说明当前实现差异和规划验证。本次范围仅为详细计划与计划 review，不改变以下功能目标的待实施状态。
 
