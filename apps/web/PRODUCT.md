@@ -8,16 +8,15 @@ web
 
 ## Stack
 
-现状（既有，继续使用）：React 19 + Vite 8 + TypeScript + react-router-dom 7；交互原语 Radix UI；
-样式为手写 CSS（`apps/web/src/index.css`，约 2100 行）。
+React 19 + Vite 8 + TypeScript + react-router-dom 7；交互原语 Radix UI；**Tailwind CSS 4** 做布局与工具层；
+**Semi Design**（`@douyinfe/semi-ui`）做表单控件与外壳（深路径引入）；视觉世界是自研的**深色信息板**。
 
-**用户已决定的新栈（本轮设计方案的既定前提）**：
+样式分三层，顺序即优先级：`tailwind.css`（preflight + `@theme` 令牌）→ `ui.css`（控制台类层，板面令牌）
+→ `theme.css`（令牌别名 + 字体 + Semi 覆盖 + 浏览器表面）；板面基础件在 `board/board.css`。
 
-- 引入 **Tailwind CSS** 作为布局与工具层；
-- 引入 **Semi Design**（`@douyinfe/semi-ui`）作为组件与设计系统，视觉材质以它为准；
-- 迁移策略为**全量替换**：`index.css` 拆解为 Tailwind 主题 + Semi 主题 token，所有页面一次换完；
-- 同时删除 `apps/web/DESIGN.md` §7 与 `AGENTS.md` 中「禁止 Tailwind 与带视觉主见的组件库」的禁令，
-  改为「允许 Tailwind + 指定组件库 Semi Design」。此为用户明确指示，覆盖原有项目约定。
+**已完成的全量替换**：旧的 `index.css`（约 2100 行浅色纸面）已删除并改写成 `ui.css`；
+迁移桥（旧 token 名 + 未迁移页面的组件层补丁）已拆除；`DESIGN.md` §7 与 `AGENTS.md` 里
+「禁止 Tailwind 与带视觉主见的组件库」的禁令已删除，改为「允许 Tailwind + 指定组件库 Semi Design」。
 
 ## Users
 

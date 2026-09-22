@@ -1,8 +1,9 @@
 /* Tailwind 入口（只做两件事：preflight + 设计令牌）
  *
- * 载入顺序（main.tsx）：semi.css → tailwind.css → index.css（冻结的旧样式）→ theme.css
- * preflight 必须排在旧样式之前：旧页面依赖 UA 默认的 h1/h2 字号与裸控件外观，
- * 让 preflight 压在上面会当场把未迁移的页面打坏。主题令牌与旧 token 的桥接放在 theme.css（最后）。
+ * 载入顺序（main.tsx）：semi.css → tailwind.css → ui.css（控制台类层）→ theme.css（主题层）
+ * preflight 必须排在类层之前：类层只定义自己的类名，不接管 UA 默认样式；
+ * 让 preflight 压在上面会把还没写 className 的裸元素打坏。
+ * 令牌别名、骨架尺寸与 Semi 覆盖在 theme.css（最后载入，优先级最高）。
  */
 
 @import "tailwindcss";
@@ -23,6 +24,7 @@
 
   /* 五语气（深色底重调；语义不变，仍是唯一信号系统） */
   --color-tone-info: #57b6d9;
+  --color-tone-info-hover: #6cc4e3;
   --color-tone-success: #4cc38a;
   --color-tone-warning: #e3a63c;
   --color-tone-error: #e8695f;

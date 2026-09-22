@@ -3,8 +3,9 @@
 本文件是 `apps/web` 所有 UI 工作的唯一设计依据。改动界面之前先读本文。
 改设计 = 改本文 = 改 `src/tailwind.css` / `src/theme.css` 的令牌，三者同一个提交。
 
-v4 描述的是**已经建成的东西**（不是计划）：深色信息板世界 + 板面/签发台/转录面三种页面语法，
-以及一段仍在服役的**迁移桥**（第 8 节）。v3 的骨架与页面模式思路被继承，视觉世界整体替换。
+v4 描述的是**已经建成的东西**（不是计划）：深色信息板世界 + 板面/签发台/转录面三种页面语法。
+v3 的骨架与页面模式思路被继承，视觉世界整体替换；**迁移桥已在 v4.1 拆除**（第 8 节），
+旧世界（浅色冷灰纸面 + 6/8/9999px 圆角 + `--bg-canvas` 一族令牌）在仓库里不再有任何残留。
 
 ## 0. 设计语言与基调
 
@@ -27,7 +28,7 @@ v4 描述的是**已经建成的东西**（不是计划）：深色信息板世�
 
 ## 2. 令牌
 
-令牌定义在两处（都在 `src/`），Tailwind 4 的 CSS-first 配置：
+令牌定义在 `src/` 的两个文件里（`tailwind.css` 的 `@theme` 与 `theme.css` 的 `:root`），Tailwind 4 的 CSS-first 配置：
 
 ### 2.1 `tailwind.css` 的 `@theme`（唯一定义处）
 
@@ -41,9 +42,26 @@ v4 描述的是**已经建成的东西**（不是计划）：深色信息板世�
 | 圆角 | `--radius-cell` 2px / `--radius-panel` 4px | |
 | 密度 | `--spacing-row` 40px / `--spacing-row-compact` 32px | |
 
-`theme.css` 把它们别名成 `--board-*` / `--ink-*` / `--tone-*`，供手写 CSS 使用。
+`theme.css` 把它们别名成 `--board-*` / `--ink-*` / `--tone-*`，供手写 CSS（`ui.css`）使用，并补上三组 `@theme` 不适合放的令牌：
 
-### 2.2 Semi Design 覆盖（运行期 CSS 变量，已实测）
+- **语气三件套**：`--tone-{info,success,warning,error,neutral}-bg` / `-border`（深色底上的半透明语气，成对使用）。
+  语气前景就是 `--tone-*` 本身，不再有独立的 `-fg` 令牌。
+- **弹层表面**：`--scrim`（遮罩）、`--shadow-pop`（浮层阴影，全站唯一允许阴影处）。
+- **骨架尺寸**：`--shell-sidebar-w` / `--shell-topbar-h` / `--pane-gap` / `--page-pad-x|y` / `--panel-pad-x|y` / `--measure` / `--rail-w`。
+
+### 2.2 样式分层（三层，顺序即优先级）
+
+| 文件 | 职责 | 允许写十六进制色值 |
+|---|---|---|
+| `tailwind.css` | preflight + `@theme` 令牌（唯一定义处） | ✅ |
+| `ui.css` | 控制台类层：`.page` / `.panel` / `.control` / `.status-badge` … 全部定义成板面语法 | ❌（断言在 `tests/stylesheet.test.ts`） |
+| `theme.css` | 令牌别名与骨架尺寸、字体 `@font-face`、Semi 语义 token 覆盖、浏览器表面、板选择器 | ✅ |
+| `board/board.css` | 板面基础件（`Board` / `StatusFlap` / `FieldGrid` / 转录面）的语法 | ❌ |
+
+`ui.css` **不是"旧世界的皮"，也不是迁移桥**：它是控制台类名的唯一定义处，取值只允许板面令牌。
+页面级的一次性样式写在页面自己的 Tailwind 工具类里，不进 `ui.css`。
+
+### 2.3 Semi Design 覆盖（运行期 CSS 变量，已实测）
 
 Semi 2.103 的编译产物用 **2744 处 `var(--semi-*)` 消费 690 个变量**；深色主题就是
 `body[theme-mode=dark]` 里重定义它们；语义 token **从不被 `rgba()` 二次包装**（实测 0 处）。
@@ -53,7 +71,7 @@ Semi 2.103 的编译产物用 **2744 处 `var(--semi-*)` 消费 690 个变量**�
 包路径注意：Semi 的 `exports` 没导出 `dist/css/*`，完整主题只能用 Vite 别名指到真实文件
 （见 `vite.config.mts` 的 `semiThemeCss`）；`lib/es/_base/base.css` 只有 35KB 变量层，不含组件样式。
 
-### 2.3 字号阶梯
+### 2.4 字号阶梯
 
 26 板面大读数（data 600）/ 20 页面标题 / 15 面板标题（board 600）/ 13 正文与表单 /
 12.5 数据 / 12 翻牌格 / 11 列名（board、大写、字距 .08–.1em）/ 10 构建标识与 seq。
@@ -130,25 +148,33 @@ Semi 2.103 的编译产物用 **2744 处 `var(--semi-*)` 消费 690 个变量**�
 | 成本 | 永远带币种与统计范围；未知写「未知」 |
 | 空值 | 统一 `—`；永不空白、永不 0 |
 
-## 8. 迁移桥（**仍在服役**，不是历史遗留的脏东西）
+## 8. 迁移（已完成，桥已拆除）
 
-`theme.css` 里有两段桥，作用是把**尚未按新模式重写的页面**也拉进新世界：
+v4 的第一版用两段**迁移桥**把尚未重写的页面拉进新世界：token 层（旧 token 名 → 板面调色板）与
+组件层（旧类名整体改写到板面语法）。桥的价值是让"深色外壳 + 浅色页面"的半成品期不存在。
 
-1. **token 层**：把旧 token 名（`--bg-canvas` / `--text-primary` / `--tone-*` …）映射到板面调色板
-2. **组件层**：把旧类名整体改写到板面语法——`.status-badge` → 翻牌格、`.panel` / `.operate-card` / … → 方角、
-   `.embed-title` / `.field-label` / `.kv dt` → DIN 大写、`th` → 板面带、
-   `.control` / `form input|select|textarea` / `.operate-card …` → 板面控件规格
+**v4.1 把桥拆了。** 拆法不是删掉控制台类层（那会让 30 个页面的 markup 全部作废），
+而是**把类层本身改写到板面令牌上**——于是它不再是"临时补丁"，而是类名的唯一定义处：
 
-**顺序约束（硬）**：桥是未迁移页面的唯一外观来源，**删桥必须等所有页面迁完**，否则当场打回旧世界。
-每迁移一个页面，从桥里删掉对应规则；全部迁完后第 7 步整块删除。
+1. `index.css`（浅色"冷灰纸面"，2100 行）→ `ui.css`（板面类层，2047 行）。
+   45 个旧 token 名、16 处十六进制、13 处 rgba、6/8/9999px 圆角**全部清零**，断言在 `tests/stylesheet.test.ts`。
+2. `theme.css` 的 token 桥与组件桥整块删除；`theme.css` 只剩令牌别名、字体、Semi 覆盖、浏览器表面、板选择器。
+3. 结构性遗留一并消灭：`.operate-section` / `.operate-grid` / `.operate-card` 整族删除
+   （操作页改用 `FieldGrid` + `IssueBar`）；`.status-badge` 改成翻牌格语法；
+   `.metric-card` 改成板面读数格墙；`.table-scroll` / `.pane-scroll` / `.action-bar` / `.runs-table` / `.skeleton` 等 28 个死类名删除。
+4. 旧组件 `StatusBadge` / `MetricCards` 保留**类名与语义契约**（`.status-badge` / `.metric-card[data-tone]`），
+   实现换成板面语法——测试按语义断言（tone），不按外观断言，所以它们不是"遗留组件"，是板面原语的薄封装。
 
 ### 迁移台账（诚实记录）
 
-**已在新世界**：应用骨架、运行总览、GSM8K 操作页、GSM8K 题目页、Direct LLM 题目页、Agent 文件任务、
-CMMLU / C-Eval 操作页、Terminal-Bench 任务清单、评分历史、批次过程、运行时间线、逐题下钻、评分结果、Agent·Harness 资源清单。
+**已在板面语法上（全部页面）**：应用骨架、运行总览、GSM8K 操作页/题目页、Direct LLM 操作页/题目页、
+Terminal-Bench 操作页/任务清单、Agent 文件任务、CMMLU / C-Eval、评分历史、批次过程、运行时间线、
+逐题下钻、评分结果、资源清单、Provider 与模型、实验 / 比较 / 基线 / 门禁、场景 Workflow、Skill 校验、
+Replay / Fallback / 外部基准、Judge 校准。
 
-**仍在桥下（外观已一致，结构待细化）**：Provider 与模型、Terminal-Bench / Direct LLM 操作页的多卡栅格、
-实验 / 比较 / 基线 / 门禁、场景 Workflow / Skill 校验、Agent 监控与结果、Replay / Fallback / 外部基准其余页。
+**仍然欠着（质量工作，不是一致性问题）**：
+- Skill / Scenario 的 Schema 字段编辑仍是手写 `<label>` 序列（Workflow 文本页已迁到 `FieldGrid` + `IssueBar`）
+- `.runs-table .col-*` 之类的旧列宽钩子已随迁移删除，若将来需要列宽请写在 `<th>` 的 Tailwind 工具类上
 
 ## 9. 技术栈与治理
 
@@ -156,9 +182,9 @@ React 19 + Vite 8 + TypeScript；**Tailwind CSS 4** + **Semi Design 2.103**（�
 `@douyinfe/semi-ui/react19-adapter`，必须在任何 Semi 组件之前引入）；交互原语 Radix；路由 react-router-dom。
 
 样式载入顺序（`src/main.tsx`，**顺序即优先级，别改**）：
-`semi.css` → `tailwind.css`（preflight + 令牌）→ `index.css`（冻结的旧样式）→ `theme.css`（令牌别名 + Semi 覆盖 + 桥 + 新组件语法）。
+`semi.css` → `tailwind.css`（preflight + 令牌）→ `ui.css`（控制台类层）→ `theme.css`（令牌别名 + 字体 + Semi 覆盖 + 浏览器表面）。
 
-- preflight 必须排在旧样式之前：旧页面依赖 UA 默认的标题字号与裸控件外观
+- preflight 必须排在类层之前：类层只定义自己的类名，不接管 UA 默认样式
 - 依赖分包 + 路由级懒加载：首屏 app chunk 90KB → 52KB gzip；重页面按路由切分
 - 治理规则见 `AGENTS.md`（含"截图即证据"三条）
 
@@ -173,4 +199,5 @@ React 19 + Vite 8 + TypeScript；**Tailwind CSS 4** + **Semi Design 2.103**（�
 
 - **亮色主题**：当前是深色单主题。若需要在强光下使用，需要另做一版亮色令牌（用户已同意"先完成深色再决定"）。
 - **Semi CSS 体积**：单文件全量主题 75KB gzip，摇不掉；要压下去得走 SCSS 按组件编译主题。
-- **桥下页面的结构细化**：见第 8 节台账，属质量工作而非一致性工作。
+- **字段编辑器的 Schema 分支**：Scenario / Skill 的 Schema 字段仍是手写 label 序列，未走 `FieldGrid`。
+- **`ui.css` 的体量**：2047 行仍是"控制台类层"而非"组件库"；若将来类名继续增长，应拆成按域的多个文件。

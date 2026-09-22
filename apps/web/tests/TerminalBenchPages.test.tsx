@@ -652,11 +652,11 @@ describe("Terminal-Bench 页面", () => {
     const { container } = render(wrap(<TerminalBenchOperate />));
     await waitFor(() => expect(screen.getByTestId("tb-dataset-revision").textContent).toContain("tb-rev-1"));
     fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "claude-code" } });
-    const profileCard = Array.from(container.querySelectorAll(".operate-card"))
+    // 签发台（DESIGN.md §5 P3）：字段按面板分组，凭据引用与 Agent 身份同属一个 .panel，不再套第二层壳
+    const profileCard = Array.from(container.querySelectorAll("section.panel"))
       .find((card) => card.querySelector('[data-testid="tb-credential-0"]'));
     expect(profileCard).toBeTruthy();
-    // DESIGN.md：卡内分节用 .embed-title，不套第二层卡片
-    expect(profileCard?.querySelector(".operate-card")).toBeNull();
+    expect(profileCard?.querySelector("section.panel")).toBeNull();
     expect(profileCard?.textContent).toContain("凭据引用");
     expect(profileCard?.querySelectorAll('input[type="password"]')).toHaveLength(0);
     // 凭据行只有「名称 / 环境变量名」两个文本输入，没有第三个值字段

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import * as Switch from "@radix-ui/react-switch";
+import Switch from "@douyinfe/semi-ui/lib/es/switch";
 import {
   ArrowClockwiseIcon,
   KeyIcon,
@@ -37,6 +37,7 @@ import {
 } from "../api/client";
 import { Board } from "../board/Board";
 import { EmptyBoard } from "../board/EmptyBoard";
+import { Field, FieldGrid, IssueBar } from "../board/FieldGrid";
 import { formatContext } from "../components/ModelPicker";
 
 /** 目录接口不可用时的兜底：至少能创建本地兼容端点。 */
@@ -93,11 +94,13 @@ export function ProvidersPage() {
 
   return (
     <div className="page fill">
-      <aside className="panel list-panel pane" aria-label="Provider 清单">
+      {/* 主从：清单列固定轨道宽，由 .panel.list-panel（0-2-0）给出——
+          .panel 的 flex/min-width 是无层规则，@layer utilities 里的同名工具类压不过它。 */}
+      <aside className="panel list-panel" aria-label="Provider 清单">
         <div className="panel-head">
           <h2>Provider</h2>
           <div className="panel-head-actions">
-            <button type="button" className="icon-btn" aria-label="刷新清单" onClick={() => void refresh()}>
+            <button type="button" className="board-open" aria-label="刷新清单" onClick={() => void refresh()}>
               <ArrowClockwiseIcon size={14} weight="bold" aria-hidden />
             </button>
             <button type="button" className="link" onClick={() => setCreating(true)}>
@@ -106,35 +109,43 @@ export function ProvidersPage() {
             </button>
           </div>
         </div>
-        {loadError && <p className="error">{loadError}</p>}
-        {!loaded && providers.length === 0 ? (
-          <p className="empty">加载中</p>
-        ) : providers.length === 0 ? (
-          <p className="empty">暂无 Provider</p>
-        ) : (
-          <ul className="provider-list">
-            {providers.map((provider) => (
-              <li key={provider.name}>
-                <button
-                  type="button"
-                  className="provider-item"
-                  data-state={selectedProvider?.name === provider.name ? "active" : undefined}
-                  data-enabled={provider.enabled === false ? "false" : undefined}
-                  onClick={() => setSelected(provider.name)}
-                >
-                  <PlugIcon size={16} weight="bold" aria-hidden />
-                  <span className="provider-item-name mono">{provider.name}</span>
-                  {providerTests[provider.name] === true && (
-                    <span className="state-dot pass" aria-label="最近测试通过" />
-                  )}
-                  {providerTests[provider.name] === false && (
-                    <span className="state-dot fail" aria-label="最近测试失败" />
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="board-scroll">
+          {loadError && <p className="error">{loadError}</p>}
+          {!loaded && providers.length === 0 ? (
+            <p className="empty">加载中</p>
+          ) : providers.length === 0 ? (
+            <p className="empty">暂无 Provider</p>
+          ) : (
+            <ul className="provider-list">
+              {providers.map((provider) => (
+                <li key={provider.name}>
+                  <button
+                    type="button"
+                    className="provider-item"
+                    data-state={selectedProvider?.name === provider.name ? "active" : undefined}
+                    data-enabled={provider.enabled === false ? "false" : undefined}
+                    onClick={() => setSelected(provider.name)}
+                  >
+                    <PlugIcon size={16} weight="bold" aria-hidden />
+                    <span className="provider-item-name mono">{provider.name}</span>
+                    {/* 裸状态点：只给语气色，不带词——清单里"通过"会与详情行的测试结果文案撞车。
+                        StatusFlap 的封闭词表带固定文案，这里用板面 .flap 原语只要它的点。 */}
+                    {providerTests[provider.name] === true && (
+                      <span className="flap" data-tone="success" aria-label="最近测试通过">
+                        <span className="flap-dot" aria-hidden />
+                      </span>
+                    )}
+                    {providerTests[provider.name] === false && (
+                      <span className="flap" data-tone="error" aria-label="最近测试失败">
+                        <span className="flap-dot" aria-hidden />
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </aside>
 
       {selectedProvider ? (
@@ -154,7 +165,7 @@ export function ProvidersPage() {
         />
       ) : (
         loaded && (
-          <section className="panel provider-detail pane">
+          <section className="panel">
             <p className="empty">暂无 Provider，点击左侧「添加」创建第一个连接</p>
           </section>
         )
@@ -241,58 +252,57 @@ function CreateProviderDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content className="dialog-content" aria-label="创建 Provider">
-          <div className="dialog-header">
-            <Dialog.Title className="dialog-title">创建 Provider</Dialog.Title>
+          <div className="panel-head">
+            <Dialog.Title>创建 Provider</Dialog.Title>
             <Dialog.Close asChild>
-              <button type="button" className="icon-btn" aria-label="关闭创建面板">
+              <button type="button" className="board-open" aria-label="关闭创建面板">
                 <XIcon size={16} weight="bold" aria-hidden />
               </button>
             </Dialog.Close>
           </div>
           <form onSubmit={submit}>
-            <label>
-              协议类型
-              <select value={kind} onChange={(change) => changeKind(change.target.value)}>
-                {kinds.map((entry) => (
-                  <option key={entry.kind} value={entry.kind}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FieldGrid>
+              <Field label="协议类型">
+                <select value={kind} onChange={(change) => changeKind(change.target.value)}>
+                  {kinds.map((entry) => (
+                    <option key={entry.kind} value={entry.kind}>
+                      {entry.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="名称">
+                <input value={name} onChange={(change) => setName(change.target.value)} placeholder="my-provider" required />
+              </Field>
+              <Field label="Base URL">
+                <input
+                  value={baseUrl}
+                  onChange={(change) => setBaseUrl(change.target.value)}
+                  placeholder={kindMeta?.default_base_url ?? "http://localhost:8001/v1"}
+                  required
+                />
+              </Field>
+              <Field label="凭据 profile（留空则与名称相同）">
+                <input value={credentials} onChange={(change) => setCredentials(change.target.value)} placeholder="my-provider" />
+              </Field>
+              <Field label="API Key（可选；写入服务器凭据文件，不回显、不入库）" wide>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={apiKey}
+                  onChange={(change) => setApiKey(change.target.value)}
+                  placeholder="sk-…"
+                />
+              </Field>
+            </FieldGrid>
             {kindMeta?.description && <p className="hint">{kindMeta.description}</p>}
-            <label>
-              名称
-              <input value={name} onChange={(change) => setName(change.target.value)} placeholder="my-provider" required />
-            </label>
-            <label>
-              Base URL
-              <input
-                value={baseUrl}
-                onChange={(change) => setBaseUrl(change.target.value)}
-                placeholder={kindMeta?.default_base_url ?? "http://localhost:8001/v1"}
-                required
-              />
-            </label>
-            <label>
-              凭据 profile（留空则与名称相同）
-              <input value={credentials} onChange={(change) => setCredentials(change.target.value)} placeholder="my-provider" />
-            </label>
-            <label>
-              API Key（可选；写入服务器凭据文件，不回显、不入库）
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={apiKey}
-                onChange={(change) => setApiKey(change.target.value)}
-                placeholder="sk-…"
-              />
-            </label>
             <p className="hint">
               API Key 会写入服务器凭据文件（0600），与 <code>python -m motte_cli credentials set {"<profile>"}</code> 等价
               {kindMeta?.default_key_env && <>；未填写时回退环境变量 <code>{kindMeta.default_key_env}</code></>}
             </p>
-            <button type="submit" className="primary">创建</button>
+            <IssueBar>
+              <button type="submit" className="primary">创建</button>
+            </IssueBar>
             {error && <p className="error">{error}</p>}
           </form>
         </Dialog.Content>
@@ -540,22 +550,20 @@ function ProviderDetail({
   };
 
   return (
-    <section className="panel provider-detail pane" aria-label={`Provider ${provider.name} 详情`}>
-      <header className="detail-head">
-        <h2 className="mono">{provider.name}</h2>
-        <span className="status-badge status-tone-neutral kind-badge">{provider.kind}</span>
-        <div className="detail-actions">
-          <span className="inline-field">
-            <span className="field-label">启用</span>
-            <Switch.Root
-              className="switch"
-              checked={provider.enabled !== false}
-              onCheckedChange={(next) => void toggleProvider(next)}
-              aria-label={`启用 ${provider.name}`}
-            >
-              <Switch.Thumb className="switch-thumb" />
-            </Switch.Root>
-          </span>
+    <section className="panel" aria-label={`Provider ${provider.name} 详情`}>
+      <div className="panel-head">
+        {/* 标题与状态格是一组：面板头是 space-between，三件东西会把状态格甩到中缝 */}
+        <div className="panel-summary">
+          <h2 className="mono">{provider.name}</h2>
+          <span className="status-badge status-tone-neutral">{provider.kind}</span>
+        </div>
+        <div className="panel-head-actions">
+          <span className="field-name">启用</span>
+          <Switch
+            checked={provider.enabled !== false}
+            onChange={(next) => void toggleProvider(next)}
+            aria-label={`启用 ${provider.name}`}
+          />
           <button type="button" className="link" onClick={() => setKeyEditing((open) => !open)}>
             <KeyIcon size={14} weight="bold" aria-hidden />
             更新密钥
@@ -581,299 +589,332 @@ function ProviderDetail({
             </button>
           )}
         </div>
-      </header>
+      </div>
 
-      {keyEditing && (
-        <div className="key-edit">
-          <span className="field-label">新 API Key（{provider.credentials ?? provider.name}）</span>
-          <input
-            className="control"
-            type="password"
-            autoComplete="new-password"
-            aria-label="新 API Key"
-            value={keyInput}
-            onChange={(change) => setKeyInput(change.target.value)}
-            placeholder="sk-…"
-          />
-          <button type="button" onClick={() => void saveKey()} disabled={!keyInput}>
-            保存
-          </button>
-          <button type="button" onClick={() => { setKeyEditing(false); setKeyInput(""); }}>
-            取消
-          </button>
-        </div>
-      )}
-
-      <form className="connection-form" onSubmit={saveConnection} aria-label="连接配置">
-        <div className="section-head">
-          <h3 className="embed-title">连接</h3>
-        </div>
-        <div className="connection-grid">
-          <label>
-            协议类型
-            <select value={connectionKind} onChange={(change) => setConnectionKind(change.target.value)}>
-              {kinds.map((entry) => (
-                <option key={entry.kind} value={entry.kind}>
-                  {entry.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Base URL
-            <input
-              value={connectionUrl}
-              onChange={(change) => setConnectionUrl(change.target.value)}
-              placeholder="http://localhost:8001/v1"
-            />
-          </label>
-        </div>
-        <dl className="kv">
-          <dt>凭据 profile</dt>
-          <dd className="mono">{provider.credentials ?? provider.name}</dd>
-          <dt>密钥</dt>
-          <dd className="mono">{credentialHint ?? "未配置"}</dd>
-        </dl>
-        {connectionDirty && (
-          <button type="submit" className="primary" disabled={savingConnection}>
-            保存连接
-          </button>
+      <div className="board-scroll">
+        {keyEditing && (
+          <FieldGrid columns={1}>
+            <Field label={`新 API Key（${provider.credentials ?? provider.name}）`}>
+              <input
+                type="password"
+                autoComplete="new-password"
+                aria-label="新 API Key"
+                value={keyInput}
+                onChange={(change) => setKeyInput(change.target.value)}
+                placeholder="sk-…"
+              />
+            </Field>
+          </FieldGrid>
         )}
-      </form>
+        {keyEditing && (
+          <div className="board-foot">
+            <button type="button" className="primary" onClick={() => void saveKey()} disabled={!keyInput}>
+              保存
+            </button>
+            <button type="button" onClick={() => { setKeyEditing(false); setKeyInput(""); }}>
+              取消
+            </button>
+          </div>
+        )}
 
-      <section aria-label="模型列表">
-        <div className="section-head">
-          <h3 className="embed-title">模型列表</h3>
-          <button type="button" className="link" onClick={startAdd}>
-            <PlusIcon size={14} weight="bold" aria-hidden />
-            添加模型
-          </button>
-        </div>
-        <ul className="model-list">
-          {models.map((model) => {
-            const summary = parameterSummary({ ...model.parameters, max_output_tokens: model.max_output_tokens ?? model.parameters?.max_output_tokens ?? null });
-            const context = formatContext(model.context_window);
-            const test = tests[model.id];
-            const lifecycle = model.lifecycle ?? "draft";
-            const lifecycleLabel = lifecycle === "draft" ? "草稿" : lifecycle === "published" ? "已发布" : "已弃用";
-            return (
-              <li key={model.id} className="model-item">
-                <div className="model-row">
-                  <div className="model-main">
-                    <span className="mono model-id">{model.id}</span>
-                    <span className={`status-badge model-badge ${lifecycle === "published" ? "status-tone-success" : lifecycle === "deprecated" ? "status-tone-warning" : "status-tone-neutral"}`}>
-                      {lifecycleLabel} · g{model.generation ?? 1}
-                    </span>
-                    {context && <span className="status-badge status-tone-neutral model-badge">{context}</span>}
-                    {model.supports_tools && (
-                      <span className="status-badge status-tone-neutral model-badge">工具</span>
-                    )}
-                    {summary && <span className="model-params mono">{summary}</span>}
-                  </div>
-                  <div className="model-actions">
-                    <Switch.Root
-                      className="switch"
-                      checked={model.enabled !== false}
-                      onCheckedChange={(next) => void toggleModel(model, next)}
-                      aria-label={`启用 ${model.id}`}
-                      disabled={lifecycle !== "draft"}
-                    >
-                      <Switch.Thumb className="switch-thumb" />
-                    </Switch.Root>
-                    <button type="button" className="link" onClick={() => void runTest(model.id)} disabled={lifecycle === "deprecated"}>
-                      <PlayIcon size={14} weight="bold" aria-hidden />
-                      测试
-                    </button>
-                    {lifecycle === "draft" && (
-                      <>
-                        <button type="button" className="link" onClick={() => startEdit(model)}>
-                          <PencilSimpleIcon size={14} weight="bold" aria-hidden />
-                          编辑
-                        </button>
-                        <button type="button" className="link" onClick={() => void publishModelProfile(model.id)}>
-                          发布
-                        </button>
-                      </>
-                    )}
-                    {lifecycle !== "deprecated" && (
-                      <button type="button" className="link danger" onClick={() => void removeModel(model.id)}>
-                        弃用
+        <form onSubmit={saveConnection} aria-label="连接配置">
+          <div className="panel-head">
+            <h2>连接</h2>
+          </div>
+          <FieldGrid>
+            <Field label="协议类型">
+              <select value={connectionKind} onChange={(change) => setConnectionKind(change.target.value)}>
+                {kinds.map((entry) => (
+                  <option key={entry.kind} value={entry.kind}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Base URL">
+              <input
+                value={connectionUrl}
+                onChange={(change) => setConnectionUrl(change.target.value)}
+                placeholder="http://localhost:8001/v1"
+              />
+            </Field>
+          </FieldGrid>
+          <dl className="kv">
+            <dt>凭据 profile</dt>
+            <dd className="mono">{provider.credentials ?? provider.name}</dd>
+            <dt>密钥</dt>
+            <dd className="mono">{credentialHint ?? "未配置"}</dd>
+          </dl>
+          {connectionDirty && (
+            <div className="board-foot">
+              <button type="submit" className="primary" disabled={savingConnection}>
+                保存连接
+              </button>
+            </div>
+          )}
+        </form>
+
+        <section aria-label="模型列表">
+          <div className="panel-head">
+            <h2>模型列表</h2>
+            <button type="button" className="link" onClick={startAdd}>
+              <PlusIcon size={14} weight="bold" aria-hidden />
+              添加模型
+            </button>
+          </div>
+          <Board
+            label="模型列表"
+            head={
+              <>
+                {/* 不设「提供方」列：这张表本来就在某个 Provider 的详情面板内，列出来是复述 */}
+                <th className="w-[190px]">模型 id</th>
+                <th>参数</th>
+                <th className="w-[120px]">状态</th>
+                <th className="board-actions w-[280px]">操作</th>
+              </>
+            }
+          >
+            {models.map((model) => {
+              const summary = parameterSummary({ ...model.parameters, max_output_tokens: model.max_output_tokens ?? model.parameters?.max_output_tokens ?? null });
+              const context = formatContext(model.context_window);
+              const test = tests[model.id];
+              const lifecycle = model.lifecycle ?? "draft";
+              const lifecycleLabel = lifecycle === "draft" ? "草稿" : lifecycle === "published" ? "已发布" : "已弃用";
+              const lifecycleTone = lifecycle === "published" ? "status-tone-success" : lifecycle === "deprecated" ? "status-tone-warning" : "status-tone-neutral";
+              return (
+                <Fragment key={model.id}>
+                  <tr>
+                    <td className="data">{model.id}</td>
+                    <td>
+                      <span className="inline-flex items-center gap-2 flex-wrap">
+                        {context && <span className="status-badge status-tone-neutral">{context}</span>}
+                        {model.supports_tools && (
+                          <span className="status-badge status-tone-neutral">工具</span>
+                        )}
+                        {summary && <span className="muted mono">{summary}</span>}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`status-badge ${lifecycleTone}`}>
+                        {lifecycleLabel} · g{model.generation ?? 1}
+                      </span>
+                    </td>
+                    <td className="board-actions">
+                      <Switch
+                        checked={model.enabled !== false}
+                        onChange={(next) => void toggleModel(model, next)}
+                        aria-label={`启用 ${model.id}`}
+                        disabled={lifecycle !== "draft"}
+                      />
+                      <button type="button" className="link" onClick={() => void runTest(model.id)} disabled={lifecycle === "deprecated"}>
+                        <PlayIcon size={14} weight="bold" aria-hidden />
+                        测试
                       </button>
-                    )}
-                  </div>
-                </div>
-                {test && (
-                  <div className="model-test-result">
-                    {test === "running" ? (
-                      <span className="muted">测试中，真实调用进行中</span>
-                    ) : test.ok ? (
-                      <span className="pass">
-                        通过 <span className="mono">{Math.round(test.latency_ms ?? 0)}ms</span>
-                        {test.usage && (
-                          <span className="muted">
-                            {" "}
-                            tokens {test.usage.prompt_tokens ?? "?"} + {test.usage.completion_tokens ?? "?"}
+                      {lifecycle === "draft" && (
+                        <>
+                          <button type="button" className="link" onClick={() => startEdit(model)}>
+                            <PencilSimpleIcon size={14} weight="bold" aria-hidden />
+                            编辑
+                          </button>
+                          <button type="button" className="link" onClick={() => void publishModelProfile(model.id)}>
+                            发布
+                          </button>
+                        </>
+                      )}
+                      {lifecycle !== "deprecated" && (
+                        <button type="button" className="link danger" onClick={() => void removeModel(model.id)}>
+                          弃用
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                  {test && (
+                    <tr className="board-detail">
+                      <td colSpan={4}>
+                        {test === "running" ? (
+                          <span className="muted">测试中，真实调用进行中</span>
+                        ) : test.ok ? (
+                          <span className="pass">
+                            通过 <span className="mono">{Math.round(test.latency_ms ?? 0)}ms</span>
+                            {test.usage && (
+                              <span className="muted">
+                                {" "}
+                                tokens {test.usage.prompt_tokens ?? "?"} + {test.usage.completion_tokens ?? "?"}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="fail">
+                            失败 {test.error?.class && <span className="mono">{test.error.class}</span>}{" "}
+                            {test.error?.message ?? "未知错误"}
                           </span>
                         )}
-                      </span>
-                    ) : (
-                      <span className="fail">
-                        失败 {test.error?.class && <span className="mono">{test.error.class}</span>}{" "}
-                        {test.error?.message ?? "未知错误"}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-          {models.length === 0 && <li className="empty">暂无模型</li>}
-        </ul>
-      </section>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+            {models.length === 0 && (
+              <tr>
+                <td colSpan={4} style={{ height: "auto", padding: "16px" }}>
+                  <EmptyBoard reason="暂无模型" next="用上方「添加模型」为这个 Provider 注册模型" />
+                </td>
+              </tr>
+            )}
+          </Board>
+        </section>
 
-      {adding && (
-        <form
-          className="model-add"
-          onSubmit={submitModel}
-          aria-label={editing ? `编辑 ${provider.name} 的模型 ${editing}` : `为 ${provider.name} 添加模型`}
-        >
-          <label>
-            模型 ID{editing ? "（编辑中不可改）" : ""}
-            <input
-              value={modelId}
-              onChange={(change) => setModelId(change.target.value)}
-              placeholder="qwen2.5-7b"
-              required
-              disabled={Boolean(editing)}
-            />
-          </label>
-          <label>
-            API 模型名（留空则与 ID 相同）
-            <input value={modelName} onChange={(change) => setModelName(change.target.value)} placeholder="Qwen/Qwen2.5-7B-Instruct" />
-          </label>
-          <fieldset className="model-config-group">
-            <legend>基础限制</legend>
-            <div className="connection-grid">
-              <label>
-                上下文窗口
-                <input type="number" min={1} step={1} value={contextWindow} onChange={(change) => setContextWindow(change.target.value)} placeholder="32768" />
-              </label>
-              <label>
-                最大输出 Token
-                <input type="number" min={1} step={1} value={maxOutputTokens} onChange={(change) => setMaxOutputTokens(change.target.value)} placeholder="4096" aria-describedby="output-token-help" />
-              </label>
-            </div>
-            <p className="hint" id="output-token-help">单次模型请求允许生成的最大 Token 数。留空使用服务端默认值。</p>
-          </fieldset>
-          <fieldset className="model-config-group">
-            <legend>输入类型</legend>
-            <p className="hint">设置模型能够接收的内容类型。文本为必选项；能力声明不会自动转换输入内容。</p>
-            {[
-              ["text", "文本", "接收文本内容（必选）"],
-              ["image", "图片", "接收图片内容"],
-              ["video", "视频", "接收视频内容"],
-              ["pdf", "PDF", "直接接收 PDF 文档"],
-            ].map(([value, label, description]) => (
-              <div className="model-option" key={value}>
-                <div><span>{label}</span><p className="hint">{description}</p></div>
-                <Switch.Root className="switch" aria-label={`输入类型：${label}`} disabled={value === "text"} checked={inputModalities.includes(value)} onCheckedChange={(checked) => setInputModalities((current) => checked ? [...current, value] : current.filter((item) => item !== value))}>
-                  <Switch.Thumb className="switch-thumb" />
-                </Switch.Root>
-              </div>
-            ))}
-          </fieldset>
-          <fieldset className="model-config-group">
-            <legend>模型能力</legend>
-            <p className="hint">请勿勾选模型不支持的能力。声明支持不等于在每次请求中启用。</p>
-            {[
-              ["structured_output", "结构化输出", "支持通过 JSON Schema 约束模型输出的字段、类型和结构。"],
-              ["native_search", "原生联网搜索", "支持使用模型接口内置的联网搜索能力。"],
-              ["system_messages", "对话中系统消息", "支持在对话中途插入系统指令。"],
-            ].map(([key, label, description]) => (
-              <div className="model-option" key={key}>
-                <div><span>{label}</span><p className="hint">{description}</p></div>
-                <Switch.Root className="switch" aria-label={label} checked={capabilities[key] === true} onCheckedChange={(checked) => setCapabilities((current) => ({ ...current, [key]: checked }))}>
-                  <Switch.Thumb className="switch-thumb" />
-                </Switch.Root>
-              </div>
-            ))}
-            <div className="model-option">
-              <span>支持工具调用</span>
-              <Switch.Root className="switch" checked={supportsTools} onCheckedChange={setSupportsTools} aria-label="支持工具调用">
-                <Switch.Thumb className="switch-thumb" />
-              </Switch.Root>
-            </div>
-          </fieldset>
-          <fieldset className="model-config-group">
-            <legend>推理等级</legend>
-            <div className="model-option">
-              <span>启用推理等级映射</span>
-              <Switch.Root className="switch" checked={reasoningEnabled} onCheckedChange={setReasoningEnabled} aria-label="启用推理等级映射">
-                <Switch.Thumb className="switch-thumb" />
-              </Switch.Root>
-            </div>
-            {reasoningEnabled && <>
-              <div className="connection-grid">
-                <label>可用推理等级
-                  <input value={reasoningLevels} onChange={(change) => setReasoningLevels(change.target.value)} placeholder="low, medium, high" required />
-                </label>
-                <label>默认推理等级
-                  <select value={reasoningDefault} onChange={(change) => setReasoningDefault(change.target.value)} required>
-                    <option value="">请选择</option>
-                    {Array.from(new Set(reasoningLevels.split(/[,，\s]+/).filter(Boolean))).map((level) => <option key={level} value={level}>{level}</option>)}
-                  </select>
-                </label>
-              </div>
-              <label>CEL 表达式
-                <textarea className="mono" rows={5} value={reasoningControl} onChange={(change) => setReasoningControl(change.target.value)} placeholder={'{"reasoning_effort": reasoningLevel}'} required aria-describedby="reasoning-help" />
-              </label>
-              <p className="hint" id="reasoning-help">使用 CEL 将当前推理等级 <code>reasoningLevel</code> 映射为 JSON 对象，按顶层字段合并到请求体。保存时校验所有可用等级；运行可用 <code>manifest.reasoning_level</code> 覆盖默认等级。</p>
-              <p className="hint">示例仅适用于支持该字段的接口：Chat Completions 使用 <code>{'{"reasoning_effort": reasoningLevel}'}</code>；Responses 使用 <code>{'{"reasoning": {"effort": reasoningLevel}}'}</code>。不能覆盖模型、消息、工具或凭据字段。</p>
-            </>}
-          </fieldset>
-          <details className="model-config-group">
-            <summary>高级采样参数（可选）</summary>
-            <p className="hint">仅为支持采样参数的模型设置；推理模型通常应留空。不修改时保留已有配置。</p>
-            <div className="connection-grid">
-          <label>
-            temperature（0-1，可选）
-            <input
-              type="number"
-              min={0}
-              max={1}
-              step="any"
-              value={temperature}
-              onChange={(change) => setTemperature(change.target.value)}
-              placeholder="0.7"
-            />
-          </label>
-          <label>
-            top_p（0-1，可选）
-            <input
-              type="number"
-              min={0}
-              max={1}
-              step="any"
-              value={topP}
-              onChange={(change) => setTopP(change.target.value)}
-              placeholder="0.9"
-            />
-          </label>
-            </div>
-          </details>
-          <button type="submit" className="primary" disabled={savingModel}>{savingModel ? "保存中…" : editing ? "保存修改" : "注册"}</button>
-          <button
-            type="button"
-            onClick={() => {
-              resetModelForm();
-              setAdding(false);
-            }}
+        {adding && (
+          <form
+            className="panel"
+            onSubmit={submitModel}
+            aria-label={editing ? `编辑 ${provider.name} 的模型 ${editing}` : `为 ${provider.name} 添加模型`}
           >
-            取消
-          </button>
-        </form>
-      )}
-      {error && <p className="error">{error}</p>}
+            <div className="panel-head">
+              <h2>{editing ? `编辑模型 ${editing}` : "添加模型"}</h2>
+            </div>
+            <FieldGrid>
+              <Field label={"模型 ID" + (editing ? "（编辑中不可改）" : "")}>
+                <input
+                  value={modelId}
+                  onChange={(change) => setModelId(change.target.value)}
+                  placeholder="qwen2.5-7b"
+                  required
+                  disabled={Boolean(editing)}
+                />
+              </Field>
+              <Field label="API 模型名（留空则与 ID 相同）">
+                <input value={modelName} onChange={(change) => setModelName(change.target.value)} placeholder="Qwen/Qwen2.5-7B-Instruct" />
+              </Field>
+            </FieldGrid>
+            <fieldset className="mt-4 border-t border-board-rule pt-4">
+              <legend className="field-name">基础限制</legend>
+              <FieldGrid>
+                <Field label="上下文窗口">
+                  <input type="number" min={1} step={1} value={contextWindow} onChange={(change) => setContextWindow(change.target.value)} placeholder="32768" />
+                </Field>
+                <Field label="最大输出 Token">
+                  <input type="number" min={1} step={1} value={maxOutputTokens} onChange={(change) => setMaxOutputTokens(change.target.value)} placeholder="4096" aria-describedby="output-token-help" />
+                </Field>
+              </FieldGrid>
+              <p className="hint" id="output-token-help">单次模型请求允许生成的最大 Token 数。留空使用服务端默认值。</p>
+            </fieldset>
+            <fieldset className="mt-4 border-t border-board-rule pt-4">
+              <legend className="field-name">输入类型</legend>
+              <p className="hint">设置模型能够接收的内容类型。文本为必选项；能力声明不会自动转换输入内容。</p>
+              <FieldGrid>
+                {[
+                  ["text", "文本", "接收文本内容（必选）"],
+                  ["image", "图片", "接收图片内容"],
+                  ["video", "视频", "接收视频内容"],
+                  ["pdf", "PDF", "直接接收 PDF 文档"],
+                ].map(([value, label, description]) => (
+                  <Field key={value} label={label} hint={description}>
+                    <Switch
+                      aria-label={`输入类型：${label}`}
+                      disabled={value === "text"}
+                      checked={inputModalities.includes(value)}
+                      onChange={(checked) => setInputModalities((current) => checked ? [...current, value] : current.filter((item) => item !== value))}
+                    />
+                  </Field>
+                ))}
+              </FieldGrid>
+            </fieldset>
+            <fieldset className="mt-4 border-t border-board-rule pt-4">
+              <legend className="field-name">模型能力</legend>
+              <p className="hint">请勿勾选模型不支持的能力。声明支持不等于在每次请求中启用。</p>
+              <FieldGrid>
+                {[
+                  ["structured_output", "结构化输出", "支持通过 JSON Schema 约束模型输出的字段、类型和结构。"],
+                  ["native_search", "原生联网搜索", "支持使用模型接口内置的联网搜索能力。"],
+                  ["system_messages", "对话中系统消息", "支持在对话中途插入系统指令。"],
+                ].map(([key, label, description]) => (
+                  <Field key={key} label={label} hint={description}>
+                    <Switch
+                      aria-label={label}
+                      checked={capabilities[key] === true}
+                      onChange={(checked) => setCapabilities((current) => ({ ...current, [key]: checked }))}
+                    />
+                  </Field>
+                ))}
+                <Field label="支持工具调用">
+                  <Switch checked={supportsTools} onChange={setSupportsTools} aria-label="支持工具调用" />
+                </Field>
+              </FieldGrid>
+            </fieldset>
+            <fieldset className="mt-4 border-t border-board-rule pt-4">
+              <legend className="field-name">推理等级</legend>
+              <FieldGrid columns={1}>
+                <Field label="启用推理等级映射">
+                  <Switch checked={reasoningEnabled} onChange={setReasoningEnabled} aria-label="启用推理等级映射" />
+                </Field>
+              </FieldGrid>
+              {reasoningEnabled && <>
+                <FieldGrid>
+                  <Field label="可用推理等级">
+                    <input value={reasoningLevels} onChange={(change) => setReasoningLevels(change.target.value)} placeholder="low, medium, high" required />
+                  </Field>
+                  <Field label="默认推理等级">
+                    <select value={reasoningDefault} onChange={(change) => setReasoningDefault(change.target.value)} required>
+                      <option value="">请选择</option>
+                      {Array.from(new Set(reasoningLevels.split(/[,，\s]+/).filter(Boolean))).map((level) => <option key={level} value={level}>{level}</option>)}
+                    </select>
+                  </Field>
+                </FieldGrid>
+                <FieldGrid columns={1}>
+                  <Field label="CEL 表达式">
+                    <textarea className="mono" rows={5} value={reasoningControl} onChange={(change) => setReasoningControl(change.target.value)} placeholder={'{"reasoning_effort": reasoningLevel}'} required aria-describedby="reasoning-help" />
+                  </Field>
+                </FieldGrid>
+                <p className="hint" id="reasoning-help">使用 CEL 将当前推理等级 <code>reasoningLevel</code> 映射为 JSON 对象，按顶层字段合并到请求体。保存时校验所有可用等级；运行可用 <code>manifest.reasoning_level</code> 覆盖默认等级。</p>
+                <p className="hint">示例仅适用于支持该字段的接口：Chat Completions 使用 <code>{'{"reasoning_effort": reasoningLevel}'}</code>；Responses 使用 <code>{'{"reasoning": {"effort": reasoningLevel}}'}</code>。不能覆盖模型、消息、工具或凭据字段。</p>
+              </>}
+            </fieldset>
+            <details className="disclosure">
+              <summary>高级采样参数（可选）</summary>
+              <p className="hint">仅为支持采样参数的模型设置；推理模型通常应留空。不修改时保留已有配置。</p>
+              <FieldGrid>
+                <Field label="temperature（0-1，可选）">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step="any"
+                    value={temperature}
+                    onChange={(change) => setTemperature(change.target.value)}
+                    placeholder="0.7"
+                  />
+                </Field>
+                <Field label="top_p（0-1，可选）">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step="any"
+                    value={topP}
+                    onChange={(change) => setTopP(change.target.value)}
+                    placeholder="0.9"
+                  />
+                </Field>
+              </FieldGrid>
+            </details>
+            <IssueBar>
+              <button type="submit" className="primary" disabled={savingModel}>{savingModel ? "保存中…" : editing ? "保存修改" : "注册"}</button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetModelForm();
+                  setAdding(false);
+                }}
+              >
+                取消
+              </button>
+            </IssueBar>
+          </form>
+        )}
+        {error && <p className="error">{error}</p>}
+      </div>
     </section>
   );
 }

@@ -97,6 +97,15 @@
   white-space: nowrap;
 }
 
+/* 动作列里的控件必须分开：开关与几个 link 按钮贴在一起会连成一片（td 不能变 flex，会脱离表格布局） */
+.board-table td.board-actions > * {
+  vertical-align: middle;
+}
+
+.board-table td.board-actions > * + * {
+  margin-left: 12px;
+}
+
 /* 就地展开行（来自球鞋档案墙的 raise）：把这一行抽出来，不跳走 */
 .board-table tr.board-detail > td {
   height: auto;

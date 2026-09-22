@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Board } from "../../board/Board";
+import { FieldGrid, Field, IssueBar } from "../../board/FieldGrid";
 import { Link, useNavigate } from "react-router-dom";
 import { CalculatorIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import {
@@ -362,288 +363,330 @@ export function DirectLlmOperate() {
 
   return (
     <div className="page operate">
-      {/* 外层只做布局：顶栏页签已经报了「Direct LLM / 操作」，页内不再重复标题 */}
-      <section className="operate-section" aria-label="Direct LLM 操作页">
-        {error && <p className="error">{error}</p>}
-
-        <div className="operate-grid">
-          <div className="operate-card">
-            <h3 className="embed-title">数据集（版本固定）</h3>
+      {/* 签发台：本次运行定义 / 模型 / 数据集维护。顶栏页签已经报了「Direct LLM / 操作」，页内不再重复标题。 */}
+      <section className="panel" aria-label="本次运行定义">
+        <div className="panel-head">
+          <h2>本次运行定义</h2>
+          <p className="panel-summary">
+            本次将跑 <b className="mono">{runSize}</b> 题 · 已选 <b className="mono">{selected.length}</b> 个模型
+          </p>
+        </div>
+        <FieldGrid>
+          <Field label="数据集（版本固定）">
             {preset ? (
               <>
                 {presets.length > 1 && (
-                  <div className="inline-field">
-                    <span className="field-label">运行数据集</span>
-                    <select
-                      className="control"
-                      aria-label="运行数据集"
-                      value={preset.scenario}
-                      onChange={(change) => {
-                        setChosenScenario(change.target.value);
-                        setCaseMode((current) => current === "profile" ? "all" : current);
-                        setProfileName("");
-                      }}
-                    >
-                      {presets.map((item) => (
-                        <option key={item.scenario} value={item.scenario}>
-                          {item.scenario} · {item.cases} 题
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                {/* 数据集身份与事实合成一行：identity 加粗，其余跟在后面。
-                     dataset 与 scenario 同名时只写一次，不复述。 */}
-                <p className="hint mono dataset-line">
-                  <b className="mono">{preset.scenario}</b>
-                  {preset.dataset && preset.dataset !== preset.scenario ? " · " + preset.dataset : ""}
-                  {" · "}{preset.cases} 题 · {scorerLabel(datasetScorer(preset))}
-                </p>
-                <p className="hint mono">
-                  来源 {String(preset.provenance?.source ?? "—")}
-                  {preset.eval?.prompt_version ? ` · prompt ${preset.eval.prompt_version}` : ""}
-                  {preset.eval?.scorer_version ? ` · scorer ${preset.eval.scorer_version}` : ""}
-                </p>
-              </>
-            ) : (
-              <p className="hint">尚未导入数据集。用「内置样例」一键导入，或粘贴 / 选择本地 JSONL。</p>
-            )}
-
-            <details className="disclosure">
-              <summary>
-                受管来源{sourceError ? "（加载失败）" : managedSources == null ? "（加载中）" : `（${visibleSources?.length ?? 0}）`}
-              </summary>
-              <p className="hint">只读治理目录，不触发外部网络访问；待审核与受限来源不提供获取或准备操作。</p>
-              {managedSources?.some((item) => item.status === "restricted") && (
-                <div className="model-picker-item">
-                  <input
-                    type="checkbox"
-                    checked={showRestrictedSources}
-                    onChange={(change) => setShowRestrictedSources(change.target.checked)}
-                    aria-label="显示受限来源"
-                  />
-                  <span>显示受限来源</span>
-                </div>
-              )}
-              {sourceError ? (
-                <p className="error">受管来源加载失败：{sourceError}</p>
-              ) : managedSources == null ? (
-                <p className="empty">受管来源加载中</p>
-              ) : managedSources.length === 0 ? (
-                <p className="empty">暂无受管来源</p>
-              ) : visibleSources?.length === 0 ? (
-                <p className="empty">没有非受限来源</p>
-              ) : (
-                <Board
-                  label="受管来源目录"
-                  head={<>
-                    <th>来源</th><th>状态</th><th>Revision</th><th>Stable</th>
-                  </>}
-                >
-
-                
-
-                  {(visibleSources ?? []).map((managedSource) => {
-                    const statusMeta = SOURCE_STATUS_META[managedSource.status]
-                      ?? { label: managedSource.status, tone: "neutral" as const };
-                    const isOpen = openSourceId === managedSource.id;
-                    return (
-                      <Fragment key={managedSource.id}>
-                        <tr>
-                          <td>
-                            <button
-                              type="button"
-                              className="link"
-                              aria-expanded={isOpen}
-                              onClick={() => toggleSourceDetail(managedSource.id)}
-                            >
-                              {managedSource.label}
-                            </button>
-                            <span className="muted mono"> {managedSource.id}</span>
-                          </td>
-                          <td>
-                            <span className={`status-badge status-tone-${statusMeta.tone}`}>
-                              {statusMeta.label}
-                            </span>
-                          </td>
-                          <td>
-                            <span
-                              className={`status-badge ${managedSource.revision ? "status-tone-success" : "status-tone-neutral"}`}
-                              title={managedSource.revision ?? undefined}
-                            >
-                              {managedSource.revision ? "已固定" : "未固定"}
-                            </span>
-                          </td>
-                          <td>
-                            <span className={`status-badge ${managedSource.stable_eligible ? "status-tone-success" : "status-tone-neutral"}`}>
-                              {managedSource.stable_eligible ? "符合" : "不符合"}
-                            </span>
-                          </td>
-                        </tr>
-                        <tr>
-                          <td colSpan={4} className="muted">
-                            License <span className="mono">{managedSource.license_ids?.join(", ") || "—"}</span>
-                            {" · "}Profiles <span className="mono">{managedSource.profiles?.join(", ") || "—"}</span>
-                            {" · "}阻断 <span className="mono">{managedSource.blocker_count}</span>
-                          </td>
-                        </tr>
-                        {isOpen && (
-                          <tr className="drill-detail-row">
-                            <td colSpan={4}>
-                              <div className="drill-detail">
-                                {sourceDetailLoading ? (
-                                  <p className="empty">来源详情加载中</p>
-                                ) : sourceDetailError ? (
-                                  <p className="error">来源详情加载失败：{sourceDetailError}</p>
-                                ) : sourceDetail?.id === managedSource.id ? (
-                                  <>
-                                    <p>{sourceDetail.description}</p>
-                                    <dl className="kv">
-                                      <dt>distribution scope</dt>
-                                      <dd>
-                                        {DISTRIBUTION_LABELS[sourceDetail.governance.distribution_scope]
-                                          ?? sourceDetail.governance.distribution_scope}
-                                        {" · "}<span className="mono">{sourceDetail.governance.distribution_scope}</span>
-                                      </dd>
-                                      <dt>revision</dt>
-                                      <dd className="mono">
-                                        {sourceDetail.upstream.revision.kind} · {sourceDetail.upstream.revision.value ?? "未固定"}
-                                      </dd>
-                                      <dt>comparability</dt>
-                                      <dd>
-                                        {COMPARABILITY_LABELS[sourceDetail.official_comparability.status]
-                                          ?? sourceDetail.official_comparability.status}
-                                      </dd>
-                                      <dt>network_entrypoint</dt><dd className="mono">{sourceDetail.safety.network_entrypoint}</dd>
-                                      <dt>trust_remote_code</dt><dd className="mono">{String(sourceDetail.safety.trust_remote_code)}</dd>
-                                      <dt>online_rows_fallback</dt><dd className="mono">{String(sourceDetail.safety.online_rows_fallback)}</dd>
-                                      <dt>executable_upstream_code</dt><dd className="mono">{String(sourceDetail.safety.executable_upstream_code)}</dd>
-                                      <dt>archive_auto_extract</dt><dd className="mono">{String(sourceDetail.safety.archive_auto_extract)}</dd>
-                                    </dl>
-                                    <p>
-                                      <span className="field-label">可比性说明</span>
-                                      {sourceDetail.official_comparability.notes}
-                                    </p>
-                                    <p><span className="field-label">阻断项</span></p>
-                                    {sourceDetail.blockers.length > 0 ? (
-                                      <ul>{sourceDetail.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
-                                    ) : (
-                                      <p className="hint">无阻断项</p>
-                                    )}
-                                  </>
-                                ) : null}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-
-                </Board>
-              )}
-            </details>
-          </div>
-
-          <div className="operate-card">
-            <h3 className="embed-title">题目（本次运行跑哪些题）</h3>
-            <label>
-              本次运行题目
-              <select
-                className="control"
-                value={caseMode}
-                onChange={(change) => {
-                  const nextMode: CaseMode = change.target.value === "ids" ? "ids"
-                    : change.target.value === "random" ? "random"
-                      : change.target.value === "profile" ? "profile" : "all";
-                  setCaseMode(nextMode);
-                  if (nextMode === "profile" && activeProfile) setProfileName(activeProfile.name);
-                }}
-              >
-                <option value="all">全部（{preset?.cases ?? 0} 题）</option>
-                {profiles.length > 0 && <option value="profile">数据集 Profile</option>}
-                <option value="random">随机 N 题</option>
-                <option value="ids">指定题目（题目页勾选）</option>
-              </select>
-            </label>
-            {caseMode === "random" && (
-              <>
-                <label>
-                  随机题数
-                  <input
-                    type="number" min={1} max={preset?.cases ?? 1} value={randomCount}
-                    onChange={(change) => setRandomCount(change.target.value)}
-                  />
-                </label>
-                <label>
-                  随机种子（写进运行快照，可复现）
-                  <input className="mono" value={seed} onChange={(change) => setSeed(change.target.value)} />
-                </label>
-                <button type="button" className="link" onClick={() => setSeed(randomSeed())}>重新生成种子</button>
-              </>
-            )}
-            {caseMode === "profile" && activeProfile && (
-              <>
-                <label>
-                  数据集 Profile
                   <select
-                    className="control mono"
-                    aria-label="运行 Profile"
-                    value={activeProfile.name}
-                    onChange={(change) => setProfileName(change.target.value)}
+                    className="control"
+                    aria-label="运行数据集"
+                    value={preset.scenario}
+                    onChange={(change) => {
+                      setChosenScenario(change.target.value);
+                      setCaseMode((current) => current === "profile" ? "all" : current);
+                      setProfileName("");
+                    }}
                   >
-                    {profiles.map((profile) => (
-                      <option key={profile.name} value={profile.name}>
-                        {profile.name} · {profile.count} 题
+                    {presets.map((item) => (
+                      <option key={item.scenario} value={item.scenario}>
+                        {item.scenario} · {item.cases} 题
                       </option>
                     ))}
                   </select>
-                </label>
-                <p className="hint mono">
-                  strategy {activeProfile.strategy ?? "未提供"}
-                  {activeProfile.case_ids_sha256 ? ` · case ids ${activeProfile.case_ids_sha256}` : ""}
-                </p>
-              </>
-            )}
-            {caseMode === "ids" && (
-              <p className={pickedMismatch ? "error" : "hint"}>
-                {usablePicked
-                  ? `已选 ${usablePicked.caseIds.length} 题（${usablePicked.dataset}）`
-                  : pickedUnavailable
-                    ? `已选题目来自 ${picked?.dataset}，但该数据集当前不可用；请回题目页重新选择。`
-                    : pickedMismatch
-                      ? `已选题目来自 ${picked?.dataset}，当前数据集是 ${preset?.dataset}；不能用旧题目发起评测。`
-                      : "尚未选择题目。"}
-                {" "}
-                <Link className="link" to={ROUTES.cases}>去题目页选择</Link>
-                {usablePicked && (
-                  <button
-                    type="button" className="link"
-                    onClick={() => { clearCaseSelection(); setPicked(null); setCaseMode("all"); }}
-                  >
-                    清除
-                  </button>
                 )}
-              </p>
+                {/* 数据集身份与事实合成一行：identity 加粗，其余跟在后面。
+                     dataset 与 scenario 同名时只写一次，不复述。 */}
+                <span className="hint mono dataset-line">
+                  <b className="mono">{preset.scenario}</b>
+                  {preset.dataset && preset.dataset !== preset.scenario ? " · " + preset.dataset : ""}
+                  {" · "}{preset.cases} 题 · {scorerLabel(datasetScorer(preset))}
+                </span>
+                <span className="hint mono">
+                  来源 {String(preset.provenance?.source ?? "—")}
+                  {preset.eval?.prompt_version ? ` · prompt ${preset.eval.prompt_version}` : ""}
+                  {preset.eval?.scorer_version ? ` · scorer ${preset.eval.scorer_version}` : ""}
+                </span>
+              </>
+            ) : (
+              <span className="hint">尚未导入数据集。用「内置样例」一键导入，或粘贴 / 选择本地 JSONL。</span>
             )}
-            {caseMode === "all" && (
-              <p className="hint">
-                <Link className="link" to={ROUTES.cases}>浏览 / 勾选题目</Link>
-              </p>
-            )}
-          </div>
+          </Field>
 
-          <div className="operate-card">
-            <h3 className="embed-title">模型（可多选对比）</h3>
-            <ModelPicker
-              models={models}
-              selected={selected}
-              onToggle={(id) => setSelected((current) =>
-                current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+          <Field label="本次运行题目">
+            <select
+              className="control"
+              value={caseMode}
+              onChange={(change) => {
+                const nextMode: CaseMode = change.target.value === "ids" ? "ids"
+                  : change.target.value === "random" ? "random"
+                    : change.target.value === "profile" ? "profile" : "all";
+                setCaseMode(nextMode);
+                if (nextMode === "profile" && activeProfile) setProfileName(activeProfile.name);
+              }}
+            >
+              <option value="all">全部（{preset?.cases ?? 0} 题）</option>
+              {profiles.length > 0 && <option value="profile">数据集 Profile</option>}
+              <option value="random">随机 N 题</option>
+              <option value="ids">指定题目（题目页勾选）</option>
+            </select>
+          </Field>
+          {caseMode === "random" && (
+            <>
+              <Field label="随机题数">
+                <input
+                  type="number" min={1} max={preset?.cases ?? 1} value={randomCount}
+                  onChange={(change) => setRandomCount(change.target.value)}
+                />
+              </Field>
+              <Field label="随机种子" hint="写进运行快照，可复现">
+                <input
+                  className="mono"
+                  aria-label="随机种子（写进运行快照，可复现）"
+                  value={seed}
+                  onChange={(change) => setSeed(change.target.value)}
+                />
+              </Field>
+              <button type="button" className="link col-span-full" onClick={() => setSeed(randomSeed())}>
+                重新生成种子
+              </button>
+            </>
+          )}
+          {caseMode === "profile" && activeProfile && (
+            <>
+              <Field label="数据集 Profile">
+                <select
+                  className="control mono"
+                  aria-label="运行 Profile"
+                  value={activeProfile.name}
+                  onChange={(change) => setProfileName(change.target.value)}
+                >
+                  {profiles.map((profile) => (
+                    <option key={profile.name} value={profile.name}>
+                      {profile.name} · {profile.count} 题
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <p className="hint mono col-span-full">
+                strategy {activeProfile.strategy ?? "未提供"}
+                {activeProfile.case_ids_sha256 ? ` · case ids ${activeProfile.case_ids_sha256}` : ""}
+              </p>
+            </>
+          )}
+          {caseMode === "ids" && (
+            <p className={pickedMismatch ? "error col-span-full" : "hint col-span-full"}>
+              {usablePicked
+                ? `已选 ${usablePicked.caseIds.length} 题（${usablePicked.dataset}）`
+                : pickedUnavailable
+                  ? `已选题目来自 ${picked?.dataset}，但该数据集当前不可用；请回题目页重新选择。`
+                  : pickedMismatch
+                    ? `已选题目来自 ${picked?.dataset}，当前数据集是 ${preset?.dataset}；不能用旧题目发起评测。`
+                    : "尚未选择题目。"}
+              {" "}
+              <Link className="link" to={ROUTES.cases}>去题目页选择</Link>
+              {usablePicked && (
+                <button
+                  type="button" className="link"
+                  onClick={() => { clearCaseSelection(); setPicked(null); setCaseMode("all"); }}
+                >
+                  清除
+                </button>
+              )}
+            </p>
+          )}
+          {caseMode === "all" && (
+            <p className="hint col-span-full">
+              <Link className="link" to={ROUTES.cases}>浏览 / 勾选题目</Link>
+            </p>
+          )}
+
+          <Field label="temperature">
+            <input
+              type="number" step="0.1" min="0" value={temperature}
+              onChange={(change) => setTemperature(change.target.value)}
+              placeholder="留空 = 模型档案默认值"
             />
+          </Field>
+          <Field label="max_output_tokens">
+            <input
+              type="number" min={1} value={budget}
+              onChange={(change) => setBudget(change.target.value)}
+              placeholder={`留空 = 数据集预设 ${presetBudget}`}
+            />
+          </Field>
+        </FieldGrid>
+
+        <details className="disclosure">
+          <summary>
+            受管来源{sourceError ? "（加载失败）" : managedSources == null ? "（加载中）" : `（${visibleSources?.length ?? 0}）`}
+          </summary>
+          <p className="hint">只读治理目录，不触发外部网络访问；待审核与受限来源不提供获取或准备操作。</p>
+          {managedSources?.some((item) => item.status === "restricted") && (
+            <div className="model-picker-item">
+              <input
+                type="checkbox"
+                checked={showRestrictedSources}
+                onChange={(change) => setShowRestrictedSources(change.target.checked)}
+                aria-label="显示受限来源"
+              />
+              <span>显示受限来源</span>
+            </div>
+          )}
+          {sourceError ? (
+            <p className="error">受管来源加载失败：{sourceError}</p>
+          ) : managedSources == null ? (
+            <p className="empty">受管来源加载中</p>
+          ) : managedSources.length === 0 ? (
+            <p className="empty">暂无受管来源</p>
+          ) : visibleSources?.length === 0 ? (
+            <p className="empty">没有非受限来源</p>
+          ) : (
+            <Board
+              label="受管来源目录"
+              head={<>
+                <th>来源</th><th>状态</th><th>Revision</th><th>Stable</th>
+              </>}
+            >
+              {(visibleSources ?? []).map((managedSource) => {
+                const statusMeta = SOURCE_STATUS_META[managedSource.status]
+                  ?? { label: managedSource.status, tone: "neutral" as const };
+                const isOpen = openSourceId === managedSource.id;
+                return (
+                  <Fragment key={managedSource.id}>
+                    <tr>
+                      <td>
+                        <button
+                          type="button"
+                          className="link"
+                          aria-expanded={isOpen}
+                          onClick={() => toggleSourceDetail(managedSource.id)}
+                        >
+                          {managedSource.label}
+                        </button>
+                        <span className="muted mono"> {managedSource.id}</span>
+                      </td>
+                      <td>
+                        <span className={`status-badge status-tone-${statusMeta.tone}`}>
+                          {statusMeta.label}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className={`status-badge ${managedSource.revision ? "status-tone-success" : "status-tone-neutral"}`}
+                          title={managedSource.revision ?? undefined}
+                        >
+                          {managedSource.revision ? "已固定" : "未固定"}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`status-badge ${managedSource.stable_eligible ? "status-tone-success" : "status-tone-neutral"}`}>
+                          {managedSource.stable_eligible ? "符合" : "不符合"}
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={4} className="muted">
+                        License <span className="mono">{managedSource.license_ids?.join(", ") || "—"}</span>
+                        {" · "}Profiles <span className="mono">{managedSource.profiles?.join(", ") || "—"}</span>
+                        {" · "}阻断 <span className="mono">{managedSource.blocker_count}</span>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="drill-detail-row">
+                        <td colSpan={4}>
+                          <div className="drill-detail">
+                            {sourceDetailLoading ? (
+                              <p className="empty">来源详情加载中</p>
+                            ) : sourceDetailError ? (
+                              <p className="error">来源详情加载失败：{sourceDetailError}</p>
+                            ) : sourceDetail?.id === managedSource.id ? (
+                              <>
+                                <p>{sourceDetail.description}</p>
+                                <dl className="kv">
+                                  <dt>distribution scope</dt>
+                                  <dd>
+                                    {DISTRIBUTION_LABELS[sourceDetail.governance.distribution_scope]
+                                      ?? sourceDetail.governance.distribution_scope}
+                                    {" · "}<span className="mono">{sourceDetail.governance.distribution_scope}</span>
+                                  </dd>
+                                  <dt>revision</dt>
+                                  <dd className="mono">
+                                    {sourceDetail.upstream.revision.kind} · {sourceDetail.upstream.revision.value ?? "未固定"}
+                                  </dd>
+                                  <dt>comparability</dt>
+                                  <dd>
+                                    {COMPARABILITY_LABELS[sourceDetail.official_comparability.status]
+                                      ?? sourceDetail.official_comparability.status}
+                                  </dd>
+                                  <dt>network_entrypoint</dt><dd className="mono">{sourceDetail.safety.network_entrypoint}</dd>
+                                  <dt>trust_remote_code</dt><dd className="mono">{String(sourceDetail.safety.trust_remote_code)}</dd>
+                                  <dt>online_rows_fallback</dt><dd className="mono">{String(sourceDetail.safety.online_rows_fallback)}</dd>
+                                  <dt>executable_upstream_code</dt><dd className="mono">{String(sourceDetail.safety.executable_upstream_code)}</dd>
+                                  <dt>archive_auto_extract</dt><dd className="mono">{String(sourceDetail.safety.archive_auto_extract)}</dd>
+                                </dl>
+                                <p>
+                                  <span className="field-label">可比性说明</span>
+                                  {sourceDetail.official_comparability.notes}
+                                </p>
+                                <p><span className="field-label">阻断项</span></p>
+                                {sourceDetail.blockers.length > 0 ? (
+                                  <ul>{sourceDetail.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
+                                ) : (
+                                  <p className="hint">无阻断项</p>
+                                )}
+                              </>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </Board>
+          )}
+        </details>
+
+        {/* 只读派生读数：不是可编辑字段，单独三列排开，不跟可编辑字段抢两列 */}
+        <FieldGrid columns={3}>
+          <Field label="题数">
+            <span className="field-value mono">
+              {caseMode === "random" ? `${randomCount || 0} / ${preset?.cases ?? 0}`
+                : caseMode === "ids" ? `${usablePicked?.caseIds.length ?? 0} / ${preset?.cases ?? 0}`
+                  : caseMode === "profile" ? `${activeProfile?.count ?? 0} / ${preset?.cases ?? 0}`
+                    : preset?.cases ?? "—"}
+            </span>
+          </Field>
+          <Field label="输出上限">
+            <span className="field-value mono">{Number.isFinite(effectiveBudget) ? effectiveBudget : "—"}</span>
+          </Field>
+          <Field label="重试"><span className="field-value mono">0</span></Field>
+        </FieldGrid>
+        <p className="hint">
+          输出上限不得超模型档案声明的上限；评分只看输出正文，流式思考会占满预算。
+        </p>
+      </section>
+
+      <section className="panel" aria-label="模型">
+        <div className="panel-head">
+          <h2>模型（可多选对比）</h2>
+          <p className="panel-summary">
+            已选 <b className="mono">{selected.length}</b> 个
+          </p>
+        </div>
+        <ModelPicker
+          models={models}
+          selected={selected}
+          onToggle={(id) => setSelected((current) =>
+            current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+        />
+        {reasoningModels.length > 0 && (
+          <FieldGrid>
             {reasoningModels.map((model) => (
-              <label key={model.id}>
-                {model.id} 的思考强度（默认 {model.reasoning?.default_level ?? "无"}）
+              <Field
+                key={model.id}
+                label={model.id + " 的思考强度"}
+                hint={"默认 " + (model.reasoning?.default_level ?? "无")}
+              >
                 <select
                   className="control mono"
                   value={levels[model.id] ?? ""}
@@ -654,228 +697,198 @@ export function DirectLlmOperate() {
                     <option key={level} value={level}>{level}</option>
                   ))}
                 </select>
-              </label>
+              </Field>
             ))}
-          </div>
-
-          <div className="operate-card">
-            <h3 className="embed-title">跑测参数</h3>
-            <label>
-              temperature
-              <input
-                type="number" step="0.1" min="0" value={temperature}
-                onChange={(change) => setTemperature(change.target.value)}
-                placeholder="留空 = 模型档案默认值"
-              />
-            </label>
-            <label>
-              max_output_tokens
-              <input
-                type="number" min={1} value={budget}
-                onChange={(change) => setBudget(change.target.value)}
-                placeholder={`留空 = 数据集预设 ${presetBudget}`}
-              />
-            </label>
-            <dl className="kv">
-              <dt>题数</dt>
-              <dd className="mono">
-                {caseMode === "random" ? `${randomCount || 0} / ${preset?.cases ?? 0}`
-                  : caseMode === "ids" ? `${usablePicked?.caseIds.length ?? 0} / ${preset?.cases ?? 0}`
-                    : caseMode === "profile" ? `${activeProfile?.count ?? 0} / ${preset?.cases ?? 0}`
-                      : preset?.cases ?? "—"}
-              </dd>
-              <dt>输出上限</dt>
-              <dd className="mono">{Number.isFinite(effectiveBudget) ? effectiveBudget : "—"}</dd>
-              <dt>重试</dt><dd className="mono">0</dd>
-            </dl>
-            <p className="hint">
-              输出上限不得超模型档案声明的上限；评分只看输出正文，流式思考会占满预算。
-            </p>
-          </div>
-
-          <div className="operate-card">
-            <h3 className="embed-title">内置样例</h3>
-            <p className="hint">
-              仓库自带的小型样例集（见 datasets/direct-llm/），用来在零外部数据的前提下跑通链路。
-            </p>
-            {builtins.length > 0 ? (
-              <form onSubmit={importBuiltin} aria-label="导入内置样例">
-                <label>
-                  样例数据集
-                  <select
-                    className="control"
-                    aria-label="内置样例"
-                    value={chosenBuiltin}
-                    onChange={(change) => setChosenBuiltin(change.target.value)}
-                  >
-                    {builtins.map((item) => (
-                      <option key={item.id} value={item.id} disabled={!item.importable}>
-                        {item.id} · {scorerLabel(item.scorer)} · {item.cases ?? "?"} 题
-                        {item.importable ? "" : "（不可导入）"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="hint">{usableBuiltin?.description ?? "该样例不可导入。"}</p>
-                <label>
-                  数据集版本
-                  <input
-                    value={builtinVersion}
-                    onChange={(change) => setBuiltinVersion(change.target.value)}
-                    placeholder="留空 = 自动（同内容复用，否则下一个空号）"
-                  />
-                </label>
-                <button type="submit" disabled={importing || !usableBuiltin}>
-                  {importing ? "导入中…" : "导入所选样例"}
-                </button>
-              </form>
-            ) : (
-              <p className="hint">内置样例清单不可用（服务端样例目录缺失）。</p>
-            )}
-          </div>
-
-          <div className="operate-card">
-            <h3 className="embed-title">导入本地 JSONL</h3>
-            <p className="hint">
-              每行一个对象：<span className="mono">{'{"input": "题面", "expected": "期望", "scorer": "contains"}'}</span>。
-              评分器可单题覆盖；没有 expected 的题记为「无判定」，不进分母。整份文件逐行校验，任何一行
-              不合法都会整体拒绝。
-            </p>
-            <form onSubmit={importContent} aria-label="导入本地 JSONL">
-              <div className="inline-field">
-                <button type="button" onClick={() => filePicker.current?.click()}>
-                  选择 .jsonl 文件
-                </button>
-                {fileName && <span className="hint mono">{fileName}</span>}
-                <input
-                  ref={filePicker}
-                  type="file"
-                  hidden
-                  accept=".jsonl,.json,.txt"
-                  onChange={(change) => void readFile(change)}
-                />
-              </div>
-              <label>
-                JSONL 内容
-                <textarea
-                  className="mono"
-                  rows={6}
-                  value={content}
-                  onChange={(change) => setContent(change.target.value)}
-                  placeholder={'{"input": "1+1=?", "expected": "2"}'}
-                />
-              </label>
-              <details className="disclosure">
-                <summary>高级设置</summary>
-                <label>
-                  数据集名
-                  <input
-                    value={name}
-                    onChange={(change) => setName(change.target.value)}
-                    placeholder="留空 = direct-llm-custom"
-                  />
-                </label>
-                <label>
-                  数据集版本
-                  <input
-                    value={version}
-                    onChange={(change) => setVersion(change.target.value)}
-                    placeholder="留空 = 自动（同内容复用，否则下一个空号）"
-                  />
-                </label>
-                <label>
-                  默认评分器
-                  <select
-                    className="control"
-                    value={scorer}
-                    onChange={(change) => setScorer(change.target.value)}
-                  >
-                    <option value="">exact（默认）</option>
-                    {SCORER_OPTIONS.filter((option) => option.value !== "exact").map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  License
-                  <input value={license} onChange={(change) => setLicense(change.target.value)} />
-                </label>
-                <label>
-                  来源标记
-                  <input
-                    value={source}
-                    onChange={(change) => setSource(change.target.value)}
-                    placeholder="留空 = local-jsonl"
-                  />
-                </label>
-              </details>
-              <button type="submit" disabled={importing || !content.trim()}>
-                <UploadSimpleIcon size={14} weight="bold" aria-hidden />
-                {importing ? "导入中…" : "导入 JSONL"}
-              </button>
-              {message && <p className="import-feedback pass">{message}</p>}
-            </form>
-          </div>
-        </div>
-
-        <div className="actions">
-          <button
-            type="button"
-            className="primary"
-            onClick={() => void doRun()}
-            disabled={running || estimating || selected.length === 0 || !preset || runSize <= 0}
-          >
-            {running ? "创建中…" : `发起评测（${selected.length} 个模型 × ${runSize} 题）`}
-          </button>
-          <button
-            type="button"
-            onClick={() => void estimateRun()}
-            disabled={estimating || running || selected.length !== 1 || !preset || runSize <= 0}
-          >
-            <CalculatorIcon size={14} weight="bold" aria-hidden />
-            {estimating ? "估算中…" : "运行前估算"}
-          </button>
-          <span className="hint">
-            真实调用 · 产生费用 · 发起后自动进入过程页
-            {selected.length > 1 ? " · 估算需只选择一个模型" : ""}
-          </span>
-        </div>
-        {dryRunError && <p className="error" role="alert">运行前估算失败：{dryRunError}</p>}
-        {dryRun && (
-          <>
-            <h3 className="embed-title">运行前估算</h3>
-            <dl className="kv" aria-label="运行前估算结果">
-              <dt>选择题数</dt><dd className="mono">{dryRun.selected_count}</dd>
-              <dt>单题输入上界</dt><dd className="mono">{dryRun.max_input_tokens_upper_bound ?? "未提供"}</dd>
-              <dt>单题输出上限</dt><dd className="mono">{dryRun.max_output_tokens}</dd>
-              <dt>单题总量上界</dt><dd className="mono">{dryRun.max_total_tokens_upper_bound ?? "未提供"}</dd>
-              <dt>模型上下文</dt><dd className="mono">{dryRun.context_window ?? "未提供"}</dd>
-              <dt>估算方法</dt><dd className="mono">{dryRun.estimation_method ?? "未提供"}</dd>
-              <dt>费用上界</dt>
-              <dd className="mono">
-                {dryRun.estimated_cost_upper_bound == null
-                  ? "未提供"
-                  : `${dryRun.estimated_cost_upper_bound} ${dryRun.currency ?? "币种未提供"}`}
-              </dd>
-              <dt>价表版本</dt><dd className="mono">{dryRun.price_table_version ?? "未提供"}</dd>
-            </dl>
-            <p className="hint">估算结果是保守上界，不是最终账单；不会创建运行。</p>
-          </>
-        )}
-        {failures.length > 0 && (
-          <ul className="failure-list">
-            {failures.map((failure) => (
-              <li key={failure.model} className="error">{failure.model}：{failure.error}</li>
-            ))}
-          </ul>
-        )}
-        {launched.length > 0 && (
-          <p>
-            已创建 {launched.length} 个运行 ·{" "}
-            <Link className="link" to={ROUTES.monitor(launched)}>查看批次进度</Link>
-          </p>
+          </FieldGrid>
         )}
       </section>
+
+      <section className="panel" aria-label="数据集维护">
+        <div className="panel-head">
+          <h2>导入数据集</h2>
+        </div>
+
+        <p className="embed-title">内置样例</p>
+        <p className="hint">
+          仓库自带的小型样例集（见 datasets/direct-llm/），用来在零外部数据的前提下跑通链路。
+        </p>
+        {builtins.length > 0 ? (
+          <form onSubmit={importBuiltin} aria-label="导入内置样例">
+            <FieldGrid>
+              <Field label="样例数据集" hint={usableBuiltin?.description ?? "该样例不可导入。"}>
+                <select
+                  className="control"
+                  aria-label="内置样例"
+                  value={chosenBuiltin}
+                  onChange={(change) => setChosenBuiltin(change.target.value)}
+                >
+                  {builtins.map((item) => (
+                    <option key={item.id} value={item.id} disabled={!item.importable}>
+                      {item.id} · {scorerLabel(item.scorer)} · {item.cases ?? "?"} 题
+                      {item.importable ? "" : "（不可导入）"}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="数据集版本">
+                <input
+                  value={builtinVersion}
+                  onChange={(change) => setBuiltinVersion(change.target.value)}
+                  placeholder="留空 = 自动（同内容复用，否则下一个空号）"
+                />
+              </Field>
+            </FieldGrid>
+            <div className="actions">
+              <button type="submit" disabled={importing || !usableBuiltin}>
+                {importing ? "导入中…" : "导入所选样例"}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className="hint">内置样例清单不可用（服务端样例目录缺失）。</p>
+        )}
+
+        <p className="embed-title">导入本地 JSONL</p>
+        <p className="hint">
+          每行一个对象：<span className="mono">{'{"input": "题面", "expected": "期望", "scorer": "contains"}'}</span>。
+          评分器可单题覆盖；没有 expected 的题记为「无判定」，不进分母。整份文件逐行校验，任何一行
+          不合法都会整体拒绝。
+        </p>
+        <form onSubmit={importContent} aria-label="导入本地 JSONL">
+          <div className="inline-field">
+            <button type="button" onClick={() => filePicker.current?.click()}>
+              选择 .jsonl 文件
+            </button>
+            {fileName && <span className="hint mono">{fileName}</span>}
+            <input
+              ref={filePicker}
+              type="file"
+              hidden
+              accept=".jsonl,.json,.txt"
+              onChange={(change) => void readFile(change)}
+            />
+          </div>
+          <FieldGrid>
+            <Field label="JSONL 内容" wide>
+              <textarea
+                className="mono"
+                rows={6}
+                value={content}
+                onChange={(change) => setContent(change.target.value)}
+                placeholder={'{"input": "1+1=?", "expected": "2"}'}
+              />
+            </Field>
+          </FieldGrid>
+          <details className="disclosure">
+            <summary>高级设置</summary>
+            <FieldGrid>
+              <Field label="数据集名">
+                <input
+                  value={name}
+                  onChange={(change) => setName(change.target.value)}
+                  placeholder="留空 = direct-llm-custom"
+                />
+              </Field>
+              <Field label="数据集版本">
+                <input
+                  value={version}
+                  onChange={(change) => setVersion(change.target.value)}
+                  placeholder="留空 = 自动（同内容复用，否则下一个空号）"
+                />
+              </Field>
+              <Field label="默认评分器">
+                <select
+                  className="control"
+                  value={scorer}
+                  onChange={(change) => setScorer(change.target.value)}
+                >
+                  <option value="">exact（默认）</option>
+                  {SCORER_OPTIONS.filter((option) => option.value !== "exact").map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="License">
+                <input value={license} onChange={(change) => setLicense(change.target.value)} />
+              </Field>
+              <Field label="来源标记">
+                <input
+                  value={source}
+                  onChange={(change) => setSource(change.target.value)}
+                  placeholder="留空 = local-jsonl"
+                />
+              </Field>
+            </FieldGrid>
+          </details>
+          <div className="actions">
+            <button type="submit" disabled={importing || !content.trim()}>
+              <UploadSimpleIcon size={14} weight="bold" aria-hidden />
+              {importing ? "导入中…" : "导入 JSONL"}
+            </button>
+          </div>
+          {message && <p className="import-feedback pass">{message}</p>}
+        </form>
+      </section>
+
+      <IssueBar note={<>
+        真实调用 · 产生费用 · 发起后自动进入过程页
+        {selected.length > 1 ? " · 估算需只选择一个模型" : ""}
+      </>}>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => void doRun()}
+          disabled={running || estimating || selected.length === 0 || !preset || runSize <= 0}
+        >
+          {running ? "创建中…" : `发起评测（${selected.length} 个模型 × ${runSize} 题）`}
+        </button>
+        <button
+          type="button"
+          onClick={() => void estimateRun()}
+          disabled={estimating || running || selected.length !== 1 || !preset || runSize <= 0}
+        >
+          <CalculatorIcon size={14} weight="bold" aria-hidden />
+          {estimating ? "估算中…" : "运行前估算"}
+        </button>
+      </IssueBar>
+      {dryRunError && <p className="error" role="alert">运行前估算失败：{dryRunError}</p>}
+      {dryRun && (
+        <>
+          <div className="panel-head">
+            <h2>运行前估算</h2>
+          </div>
+          <dl className="kv" aria-label="运行前估算结果">
+            <dt>选择题数</dt><dd className="mono">{dryRun.selected_count}</dd>
+            <dt>单题输入上界</dt><dd className="mono">{dryRun.max_input_tokens_upper_bound ?? "未提供"}</dd>
+            <dt>单题输出上限</dt><dd className="mono">{dryRun.max_output_tokens}</dd>
+            <dt>单题总量上界</dt><dd className="mono">{dryRun.max_total_tokens_upper_bound ?? "未提供"}</dd>
+            <dt>模型上下文</dt><dd className="mono">{dryRun.context_window ?? "未提供"}</dd>
+            <dt>估算方法</dt><dd className="mono">{dryRun.estimation_method ?? "未提供"}</dd>
+            <dt>费用上界</dt>
+            <dd className="mono">
+              {dryRun.estimated_cost_upper_bound == null
+                ? "未提供"
+                : `${dryRun.estimated_cost_upper_bound} ${dryRun.currency ?? "币种未提供"}`}
+            </dd>
+            <dt>价表版本</dt><dd className="mono">{dryRun.price_table_version ?? "未提供"}</dd>
+          </dl>
+          <p className="hint">估算结果是保守上界，不是最终账单；不会创建运行。</p>
+        </>
+      )}
+      {failures.length > 0 && (
+        <ul className="failure-list">
+          {failures.map((failure) => (
+            <li key={failure.model} className="error">{failure.model}：{failure.error}</li>
+          ))}
+        </ul>
+      )}
+      {launched.length > 0 && (
+        <p>
+          已创建 {launched.length} 个运行 ·{" "}
+          <Link className="link" to={ROUTES.monitor(launched)}>查看批次进度</Link>
+        </p>
+      )}
+      {error && <p className="error">{error}</p>}
     </div>
   );
 }

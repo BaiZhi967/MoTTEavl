@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Board } from "../../board/Board";
 import { EmptyBoard } from "../../board/EmptyBoard";
+import { FieldGrid, Field, IssueBar } from "../../board/FieldGrid";
 import { StatusFlap } from "../../board/StatusFlap";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react";
 import {
@@ -44,7 +45,7 @@ function CompareResult({ result }: { result: ComparabilityView }) {
   const metricEligibility = Object.entries(result.metric_eligibility ?? {});
   const diff = result.case_diff ?? { added: [], removed: [], changed: [] };
   return (
-    <section className="panel detail" aria-label="比较结果" data-testid="compare-result">
+    <section className="panel" aria-label="比较结果" data-testid="compare-result">
       <div className="panel-head">
         <h2>比较结果</h2>
         <div className="panel-head-actions">
@@ -165,48 +166,48 @@ export function ComparePage() {
     <div className="page">
       <section className="panel form-panel" aria-label="比较输入">
         <form onSubmit={onCompare}>
-          <h2><ArrowsLeftRightIcon size={16} weight="bold" aria-hidden /> 比较两个 Run</h2>
-          <p className="hint">只读固定报告（Run + ScoringPass），零模型 / Judge / Runner 调用；一切正式结果引用具体 pass，不追随 current。</p>
-          <label htmlFor="compare-baseline-run">
-            基线 Run（baseline）
-            <input
-              id="compare-baseline-run"
-              className="mono"
-              value={baselineRun}
-              placeholder="run id"
-              onChange={(change) => setBaselineRun(change.target.value)}
-            />
-          </label>
-          <label htmlFor="compare-baseline-pass">
-            基线 ScoringPass（可选）
-            <input
-              id="compare-baseline-pass"
-              className="mono"
-              value={baselinePass}
-              placeholder="缺省 current pass"
-              onChange={(change) => setBaselinePass(change.target.value)}
-            />
-          </label>
-          <label htmlFor="compare-candidate-run">
-            候选 Run（candidate）
-            <input
-              id="compare-candidate-run"
-              className="mono"
-              value={candidateRun}
-              placeholder="run id"
-              onChange={(change) => setCandidateRun(change.target.value)}
-            />
-          </label>
-          <label htmlFor="compare-candidate-pass">
-            候选 ScoringPass（可选）
-            <input
-              id="compare-candidate-pass"
-              className="mono"
-              value={candidatePass}
-              placeholder="缺省 current pass"
-              onChange={(change) => setCandidatePass(change.target.value)}
-            />
-          </label>
+          <div className="panel-head">
+            <h2><ArrowsLeftRightIcon size={16} weight="bold" aria-hidden /> 比较两个 Run</h2>
+          </div>
+          <p className="hint">只读固定报告（Run + ScoringPass）：一切正式结果引用具体 pass，不追随 current。</p>
+          <FieldGrid columns={1}>
+            <Field label="基线 Run（baseline）">
+              <input
+                id="compare-baseline-run"
+                className="mono"
+                value={baselineRun}
+                placeholder="run id"
+                onChange={(change) => setBaselineRun(change.target.value)}
+              />
+            </Field>
+            <Field label="基线 ScoringPass（可选）">
+              <input
+                id="compare-baseline-pass"
+                className="mono"
+                value={baselinePass}
+                placeholder="缺省 current pass"
+                onChange={(change) => setBaselinePass(change.target.value)}
+              />
+            </Field>
+            <Field label="候选 Run（candidate）">
+              <input
+                id="compare-candidate-run"
+                className="mono"
+                value={candidateRun}
+                placeholder="run id"
+                onChange={(change) => setCandidateRun(change.target.value)}
+              />
+            </Field>
+            <Field label="候选 ScoringPass（可选）">
+              <input
+                id="compare-candidate-pass"
+                className="mono"
+                value={candidatePass}
+                placeholder="缺省 current pass"
+                onChange={(change) => setCandidatePass(change.target.value)}
+              />
+            </Field>
+          </FieldGrid>
 
           <div className="model-picker-group" data-testid="compare-factors">
             <p className="field-label">政策允许变化的因子（至少一个；未允许的条件必须一致）</p>
@@ -222,7 +223,7 @@ export function ComparePage() {
             ))}
           </div>
 
-          <div className="actions">
+          <IssueBar note="零模型 / Judge / Runner 调用 · 不写入任何状态">
             <button
               type="submit"
               className="primary"
@@ -232,16 +233,21 @@ export function ComparePage() {
             >
               {busy ? "比较中…" : "比较（只读）"}
             </button>
-          </div>
+          </IssueBar>
           {error && <p className="error" role="alert" data-testid="compare-error">{error}</p>}
         </form>
       </section>
 
       {result
         ? <CompareResult result={result} />
-        : <section className="panel detail" aria-label="比较结果">
-            <h2>比较结果</h2>
-            <p className="empty">输入两个 Run 后显示三级结论、原因分组与 case 差异。</p>
+        : <section className="panel" aria-label="比较结果">
+            <div className="panel-head">
+              <h2>比较结果</h2>
+            </div>
+            <EmptyBoard
+              reason="尚未比较"
+              next="在左侧填入基线 Run 与候选 Run（至少允许一个变化因子），结果会出现在这里"
+            />
           </section>}
     </div>
   );

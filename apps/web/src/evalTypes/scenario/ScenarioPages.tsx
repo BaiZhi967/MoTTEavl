@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Board } from "../../board/Board";
+import { FieldGrid, Field, IssueBar } from "../../board/FieldGrid";
 import { useParams } from "react-router-dom";
 import * as Tabs from "@radix-ui/react-tabs";
 import { ArrowClockwiseIcon, FlowArrowIcon, ShieldCheckIcon } from "@phosphor-icons/react";
@@ -480,20 +481,26 @@ export function ScenarioWorkflowsPage() {
             <Tabs.Trigger className="tabs-trigger" value="schema">Schema 字段</Tabs.Trigger>
           </Tabs.List>
           <Tabs.Content value="text">
+            {/* P4 转录面：JSON 草案是一整片文本面，不装卡片壳；宽度交给 .field-wide */}
             <form onSubmit={onValidate}>
-              <label htmlFor="workflow-draft">
-                WorkflowVersion DSL（JSON）
-                <textarea
-                  id="workflow-draft"
-                  className="mono"
-                  rows={18}
-                  value={text}
-                  onChange={(change) => setText(change.target.value)}
-                  spellCheck={false}
-                />
-              </label>
+              <FieldGrid columns={1}>
+                <Field
+                  label="WorkflowVersion DSL（JSON）"
+                  wide
+                  hint="这里只判 JSON 语法与必填字段；DSL 语义（重复 step_id、无界循环、未知工具）由服务端只读校验给出。"
+                >
+                  <textarea
+                    id="workflow-draft"
+                    className="mono"
+                    rows={18}
+                    value={text}
+                    onChange={(change) => setText(change.target.value)}
+                    spellCheck={false}
+                  />
+                </Field>
+              </FieldGrid>
               <FieldErrors issues={issues} locator="workflow" />
-              <div className="actions">
+              <IssueBar note="只读校验不发布、不建 Run、不产生调用与费用">
                 <button type="button" disabled={parsed.value === null || busy !== null} onClick={() => void onValidate()}>
                   {busy === "validate" ? "校验中…" : "校验（只读）"}
                 </button>
@@ -506,7 +513,7 @@ export function ScenarioWorkflowsPage() {
                 >
                   {busy === "publish" ? "发布中…" : "发布版本"}
                 </button>
-              </div>
+              </IssueBar>
             </form>
           </Tabs.Content>
           <Tabs.Content value="schema">
@@ -516,74 +523,70 @@ export function ScenarioWorkflowsPage() {
               </CapabilityNotice>
             ) : (
               <form onSubmit={onValidate}>
-                <label htmlFor="field-workflow-id">
-                  workflow_id
-                  <input
-                    id="field-workflow-id"
-                    value={String(readPath(parsed.value, "workflow_id") ?? "")}
-                    onChange={(change) => updateField("workflow_id", change.target.value)}
-                  />
-                </label>
-                <FieldErrors issues={issues} locator="workflow_id" />
-                <label htmlFor="field-version">
-                  version
-                  <input
-                    id="field-version"
-                    value={String(readPath(parsed.value, "version") ?? "")}
-                    onChange={(change) => updateField("version", change.target.value)}
-                  />
-                </label>
-                <FieldErrors issues={issues} locator="version" />
-                <label htmlFor="field-max-steps">
-                  limits.max_total_steps
-                  <input
-                    id="field-max-steps"
-                    type="number"
-                    value={String(readPath(parsed.value, "limits.max_total_steps") ?? "")}
-                    onChange={(change) => updateField("limits.max_total_steps", change.target.value === "" ? null : Number(change.target.value))}
-                  />
-                </label>
-                <FieldErrors issues={issues} locator="limits.max_total_steps" />
-                <label htmlFor="field-max-turns">
-                  limits.max_turns
-                  <input
-                    id="field-max-turns"
-                    type="number"
-                    value={String(readPath(parsed.value, "limits.max_turns") ?? "")}
-                    onChange={(change) => updateField("limits.max_turns", change.target.value === "" ? null : Number(change.target.value))}
-                  />
-                </label>
-                <FieldErrors issues={issues} locator="limits.max_turns" />
-                <label htmlFor="field-wall-time">
-                  limits.wall_time_sec
-                  <input
-                    id="field-wall-time"
-                    type="number"
-                    value={String(readPath(parsed.value, "limits.wall_time_sec") ?? "")}
-                    onChange={(change) => updateField("limits.wall_time_sec", change.target.value === "" ? null : Number(change.target.value))}
-                  />
-                </label>
-                <FieldErrors issues={issues} locator="limits.wall_time_sec" />
-                <label htmlFor="field-failure-policy">
-                  failure_policy
-                  <select
-                    id="field-failure-policy"
-                    className="control"
-                    value={String(readPath(parsed.value, "failure_policy") ?? "stop_case")}
-                    onChange={(change) => updateField("failure_policy", change.target.value)}
-                  >
-                    <option value="stop_case">stop_case</option>
-                    <option value="continue_for_evidence">continue_for_evidence</option>
-                  </select>
-                </label>
-                <FieldErrors issues={issues} locator="failure_policy" />
+                <FieldGrid>
+                  <Field label="workflow_id">
+                    <input
+                      id="field-workflow-id"
+                      value={String(readPath(parsed.value, "workflow_id") ?? "")}
+                      onChange={(change) => updateField("workflow_id", change.target.value)}
+                    />
+                    <FieldErrors issues={issues} locator="workflow_id" />
+                  </Field>
+                  <Field label="version">
+                    <input
+                      id="field-version"
+                      value={String(readPath(parsed.value, "version") ?? "")}
+                      onChange={(change) => updateField("version", change.target.value)}
+                    />
+                    <FieldErrors issues={issues} locator="version" />
+                  </Field>
+                  <Field label="limits.max_total_steps">
+                    <input
+                      id="field-max-steps"
+                      type="number"
+                      value={String(readPath(parsed.value, "limits.max_total_steps") ?? "")}
+                      onChange={(change) => updateField("limits.max_total_steps", change.target.value === "" ? null : Number(change.target.value))}
+                    />
+                    <FieldErrors issues={issues} locator="limits.max_total_steps" />
+                  </Field>
+                  <Field label="limits.max_turns">
+                    <input
+                      id="field-max-turns"
+                      type="number"
+                      value={String(readPath(parsed.value, "limits.max_turns") ?? "")}
+                      onChange={(change) => updateField("limits.max_turns", change.target.value === "" ? null : Number(change.target.value))}
+                    />
+                    <FieldErrors issues={issues} locator="limits.max_turns" />
+                  </Field>
+                  <Field label="limits.wall_time_sec">
+                    <input
+                      id="field-wall-time"
+                      type="number"
+                      value={String(readPath(parsed.value, "limits.wall_time_sec") ?? "")}
+                      onChange={(change) => updateField("limits.wall_time_sec", change.target.value === "" ? null : Number(change.target.value))}
+                    />
+                    <FieldErrors issues={issues} locator="limits.wall_time_sec" />
+                  </Field>
+                  <Field label="failure_policy">
+                    <select
+                      id="field-failure-policy"
+                      className="control"
+                      value={String(readPath(parsed.value, "failure_policy") ?? "stop_case")}
+                      onChange={(change) => updateField("failure_policy", change.target.value)}
+                    >
+                      <option value="stop_case">stop_case</option>
+                      <option value="continue_for_evidence">continue_for_evidence</option>
+                    </select>
+                    <FieldErrors issues={issues} locator="failure_policy" />
+                  </Field>
+                </FieldGrid>
                 <FieldErrors issues={issues} locator="steps" />
-                <div className="actions">
+                <IssueBar note="Schema 字段与文本标签页作用于同一份草案；发布前必须通过只读校验">
                   <button type="button" disabled={busy !== null} onClick={() => void onValidate()}>校验（只读）</button>
                   <button type="button" className="primary" disabled={!canPublish} onClick={() => void onPublish()}>
                     发布版本
                   </button>
-                </div>
+                </IssueBar>
               </form>
             )}
           </Tabs.Content>
