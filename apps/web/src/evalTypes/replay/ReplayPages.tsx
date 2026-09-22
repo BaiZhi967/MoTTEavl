@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createRun, getRun, getRuns, type RunRecord } from "../../api/client";
 import { BatchMonitor } from "../../components/BatchMonitor";
@@ -82,11 +83,15 @@ export function ReplayOperate() {
         {recent.length === 0 ? (
           <p className="empty">暂无回放运行</p>
         ) : (
-          <table>
-            <thead>
-              <tr><th>ID</th><th>状态</th><th>开始</th></tr>
-            </thead>
-            <tbody>
+          <Board
+            label="数据板面"
+            head={<>
+              <th>ID</th><th>状态</th><th>开始</th>
+            </>}
+          >
+
+            
+
               {recent.slice(0, 10).map((run) => (
                 <tr key={run.id}>
                   <td className="mono" title={run.id}>
@@ -96,8 +101,8 @@ export function ReplayOperate() {
                   <td className="mono">{formatTimestamp(run.created_at) ?? "—"}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+
+          </Board>
         )}
       </section>
     </div>

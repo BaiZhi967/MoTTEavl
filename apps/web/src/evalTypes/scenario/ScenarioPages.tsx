@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Board } from "../../board/Board";
 import { useParams } from "react-router-dom";
 import * as Tabs from "@radix-ui/react-tabs";
 import { ArrowClockwiseIcon, FlowArrowIcon, ShieldCheckIcon } from "@phosphor-icons/react";
@@ -209,11 +210,15 @@ function StepRow({ step, index }: { step: ScenarioStepState; index: number }) {
               </CapabilityNotice>
             )}
             {assertions.length > 0 && (
-              <table>
-                <thead>
-                  <tr><th>断言</th><th>运算符</th><th>结果</th><th>说明</th></tr>
-                </thead>
-                <tbody>
+              <Board
+                label="数据板面"
+                head={<>
+                  <th>断言</th><th>运算符</th><th>结果</th><th>说明</th>
+                </>}
+              >
+
+                
+
                   {assertions.map((assertion, position) => (
                     <tr key={(assertion.locator ?? assertion.path ?? "assertion") + "-" + position}>
                       <td className="mono nowrap">{assertion.locator ?? assertion.path ?? UNKNOWN_TEXT}</td>
@@ -228,8 +233,8 @@ function StepRow({ step, index }: { step: ScenarioStepState; index: number }) {
                       <td>{assertion.reason ?? "—"}</td>
                     </tr>
                   ))}
-                </tbody>
-              </table>
+
+              </Board>
             )}
             {step.detail && <p className="hint">{step.detail}</p>}
             {step.result !== undefined && step.result !== null && (
@@ -245,13 +250,15 @@ function StepRow({ step, index }: { step: ScenarioStepState; index: number }) {
 
 function FixtureTable({ fixtures }: { fixtures: ScenarioFixtureState[] }) {
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>fixture</th><th>版本</th><th>类型</th><th>owner</th><th>隔离</th><th>快照</th><th>清理</th><th>错误</th>
-        </tr>
-      </thead>
-      <tbody>
+    <Board
+      label="数据板面"
+      head={<>
+        <th>fixture</th><th>版本</th><th>类型</th><th>owner</th><th>隔离</th><th>快照</th><th>清理</th><th>错误</th>
+      </>}
+    >
+
+      
+
         {fixtures.map((fixture) => {
           const cleanup = cleanupStatusOf(fixture);
           const isolationError = fixture.isolated === false || fixture.prepare_error != null;
@@ -295,8 +302,8 @@ function FixtureTable({ fixtures }: { fixtures: ScenarioFixtureState[] }) {
             </tr>
           );
         })}
-      </tbody>
-    </table>
+
+    </Board>
   );
 }
 
@@ -716,21 +723,23 @@ export function ScenarioRunStepsPage() {
               步骤 {steps.steps.length} 个，未知结果 {unknownSteps} 个，清理失败 {cleanupFailures} 个。
               未知结果不计入成功。
             </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th><th>step_id</th><th>类型</th><th>状态</th><th>工具模式</th><th>断言</th><th>耗时</th><th />
-                </tr>
-              </thead>
-              <tbody>
+            <Board
+              label="数据板面"
+              head={<>
+                <th>#</th><th>step_id</th><th>类型</th><th>状态</th><th>工具模式</th><th>断言</th><th>耗时</th><th />
+              </>}
+            >
+
+              
+
                 {steps.steps.map((step, index) => (
                   <StepRow key={step.step_id + "-" + index} step={step} index={index} />
                 ))}
                 {steps.steps.length === 0 && (
                   <tr><td colSpan={8} className="empty">暂无步骤证据</td></tr>
                 )}
-              </tbody>
-            </table>
+
+            </Board>
           </>
         )}
       </section>

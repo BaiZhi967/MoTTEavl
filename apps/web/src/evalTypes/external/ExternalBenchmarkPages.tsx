@@ -415,20 +415,32 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
               <div data-testid="metric-columns">
                 <p className="hint">指标双栏（互不覆盖）：</p>
                 <div className="inline-field">
-                  <table className="table" aria-label="native 指标">
-                    <thead><tr><th>native.*（Runner 原始聚合）</th><th>值</th></tr></thead>
-                    <tbody>
+                  <Board
+                    label="native 指标"
+                    head={<>
+                      <th>native.*（Runner 原始聚合）</th><th>值</th>
+                    </>}
+                  >
+
+                    
+
                       {Object.entries(metrics.native ?? {}).slice(0, 8).map(([key, value]) => (
                         <tr key={key}><td className="mono">{key}</td><td className="mono">{String(value)}</td></tr>
                       ))}
                       {!metrics.native && (
                         <tr><td colSpan={2} className="hint">无原生分数输入时不生成 native 指标。</td></tr>
                       )}
-                    </tbody>
-                  </table>
-                  <table className="table" aria-label="diagnostic 指标">
-                    <thead><tr><th>diagnostic.*（平台重算）</th><th>值</th></tr></thead>
-                    <tbody>
+
+                  </Board>
+                  <Board
+                    label="diagnostic 指标"
+                    head={<>
+                      <th>diagnostic.*（平台重算）</th><th>值</th>
+                    </>}
+                  >
+
+                    
+
                       <tr>
                         <td className="mono">per_subject</td>
                         <td className="mono">{JSON.stringify(metrics.diagnostic?.per_subject ?? {})}</td>
@@ -437,8 +449,8 @@ export function makeExternalPages(benchmarkId: string, labels: Partial<ExternalB
                         <td className="mono">aggregate.accuracy</td>
                         <td className="mono">{String(metrics.diagnostic?.aggregate?.accuracy ?? "—")}</td>
                       </tr>
-                    </tbody>
-                  </table>
+
+                  </Board>
                 </div>
               </div>
             </>

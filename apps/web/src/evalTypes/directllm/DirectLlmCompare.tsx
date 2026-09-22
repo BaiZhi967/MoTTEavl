@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Board } from "../../board/Board";
 import { Link, useSearchParams } from "react-router-dom";
 import { getReport, getRun, modelLabel, type RunRecord } from "../../api/client";
 import { suiteRoutes } from "../registry";
@@ -172,27 +173,29 @@ export function DirectLlmCompare() {
               {scorerShort(datasetScorerName) !== "—"
                 ? ` · 数据集默认评分器 ${scorerShort(datasetScorerName)}` : ""}
             </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>指标</th>
-                  {columns.map((column) => (
-                    <th key={column.runId}>
-                      {column.model}
-                      <span className="muted mono"> {column.runId}</span>
-                      <Link className="link" to={ROUTES.result(column.runId)}>详情</Link>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
+            <Board
+              label="数据板面"
+              head={<>
+                <th>指标</th>
+                {columns.map((column) => (
+                <th key={column.runId}>
+                {column.model}
+                <span className="muted mono"> {column.runId}</span>
+                <Link className="link" to={ROUTES.result(column.runId)}>详情</Link>
+                </th>
+                ))}
+              </>}
+            >
+
+              
+
                 <tr><td>通过率</td>{columns.map((c) => <td key={c.runId} className="mono">{c.rate == null ? "—" : `${c.rate}%`}</td>)}</tr>
                 <tr><td>判定题数</td>{columns.map((c) => <td key={c.runId} className="mono">{c.judged}</td>)}</tr>
                 <tr><td>tokens</td>{columns.map((c) => <td key={c.runId} className="mono">{c.tokens}</td>)}</tr>
                 <tr><td>成本</td>{columns.map((c) => <td key={c.runId} className="mono">{c.cost == null ? "—" : `¥${c.cost}`}</td>)}</tr>
                 <tr><td>共同不通过</td><td colSpan={Math.max(1, columns.length)} className="mono">{[...sharedFailed].join(", ") || "无"}</td></tr>
-              </tbody>
-            </table>
+
+            </Board>
 
             <h3 className="embed-title">逐题下钻</h3>
             <ul className="compare-case-list">

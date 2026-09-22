@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Board } from "../../board/Board";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowClockwiseIcon, FlaskIcon, MagicWandIcon, TestTubeIcon } from "@phosphor-icons/react";
 import {
@@ -168,11 +169,15 @@ function ScopeChecks({ scope }: { scope: SkillVerificationScopeView }) {
   const checks = scope.checks ?? [];
   if (checks.length === 0) return <p className="hint">服务端未返回逐项检查明细。</p>;
   return (
-    <table>
-      <thead>
-        <tr><th>检查项</th><th>字段</th><th>结论</th><th>说明</th></tr>
-      </thead>
-      <tbody>
+    <Board
+      label="数据板面"
+      head={<>
+        <th>检查项</th><th>字段</th><th>结论</th><th>说明</th>
+      </>}
+    >
+
+      
+
         {checks.map((check, index) => (
           <tr key={(check.id ?? check.locator ?? "check") + "-" + index}>
             <td className="mono nowrap">{check.id ?? UNKNOWN_TEXT}</td>
@@ -187,8 +192,8 @@ function ScopeChecks({ scope }: { scope: SkillVerificationScopeView }) {
             <td>{check.message ?? "—"}</td>
           </tr>
         ))}
-      </tbody>
-    </table>
+
+    </Board>
   );
 }
 
@@ -336,11 +341,15 @@ export function SkillValidationPage() {
             <p className="hint">
               三种范围能证明的东西不同，页面不把它们合并成一个「已验证」结论。
             </p>
-            <table>
-              <thead>
-                <tr><th>验证范围</th><th>状态</th><th>能证明</th><th>不能证明</th><th>操作</th></tr>
-              </thead>
-              <tbody>
+            <Board
+              label="数据板面"
+              head={<>
+                <th>验证范围</th><th>状态</th><th>能证明</th><th>不能证明</th><th>操作</th>
+              </>}
+            >
+
+              
+
                 {VALIDATION_SCOPES.map((scope) => {
                   const result = results[scope.id] ?? skill.verification?.[scope.id] ?? null;
                   const capabilityReason = unavailable[scope.id] ?? null;
@@ -380,8 +389,8 @@ export function SkillValidationPage() {
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
+
+            </Board>
 
             <h3 className="embed-title">行为测试条件</h3>
             <div className="connection-grid">
@@ -446,9 +455,15 @@ export function SkillValidationPage() {
             )}
 
             <h3 className="embed-title">资源、依赖与权限声明</h3>
-            <table>
-              <thead><tr><th>资源路径</th><th>sha256</th><th>大小</th><th>媒体类型</th></tr></thead>
-              <tbody>
+            <Board
+              label="数据板面"
+              head={<>
+                <th>资源路径</th><th>sha256</th><th>大小</th><th>媒体类型</th>
+              </>}
+            >
+
+              
+
                 {(skill.resource_manifest ?? []).map((resource) => (
                   <tr key={resource.path}>
                     <td className="mono">{resource.path}</td>
@@ -460,8 +475,8 @@ export function SkillValidationPage() {
                 {(skill.resource_manifest ?? []).length === 0 && (
                   <tr><td colSpan={4} className="empty">该 Skill 没有声明资源</td></tr>
                 )}
-              </tbody>
-            </table>
+
+            </Board>
             <dl className="kv">
               <dt>入口</dt>
               <dd className="mono">
@@ -696,19 +711,21 @@ export function SkillComparePage() {
               三臂必须固定 DatasetVersion、样本集合、Agent/runtime、模型、scorer、工具权限与预算政策，
               并为每组使用独立初始状态与 session；只有 Skill 是允许变化的维度。
             </p>
-            <table>
-              <thead>
-                <tr>
-                  <th>条件</th>
-                  {arms.map((arm) => (
-                    <th key={arm.runId}>
-                      <span className="mono">{arm.arm}</span>
-                      <Link className="link" to={"/scenario/runs/" + encodeURIComponent(arm.runId)}>{arm.runId}</Link>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
+            <Board
+              label="数据板面"
+              head={<>
+                <th>条件</th>
+                {arms.map((arm) => (
+                <th key={arm.runId}>
+                <span className="mono">{arm.arm}</span>
+                <Link className="link" to={"/scenario/runs/" + encodeURIComponent(arm.runId)}>{arm.runId}</Link>
+                </th>
+                ))}
+              </>}
+            >
+
+              
+
                 <tr>
                   <td>模型</td>
                   {arms.map((arm) => <td key={arm.runId} className="mono">{arm.model}</td>)}
@@ -779,8 +796,8 @@ export function SkillComparePage() {
                     </td>
                   ))}
                 </tr>
-              </tbody>
-            </table>
+
+            </Board>
             <p className="hint">
               报道成本只覆盖已报道成本的样本；覆盖不完整时总额按未知处理，Skill 额外 token 也不重复计入模型费用。
             </p>

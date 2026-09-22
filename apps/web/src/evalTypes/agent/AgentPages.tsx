@@ -664,9 +664,15 @@ export function AgentCompare() {
                     <div><dt>状态</dt><dd><StatusBadge status={run.status} /></dd></div>
                     <div><dt>模型</dt><dd>{(run.manifest?.resource_snapshots?.model_profile as any)?.id ?? "—"}</dd></div>
                   </dl>
-                  <table className="table">
-                    <thead><tr><th>任务</th><th>指标</th><th>判定</th></tr></thead>
-                    <tbody>
+                  <Board
+                    label="数据板面"
+                    head={<>
+                      <th>任务</th><th>指标</th><th>判定</th>
+                    </>}
+                  >
+
+                    
+
                       {(run.scores ?? [])
                         .filter((score: any) => typeof score.metric_id === "string")
                         .map((score: any, i: number) => (
@@ -676,8 +682,8 @@ export function AgentCompare() {
                             <td>{score.passed === true ? "通过" : score.passed === false ? "未通过" : "未判定"}</td>
                           </tr>
                         ))}
-                    </tbody>
-                  </table>
+
+                  </Board>
                 </>
               )}
           </Panel>

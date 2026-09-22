@@ -1081,14 +1081,20 @@ export function TerminalBenchOperate() {
                   ))}
                 </ul>
               )}
-              <table aria-label="预检检查项">
-                <thead><tr><th>检查项</th><th>取值</th></tr></thead>
-                <tbody>
+              <Board
+                label="预检检查项"
+                head={<>
+                  <th>检查项</th><th>取值</th>
+                </>}
+              >
+
+                
+
                   {Object.entries(preflight.checks ?? {}).map(([key, value]) => (
                     <tr key={key}><td className="mono">{key}</td><td className="mono">{describeCheckValue(value)}</td></tr>
                   ))}
-                </tbody>
-              </table>
+
+              </Board>
               <dl className="kv">
                 <div>
                   <dt>Profile 指纹</dt>
@@ -1577,11 +1583,15 @@ function ArtifactViewer({
           缺工件：该 Trial 没有可读工件（workspace / 轨迹可能未被采集）。
         </p>
       ) : (
-        <table aria-label="Trial 工件">
-          <thead>
-            <tr><th>工件</th><th>类型</th><th>完整度</th><th>大小</th><th>sha256</th><th /></tr>
-          </thead>
-          <tbody>
+        <Board
+          label="Trial 工件"
+          head={<>
+            <th>工件</th><th>类型</th><th>完整度</th><th>大小</th><th>sha256</th><th />
+          </>}
+        >
+
+          
+
             {artifacts.map((artifact) => (
               <tr
                 key={`${runId}:${trialId}:${artifact.artifact_id}`}
@@ -1604,8 +1614,8 @@ function ArtifactViewer({
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
+
+        </Board>
       )}
       {selected && (
         <div className="drill-detail" data-testid="tb-artifact-detail">
@@ -1709,17 +1719,24 @@ function TrialDrillDown({
             <div><dt>异常类型</dt><dd className="mono">{termination.exception_type ? String(termination.exception_type) : "无"}</dd></div>
             <div><dt>异常信息</dt><dd>{termination.exception_message ? String(termination.exception_message) : "无"}</dd></div>
           </dl>
-          <table aria-label="Trial 分阶段耗时" data-testid="tb-termination-timings">
-            <thead><tr><th>阶段</th><th>耗时</th></tr></thead>
-            <tbody>
+          <Board
+            testId="tb-termination-timings"
+            label="Trial 分阶段耗时"
+            head={<>
+              <th>阶段</th><th>耗时</th>
+            </>}
+          >
+
+            
+
               {TIMING_FIELDS.map((field) => (
                 <tr key={field.key}>
                   <td>{field.label}</td>
                   <td className="mono">{formatSeconds(timings[field.key])}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+
+          </Board>
 
           <h3 className="embed-title">Verifier 观测</h3>
           <dl className="kv">
@@ -1743,9 +1760,16 @@ function TrialDrillDown({
           <TerminalTextView terminal={detail.terminal} />
 
           <h3 className="embed-title">覆盖与工件完整度</h3>
-          <table aria-label="Trial 覆盖项" data-testid="tb-coverage">
-            <thead><tr><th>覆盖项</th><th>状态</th></tr></thead>
-            <tbody>
+          <Board
+            testId="tb-coverage"
+            label="Trial 覆盖项"
+            head={<>
+              <th>覆盖项</th><th>状态</th>
+            </>}
+          >
+
+            
+
               {Object.entries(coverageItems).map(([key, value]) => (
                 <tr key={key}>
                   <td>{COVERAGE_ITEM_LABELS[key] ?? key}<span className="hint mono"> {key}</span></td>
@@ -1755,8 +1779,8 @@ function TrialDrillDown({
               {Object.keys(coverageItems).length === 0 && (
                 <tr><td colSpan={2} className="empty">没有覆盖率登记（未知）。</td></tr>
               )}
-            </tbody>
-          </table>
+
+          </Board>
           <dl className="kv">
             <div>
               <dt>缺失</dt>
@@ -2055,14 +2079,16 @@ export function TerminalBenchResult() {
             </div>
             {tasks.length === 0 && !tasksError && <p className="empty">暂无 Task：该运行还没有产出 Trial。</p>}
 
-            <table aria-label="Trial 清单">
-              <thead>
-                <tr>
-                  <th>Trial</th><th>重复</th><th>处置</th><th>Verifier</th>
-                  <th>reward</th><th>有效</th><th>覆盖缺失</th><th />
-                </tr>
-              </thead>
-              <tbody>
+            <Board
+              label="Trial 清单"
+              head={<>
+                <th>Trial</th><th>重复</th><th>处置</th><th>Verifier</th>
+                <th>reward</th><th>有效</th><th>覆盖缺失</th><th />
+              </>}
+            >
+
+              
+
                 {trials.map((row) => (
                   <tr key={row.trial_id} data-testid={`tb-trial-${row.trial_id}`}>
                     <td className="mono nowrap">{row.trial_id}</td>
@@ -2093,8 +2119,8 @@ export function TerminalBenchResult() {
                     </td>
                   </tr>
                 )}
-              </tbody>
-            </table>
+
+            </Board>
             {trialsError && <p className="error">{trialsError}</p>}
           </>
         )}
@@ -2208,9 +2234,15 @@ export function TerminalBenchCompare() {
               任务集合差异：+{comparison.case_diff.added.length} / -{comparison.case_diff.removed.length}
               {" "}/ 改 {comparison.case_diff.changed.length}
             </p>
-            <table aria-label="指标可用性">
-              <thead><tr><th>条件</th><th>可用</th></tr></thead>
-              <tbody>
+            <Board
+              label="指标可用性"
+              head={<>
+                <th>条件</th><th>可用</th>
+              </>}
+            >
+
+              
+
                 {Object.entries(comparison.metric_eligibility ?? {}).map(([metric, eligible]) => (
                   <tr key={metric}>
                     <td className="mono">{metric}</td>
@@ -2220,8 +2252,8 @@ export function TerminalBenchCompare() {
                 {Object.keys(comparison.metric_eligibility ?? {}).length === 0 && (
                   <tr><td colSpan={2} className="empty">没有指标可用性登记。</td></tr>
                 )}
-              </tbody>
-            </table>
+
+            </Board>
           </div>
         )}
         {gate && (
@@ -2235,9 +2267,15 @@ export function TerminalBenchCompare() {
               指标 {gate.metric_id ?? COMPARE_POLICY.metric}（要求 {COMPARE_POLICY.op} {COMPARE_POLICY.threshold}），
               覆盖要求 {COMPARE_POLICY.required_coverage}（分母 planned_trials）
             </p>
-            <table aria-label="固定比较条件">
-              <thead><tr><th>条件</th><th>结论</th><th>原因</th></tr></thead>
-              <tbody>
+            <Board
+              label="固定比较条件"
+              head={<>
+                <th>条件</th><th>结论</th><th>原因</th>
+              </>}
+            >
+
+              
+
                 {gate.rules.map((rule) => (
                   <tr key={rule.id}>
                     <td className="mono">{rule.id}</td>
@@ -2248,8 +2286,8 @@ export function TerminalBenchCompare() {
                 {gate.rules.length === 0 && (
                   <tr><td colSpan={3} className="empty">门禁没有登记条件。</td></tr>
                 )}
-              </tbody>
-            </table>
+
+            </Board>
           </div>
         )}
       </Panel>

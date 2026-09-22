@@ -276,9 +276,15 @@ function PolicyDetail({
       </dl>
 
       <h3 className="embed-title">规则（{rules.length}）</h3>
-      <table>
-        <thead><tr><th>rule_id</th><th>kind</th><th>metric</th><th>operator / threshold</th><th>severity</th><th>missing_policy</th></tr></thead>
-        <tbody>
+      <Board
+        label="数据板面"
+        head={<>
+          <th>rule_id</th><th>kind</th><th>metric</th><th>operator / threshold</th><th>severity</th><th>missing_policy</th>
+        </>}
+      >
+
+        
+
           {rules.map((rule) => (
             <tr key={String(rule.rule_id)}>
               <td className="mono nowrap">{String(rule.rule_id)}</td>
@@ -294,8 +300,8 @@ function PolicyDetail({
             </tr>
           ))}
           {rules.length === 0 && <tr><td colSpan={6} className="empty">暂无规则</td></tr>}
-        </tbody>
-      </table>
+
+      </Board>
       {notice && <p className="hint pass" data-testid="gate-policy-notice">{notice}</p>}
       {error && <p className="error" role="alert" data-testid="gate-policy-error">{error}</p>}
 

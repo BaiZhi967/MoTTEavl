@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { Board } from "../../board/Board";
 import { Link, useNavigate } from "react-router-dom";
 import { CalculatorIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import {
@@ -433,11 +434,15 @@ export function DirectLlmOperate() {
               ) : visibleSources?.length === 0 ? (
                 <p className="empty">没有非受限来源</p>
               ) : (
-                <table aria-label="受管来源目录">
-                <thead>
-                  <tr><th>来源</th><th>状态</th><th>Revision</th><th>Stable</th></tr>
-                </thead>
-                <tbody>
+                <Board
+                  label="受管来源目录"
+                  head={<>
+                    <th>来源</th><th>状态</th><th>Revision</th><th>Stable</th>
+                  </>}
+                >
+
+                
+
                   {(visibleSources ?? []).map((managedSource) => {
                     const statusMeta = SOURCE_STATUS_META[managedSource.status]
                       ?? { label: managedSource.status, tone: "neutral" as const };
@@ -534,8 +539,8 @@ export function DirectLlmOperate() {
                       </Fragment>
                     );
                   })}
-                </tbody>
-                </table>
+
+                </Board>
               )}
             </details>
           </div>

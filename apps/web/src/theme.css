@@ -358,6 +358,18 @@ form textarea,
   border-radius: var(--radius-cell);
 }
 
+/* 未迁移的操作页：收尾动作行吸底，拿到 IssueBar 的行为（结构不动，行为对齐） */
+.page.operate > .actions,
+.operate-section > .actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: auto calc(-1 * var(--page-pad-x)) 0;
+  padding: 16px var(--page-pad-x) 12px;
+  background: var(--board-panel);
+  border-top: 1px solid var(--board-rule);
+}
+
 /* 旧空态：虚线框与板面同色（1.5px 虚线来自旧层，保留） */
 .empty {
   color: var(--ink-faint);
