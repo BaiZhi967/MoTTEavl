@@ -1,4 +1,4 @@
-// 状态语义的唯一来源（DESIGN.md 第 3 节）。
+// 状态语义的唯一来源（DESIGN.md 第 4 节）。
 // 徽章、时间线、过滤下拉一律从这里取标签与语气，禁止在组件里手写状态颜色。
 
 export type Tone = "success" | "error" | "info" | "warning" | "neutral";
@@ -27,7 +27,7 @@ export interface StatusMetaEntry {
 }
 
 export const STATUS_META: Record<string, StatusMetaEntry> = {
-  // Run 状态（10 种收敛到 5 种语气，DESIGN.md 第 3 节）
+  // Run 状态（10 种收敛到 5 种语气，DESIGN.md 第 4 节）
   queued: { label: "排队中", tone: "neutral" },
   preparing: { label: "准备中", tone: "info" },
   running: { label: "运行中", tone: "info" },
