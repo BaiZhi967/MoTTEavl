@@ -1,5 +1,9 @@
 # MoTTEavl 支持矩阵（M7 RC）
 
+> M8 候选增量以 `docs/verification/M8.md` 为准。下表原 M7 收据只证明其各自
+> 记录的 SHA/环境，不自动证明 M8 候选；M8 的 `stable_supported` 与
+> `cutover_ready` 均未达到。
+
 > 状态：draft（随 T11 证据回填）。取值：`tested`（本仓真实执行证据）＞ `supported`
 > （tested 子集 + 无已知反例）＞ `experimental`（有实现、证据不足或已知限制）＞
 > `blocked`（环境/授权缺失）＞ `not_run`（未执行）。skip 不计入 supported。
@@ -62,3 +66,14 @@
 
 只有上表所有声明 supported/tested 的行都有真实证据时，才可输出 `stable_supported`；
 任一 not_run/blocked 存在时如实标注 `offline_verified` + `external_pending`。
+
+## 7. M8 候选增量（2026-09-23）
+
+| 能力 / 环境 | 本候选状态 | 证据或缺口 |
+|---|---|---|
+| Direct/GSM8K 固定 Pass 比较 | offline_verified | M8 T04 的真实 HTTP 与 Web 测试；live/截图未复验 |
+| Direct/GSM8K Experiment | offline_partial | M8 T02/T03/T05；GSM8K standalone 装配一致，其他 suite 未接入 |
+| 统计正式消费者 | experimental | 统计函数有组件测试；API/CLI/Web/导出固定输入消费者未闭合 |
+| PostgreSQL 隔离迁移 | CI_pending | `fcb85e2` 之后的 real PG CI 尚待结果；本机无 DSN |
+| PostgreSQL dump/restore、Compose build/up | blocked_local | 本机无 Docker/DSN；不能以 config 检查替代恢复收据 |
+| 真实 Provider/Harness/Judge 与生产切换 | authorization_pending | 需单独有界授权；无本轮 live/cutover 收据 |

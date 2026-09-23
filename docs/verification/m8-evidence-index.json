@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "assessment": "docs\\review\\2026-09-22-m1-m7-assessment\\MoTTEavl_M1-M7_Assessment_2026-09-22.md",
+  "assessment": "docs/review/2026-09-22-m1-m7-assessment/MoTTEavl_M1-M7_Assessment_2026-09-22.md",
   "goals": [
     {
       "goal_id": "M1-G01",
@@ -2440,14 +2440,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; other suites and real execution pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/resolve.py"
+        ],
+        "test_nodes": [
+          "tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects",
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2468,14 +2474,19 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; cross-process resource races pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/storage/motte_storage/platform.py"
+        ],
+        "test_nodes": [
+          "tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2522,14 +2533,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2548,14 +2565,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2599,14 +2622,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2625,14 +2654,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2651,14 +2686,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2677,14 +2718,18 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "consumer_gap; statistical functions have tests but no fixed-report API/CLI/Web/export consumer",
+        "consumer_paths": [
+          "packages/evaluators/motte_eval/statistics.py"
+        ],
+        "test_nodes": [
+          "tests/evaluators/test_statistics.py"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2703,14 +2748,18 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "consumer_gap; statistical functions have tests but no fixed-report API/CLI/Web/export consumer",
+        "consumer_paths": [
+          "packages/evaluators/motte_eval/statistics.py"
+        ],
+        "test_nodes": [
+          "tests/evaluators/test_statistics.py"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2729,14 +2778,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2886,14 +2941,19 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; runtime/Judge factor coverage pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/resolve.py"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2912,14 +2972,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2963,14 +3029,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "gap_recheck",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {

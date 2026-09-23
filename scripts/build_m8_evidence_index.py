@@ -40,6 +40,44 @@ HISTORICAL_RECEIPT = {
     7: "docs/verification/M7.md",
 }
 
+CURRENT_EVIDENCE = {
+    "M6-G01": (
+        ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
+        ["tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects",
+         "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"],
+        "partial_m8; other suites and real execution pending",
+    ),
+    "M6-G02": (
+        ["packages/sdk-python/motte_sdk/experiments.py", "packages/storage/motte_storage/platform.py"],
+        ["tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild"],
+        "partial_m8; cross-process resource races pending",
+    ),
+    "M6-G18": (
+        ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
+        ["tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"],
+        "partial_m8; runtime/Judge factor coverage pending",
+    ),
+    **{
+        goal_id: (
+            ["packages/sdk-python/motte_sdk/comparisons.py",
+             "apps/web/src/evalTypes/suiteComparison.ts"],
+            ["tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+             "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"],
+            "partial_m8; fixed-pass suite pages verified offline",
+        )
+        for goal_id in ("M6-G04", "M6-G05", "M6-G07", "M6-G08", "M6-G09",
+                        "M6-G12", "M6-G19", "M6-G21")
+    },
+    **{
+        goal_id: (
+            ["packages/evaluators/motte_eval/statistics.py"],
+            ["tests/evaluators/test_statistics.py"],
+            "consumer_gap; statistical functions have tests but no fixed-report API/CLI/Web/export consumer",
+        )
+        for goal_id in ("M6-G10", "M6-G11")
+    },
+}
+
 
 def packages(goal_id: str) -> list[str]:
     stage = int(goal_id[1])
@@ -75,6 +113,29 @@ def main() -> None:
             continue
         goal_id, summary, historical_status, historical_note = match.groups()
         stage = int(goal_id[1])
+        evidence = CURRENT_EVIDENCE.get(goal_id)
+        current = {
+            "baseline_sha": BASE_SHA,
+            "implementation_status": "gap_recheck" if historical_status == "I" else "not_reverified",
+            "consumer_paths": [],
+            "test_nodes": [],
+            "environment": None,
+            "verification_layer": "not_reverified",
+            "receipt_ref": None,
+            "artifact_hash": None,
+            "supersedes": None,
+        }
+        if evidence is not None:
+            paths, nodes, status = evidence
+            current.update({
+                "implementation_status": status,
+                "consumer_paths": paths,
+                "test_nodes": nodes,
+                "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+                "verification_layer": "offline_component_or_http",
+                "receipt_ref": "docs/verification/M8.md",
+                "supersedes": "assessment@fc1e7d56 (current slice only)",
+            })
         goals.append({
             "goal_id": goal_id,
             "original_goal": summary,
@@ -86,22 +147,18 @@ def main() -> None:
                 "receipt_ref": HISTORICAL_RECEIPT[stage],
             },
             "m8_work_packages": packages(goal_id),
-            "current": {
-                "baseline_sha": BASE_SHA,
-                "implementation_status": "gap_recheck" if historical_status == "I" else "not_reverified",
-                "consumer_paths": [],
-                "test_nodes": [],
-                "environment": None,
-                "verification_layer": "not_reverified",
-                "receipt_ref": None,
-                "artifact_hash": None,
-                "supersedes": None,
-            },
+            "current": current,
         })
     if len(goals) != 137 or len({item["goal_id"] for item in goals}) != 137:
         raise SystemExit(f"expected 137 unique goals, got {len(goals)}")
+    for goal in goals:
+        current = goal["current"]
+        for path in [*current["consumer_paths"], *current["test_nodes"]]:
+            source = ROOT / path.split("::", 1)[0]
+            if not source.is_file():
+                raise SystemExit(f"{goal['goal_id']}: missing evidence path {path}")
     OUTPUT.write_text(
-        json.dumps({"schema_version": 1, "assessment": str(ASSESSMENT.relative_to(ROOT)),
+        json.dumps({"schema_version": 1, "assessment": ASSESSMENT.relative_to(ROOT).as_posix(),
                     "goals": goals}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
