@@ -136,6 +136,18 @@ def test_experiment_suite_mismatch_rejects_before_creating_cells() -> None:
     assert store.runs.list() == []
 
 
+def test_idempotent_completed_create_replay_does_not_require_live_resources() -> None:
+    store, run_service, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    first = service.create(payload, request_key="m8-completed-replay")
+    rebuilt = ExperimentService(store, run_service, resources=None)
+    replay = rebuilt.create(payload, request_key="m8-completed-replay")
+    assert [cell["run_id"] for cell in replay["cells"]] == [
+        cell["run_id"] for cell in first["cells"]
+    ]
+    assert len(store.runs.list()) == 1
+
+
 def put_manual_cells(
     store: object,
     payload: dict[str, object],

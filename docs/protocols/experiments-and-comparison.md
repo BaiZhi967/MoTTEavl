@@ -3,6 +3,15 @@
 状态：**authoritative（T00 冻结版）**。本文是 M6 所有实现必须遵守的身份层级、真值表与
 hash 规则。实现与其冲突时，以本文为准并修复实现；修订本文必须随代码同一提交。
 
+> M8 实现范围（2026-09-23）：Direct LLM 和 GSM8K Experiment 只接受
+> `model_profile` / `reasoning_level`；其他因子在 preview/create 拒绝。
+> `max_total_tokens`、`max_cost_usd`、非默认停止政策及非默认 scoring 当前无
+> 实验级强制消费者，同样拒绝。`max_total_calls` 根据固定题集与已解析 retry
+> 上界预检。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService
+> 读取质量与可比性；成本按币种分列，部分未知保留 unknown 数。此范围说明
+> 不改变下文目标协议，也不把其他 suite 或统计消费者标为已实现。证据见
+> `docs/verification/M8.md`。
+
 M6 是**结果治理层**：只消费已持久化的 Run / Trial / Observation / ScoreSet /
 ScoringPass / Artifact 引用。compare / report / gate / history / export 一律只读，
 零 Provider / Judge / Runner / 业务工具调用。Experiment 只编排既有

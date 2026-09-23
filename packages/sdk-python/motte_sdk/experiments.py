@@ -333,6 +333,16 @@ class ExperimentService:
                     "REQUEST_KEY_CONFLICT",
                     f"request_key {request_key!r} already created different spec content",
                 )
+            if seen is not None:
+                stored_replay = self.store.experiments.get_spec(spec.experiment_id, spec.version)
+                if stored_replay == spec.model_dump(mode="json"):
+                    # Fully allocated replays need no mutable resource lookup. If
+                    # cells remain pending, allocate() still performs preflight.
+                    return {
+                        "experiment_id": spec.experiment_id, "version": spec.version,
+                        "created": False, "spec": stored_replay,
+                        **self.allocate(spec.experiment_id, spec.version),
+                    }
         compiled = self._compile(spec)
         violations = compiled["violations"]
         if violations:
