@@ -32,6 +32,11 @@ jobs:
       - run: uv sync
       - run: pnpm install --frozen-lockfile
       - run: make check
+      - name: M8 isolated PostgreSQL allocation and restore receipts
+        run: >-
+          uv run pytest -vv
+          tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell
+          tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact
       - run: uv run pip-audit --skip-editable
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
