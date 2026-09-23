@@ -6,6 +6,7 @@ Run from the repository root; the output is deterministic and reviewable in Git.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -72,6 +73,13 @@ CURRENT_EVIDENCE = {
          "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence",
          "tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell"],
         "partial_m8; task-owned PostgreSQL process race and SQLite drift/recovery verified; broader resource races pending",
+    ),
+    "M6-G03": (
+        ["packages/sdk-python/motte_sdk/experiments.py",
+         "packages/sdk-python/motte_sdk/dispatcher.py",
+         "apps/worker/motte_worker/runtime.py"],
+        ["tests/integration/test_experiment_gate_slice.py::test_experiment_to_gate_full_slice"],
+        "partial_m8; scoped paid Direct/GSM8K Worker dispatch observed; other suites and recovery variants pending",
     ),
     "M6-G18": (
         ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
@@ -158,6 +166,17 @@ CURRENT_EVIDENCE = {
 }
 
 INTEGRATION_SCOPED_GOALS = {"M6-G02", "M7-G15"}
+LIVE_SCOPED_GOALS = {
+    "M6-G01": "partial_m8; paid single-Case Direct and synthetic GSM8K Experiment creation/execution observed; full suite matrix pending",
+    "M6-G03": "partial_m8; paid single-Case Direct and synthetic GSM8K Dispatcher/Worker path observed; other suites pending",
+    "M6-G05": "partial_m8; explicit-CNY fixed-pass Direct cost comparison observed live; broader eligibility matrix pending",
+}
+LIVE_RECEIPT = ROOT / "docs/verification/m8-deepseek-live-receipt.json"
+
+
+def _repository_file_hash(path: Path) -> str:
+    """Hash text as stored by Git, independent of Windows checkout newlines."""
+    return "sha256:" + hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def packages(goal_id: str) -> list[str]:
@@ -181,6 +200,8 @@ def packages(goal_id: str) -> list[str]:
         if suffix in {10, 11, 12, 13, 14}:
             result += ["T10"]
         result += ["T11", "T12"]
+    if goal_id in LIVE_SCOPED_GOALS:
+        result += ["T07"]
     if goal_id in {"M1-G17", "M5-G22", "M7-G08"}:
         result += ["T01"]
     return list(dict.fromkeys(result))
@@ -225,6 +246,25 @@ def main() -> None:
                         "task-owned disposable databases; CI e96407e"
                     ),
                 })
+            if goal_id in LIVE_SCOPED_GOALS:
+                current.update({
+                    "implementation_status": LIVE_SCOPED_GOALS[goal_id],
+                    "verification_layer": "live_scoped",
+                    "environment": (
+                        "Windows 11 / Python 3.12.10 / task-owned SQLite / "
+                        "operator-configured paid gateway / synthetic single-Case Runs"
+                    ),
+                    "receipt_ref": LIVE_RECEIPT.relative_to(ROOT).as_posix(),
+                    "artifact_hash": _repository_file_hash(LIVE_RECEIPT),
+                })
+                if goal_id == "M6-G05":
+                    current["consumer_paths"].append(
+                        "packages/provider-runtime/motte_provider/pricing.py"
+                    )
+                    current["test_nodes"].append(
+                        "tests/provider/test_openai_compatible.py::"
+                        "test_cost_keeps_explicit_price_table_currency_in_provider_evidence"
+                    )
         goals.append({
             "goal_id": goal_id,
             "original_goal": summary,

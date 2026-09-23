@@ -2448,11 +2448,12 @@
         "T00",
         "T02",
         "T03",
-        "T05"
+        "T05",
+        "T07"
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; other suites and real execution pending",
+        "implementation_status": "partial_m8; paid single-Case Direct and synthetic GSM8K Experiment creation/execution observed; full suite matrix pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
           "packages/sdk-python/motte_sdk/resolve.py"
@@ -2463,10 +2464,10 @@
           "tests/sdk/test_m6_experiments.py::test_unassembled_suite_preview_and_create_fail_closed",
           "tests/sdk/test_m6_experiments.py::test_agent_runtime_factor_cannot_silently_use_legacy_json"
         ],
-        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
-        "verification_layer": "offline_component_or_http",
-        "receipt_ref": "docs/verification/M8.md",
-        "artifact_hash": null,
+        "environment": "Windows 11 / Python 3.12.10 / task-owned SQLite / operator-configured paid gateway / synthetic single-Case Runs",
+        "verification_layer": "live_scoped",
+        "receipt_ref": "docs/verification/m8-deepseek-live-receipt.json",
+        "artifact_hash": "sha256:516c5c54cadeaf39668970bb3250affc865bb26d6e62040281f28fb9dbbf5ade",
         "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
@@ -2521,18 +2522,25 @@
         "T00",
         "T02",
         "T03",
-        "T05"
+        "T05",
+        "T07"
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
-        "artifact_hash": null,
-        "supersedes": null
+        "implementation_status": "partial_m8; paid single-Case Direct and synthetic GSM8K Dispatcher/Worker path observed; other suites pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/dispatcher.py",
+          "apps/worker/motte_worker/runtime.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_experiment_to_gate_full_slice"
+        ],
+        "environment": "Windows 11 / Python 3.12.10 / task-owned SQLite / operator-configured paid gateway / synthetic single-Case Runs",
+        "verification_layer": "live_scoped",
+        "receipt_ref": "docs/verification/m8-deepseek-live-receipt.json",
+        "artifact_hash": "sha256:516c5c54cadeaf39668970bb3250affc865bb26d6e62040281f28fb9dbbf5ade",
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2579,23 +2587,26 @@
       },
       "m8_work_packages": [
         "T00",
-        "T04"
+        "T04",
+        "T07"
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "implementation_status": "partial_m8; explicit-CNY fixed-pass Direct cost comparison observed live; broader eligibility matrix pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
-          "apps/web/src/evalTypes/suiteComparison.ts"
+          "apps/web/src/evalTypes/suiteComparison.ts",
+          "packages/provider-runtime/motte_provider/pricing.py"
         ],
         "test_nodes": [
           "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
-          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare",
+          "tests/provider/test_openai_compatible.py::test_cost_keeps_explicit_price_table_currency_in_provider_evidence"
         ],
-        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
-        "verification_layer": "offline_component_or_http",
-        "receipt_ref": "docs/verification/M8.md",
-        "artifact_hash": null,
+        "environment": "Windows 11 / Python 3.12.10 / task-owned SQLite / operator-configured paid gateway / synthetic single-Case Runs",
+        "verification_layer": "live_scoped",
+        "receipt_ref": "docs/verification/m8-deepseek-live-receipt.json",
+        "artifact_hash": "sha256:516c5c54cadeaf39668970bb3250affc865bb26d6e62040281f28fb9dbbf5ade",
         "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },

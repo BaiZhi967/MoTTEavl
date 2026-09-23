@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "authorization_ref": "user message 2026-09-23 allowing configured DeepSeek V4.1 Flash paid tests",
+  "verification_layer": "live_scoped",
+  "code_shas": [
+    "9dbbbd67e45bd3e47ee159c182b16ba13f290afe",
+    "a92c9360f9076a3d6cc43a0c50212bd50ac9d64c",
+    "738e68a71c9079206b722d1bddabd62421d4b486"
+  ],
+  "environment": "Windows 11 / CPython 3.12.10 / isolated task-owned SQLite / OpenAI-compatible gateway",
+  "gateway_url_sha256": "sha256:e4861232807042bcdb1f45bd0c88e9bc995f0f3dd337f530bff7f13fd749bef1",
+  "credential_ref_sha256": "sha256:0e9deef32abfc454392d21725f9defeff1f79a1528f24373d20877bacd697959",
+  "requested_and_reported_model": "deepseek-v4.1-flash",
+  "upstream_version_verified": false,
+  "gateway_invoice_observed": false,
+  "price_reference": {
+    "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+    "currency": "CNY",
+    "peak_input_cache_miss_per_million": 2,
+    "peak_output_per_million": 8,
+    "account_billing_equivalence_verified": false
+  },
+  "limits": {
+    "max_http_attempts": 6,
+    "actual_http_attempts": 6,
+    "retries_per_attempt": 0,
+    "output_tokens_probe_and_direct": 128,
+    "output_tokens_gsm8k_fixed": 1024,
+    "estimated_cost_stop_cny": 0.1
+  },
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 16,
+    "peak_reference_total_cny": 0.000368
+  },
+  "provider_probe": {
+    "result": "passed",
+    "attempts": 1,
+    "retry_count": 0,
+    "usage": {
+      "prompt_tokens": 17,
+      "completion_tokens": 1,
+      "total_tokens": 18
+    },
+    "currency_missing_in_historical_cost": true
+  },
+  "runs": [
+    {
+      "run_id": "run-exp-16731cc8c497a02a17aa95f7",
+      "suite": "direct-llm",
+      "status": "completed",
+      "case_id": "m8-live-direct-001",
+      "scoring_pass_id": "pass-6b09b02fb2204d69bab560f23ac9135a",
+      "score_passed": true,
+      "attempts": 1,
+      "retry_count": 0,
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 17,
+        "total_tokens": 18
+      },
+      "peak_reference_cost": 4.2e-05,
+      "cost_currency": null,
+      "synthetic": true,
+      "reported_model": "deepseek-v4.1-flash",
+      "identity_policy_result": "exact_match"
+    },
+    {
+      "run_id": "run-exp-6ef573687c6f431c043eaeae",
+      "suite": "direct-llm",
+      "status": "completed",
+      "case_id": "m8-live-direct-001",
+      "scoring_pass_id": "pass-0b154e330e2f48cbb5d809f26755e43f",
+      "score_passed": true,
+      "attempts": 1,
+      "retry_count": 0,
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 17,
+        "total_tokens": 18
+      },
+      "peak_reference_cost": 4.2e-05,
+      "cost_currency": "CNY",
+      "synthetic": true,
+      "reported_model": "deepseek-v4.1-flash",
+      "identity_policy_result": "exact_match"
+    },
+    {
+      "run_id": "run-exp-aee2030a108ad6434442954f",
+      "suite": "direct-llm",
+      "status": "completed",
+      "case_id": "m8-live-direct-001",
+      "scoring_pass_id": "pass-640fe8ef16054cf4b6aa37e907a41e6c",
+      "score_passed": true,
+      "attempts": 1,
+      "retry_count": 0,
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 17,
+        "total_tokens": 18
+      },
+      "peak_reference_cost": 4.2e-05,
+      "cost_currency": "CNY",
+      "synthetic": true,
+      "reported_model": "deepseek-v4.1-flash",
+      "identity_policy_result": "exact_match"
+    },
+    {
+      "run_id": "run-exp-c6ae11f71421b33b174b53fc",
+      "suite": "gsm8k",
+      "status": "completed",
+      "case_id": "gsm8k-test-0000",
+      "scoring_pass_id": "pass-e314ea26e064428794b976483ed02e40",
+      "score_passed": true,
+      "attempts": 1,
+      "retry_count": 0,
+      "usage": {
+        "completion_tokens": 11,
+        "prompt_tokens": 35,
+        "total_tokens": 46
+      },
+      "peak_reference_cost": 0.000158,
+      "cost_currency": null,
+      "synthetic": true,
+      "reported_model": "deepseek-v4.1-flash",
+      "identity_policy_result": "exact_match"
+    },
+    {
+      "run_id": "run-exp-db195c07f96f3a82285a6f36",
+      "suite": "direct-llm",
+      "status": "completed",
+      "case_id": "m8-live-direct-001",
+      "scoring_pass_id": "pass-894c4748c47a4b93a24ced70e1dd0706",
+      "score_passed": true,
+      "attempts": 1,
+      "retry_count": 0,
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 17,
+        "total_tokens": 18
+      },
+      "peak_reference_cost": 4.2e-05,
+      "cost_currency": null,
+      "synthetic": true,
+      "reported_model": "deepseek-v4.1-flash",
+      "identity_policy_result": "exact_match"
+    }
+  ],
+  "historical_cost_labels_ineligible": [
+    "run-exp-16731cc8c497a02a17aa95f7",
+    "run-exp-c6ae11f71421b33b174b53fc",
+    "run-exp-db195c07f96f3a82285a6f36"
+  ],
+  "fixed_pass_comparison": {
+    "baseline_run_id": "run-exp-6ef573687c6f431c043eaeae",
+    "candidate_run_id": "run-exp-aee2030a108ad6434442954f",
+    "baseline_pass_id": "pass-0b154e330e2f48cbb5d809f26755e43f",
+    "candidate_pass_id": "pass-640fe8ef16054cf4b6aa37e907a41e6c",
+    "baseline_cost_cny": 4.2e-05,
+    "candidate_cost_cny": 4.2e-05,
+    "level": "comparable",
+    "quality_eligible": true,
+    "cost_eligible": true,
+    "statistics_applicable": false,
+    "statistics_reason": "insufficient_tasks",
+    "n_pairs": 1,
+    "cli_json_export_exit_code": 0
+  },
+  "local_full_receipt_sha256": "sha256:224c62937ea88333df5a5c2930c7509166075cdba20c333234a616db70e1898c",
+  "local_execution_card_sha256": "sha256:6c2ee69708d47504c55f97132513ffae6c06764637e0c55625c6fbed43c278f6",
+  "local_api_comparison_sha256": "sha256:104987851cbaf31cb890b24f00e11e9010c4cd2fac6115beabe3294bb64a428d",
+  "local_cli_export_sha256": "sha256:a319d3893332241f7fc4ec85db4c2a5f68f321398d59cbc9ccda61edb3e6e12f",
+  "limitations": [
+    "The gateway returned the requested alias but did not attest the upstream model version.",
+    "The official DeepSeek price is a conservative reference, not a verified gateway debit.",
+    "GSM8K data were synthetic; no official score or C-Eval/Harbor result follows.",
+    "Three early Run cost envelopes and the initial probe lacked a currency field; no historical evidence was overwritten.",
+    "One paired Case is insufficient for formal statistics.",
+    "No Agent native/runtime, Harness, Judge or human calibration was exercised."
+  ]
+}
