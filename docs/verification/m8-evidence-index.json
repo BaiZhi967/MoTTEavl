@@ -2488,7 +2488,7 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; cross-process lock and drift verified on SQLite; PostgreSQL process test pending CI receipt",
+        "implementation_status": "partial_m8; task-owned PostgreSQL process race and SQLite drift/recovery verified; broader resource races pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
           "packages/sdk-python/motte_sdk/execution_lock.py",
@@ -2497,10 +2497,11 @@
         "test_nodes": [
           "tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild",
           "tests/sdk/test_m6_experiments.py::test_active_sqlite_allocation_is_not_reset_by_second_service",
-          "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence"
+          "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence",
+          "tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell"
         ],
-        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
-        "verification_layer": "offline_component_or_http",
+        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI ac05062",
+        "verification_layer": "integration_scoped",
         "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
         "supersedes": "assessment@fc1e7d56 (current slice only)"
@@ -3498,7 +3499,7 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; SQLite DB+Artifact backup/restore verified; isolated PG dump/restore awaits CI",
+        "implementation_status": "partial_m8; SQLite recovery and task-owned PostgreSQL dump/restore parity verified; automated PG staging restore pending",
         "consumer_paths": [
           "packages/storage/motte_storage/maintenance.py",
           "tests/storage/conftest.py"
@@ -3506,10 +3507,11 @@
         "test_nodes": [
           "tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
           "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims",
-          "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host"
+          "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host",
+          "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact"
         ],
-        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
-        "verification_layer": "offline_component_or_http",
+        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI ac05062",
+        "verification_layer": "integration_scoped",
         "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
         "supersedes": "assessment@fc1e7d56 (current slice only)"

@@ -12,4 +12,6 @@ Start: `origin/main` `0ad766fd8020e852b61b88ef82e92d010c553584`, 2026-09-23, Win
 
 Continuation ruling (2026-09-23): T03 protects an active allocation claim with a database-scoped cross-process lock and verifies the race on SQLite before the disposable PostgreSQL process test runs in CI. T05 keeps C-Eval external, Agent native/runtime, Scenario/Skill and Harbor fail-closed after comparing their standalone freeze paths. T06 adds fixed-pass planned Trial pass@k and API/CLI JSON/Web consumers; separately persisted statistical publication remains open. Exact-SHA CI and authorized RC receipts are required before any completion claim.
 
+Receipt update: `ac05062` passed two Linux CI runs, including repeated explicit-node disposable PostgreSQL process allocation and dump/restore parity tests. This closes the scoped T03 PG process and T09 staging parity verification only. Automated PostgreSQL staging restore, Compose build/up, damaged backup and in-flight barrier exercises, live suite cards, private export, and RC/cutover authorization remain on the dependency path.
+
 Every package gets a focused commit after red/green tests and `git diff --check`. Before PR, run current Makefile/CI gates and publish an implementation PR as draft while required gates or acceptance receipts remain open. Do not merge or release.

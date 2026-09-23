@@ -69,8 +69,9 @@ CURRENT_EVIDENCE = {
          "packages/storage/motte_storage/platform.py"],
         ["tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild",
          "tests/sdk/test_m6_experiments.py::test_active_sqlite_allocation_is_not_reset_by_second_service",
-         "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence"],
-        "partial_m8; cross-process lock and drift verified on SQLite; PostgreSQL process test pending CI receipt",
+         "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence",
+         "tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell"],
+        "partial_m8; task-owned PostgreSQL process race and SQLite drift/recovery verified; broader resource races pending",
     ),
     "M6-G18": (
         ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
@@ -134,8 +135,9 @@ CURRENT_EVIDENCE = {
          "tests/storage/conftest.py"],
         ["tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
          "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims",
-         "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host"],
-        "partial_m8; SQLite DB+Artifact backup/restore verified; isolated PG dump/restore awaits CI",
+         "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host",
+         "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact"],
+        "partial_m8; SQLite recovery and task-owned PostgreSQL dump/restore parity verified; automated PG staging restore pending",
     ),
     "M7-G16": (
         ["packages/storage/motte_storage/maintenance.py",
@@ -152,6 +154,8 @@ CURRENT_EVIDENCE = {
         "partial_m8; three synthetic scenarios checked, real replacement acceptance and cutover pending",
     ),
 }
+
+INTEGRATION_SCOPED_GOALS = {"M6-G02", "M7-G15"}
 
 
 def packages(goal_id: str) -> list[str]:
@@ -211,6 +215,14 @@ def main() -> None:
                 "receipt_ref": "docs/verification/M8.md",
                 "supersedes": "assessment@fc1e7d56 (current slice only)",
             })
+            if goal_id in INTEGRATION_SCOPED_GOALS:
+                current.update({
+                    "verification_layer": "integration_scoped",
+                    "environment": (
+                        "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; "
+                        "task-owned disposable databases; CI ac05062"
+                    ),
+                })
         goals.append({
             "goal_id": goal_id,
             "original_goal": summary,
