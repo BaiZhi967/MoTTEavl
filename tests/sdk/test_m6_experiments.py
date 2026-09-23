@@ -231,6 +231,37 @@ def test_direct_llm_manifest_assembly() -> None:
     assert run["manifest"]["cases"] or "cases" in run["manifest"]
 
 
+def test_reasoning_factor_reaches_captured_provider_request() -> None:
+    import json
+
+    from motte_contracts.messages import Message, ModelRequest
+    from motte_provider.config import build_case_provider
+    from tests.provider.test_openai_compatible import FakeResponse
+
+    _store, run_service, service = make_service()
+    result = service.create(spec_payload(
+        factors={"model_profile": ("model-a",), "reasoning_level": ("low", "high")},
+        repeats=1,
+    ))
+    wire: dict[str, dict] = {}
+    for cell in result["cells"]:
+        level = cell["factor_assignment"]["reasoning_level"]
+        snapshot = run_service.get_run(cell["run_id"])["manifest"]["provider"]
+        assert snapshot["reasoning_level"] == level
+        provider = build_case_provider(snapshot, api_key="").provider
+
+        def opener(request, **kwargs):
+            wire[level] = json.loads(request.data)
+            return FakeResponse({"model": "probe-1", "choices": [
+                {"message": {"content": "ok"}, "finish_reason": "stop"},
+            ]})
+
+        provider.transport._opener = opener
+        provider.complete(ModelRequest(model="probe-1", messages=[Message(role="user", content="hi")]))
+    assert wire["low"]["reasoning_effort"] == "low"
+    assert wire["high"]["reasoning_effort"] == "high"
+
+
 def test_unknown_suite_is_rejected_honestly() -> None:
     store, _run_service, service = make_service()
     payload = spec_payload(task_ref={"suite": "harbor", "scenario_version": "harbor@1"})
@@ -238,6 +269,20 @@ def test_unknown_suite_is_rejected_honestly() -> None:
         service.create(payload)
     assert excinfo.value.code == "SUITE_UNSUPPORTED"
     assert "harbor" in str(excinfo.value)
+    assert store.runs.list() == []
+
+
+@pytest.mark.parametrize("factor", ["prompt_version", "runtime_version", "skill_version"])
+def test_direct_unconsumed_factor_is_rejected_by_both_entries_before_persistence(factor):
+    store, _run_service, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",), factor: ("v1", "v2")})
+    for entry in (service.preview, service.create):
+        with pytest.raises(ExperimentError) as excinfo:
+            entry(payload)
+        assert excinfo.value.code == "FACTOR_UNSUPPORTED"
+        assert factor in excinfo.value.message
+    assert store.experiments.list_specs() == []
+    assert store.experiments.list_cells("exp-alpha") == []
     assert store.runs.list() == []
 
 

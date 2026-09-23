@@ -30,6 +30,11 @@ from motte_storage.integrity import RunConflictError
 
 #: 本服务能组装 manifest 的套件；其余套件诚实拒绝，不假装支持。
 SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm"})
+SUPPORTED_FACTORS: dict[str, frozenset[str]] = {
+    # Direct's frozen prompt is the dataset case input (verbatim); it has no
+    # published prompt/runtime/skill selector to compile into a request.
+    "direct-llm": frozenset({"model_profile", "reasoning_level"}),
+}
 
 #: Cell → Run 身份前缀：恢复/并发路径必须得到同一个 run_id。
 _RUN_ID_PREFIX = "run-exp-"
@@ -169,6 +174,12 @@ def _validate_supported_suite(spec: ExperimentSpec) -> None:
             "EXPERIMENT_INVALID",
             "task_ref requires a nonempty scenario_version",
         )
+    unconsumed = sorted(set(spec.factors) - SUPPORTED_FACTORS[suite])
+    if unconsumed:
+        raise ExperimentError(
+            "FACTOR_UNSUPPORTED",
+            f"suite {suite!r} cannot consume factors: {','.join(unconsumed)}",
+        )
     _validate_controlled_conditions(spec)
 
 
@@ -198,6 +209,7 @@ class ExperimentService:
     def preview(self, spec_payload: dict[str, Any]) -> dict[str, Any]:
         """零创建预览：校验、展开矩阵、护栏检查。不触碰任何存储。"""
         spec = ExperimentSpec.model_validate(spec_payload)
+        _validate_supported_suite(spec)
         cells = [
             {
                 "cell_id": compute_cell_id(
