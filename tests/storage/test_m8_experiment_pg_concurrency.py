@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import time
 from queue import Empty
 from typing import Any
 
@@ -62,7 +63,11 @@ def test_two_postgres_processes_do_not_reclaim_active_cell(isolated_pg_database:
         "factors": {"model_profile": ["model-a"]}, "repeats": 1,
         "budget_policy": {"max_total_calls": 10},
     }
-    context = mp.get_context("fork" if os.name != "nt" else "spawn")
+    # pytest loads threaded libraries; fork inherited their locks and the
+    # first child never reached allocation on Linux CI. Fresh spawn processes
+    # exercise the actual cross-process database coordination without that
+    # unrelated process-memory hazard.
+    context = mp.get_context("spawn")
     entered, release = context.Event(), context.Event()
     calls, outcomes = context.Queue(), context.Queue()
     first = context.Process(target=_create_in_process,
@@ -73,7 +78,18 @@ def test_two_postgres_processes_do_not_reclaim_active_cell(isolated_pg_database:
                              kwargs={"pause": False})
     first.start()
     try:
-        assert entered.wait(15), "first process never claimed its cell"
+        deadline = time.monotonic() + 20
+        while not entered.wait(0.1):
+            try:
+                early = outcomes.get_nowait()
+            except Empty:
+                early = None
+            if early is not None:
+                raise AssertionError(f"first process failed before claim: {early}")
+            if first.exitcode is not None:
+                raise AssertionError(f"first process exited before claim: {first.exitcode}")
+            if time.monotonic() >= deadline:
+                raise AssertionError("first process never claimed its cell")
         second.start()
         # Without the allocation lock the second process can finish while the
         # first owns an unfinished claim. With it, the second waits here.

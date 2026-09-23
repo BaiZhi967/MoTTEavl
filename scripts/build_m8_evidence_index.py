@@ -48,6 +48,13 @@ CURRENT_EVIDENCE = {
          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows"],
         "partial_m8; fixed-pass statistical consumer excludes unplanned retry rows; full Trial lifecycle remains historical evidence",
     ),
+    "M3-G15": (
+        ["packages/sdk-python/motte_sdk/comparisons.py",
+         "packages/evaluators/motte_eval/statistics.py"],
+        ["tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+         "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k"],
+        "partial_m8; fixed-pass Task/Trial denominator and k consumer verified offline; live Profile coverage pending",
+    ),
     "M6-G01": (
         ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
         ["tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects",
@@ -105,6 +112,40 @@ CURRENT_EVIDENCE = {
          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
          "apps/web/tests/M6.test.tsx::ComparePage"],
         "partial_m8; planned valid Trial pass@k and retry distinction have fixed-pass consumers; live independence not verified",
+    ),
+    "M7-G10": (
+        ["packages/sdk-python/motte_sdk/migration/plan.py",
+         "packages/sdk-python/motte_sdk/migration/apply.py"],
+        ["tests/migration/test_import_plan.py::test_plan_is_a_pure_dry_run",
+         "tests/migration/test_legacy_import.py::test_second_apply_of_same_source_is_all_reused"],
+        "partial_m8; synthetic dry-run/apply idempotency verified; authorized private export pending",
+    ),
+    "M7-G14": (
+        ["packages/sdk-python/motte_sdk/migration/apply.py",
+         "packages/sdk-python/motte_sdk/migration/rollback.py"],
+        ["tests/migration/test_import_resume_rollback.py::test_crash_mid_apply_resumes_without_duplicates",
+         "tests/migration/test_import_resume_rollback.py::test_rollback_deletes_only_own_unreferenced_objects"],
+        "partial_m8; synthetic interruption/rollback verified; private export and PG restore pending",
+    ),
+    "M7-G15": (
+        ["packages/storage/motte_storage/maintenance.py"],
+        ["tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
+         "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims"],
+        "partial_m8; SQLite DB+Artifact backup/restore verified; isolated PG dump/restore awaits CI",
+    ),
+    "M7-G16": (
+        ["packages/storage/motte_storage/maintenance.py",
+         "packages/storage/motte_storage/migrations.py"],
+        ["tests/integration/test_release_smoke.py::test_release_upgrade_old_shape_database_gets_platform_tables",
+         "tests/integration/test_release_smoke.py::test_release_recovery_path_from_backup"],
+        "partial_m8; synthetic old-shape SQLite upgrade/recovery verified; supported PG upgrade/rollback pending",
+    ),
+    "M7-G21": (
+        ["tests/integration/test_cutover_readiness.py"],
+        ["tests/integration/test_cutover_readiness.py::test_cutover_scenario_1_model_evaluation_two_runs",
+         "tests/integration/test_cutover_readiness.py::test_cutover_scenario_2_agent_benchmark_offline_evidence",
+         "tests/integration/test_cutover_readiness.py::test_cutover_scenario_3_business_regression_offline_evidence"],
+        "partial_m8; three synthetic scenarios checked, real replacement acceptance and cutover pending",
     ),
 }
 

@@ -1299,14 +1299,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass Task/Trial denominator and k consumer verified offline; live Profile coverage pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "packages/evaluators/motte_eval/statistics.py"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+          "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -3337,14 +3343,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; synthetic dry-run/apply idempotency verified; authorized private export pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/migration/plan.py",
+          "packages/sdk-python/motte_sdk/migration/apply.py"
+        ],
+        "test_nodes": [
+          "tests/migration/test_import_plan.py::test_plan_is_a_pure_dry_run",
+          "tests/migration/test_legacy_import.py::test_second_apply_of_same_source_is_all_reused"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -3450,14 +3462,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; synthetic interruption/rollback verified; private export and PG restore pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/migration/apply.py",
+          "packages/sdk-python/motte_sdk/migration/rollback.py"
+        ],
+        "test_nodes": [
+          "tests/migration/test_import_resume_rollback.py::test_crash_mid_apply_resumes_without_duplicates",
+          "tests/migration/test_import_resume_rollback.py::test_rollback_deletes_only_own_unreferenced_objects"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -3478,14 +3496,19 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; SQLite DB+Artifact backup/restore verified; isolated PG dump/restore awaits CI",
+        "consumer_paths": [
+          "packages/storage/motte_storage/maintenance.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
+          "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -3506,14 +3529,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; synthetic old-shape SQLite upgrade/recovery verified; supported PG upgrade/rollback pending",
+        "consumer_paths": [
+          "packages/storage/motte_storage/maintenance.py",
+          "packages/storage/motte_storage/migrations.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_release_smoke.py::test_release_upgrade_old_shape_database_gets_platform_tables",
+          "tests/integration/test_release_smoke.py::test_release_recovery_path_from_backup"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -3642,14 +3671,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; three synthetic scenarios checked, real replacement acceptance and cutover pending",
+        "consumer_paths": [
+          "tests/integration/test_cutover_readiness.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_1_model_evaluation_two_runs",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_2_agent_benchmark_offline_evidence",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_3_business_regression_offline_evidence"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
