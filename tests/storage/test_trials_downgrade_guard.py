@@ -162,6 +162,16 @@ def test_downgrade_proceeds_when_no_trial_evidence_exists(monkeypatch) -> None:
         assert not inspect(bind).has_table("case_attempts")
 
 
+def test_isolated_pg_database_keeps_uri_form_for_migrations() -> None:
+    from motte_storage.postgres import normalize_dsn
+    from tests.storage.conftest import isolated_database_uri
+
+    source = "postgresql://tester:secret@localhost:5432/motteavl?sslmode=disable"
+    target = isolated_database_uri(source, "m8_test_abc")
+    assert target == "postgresql://tester:secret@localhost:5432/m8_test_abc?sslmode=disable"
+    assert normalize_dsn(target) == target
+
+
 @pytest.mark.skipif(
     not os.environ.get("MOTTE_PG_DSN"),
     reason="real PostgreSQL required (MOTTE_PG_DSN)",
