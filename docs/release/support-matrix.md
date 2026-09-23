@@ -75,6 +75,6 @@
 | Direct/GSM8K/Agent Tasks Experiment | offline_partial | M8 T02/T03/T05；GSM8K 与 Agent Tasks 的 standalone 冻结快照一致，Agent 按最多模型步骤预检；C-Eval、Scenario/Skill、Harbor 未接入 |
 | 固定 Pass Case/Task 与 Terminal Trial 统计 | offline_partial | M8 T06 SDK/HTTP/CLI JSON/Web 消费固定引用、政策、`k`、缺失资格和计划 Trial pass@k；另行持久发布的统计报告与 live 独立性仍未闭合 |
 | PostgreSQL 隔离迁移与实验分配 | integration_scoped | 原 T01 migration/owner CI `f5c4374` / `35815300827`；M8 T03 两进程同 key、单 initial Run 在 task-owned PG 库通过两次（`ac05062` / `35829305820`, `35829308936`）。本机无 DSN |
-| PostgreSQL dump/restore（一次性 staging） | integration_scoped | M8 T09 `ac05062` 两次 `-vv` 节点通过：Run、TrialPlan、ScoringPass、ScoreSet、Baseline、Artifact 与 queued guard 对账；仍是手工 `pg_restore` + 显式 guard，未演练生产恢复 |
+| PostgreSQL dump/restore（一次性 staging） | integration_scoped | M8 T09 `ac05062` 两次 `-vv` 节点通过手工 Run/TrialPlan/Pass/Baseline/Artifact/guard 对账；新 `restore_postgres_staging` 自动校验并置守卫，真实 PG 回归待当前提交 CI。生产恢复未演练 |
 | Docker Compose build/up | blocked_local | 本机无 Docker；Linux CI 仅 compose config，通过不代表 build/up/health/Worker 演练 |
 | 真实 Provider/Harness/Judge 与生产切换 | authorization_pending | 需单独有界授权；无本轮 live/cutover 收据 |

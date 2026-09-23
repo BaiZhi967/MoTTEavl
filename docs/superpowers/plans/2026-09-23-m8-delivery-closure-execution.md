@@ -14,4 +14,6 @@ Continuation ruling (2026-09-23): T03 protects an active allocation claim with a
 
 Receipt update: `ac05062` passed two Linux CI runs, including repeated explicit-node disposable PostgreSQL process allocation and dump/restore parity tests. This closes the scoped T03 PG process and T09 staging parity verification only. Automated PostgreSQL staging restore, Compose build/up, damaged backup and in-flight barrier exercises, live suite cards, private export, and RC/cutover authorization remain on the dependency path.
 
+T09 continuation: the manual restore parity exposed a recoverability gap: `pg_restore` alone leaves the dump's maintenance flag and cannot verify a preflight manifest or set the staging guard. Add `restore_postgres_staging` for an empty target, first prove a damaged dump is rejected before any target access, then rerun the task-owned PG parity test through that helper. This does not authorize a production target or claim Compose/GC/in-flight verification.
+
 Every package gets a focused commit after red/green tests and `git diff --check`. Before PR, run current Makefile/CI gates and publish an implementation PR as draft while required gates or acceptance receipts remain open. Do not merge or release.

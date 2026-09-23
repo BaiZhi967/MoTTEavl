@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,10 +18,8 @@ from motte_sdk.service import RunService
 from motte_storage.artifacts import ArtifactStore
 from motte_storage.factory import create_run_store
 from motte_storage.maintenance import (
-    MAINTENANCE_FLAG,
-    MAINTENANCE_STARTED_AT,
-    consistent_backup_postgres,
-    maintenance_status,
+    RestoreIncomplete, consistent_backup_postgres, maintenance_status,
+    restore_postgres_staging,
 )
 from motte_storage.migrations import upgrade
 from motte_storage.platform import platform_for
@@ -125,11 +122,16 @@ def test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact(
     assert manifest["counts"]["baselines"] == 1
     assert maintenance_status(source)["active"] is False
     dump = backup_dir / manifest["database"]["snapshot"]
-    completed = subprocess.run(
-        ["pg_restore", "--exit-on-error", "--dbname", staging_dsn, str(dump)],
-        capture_output=True, text=True, check=False,
+    report = restore_postgres_staging(
+        backup_dir, staging_dsn, tmp_path / "restored-artifacts",
+        expected_manifest_sha256=manifest["manifest_sha256"],
     )
-    assert completed.returncode == 0, completed.stderr[:1000]
+    assert dump.is_file()
+    assert report["restore_guard"] == "active"
+    assert report["database"].startswith("m8_test_restore_")
+    assert "postgresql://" not in report["database"]
+    assert report["counts"]["expected"] == report["counts"]["actual"] == manifest["counts"]
+    assert report["unresolved_runs"] == [{"id": "m8-restore-queued", "status": "queued"}]
     restored = create_run_store(storage="postgres", dsn=staging_dsn)
     assert restored.runs.get(run_id) == source.runs.get(run_id)
     assert restored.runs.get("m8-restore-queued")["status"] == "queued"
@@ -139,17 +141,13 @@ def test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact(
     assert restored.baseline_store.get("m8-restore-baseline") == baseline
     copied = backup_dir / manifest["artifacts"]["dir"] / artifact.id
     assert copied.read_bytes() == b"fixed-evidence"
+    assert (tmp_path / "restored-artifacts" / artifact.id).read_bytes() == b"fixed-evidence"
     assert manifest["artifacts"]["files"][0]["sha256"] == artifact.sha256
-    # pg_restore is currently a manual operation. The test sets the same
-    # guard an operator must set before any Worker is allowed near staging.
     meta = platform_for(restored).meta
-    meta.set("restored_from_backup", "m8-manual-pg-restore")
-    # The dump captures maintenance=active. Remove that inherited flag while
-    # the restore guard is held, so the assertion tests the guard itself.
-    meta.delete(MAINTENANCE_FLAG)
-    meta.delete(MAINTENANCE_STARTED_AT)
     assert meta.get("restored_from_backup") is not None
     worker = WorkerLoop(RunService(restored), execution_lock_held=True, scoring_jobs=None)
     assert worker._platform_block_reason() == "restore_guard_active"
     assert worker.run_once() is None
     assert restored.runs.get("m8-restore-queued")["status"] == "queued"
+    with pytest.raises(RestoreIncomplete, match="not empty"):
+        restore_postgres_staging(backup_dir, staging_dsn, tmp_path / "second-artifact-target")

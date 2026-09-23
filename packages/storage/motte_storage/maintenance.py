@@ -765,6 +765,170 @@ def restore_staging(
     }
 
 
+def _postgres_database_name(dsn: str) -> str:
+    """Effective libpq database name only; never echo a credential-bearing DSN."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    name = conninfo_to_dict(dsn).get("dbname")
+    if not isinstance(name, str) or not name:
+        raise RestoreIncomplete("staging PostgreSQL DSN must name a database")
+    return name
+
+
+def restore_postgres_staging(
+    backup_dir: str | Path,
+    staging_dsn: str,
+    artifacts_target: str | Path,
+    *,
+    expected_manifest_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Verify a PG backup and restore it into an empty, separately supplied DB.
+
+    This path never drops or cleans database objects. A failed restore leaves the
+    staging database for diagnosis; it does not attempt to roll back into or
+    replace the source. The target must not have user objects or artifact files.
+    """
+    backup_root = Path(backup_dir)
+    target_root = Path(artifacts_target)
+    manifest_path, manifest = _latest_complete_manifest(backup_root)
+    if manifest.get("manifest_version") != MANIFEST_VERSION or manifest.get("backend") != "postgres":
+        raise RestoreIncomplete("staging restore requires a PostgreSQL manifest v2")
+    actual_manifest_hash = _manifest_content_sha256(manifest)
+    if manifest.get("manifest_sha256") != actual_manifest_hash:
+        raise RestoreIncomplete("manifest hash mismatch")
+    if (expected_manifest_sha256 is not None
+            and expected_manifest_sha256 != actual_manifest_hash):
+        raise RestoreIncomplete("expected manifest sha256 does not match")
+    try:
+        snapshot = _artifact_path(backup_root, str(manifest["database"]["snapshot"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise RestoreIncomplete("invalid PostgreSQL snapshot path") from error
+    if not snapshot.is_file():
+        raise RestoreIncomplete("database snapshot missing from backup")
+    if (snapshot.stat().st_size != manifest["database"].get("bytes")
+            or _sha256_file(snapshot) != manifest["database"].get("sha256")):
+        raise RestoreIncomplete("database snapshot hash mismatch")
+    expected_counts = manifest.get("counts")
+    count_keys = {"runs", "scoring_passes", "baselines", "gate_results"}
+    if (not isinstance(expected_counts, dict)
+            or not count_keys.issubset(expected_counts)
+            or any(type(expected_counts[key]) is not int or expected_counts[key] < 0
+                   for key in count_keys)):
+        raise RestoreIncomplete("invalid PostgreSQL backup counts")
+    artifacts = manifest.get("artifacts")
+    backed_files: list[tuple[str, Path, str]] = []
+    if artifacts is not None:
+        try:
+            source_root = _artifact_path(backup_root, str(artifacts["dir"]))
+            entries = artifacts["files"]
+        except (KeyError, TypeError, ValueError) as error:
+            raise RestoreIncomplete("invalid artifact section in PostgreSQL backup") from error
+        if not isinstance(entries, list):
+            raise RestoreIncomplete("invalid artifact list in PostgreSQL backup")
+        for entry in entries:
+            try:
+                artifact_id = str(entry["path"])
+                source = _artifact_path(source_root, artifact_id)
+                expected_hash = str(entry["sha256"])
+                expected_bytes = entry["bytes"]
+            except (KeyError, TypeError, ValueError) as error:
+                raise RestoreIncomplete("invalid artifact entry in PostgreSQL backup") from error
+            if (not source.is_file() or source.stat().st_size != expected_bytes
+                    or _sha256_file(source) != expected_hash):
+                raise RestoreIncomplete(f"artifact hash mismatch in backup: {artifact_id}")
+            backed_files.append((artifact_id, source, expected_hash))
+    if (target_root.is_symlink() or
+            (target_root.exists() and
+             (not target_root.is_dir() or any(target_root.iterdir())))):
+        raise FileExistsError(f"staging artifact target is not empty: {target_root}")
+    if shutil.which("pg_restore") is None:
+        raise BackupUnsupported("pg_restore not available")
+
+    from .factory import create_run_store
+    from .postgres import _connect, normalize_dsn
+
+    dsn = normalize_dsn(staging_dsn)
+    target_database = _postgres_database_name(dsn)
+    with _connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT current_database()")
+        if cursor.fetchone()[0] != target_database:
+            raise RestoreIncomplete("staging PostgreSQL database identity mismatch")
+        cursor.execute(
+            "SELECT COUNT(*) FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE left(n.nspname, 3) <> 'pg_' "
+            "AND n.nspname <> 'information_schema' "
+            "AND c.relkind IN ('r','p','v','m','S','f')"
+        )
+        if cursor.fetchone()[0]:
+            raise RestoreIncomplete("staging PostgreSQL database is not empty")
+        cursor.execute(
+            "SELECT COUNT(*) FROM pg_catalog.pg_namespace "
+            "WHERE nspname NOT IN ('public', 'information_schema') "
+            "AND left(nspname, 3) <> 'pg_'"
+        )
+        if cursor.fetchone()[0]:
+            raise RestoreIncomplete("staging PostgreSQL database has user schemas")
+    completed = subprocess.run(
+        ["pg_restore", "--single-transaction", "--exit-on-error",
+         "--dbname", dsn, str(snapshot)],
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise RestoreIncomplete(
+            f"pg_restore failed with exit code {completed.returncode}; "
+            "inspect the isolated staging target before retrying"
+        )
+    store = create_run_store(storage="postgres", dsn=dsn)
+    # The dump captures maintenance=active. Set the restore guard before
+    # clearing that inherited flag, and leave the guard active on any later
+    # verification failure. No Worker may claim a queued staging Run.
+    meta = platform_for(store).meta
+    meta.set(RESTORE_GUARD_KEY, manifest_path.name)
+    meta.delete(MAINTENANCE_FLAG)
+    meta.delete(MAINTENANCE_STARTED_AT)
+    expected_counts = dict(expected_counts)
+    actual_counts = _store_counts(store)
+    for key, expected in expected_counts.items():
+        if actual_counts.get(key) != expected:
+            raise RestoreIncomplete(
+                f"restored count mismatch for {key}",
+                details={"expected": expected, "actual": actual_counts.get(key)},
+            )
+    expected_revision = manifest.get("alembic_revision")
+    if expected_revision is not None:
+        from .migrations import current
+
+        if current(dsn) != expected_revision:
+            raise RestoreIncomplete("restored Alembic revision mismatch")
+    target_root.mkdir(parents=True, exist_ok=True)
+    for artifact_id, source, expected_hash in backed_files:
+        try:
+            destination = _artifact_path(target_root, artifact_id)
+        except ValueError as error:
+            raise RestoreIncomplete(str(error)) from error
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        if _sha256_file(destination) != expected_hash:
+            raise RestoreIncomplete(f"artifact hash mismatch after copy: {artifact_id}")
+    missing_refs = sorted(_referenced_artifacts(store) - {item[0] for item in backed_files})
+    if missing_refs:
+        raise RestoreIncomplete(
+            "referenced artifacts missing from staging restore",
+            details={"missing": missing_refs},
+        )
+    unresolved = [
+        {"id": run.get("id"), "status": run.get("status")}
+        for run in store.runs.list() if run.get("status") in UNRESOLVED_RUN_STATUSES
+    ]
+    return {
+        "database": target_database, "backup": manifest_path.name,
+        "artifacts": {"files_restored": len(backed_files)},
+        "counts": {"expected": expected_counts, "actual": actual_counts},
+        "unresolved_runs": unresolved, "restore_guard": "active",
+    }
+
+
 def clear_restore_guard(db_path_or_store: str | Path | Any, *, confirm: bool = False) -> dict[str, Any]:
     """解除恢复守卫；必须显式 confirm=True（对应 ``motte restore-guard clear --yes``）。"""
     if not confirm:

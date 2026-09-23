@@ -3507,6 +3507,8 @@
         "test_nodes": [
           "tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
           "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims",
+          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_restore_rejects_corrupt_dump_before_target_write",
+          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_report_database_identity_excludes_credentials",
           "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host",
           "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact"
         ],
