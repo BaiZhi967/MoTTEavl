@@ -166,19 +166,18 @@ def test_downgrade_proceeds_when_no_trial_evidence_exists(monkeypatch) -> None:
     not os.environ.get("MOTTE_PG_DSN"),
     reason="real PostgreSQL required (MOTTE_PG_DSN)",
 )
-def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真实 PG
+def test_postgres_trials_downgrade_guard(isolated_pg_database: str) -> None:
     """真实 PostgreSQL：旧库升级 → 有证据拒绝降级 → 清空后空库降级 → 回到 head。"""
     from uuid import uuid4
-
-    import psycopg
 
     from motte_contracts.trial import compute_task_key, trial_id_for
     from motte_storage.migrations import current, downgrade, upgrade
     from motte_storage.pg_audit_store import PgTrials
-    from motte_storage.postgres import normalize_dsn
 
-    dsn = normalize_dsn(os.environ["MOTTE_PG_DSN"])
-    assert upgrade(dsn) == HEAD, "旧库（或空库）必须能升级到当前 head"
+    dsn = isolated_pg_database
+    assert upgrade(dsn) == HEAD, "独立空库必须能升级到当前 head"
+
+    import psycopg
 
     run_id = f"pg-downgrade-{uuid4().hex}"
     task_key = compute_task_key(
@@ -202,7 +201,7 @@ def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真
     assert current(dsn) == HEAD, "拒绝降级后版本不变"
     assert trials.get(str(plan["trial_id"])) is not None, "拒绝降级不得删除证据"
 
-    # 清空 Trial 证据后，空库降级必须放行（共享测试库由各模块夹具自行重建）。
+    # 清空本测试专用库的 Trial 证据后，空库降级必须放行。
     connection = psycopg.connect(dsn)
     try:
         with connection:

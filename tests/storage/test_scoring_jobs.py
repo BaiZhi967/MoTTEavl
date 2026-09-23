@@ -551,11 +551,11 @@ def test_migration_0012_follows_0011_and_guards_downgrade(tmp_path):
     not os.environ.get("MOTTE_PG_DSN"),
     reason="set MOTTE_PG_DSN to run the PostgreSQL scoring-job transaction test",
 )
-def test_postgres_scoring_job_transactions():
+def test_postgres_scoring_job_transactions(isolated_pg_database):
     from motte_storage.migrations import upgrade
     from motte_storage.postgres import create_postgres_run_store
 
-    dsn = os.environ["MOTTE_PG_DSN"]
+    dsn = isolated_pg_database
     upgrade(dsn)
     store = create_postgres_run_store(dsn)
     make_run(store, run_id=f"run-pg-{os.getpid()}")
@@ -571,8 +571,10 @@ def test_postgres_scoring_job_transactions():
     claimed = jobs.claim(record["job_id"])
     jobs.begin_call(
         record["job_id"], expected_revision=claimed["revision"],
-        invocation={**invocation_record("pg"), "id": "inv-pg",
-                    "job_id": record["job_id"], "run_id": f"run-pg-{os.getpid()}"},
+        invocation={**invocation_record(
+                        "pg", owner={"kind": "subject", "run_id": f"run-pg-{os.getpid()}",
+                                     "case_id": "case-1"}),
+                    "id": "inv-pg", "job_id": record["job_id"]},
         call={"call_id": "call-1", "case_id": "case-1", "mode": "single"},
     )
     settled = jobs.settle_call(
