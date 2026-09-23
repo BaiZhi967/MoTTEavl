@@ -104,7 +104,7 @@ def test_gsm8k_experiment_matches_standalone_preparation() -> None:
         experiment_id="m8-gsm-exp", task_ref={"suite": "gsm8k", "scenario_version": scenario},
         factors={"model_profile": ("model-a",)}, repeats=1,
         selected_case_keys=selected,
-        controlled_conditions={"max_output_tokens": 512},
+        controlled_conditions={"max_output_tokens": 1024},
     )
     preview = service.preview(payload)
     assert preview["violations"] == []
@@ -114,14 +114,46 @@ def test_gsm8k_experiment_matches_standalone_preparation() -> None:
     run = store.runs.get(created["cells"][0]["run_id"])
     assert run is not None
     standalone, standalone_cases = prepare_run(
-        scenario, {"model": "model-a", "parameters": {"max_output_tokens": 512},
+        scenario, {"model": "model-a", "parameters": {"max_output_tokens": 1024},
                    "case_selection": {"mode": "ids", "case_ids": selected}},
         [], service.resources,
     )
     assert run["case_ids"] == standalone_cases
     assert run["manifest"]["benchmark_snapshot"] == standalone["benchmark_snapshot"]
     assert run["manifest"]["provider"] == standalone["provider"]
+    assert run["manifest"]["provider"]["parameters"]["max_output_tokens"] == 1024
     assert len(store.runs.list()) == 1
+
+
+def test_gsm8k_experiment_rejects_output_cap_below_fixed_suite_preset() -> None:
+    import json
+
+    from motte_sdk.benchmark import import_benchmark_split
+    from motte_sdk.resolve import prepare_run
+
+    store, _run_service, service = make_service()
+    raw = "\n".join(json.dumps({"question": f"Q{i}", "answer": f"work\n#### {i}"})
+                    for i in range(20)).encode()
+    scenario = import_benchmark_split(
+        raw, name="m8-gsm-cap", version="1", revision="synthetic",
+        license_id="internal-sample", scope="smoke", resources=service.resources,
+        synthetic=True,
+    )["scenario"]
+    _, selected = prepare_run(scenario, {"model": "model-a"}, [], service.resources)
+    payload = spec_payload(
+        experiment_id="m8-gsm-cap-exp",
+        task_ref={"suite": "gsm8k", "scenario_version": scenario},
+        factors={"model_profile": ("model-a",)}, repeats=1,
+        selected_case_keys=selected[:1],
+        controlled_conditions={"max_output_tokens": 128},
+        budget_policy={"max_total_calls": 1},
+    )
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_UNSUPPORTED"):
+        service.preview(payload)
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_UNSUPPORTED"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
 
 
 def test_agent_tasks_experiment_matches_standalone_and_counts_steps() -> None:

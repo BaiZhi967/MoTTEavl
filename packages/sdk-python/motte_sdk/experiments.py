@@ -284,6 +284,16 @@ class ExperimentService:
         if self.resources is None:
             raise ExperimentError("RESOURCE_UNRESOLVED", "experiment resources are unavailable")
         _validate_task_resource(spec, self.resources)
+        if spec.task_ref["suite"] == "gsm8k":
+            from motte_contracts.gsm8k import PRESET
+
+            cap = spec.controlled_conditions.get("max_output_tokens")
+            fixed_cap = PRESET["max_output_tokens"]
+            if cap is not None and cap != fixed_cap:
+                raise ExperimentError(
+                    "CONTROLLED_CONDITION_UNSUPPORTED",
+                    f"gsm8k fixes max_output_tokens at {fixed_cap}; received {cap}",
+                )
         for (assignment, _repeat_index), cell in zip(expanded, cells, strict=True):
             try:
                 resolved_manifest, case_ids = prepare_run(
