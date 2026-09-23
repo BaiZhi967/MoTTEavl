@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 
 
@@ -7,6 +8,7 @@ class PriceTable:
     """一次请求发生时的价格快照；未知价格保持 None，绝不猜测。"""
 
     version: str
+    currency: str = "USD"
     input_per_million: float | None = None
     output_per_million: float | None = None
 
@@ -17,8 +19,12 @@ def parse_price_table(data: dict | None) -> PriceTable | None:
     version = data.get("version")
     if not version:
         raise ValueError("price table requires a version")
+    currency = data.get("currency", "USD")
+    if not isinstance(currency, str) or re.fullmatch(r"[A-Z]{3}", currency) is None:
+        raise ValueError("price table currency must be a three-letter uppercase code")
     return PriceTable(
         version=str(version),
+        currency=currency,
         input_per_million=_optional_price(data.get("input_per_million")),
         output_per_million=_optional_price(data.get("output_per_million")),
     )
@@ -57,6 +63,7 @@ def cost_detail(table: PriceTable | None, usage: dict) -> dict | None:
     return {
         "total": round(total, 8),
         "price_table_version": table.version,
+        "currency": table.currency,
         "input_per_million": table.input_per_million,
         "output_per_million": table.output_per_million,
     }

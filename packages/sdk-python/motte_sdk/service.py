@@ -2128,6 +2128,8 @@ class RunService:
                 summary["cost_total"] = cost["total"]
             if isinstance(cost.get("price_table_version"), str):
                 summary["price_table_version"] = cost["price_table_version"]
+            if isinstance(cost.get("currency"), str):
+                summary["cost_currency"] = cost["currency"]
         error = result.get("error")
         if isinstance(error, dict) and isinstance(error.get("class"), str):
             summary["error_class"] = error["class"]

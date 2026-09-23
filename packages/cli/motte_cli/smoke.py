@@ -112,7 +112,10 @@ def smoke_markdown(report: dict[str, Any]) -> str:
         )
         cost = result.get("cost")
         if cost:
-            lines.append(f"- cost: total={cost['total']}（price_table_version={cost['price_table_version']}）")
+            lines.append(
+                f"- cost: total={cost['total']} {cost.get('currency') or 'USD'}"
+                f"（price_table_version={cost['price_table_version']}）"
+            )
         else:
             lines.append("- cost: unknown（未提供价格表）")
     return "\n".join(lines) + "\n"

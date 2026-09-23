@@ -74,12 +74,14 @@ def test_smoke_markdown_and_record_contain_no_secret(tmp_path):
         base_url="https://api.example.test/v1",
         api_key=SECRET,
         prompt="ping",
-        price_table=parse_price_table({"version": "v9", "input_per_million": 1, "output_per_million": 1}),
+        price_table=parse_price_table({"version": "v9", "currency": "CNY",
+                                       "input_per_million": 1, "output_per_million": 1}),
         transport=transport,
     )
     markdown = smoke_markdown(report)
     assert "completed" in markdown
     assert "price_table_version=v9" in markdown
+    assert "CNY" in markdown
     assert SECRET not in markdown
 
     log_path = tmp_path / "live-smoke-log.md"

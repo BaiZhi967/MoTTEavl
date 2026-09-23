@@ -66,7 +66,7 @@ def test_event_and_progress_observers_receive_safe_persisted_details(capsys):
     result = service.execute(run["id"], provider=lambda _: {
         "content": "private answer",
         "usage": {"prompt_tokens": 2, "completion_tokens": 3},
-        "cost": {"total": 0.25, "price_table_version": "test"},
+        "cost": {"total": 0.25, "currency": "CNY", "price_table_version": "test"},
     })
     assert result["status"] == "completed"
     output = capsys.readouterr().err
@@ -76,6 +76,7 @@ def test_event_and_progress_observers_receive_safe_persisted_details(capsys):
     finished = next(line for line in lines if line["event"] == "case_finished")
     assert finished["prompt_tokens"] == 2
     assert finished["cost_total"] == 0.25
+    assert finished["cost_currency"] == "CNY"
     assert "private answer" not in output
     trace = service.events(run["id"])
     assert [event["seq"] for event in trace] == list(range(1, len(trace) + 1))
