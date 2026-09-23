@@ -229,7 +229,9 @@ describe("Gsm8kOperate", () => {
     await waitFor(() => expect(clientMocks.createBenchmarkRun).toHaveBeenCalledTimes(2));
     expect(clientMocks.createBenchmarkRun).toHaveBeenCalledWith({
       model: "glm-4.7", scenario: "gsm8k-test-smoke@1", case_selection: { mode: "all" } });
-    expect(screen.getByTestId("location").textContent).toBe("/gsm8k/monitor?runs=run-42,run-43");
+    // 第二次调用被记录时 Promise 与 router navigation 仍可能未完成。
+    await waitFor(() => expect(screen.getByTestId("location").textContent)
+      .toBe("/gsm8k/monitor?runs=run-42,run-43"));
   });
 
   it("个别模型失败不阻塞整批，错误就地显示且提供批次入口", async () => {

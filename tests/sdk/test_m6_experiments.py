@@ -546,6 +546,38 @@ def test_concurrent_create_gives_each_cell_exactly_one_run() -> None:
     assert len(store.runs.list()) == 8
 
 
+def test_two_sqlite_services_share_request_key_and_single_initial_run() -> None:
+    first_store, _first_runs, first = make_service()
+    path = first_store.runs._path
+    second_store = SQLiteRunStore(path)
+    second = ExperimentService(
+        second_store, RunService(second_store),
+        resources=SQLiteResourceStore(path, content_store=default_content_store()),
+    )
+    payload = spec_payload(experiment_id="m8-two-services",
+                           factors={"model_profile": ("model-a",)}, repeats=1)
+    barrier = Barrier(2)
+    errors: list[BaseException] = []
+
+    def create(service: ExperimentService) -> None:
+        try:
+            barrier.wait()
+            service.create(payload, request_key="m8-same-key")
+        except BaseException as error:  # noqa: BLE001 - surface worker exception
+            errors.append(error)
+
+    threads = [Thread(target=create, args=(service,)) for service in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    cells = first_store.experiments.list_cells("m8-two-services", "v1")
+    assert len(cells) == 1
+    assert cells[0]["allocation_status"] == "allocated"
+    assert len(first_store.runs.list()) == 1
+
+
 # ----------------------------------------------------------- A08 crash resume
 
 
