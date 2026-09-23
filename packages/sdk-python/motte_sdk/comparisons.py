@@ -699,10 +699,11 @@ class ComparisonService:
         if isinstance(cost, dict) and cost.get("unknown_cost") is False:
             total = _number(cost.get("known_cost_usd"))
             if total is not None:
-                return {"known": True, "total_usd": total, "currency": "USD"}
+                return {"known": True, "total_usd": total, "currencies": ["USD"]}
         summary_cost, total_usd = self._case_cost_summary(run_id)
         return {
-            "known": summary_cost.known, "total_usd": total_usd, "currency": "USD",
+            "known": summary_cost.known, "total_usd": total_usd,
+            "currencies": sorted(summary_cost.totals()),
         }
 
     def _case_cost_summary(self, run_id: str) -> tuple[CostSummary, float | None]:
@@ -715,42 +716,35 @@ class ComparisonService:
         if case_runs is None or not hasattr(case_runs, "list_for_run"):
             return CostSummary(entries=(), unknown_usage_count=1, source="cases"), None
         cases = case_runs.list_for_run(run_id)
-        blocks: list[dict[str, Any]] = []
-        for case in cases:
-            result = case.get("result")
-            if isinstance(result, dict) and isinstance(result.get("cost"), dict):
-                blocks.append(result["cost"])
         attempted = [
             case for case in cases
             if isinstance(case.get("result"), dict)
         ]
-        totals = [
-            float(block["total"]) for block in blocks
-            if block.get("total") is not None
-        ]
-        if attempted and len(totals) == len(attempted) and totals:
-            total = round(sum(totals), 8)
-            versions = sorted({
-                str(block["price_table_version"]) for block in blocks
-                if block.get("price_table_version")
-            })
-            return (
-                CostSummary(
-                    entries=(
-                        CostEntry(
-                            scope="subject", currency="USD", amount=total,
-                            price_table_versions=tuple(versions),
-                        ),
-                    ),
-                    unknown_usage_count=0, source="case_results",
-                ),
-                total,
-            )
-        # 无成本证据本身就是"未知"（null 不是 0），不用 0 冒充确认无未知。
-        return (
-            CostSummary(entries=(), unknown_usage_count=1, source="case_results"),
-            None,
+        totals: dict[str, float] = {}
+        versions: dict[str, set[str]] = {}
+        unknown = 0
+        for case in attempted:
+            block = case["result"].get("cost")
+            amount = _number(block.get("total")) if isinstance(block, dict) else None
+            if amount is None or amount < 0:
+                unknown += 1
+                continue
+            currency = str(block.get("currency") or "USD")
+            totals[currency] = totals.get(currency, 0.0) + amount
+            if block.get("price_table_version"):
+                versions.setdefault(currency, set()).add(str(block["price_table_version"]))
+        summary = CostSummary(
+            entries=tuple(
+                CostEntry(
+                    scope="subject", currency=currency, amount=round(amount, 8),
+                    price_table_versions=tuple(sorted(versions.get(currency, set()))),
+                )
+                for currency, amount in sorted(totals.items())
+            ),
+            unknown_usage_count=unknown if attempted else 1,
+            source="case_results",
         )
+        return summary, summary.total_usd() if summary.known else None
 
     # ------------------------------------------------------------------ 门禁
 

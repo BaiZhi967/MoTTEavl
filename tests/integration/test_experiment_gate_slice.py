@@ -141,6 +141,70 @@ def _run_experiment(slice_env, *, experiment_id="m6-accept-exp"):
     return spec, outcome, executed
 
 
+def test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes(slice_env):
+    """T04: real create_app routes, with immutable pass references and no model calls."""
+    client, application, provider = slice_env
+    store = application.state.run_service.store
+    for run_id, cases in [("m8-base", ["a", "b"]),
+                          ("m8-same", ["a", "b"]),
+                          ("m8-different", ["a", "c"])]:
+        store.runs.create({
+            "id": run_id, "schema_version": 2, "revision": 1,
+            "scenario_version": "m8@1", "status": "completed",
+            "manifest": {"evaluation": {"scorer_id": "exact", "scorer_version": "1"},
+                         "model": run_id},
+            "requested_manifest": {}, "case_ids": cases,
+            "created_at": "2026-09-23T00:00:00Z",
+            "updated_at": "2026-09-23T00:00:00Z",
+        })
+        store.scoring_passes.append({
+            "id": f"old-{run_id}", "run_id": run_id,
+            "scorer_id": "exact", "scorer_version": "1",
+            "created_at": "2026-09-23T00:00:00Z", "source": "initial",
+            "source_run_revision": 1, "summary": {},
+        }, [{"case_id": case_id, "passed": True, "metric_id": "accuracy",
+             "evaluator_id": "exact", "evaluator_version": "1",
+             "metric_status": "scored", "value": 1.0, "denominator": True,
+             "details": {}} for case_id in cases])
+    first = client.get("/api/v1/comparisons", params={
+        "baseline": "m8-base", "candidate": "m8-same", "factors": "model",
+        "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-same",
+    })
+    assert first.status_code == 200, first.text
+    assert first.json()["metric_eligibility"]["quality"] is True
+    different = client.get("/api/v1/comparisons", params={
+        "baseline": "m8-base", "candidate": "m8-different", "factors": "model",
+        "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-different",
+    })
+    assert different.status_code == 200, different.text
+    assert different.json()["metric_eligibility"]["quality"] is False
+    assert different.json()["case_diff"] == {"added": ["c"], "removed": ["b"], "changed": []}
+    store.scoring_passes.append({
+        "id": "new-m8-base", "run_id": "m8-base",
+        "scorer_id": "other", "scorer_version": "2",
+        "created_at": "2026-09-23T01:00:00Z", "source": "rescore",
+        "source_run_revision": 1, "summary": {},
+    }, [{"case_id": case_id, "passed": False, "metric_id": "accuracy",
+         "evaluator_id": "other", "evaluator_version": "2",
+         "metric_status": "scored", "value": 0.0, "denominator": True,
+         "details": {}} for case_id in ["a", "b"]])
+    fixed = client.get("/api/v1/runs/m8-base/report-snapshot",
+                       params={"scoring_pass_id": "old-m8-base"})
+    assert fixed.status_code == 200, fixed.text
+    assert fixed.json()["metric_values"]["accuracy"] == 1.0
+    assert client.get("/api/v1/comparisons", params={
+        "baseline": "m8-base", "candidate": "m8-same", "factors": "model",
+        "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-same",
+    }).json()["metric_eligibility"]["quality"] is True
+    changed = client.get("/api/v1/comparisons", params={
+        "baseline": "m8-base", "candidate": "m8-same", "factors": "model",
+        "candidate_pass": "old-m8-same",
+    })
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["metric_eligibility"]["quality"] is False
+    assert provider.calls == []
+
+
 def test_experiment_to_gate_full_slice(slice_env):
     """端到端：Run → ScoringPass → ReportSnapshot → Compare → Baseline → Gate → Export。"""
     client, application, provider = slice_env

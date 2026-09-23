@@ -226,6 +226,41 @@ def test_report_snapshot_direct_llm_judged_denominator() -> None:
     assert snapshot.cost.unknown_usage_count == 1
 
 
+def test_report_snapshot_keeps_case_currencies_separate_and_usage_unknown() -> None:
+    store = InMemoryRunStore()
+    make_run(store, "run-currencies", case_ids=["c1", "c2", "c3"],
+             manifest={"cost": {"known": False}})
+    append_pass(store, "run-currencies", "pass-currencies", [
+        score_row("c1", passed=True), score_row("c2", passed=True),
+        score_row("c3", passed=True),
+    ])
+    for case_id, currency, amount in [("c1", "CNY", 2.0), ("c2", "USD", 0.5)]:
+        store.case_runs.upsert({
+            "run_id": "run-currencies", "case_id": case_id,
+            "result": {"cost": {"total": amount, "currency": currency}},
+        })
+    store.case_runs.upsert({"run_id": "run-currencies", "case_id": "c3", "result": {}})
+    snapshot = ComparisonService(store).report_snapshot("run-currencies")
+    assert snapshot.cost.totals() == {"CNY": 2.0, "USD": 0.5}
+    assert snapshot.cost.unknown_usage_count == 1
+    assert snapshot.metric_values["cost.total_usd"] is None
+
+
+def test_cost_comparison_requires_matching_currency() -> None:
+    store = InMemoryRunStore()
+    for run_id, currency in [("base", "USD"), ("candidate", "CNY")]:
+        make_run(store, run_id, case_ids=["c1"], manifest={"cost": {"known": False}})
+        append_pass(store, run_id, f"pass-{run_id}", [score_row("c1", passed=True)])
+        store.case_runs.upsert({
+            "run_id": run_id, "case_id": "c1",
+            "result": {"cost": {"total": 1.0, "currency": currency}},
+        })
+    result = ComparisonService(store).compare("base", "candidate", allowed_factors=[])
+    assert result.metric_eligibility["quality"] is True
+    assert result.metric_eligibility["cost"] is False
+    assert "COST_CURRENCY_MISMATCH" in result.metric_reasons
+
+
 def test_report_snapshot_needs_review_run_keeps_uncertain_cases_visible() -> None:
     store = InMemoryRunStore()
     make_run(store, "run-review", case_ids=["c1", "c2"], status="needs_review")

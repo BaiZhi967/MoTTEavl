@@ -25,6 +25,8 @@ const clientMocks = vi.hoisted(() => ({
   retryRun: vi.fn(),
   rescoreRun: vi.fn(),
   getReport: vi.fn(),
+  getReportSnapshot: vi.fn(),
+  compareRunReports: vi.fn(),
   getBenchmarkOverview: vi.fn(),
   importBenchmark: vi.fn(),
   createBenchmarkRun: vi.fn(),
@@ -53,6 +55,37 @@ function LocationProbe() {
 }
 
 afterEach(cleanup);
+
+function mockSuiteComparisonApis() {
+  clientMocks.getReportSnapshot.mockImplementation(async (id: string, requestedPass?: string) => {
+    const run = await clientMocks.getRun(id);
+    const judged = (run.scores ?? []).filter((score: any) =>
+      typeof score.passed === "boolean" && !["no_expectation", "call_failed", "not_attempted"].includes(score.outcome));
+    const passed = judged.filter((score: any) => score.passed).length;
+    return {
+      ref: { run_id: id, scoring_pass_id: requestedPass ?? `pass-${id}` },
+      counts: { selected: run.case_ids?.length ?? 0, judged: judged.length, scored: passed },
+      metric_values: {
+        accuracy: judged.length === run.case_ids?.length ? passed / judged.length : null,
+        judged_accuracy: judged.length ? passed / judged.length : null,
+      },
+      cost: id === "run-41" ? { entries: [{ scope: "subject", currency: "USD", amount: 0.42 }], unknown_usage_count: 0 }
+        : { entries: [], unknown_usage_count: 1 },
+      case_dispositions: judged.map((score: any) => ({ case_id: score.case_id, disposition: "judged", detail: score.passed ? "passed" : "failed" })),
+    };
+  });
+  clientMocks.compareRunReports.mockImplementation(async ({ baseline, candidate }: { baseline: string; candidate: string }) => {
+    const [first, second] = await Promise.all([clientMocks.getRun(baseline), clientMocks.getRun(candidate)]);
+    const firstSet = JSON.stringify([...first.case_ids].sort());
+    const secondSet = JSON.stringify([...second.case_ids].sort());
+    const reasons = firstSet !== secondSet
+      ? [`题目集合不同（${first.case_ids.length} / ${second.case_ids.length} 题）`]
+      : first.manifest?.benchmark_provenance?.dataset !== second.manifest?.benchmark_provenance?.dataset
+        ? ["数据集/版本不同"] : [];
+    return { eligible: !reasons.length, level: reasons.length ? "not_comparable" : "comparable", structural_reasons: reasons,
+      metric_reasons: [], metric_eligibility: { quality: !reasons.length, cost: false }, case_diff: { added: [], removed: [], changed: [] } };
+  });
+}
 
 const RUN = {
   id: "run-9", scenario_version: "unknown@9", status: "running",
@@ -727,6 +760,21 @@ describe("Gsm8kResult", () => {
 });
 
 describe("Gsm8kCompare", () => {
+  beforeEach(mockSuiteComparisonApis);
+  it("同题数不同题集由中央比较阻断，旧 run.scores 不得生成质量矩阵", async () => {
+    clientMocks.getRun.mockImplementation(async (id: string) => ({
+      id, status: "completed", scenario_version: "gsm8k@1",
+      case_ids: id === "left" ? ["a", "b"] : ["a", "c"],
+      scores: [{ case_id: "a", passed: true }, { case_id: "b", passed: true }],
+      manifest: { model: id },
+    }));
+    clientMocks.compareRunReports.mockResolvedValue({ eligible: false, level: "not_comparable",
+      structural_reasons: ["CASE_SET_CHANGED"], metric_reasons: [], metric_eligibility: { quality: false, cost: false },
+      case_diff: { added: ["c"], removed: ["b"], changed: [] } });
+    render(<MemoryRouter initialEntries={["/gsm8k/compare?runs=left,right"]}><Gsm8kCompare /></MemoryRouter>);
+    expect((await screen.findByRole("alert")).textContent).toContain("CASE_SET_CHANGED");
+    expect(screen.queryByText("accuracy")).toBeNull();
+  });
   it("并排指标与答错重合", async () => {
     clientMocks.getRun.mockImplementation(async (id: string) => ({
       id,
@@ -759,8 +807,8 @@ describe("Gsm8kCompare", () => {
     expect(screen.getByText("model-run-42")).toBeTruthy();
     expect(screen.getByText("67%")).toBeTruthy();
     expect(screen.getByText("33%")).toBeTruthy();
-    expect(screen.getByText("¥0.42")).toBeTruthy();
-    expect(screen.getByText("—", { selector: "td" })).toBeTruthy();
+    expect(screen.getByText("USD 0.42")).toBeTruthy();
+    expect(screen.getAllByText("未知", { selector: "td" }).length).toBeGreaterThan(0);
     /* 答错题重合单元格与逐题下钻按钮都含 case-2 文本，getByText(/case-2/) 会命中多个元素，按选择器分别断言 */
     expect(screen.getByText("case-2", { selector: "td" })).toBeTruthy();
     expect(screen.getByText("case-2", { selector: "button" })).toBeTruthy();
@@ -1720,6 +1768,38 @@ describe("DirectLlmResult", () => {
 });
 
 describe("DirectLlmCompare", () => {
+  beforeEach(mockSuiteComparisonApis);
+  it("以指定旧 pass 的快照评分和成本展示，并把固定 pass 传给比较服务", async () => {
+    clientMocks.getRun.mockImplementation(async (id: string) => directRun({
+      id, scores: [{ case_id: "case-1", passed: false }],
+    }));
+    clientMocks.getReportSnapshot.mockImplementation(async (id: string, pass?: string) => ({
+      ref: { run_id: id, scoring_pass_id: pass ?? `current-${id}` },
+      counts: { judged: 2 }, metric_values: { judged_accuracy: id === "run-51" ? 1 : 0.5 },
+      cost: { entries: [
+        { scope: "subject", currency: "CNY", amount: 2 },
+        { scope: "judge", currency: "USD", amount: 0.5 },
+      ], unknown_usage_count: 1 },
+      case_dispositions: [{ case_id: "case-2", disposition: "judged", detail: "failed" }],
+    }));
+    render(<MemoryRouter initialEntries={["/direct-llm/compare?runs=run-51,run-52&pass0=old-51&pass1=old-52"]}><DirectLlmCompare /></MemoryRouter>);
+    await screen.findByText("100%");
+    expect(screen.getByText("50%")).toBeTruthy();
+    expect(screen.getAllByText("CNY 2 · USD 0.5 · 1 笔未知")).toHaveLength(2);
+    expect(screen.getByText("case-2", { selector: "td" })).toBeTruthy();
+    expect(clientMocks.getReportSnapshot).toHaveBeenCalledWith("run-51", "old-51");
+    expect(clientMocks.compareRunReports).toHaveBeenCalledWith(expect.objectContaining({
+      baseline: "run-51", candidate: "run-52", baseline_pass: "old-51", candidate_pass: "old-52",
+    }));
+  });
+
+  it("中央比较请求失败时展示错误，不回退到本地评分", async () => {
+    clientMocks.getRun.mockImplementation(async (id: string) => directRun({ id }));
+    clientMocks.compareRunReports.mockRejectedValue(new Error("comparison unavailable"));
+    render(<MemoryRouter initialEntries={["/direct-llm/compare?runs=run-51,run-52"]}><DirectLlmCompare /></MemoryRouter>);
+    expect((await screen.findByText(/comparison unavailable/)).closest(".error")).toBeTruthy();
+    expect(screen.queryByText("共同不通过")).toBeNull();
+  });
   it("按判定题数比较通过率与共同不通过，并可逐题下钻", async () => {
     const other = directRun({
       id: "run-52",
