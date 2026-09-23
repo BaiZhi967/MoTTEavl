@@ -4126,7 +4126,8 @@ def create_app(
         try:
             outcome = experiments_service.create(body, request_key=request_key)
         except ExperimentError as error:
-            return _error_json(422, error.code, str(error))
+            status = 409 if error.code == "REQUEST_KEY_CONFLICT" else 422
+            return _error_json(status, error.code, str(error))
         except Exception as error:
             code = getattr(error, "code", None)
             if code is not None:

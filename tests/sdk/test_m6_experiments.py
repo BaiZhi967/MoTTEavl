@@ -142,11 +142,11 @@ def allocate_one_manually(
 
 def test_preview_expands_matrix_without_touching_store() -> None:
     store, _run_service, service = make_service()
-    result = service.preview(spec_payload(trials_per_run=3))
+    result = service.preview(spec_payload())
     assert result["cell_count"] == 8  # 2×2 因素 × 2 repeats
-    # 真实场景 case 数（内置样例 8 题）参与预算核算：8 cell × 3 trial × 8 题。
+    # 真实场景 case 数（内置样例 8 题）参与预算核算：8 cell × 8 题。
     assert result["case_count"] == 8 and result["case_count_resolved"] is True
-    assert result["max_potential_calls"] == 8 * 3 * 8
+    assert result["max_potential_calls"] == 8 * 8
     assert len({cell["cell_id"] for cell in result["cells"]}) == 8
     assert {cell["repeat_index"] for cell in result["cells"]} == {0, 1}
     assert result["violations"] == []
@@ -168,6 +168,7 @@ def test_preview_reports_unknown_cost_not_zero() -> None:
     assert budget["cost_known"] == "unknown_until_run"
     assert budget["known_cost_usd"] is None
     assert budget["unknown"] is True
+    assert {item["code"] for item in result["violations"]} == {"POLICY_UNSUPPORTED"}
 
 
 def test_preview_flags_violations_and_create_rejects_wholesale() -> None:
@@ -272,6 +273,52 @@ def test_unknown_suite_is_rejected_honestly() -> None:
     assert store.runs.list() == []
 
 
+def test_full_ten_cases_two_cells_cap_five_rejects_before_any_executable_record() -> None:
+    import json
+
+    from motte_sdk.direct_llm import import_direct_llm_split
+
+    store, _run_service, service = make_service()
+    raw = ("\n".join(json.dumps({"case_id": f"case-{index}", "input": f"Question {index}",
+                                  "expected": str(index)}) for index in range(10)) + "\n").encode()
+    imported = import_direct_llm_split(raw, name="m8-ten", version="1",
+                                       license_id="internal-sample", resources=service.resources,
+                                       synthetic=True)
+    payload = spec_payload(
+        task_ref={"suite": "direct-llm", "scenario_version": imported["scenario"]},
+        factors={"model_profile": ("model-a", "model-b")}, repeats=1,
+        budget_policy={"max_total_calls": 5},
+    )
+    preview = service.preview(payload)
+    assert preview["case_count"] == 10
+    assert preview["max_potential_calls"] == 20
+    assert {item["code"] for item in preview["violations"]} == {"BUDGET_EXCEEDED"}
+    with pytest.raises(ExperimentError, match="max_potential_calls 20"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.experiments.list_cells("exp-alpha") == []
+    assert store.runs.list() == []
+
+
+@pytest.mark.parametrize("policy", [
+    {"budget_policy": {"max_total_calls": 2000, "max_total_tokens": 1000}},
+    {"budget_policy": {"max_total_calls": 2000, "max_cost_usd": 10.0}},
+    {"stop_policy": {"on_first_failure": True}},
+    {"stop_policy": {"max_failures": 1}},
+    {"stop_policy": {"wall_clock_seconds": 30}},
+    {"trials_per_run": 2},
+])
+def test_unenforced_experiment_policy_is_rejected_before_creation(policy):
+    store, _run_service, service = make_service()
+    payload = spec_payload(**policy)
+    preview = service.preview(payload)
+    assert any(item["code"] == "POLICY_UNSUPPORTED" for item in preview["violations"])
+    with pytest.raises(ExperimentError, match="POLICY_UNSUPPORTED"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
 @pytest.mark.parametrize("factor", ["prompt_version", "runtime_version", "skill_version"])
 def test_direct_unconsumed_factor_is_rejected_by_both_entries_before_persistence(factor):
     store, _run_service, service = make_service()
@@ -305,6 +352,25 @@ def test_request_key_conflict_and_plain_spec_conflict() -> None:
         service.create(conflicting, request_key="key-2")
     assert type(spec_conflict.value) is ValueError
     assert "immutable" in str(spec_conflict.value)
+
+
+def test_request_key_binding_survives_service_and_sqlite_store_reconstruction() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    first = service.create(payload, request_key="m8-persisted-key")
+    reopened = SQLiteRunStore(store.runs._path)
+    rebuilt = ExperimentService(reopened, RunService(reopened), resources=service.resources)
+    again = rebuilt.create(payload, request_key="m8-persisted-key")
+    assert [cell["run_id"] for cell in again["cells"]] == [
+        cell["run_id"] for cell in first["cells"]
+    ]
+    assert len(reopened.runs.list()) == 1
+    with pytest.raises(ExperimentError) as excinfo:
+        rebuilt.create(spec_payload(experiment_id="exp-other", version="v2",
+                                    factors={"model_profile": ("model-a",)}, repeats=1),
+                       request_key="m8-persisted-key")
+    assert excinfo.value.code == "REQUEST_KEY_CONFLICT"
+    assert reopened.experiments.list_specs("exp-other") == []
 
 
 # ------------------------------------------------------------ A07 concurrency
