@@ -169,6 +169,26 @@ def test_cost_uses_price_table_version_snapshot():
     )
     assert envelope["cost"]["total"] == 0.000008
     assert envelope["cost"]["price_table_version"] == "2026-09-15"
+    assert envelope["cost"]["currency"] == "USD"
+
+
+def test_cost_keeps_explicit_price_table_currency_in_provider_evidence():
+    table = parse_price_table({
+        "version": "deepseek-peak-cny", "currency": "CNY",
+        "input_per_million": 2.0, "output_per_million": 8.0,
+    })
+    envelope = make_provider(lambda r, *, timeout: FakeResponse(chat_body()), price_table=table).complete(
+        ModelRequest(model="test-model", messages=[Message(role="user", content="x")])
+    )
+    assert envelope["cost"] == {
+        "total": 0.000028, "price_table_version": "deepseek-peak-cny",
+        "currency": "CNY", "input_per_million": 2.0, "output_per_million": 8.0,
+    }
+
+
+def test_price_table_rejects_invalid_currency():
+    with pytest.raises(ValueError, match="currency"):
+        parse_price_table({"version": "bad", "currency": "yuan"})
 
 
 def test_unknown_prices_stay_null():

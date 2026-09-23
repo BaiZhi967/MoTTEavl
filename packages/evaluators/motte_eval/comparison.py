@@ -20,6 +20,8 @@ from motte_contracts.comparison import ComparabilityLevel, ComparisonPolicy, Run
 class ComparisonResult:
     eligible: bool
     reasons: tuple[str, ...]
+    baseline_ref: RunReportRef
+    candidate_ref: RunReportRef
     metric_eligibility: dict[str, bool] = field(default_factory=dict)
     case_diff: dict[str, list[str]] = field(
         default_factory=lambda: {"added": [], "removed": [], "changed": []},
@@ -752,7 +754,12 @@ def compare_run_reports(
     structural_reasons = tuple(reasons)
     structural_ok = not structural_reasons
     metric_eligibility["quality"] = structural_ok
-    cost_ok = structural_ok and baseline_cost_known and candidate_cost_known
+    base_currencies = set((baseline_cost or {}).get("currencies") or
+                          [(baseline_cost or {}).get("currency", "USD")])
+    cand_currencies = set((candidate_cost or {}).get("currencies") or
+                          [(candidate_cost or {}).get("currency", "USD")])
+    currency_match = base_currencies == cand_currencies
+    cost_ok = structural_ok and baseline_cost_known and candidate_cost_known and currency_match
     metric_eligibility["cost"] = cost_ok
     metric_reasons: list[str] = []
     if structural_ok and not cost_ok:
@@ -760,6 +767,8 @@ def compare_run_reports(
             metric_reasons.append("COST_UNKNOWN:baseline")
         if not candidate_cost_known:
             metric_reasons.append("COST_UNKNOWN:candidate")
+        if baseline_cost_known and candidate_cost_known and not currency_match:
+            metric_reasons.append("COST_CURRENCY_MISMATCH")
     reasons.extend(metric_reasons)
 
     # 三级结论（协议 §3）：结构性阻断 → not_comparable；仅指标级资格不足 →
@@ -774,6 +783,8 @@ def compare_run_reports(
     return ComparisonResult(
         eligible=structural_ok,
         reasons=tuple(reasons),
+        baseline_ref=baseline_ref,
+        candidate_ref=candidate_ref,
         metric_eligibility=metric_eligibility,
         case_diff={
             "added": added,

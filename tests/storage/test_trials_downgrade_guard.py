@@ -162,23 +162,57 @@ def test_downgrade_proceeds_when_no_trial_evidence_exists(monkeypatch) -> None:
         assert not inspect(bind).has_table("case_attempts")
 
 
+def test_isolated_pg_database_keeps_uri_form_for_migrations() -> None:
+    from psycopg.conninfo import conninfo_to_dict
+    from motte_storage.postgres import normalize_dsn
+    from tests.storage.conftest import isolated_database_uri
+
+    source = "postgresql://tester:secret@localhost:5432/motteavl?sslmode=disable"
+    target = isolated_database_uri(source, "m8_test_abc")
+    assert target == "postgresql://tester:secret@localhost:5432/m8_test_abc?sslmode=disable"
+    assert normalize_dsn(target) == target
+    overridden = isolated_database_uri(source + "&dbname=motteavl", "m8_test_abc")
+    assert conninfo_to_dict(overridden)["dbname"] == "m8_test_abc"
+    assert "dbname=" not in overridden
+
+
+def test_disposable_pg_cluster_rejects_effective_remote_host() -> None:
+    from tests.storage.conftest import require_loopback_pg_cluster
+
+    with pytest.raises(ValueError, match="loopback"):
+        require_loopback_pg_cluster(
+            "postgresql://tester@localhost/motteavl?host=remote.example"
+        )
+    with pytest.raises(ValueError, match="loopback"):
+        require_loopback_pg_cluster(
+            "postgresql://tester@localhost/motteavl?hostaddr=192.0.2.1"
+        )
+
+
+def test_programmatic_migration_marks_explicit_target() -> None:
+    from motte_storage.migrations import alembic_config
+
+    config = alembic_config("postgresql://tester:secret@localhost/m8_test_abc")
+    assert config.attributes["motte_explicit_dsn"] is True
+    assert config.get_main_option("sqlalchemy.url").endswith("/m8_test_abc")
+
+
 @pytest.mark.skipif(
     not os.environ.get("MOTTE_PG_DSN"),
     reason="real PostgreSQL required (MOTTE_PG_DSN)",
 )
-def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真实 PG
+def test_postgres_trials_downgrade_guard(isolated_pg_database: str) -> None:
     """真实 PostgreSQL：旧库升级 → 有证据拒绝降级 → 清空后空库降级 → 回到 head。"""
     from uuid import uuid4
-
-    import psycopg
 
     from motte_contracts.trial import compute_task_key, trial_id_for
     from motte_storage.migrations import current, downgrade, upgrade
     from motte_storage.pg_audit_store import PgTrials
-    from motte_storage.postgres import normalize_dsn
 
-    dsn = normalize_dsn(os.environ["MOTTE_PG_DSN"])
-    assert upgrade(dsn) == HEAD, "旧库（或空库）必须能升级到当前 head"
+    dsn = isolated_pg_database
+    assert upgrade(dsn) == HEAD, "独立空库必须能升级到当前 head"
+
+    import psycopg
 
     run_id = f"pg-downgrade-{uuid4().hex}"
     task_key = compute_task_key(
@@ -202,7 +236,7 @@ def test_postgres_trials_downgrade_guard() -> None:  # pragma: no cover - 需真
     assert current(dsn) == HEAD, "拒绝降级后版本不变"
     assert trials.get(str(plan["trial_id"])) is not None, "拒绝降级不得删除证据"
 
-    # 清空 Trial 证据后，空库降级必须放行（共享测试库由各模块夹具自行重建）。
+    # 清空本测试专用库的 Trial 证据后，空库降级必须放行。
     connection = psycopg.connect(dsn)
     try:
         with connection:

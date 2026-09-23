@@ -171,6 +171,7 @@ def comparison_to_json(view: Mapping[str, Any]) -> dict[str, Any]:
         "exporter_version": EXPORTER_VERSION,
         "level": view.get("level"),
         "eligible": view.get("eligible"),
+        "refs": dict(view.get("refs") or {}),
         "structural_reasons": list(view.get("structural_reasons") or ()),
         "metric_reasons": list(view.get("metric_reasons") or ()),
         "metric_eligibility": dict(view.get("metric_eligibility") or {}),

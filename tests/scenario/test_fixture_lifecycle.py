@@ -293,10 +293,14 @@ def test_prepare_materializes_owned_state_and_marker(runtime):
     assert {resource.kind for resource in instance.resources} <= set(CONTROLLED_RESOURCE_KINDS)
     assert instance.spec.isolation in FIXTURE_ISOLATIONS
     assert instance.spec.cleanup in FIXTURE_CLEANUP_POLICIES
-    # 路径安全复用沙箱：POSIX 走 CaseWorkspace 的 fd 链，Windows 无 dir_fd 时
-    # 走同一组规则的便携实现。
+    # reopen 只验证已有链，报告实际使用的 portable 检查；显式 create 才能
+    # 在支持 dir_fd 的平台使用 CaseWorkspace 的 fd 建链。
     root_control = ControlledRoot(Path(instance.root), anchor=runtime.anchor, create=False)
-    assert root_control.backend == ("sandbox" if os.name == "posix" else "portable")
+    assert root_control.backend == "portable"
+    created_control = ControlledRoot(Path(instance.root), anchor=runtime.anchor, create=True)
+    assert created_control.backend == (
+        "sandbox" if os.name == "posix" and hasattr(os, "O_DIRECTORY") else "portable"
+    )
     state = json.loads((root / "state" / "state.json").read_text(encoding="utf-8"))
     assert state["order_id"] == "order-1"
     assert state["status"] == "active"

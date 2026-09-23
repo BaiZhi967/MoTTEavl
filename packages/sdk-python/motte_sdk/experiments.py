@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from itertools import product
+from threading import RLock
 from typing import Any, Callable
 
 from motte_contracts.experiment import (
@@ -29,7 +30,16 @@ from motte_contracts.experiment import (
 from motte_storage.integrity import RunConflictError
 
 #: 本服务能组装 manifest 的套件；其余套件诚实拒绝，不假装支持。
-SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm"})
+SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm", "gsm8k", "agent-tasks"})
+SUPPORTED_FACTORS: dict[str, frozenset[str]] = {
+    # Direct's frozen prompt is the dataset case input (verbatim); it has no
+    # published prompt/runtime/skill selector to compile into a request.
+    "direct-llm": frozenset({"model_profile", "reasoning_level"}),
+    "gsm8k": frozenset({"model_profile", "reasoning_level"}),
+    # Agent uses its published managed scenario and fixed legacy-json mode.
+    # Runtime and prompt variants require a separate bounded assembler.
+    "agent-tasks": frozenset({"model_profile"}),
+}
 
 #: Cell → Run 身份前缀：恢复/并发路径必须得到同一个 run_id。
 _RUN_ID_PREFIX = "run-exp-"
@@ -88,7 +98,7 @@ def _expand_matrix(spec: ExperimentSpec) -> list[tuple[FactorAssignment, int]]:
     return expanded
 
 
-def _violations(spec: ExperimentSpec) -> list[dict[str, Any]]:
+def _violations(spec: ExperimentSpec, max_calls: int) -> list[dict[str, Any]]:
     """规模护栏（超限整体拒绝，不先排队一部分）。"""
     found: list[dict[str, Any]] = []
     cell_count = spec.cell_count()
@@ -101,7 +111,6 @@ def _violations(spec: ExperimentSpec) -> list[dict[str, Any]]:
                 "max_cells": spec.max_cells,
             }
         )
-    max_calls = spec.max_potential_calls()
     budget = spec.budget_policy
     if budget.max_total_calls < max_calls:
         found.append(
@@ -115,6 +124,22 @@ def _violations(spec: ExperimentSpec) -> list[dict[str, Any]]:
                 "max_total_calls": budget.max_total_calls,
             }
         )
+    unsupported: list[str] = []
+    if budget.max_total_tokens is not None:
+        unsupported.append("budget_policy.max_total_tokens")
+    if budget.max_cost_usd is not None or budget.cost_known_required:
+        unsupported.append("budget_policy.max_cost_usd/cost_known_required")
+    if spec.stop_policy.on_first_failure or spec.stop_policy.max_failures is not None:
+        unsupported.append("stop_policy.failure")
+    if spec.stop_policy.wall_clock_seconds is not None:
+        unsupported.append("stop_policy.wall_clock_seconds")
+    if spec.trials_per_run is not None:
+        unsupported.append("trials_per_run")
+    if spec.evaluation_ref.scoring != "default" or spec.evaluation_ref.scoring_pass_hint:
+        unsupported.append("evaluation_ref.scoring")
+    if unsupported:
+        found.append({"code": "POLICY_UNSUPPORTED", "message": ", ".join(unsupported)
+                      + " has no enforced experiment consumer"})
     return found
 
 
@@ -136,8 +161,7 @@ def _budget_view(budget: Any) -> dict[str, Any]:
 #: 的条件允许声明；未知条件在 preview/create 即拒绝，不在分配期才爆
 #: RESOLVED_MANIFEST_INVALID。
 _CONTROLLED_CONDITION_KEYS: frozenset[str] = frozenset({
-    "parameters",           # dict：并入 manifest.parameters（如 max_output_tokens）
-    "max_output_tokens",    # int：等价 parameters.max_output_tokens 简写
+    "max_output_tokens",    # scalar contract → manifest.parameters.max_output_tokens
 })
 
 
@@ -154,6 +178,12 @@ def _validate_controlled_conditions(spec: ExperimentSpec) -> None:
             + ",".join(unknown)
             + " (known: " + ",".join(sorted(_CONTROLLED_CONDITION_KEYS)) + ")",
         )
+    output_cap = spec.controlled_conditions.get("max_output_tokens")
+    if output_cap is not None and (type(output_cap) is not int or output_cap <= 0):
+        raise ExperimentError(
+            "CONTROLLED_CONDITION_INVALID",
+            "max_output_tokens must be a positive integer",
+        )
 
 
 def _validate_supported_suite(spec: ExperimentSpec) -> None:
@@ -169,7 +199,35 @@ def _validate_supported_suite(spec: ExperimentSpec) -> None:
             "EXPERIMENT_INVALID",
             "task_ref requires a nonempty scenario_version",
         )
+    unconsumed = sorted(set(spec.factors) - SUPPORTED_FACTORS[suite])
+    if unconsumed:
+        raise ExperimentError(
+            "FACTOR_UNSUPPORTED",
+            f"suite {suite!r} cannot consume factors: {','.join(unconsumed)}",
+        )
+    if "model_profile" not in spec.factors:
+        raise ExperimentError("FACTOR_REQUIRED", "model_profile is required for this suite")
     _validate_controlled_conditions(spec)
+
+
+def _validate_task_resource(spec: ExperimentSpec, resources: Any) -> None:
+    """A missing or mismatched managed scenario must not become an empty generic Run."""
+    from motte_sdk.benchmark_plugins import plugin_for_scenario
+
+    name, sep, version = spec.task_ref["scenario_version"].rpartition("@")
+    scenario = resources.scenarios.get(name, version) if sep else None
+    if scenario is None:
+        raise ExperimentError("SCENARIO_NOT_FOUND", spec.task_ref["scenario_version"])
+    try:
+        identity = plugin_for_scenario(scenario)
+    except ValueError as error:
+        raise ExperimentError("SCENARIO_INVALID", str(error)) from error
+    if identity is None or identity[0] != spec.task_ref["suite"]:
+        raise ExperimentError(
+            "SUITE_MISMATCH",
+            f"scenario {spec.task_ref['scenario_version']} is {identity}, "
+            f"not {spec.task_ref['suite']}",
+        )
 
 
 class ExperimentService:
@@ -189,15 +247,25 @@ class ExperimentService:
         # 普通 Run 创建**同一条** prepare_run 解析链（TOCTOU 重校验在这里）。
         self.resources = resources
         self._clock = clock or _default_clock
-        # request_key → spec content hash。request_key 只用于服务侧幂等查询，
-        # 不写入 spec payload（spec 内容不可变，见协议 §9）。
-        self._request_keys: dict[str, str] = {}
+        self._allocation_lock = RLock()
+        from motte_storage.platform import platform_for
+
+        # Existing persistent request registry, namespaced by operation below.
+        self._requests = platform_for(store).requests
 
     # ------------------------------------------------------------------ preview
 
     def preview(self, spec_payload: dict[str, Any]) -> dict[str, Any]:
         """零创建预览：校验、展开矩阵、护栏检查。不触碰任何存储。"""
         spec = ExperimentSpec.model_validate(spec_payload)
+        return self._compile(spec)
+
+    def _compile(self, spec: ExperimentSpec) -> dict[str, Any]:
+        """Read-only preflight shared by preview, create and pending allocation."""
+        from motte_sdk.resolve import ManifestResolutionError, prepare_run
+
+        _validate_supported_suite(spec)
+        expanded = _expand_matrix(spec)
         cells = [
             {
                 "cell_id": compute_cell_id(
@@ -209,23 +277,47 @@ class ExperimentService:
                 "factor_assignment": assignment.as_dict(),
                 "repeat_index": repeat_index,
             }
-            for assignment, repeat_index in _expand_matrix(spec)
+            for assignment, repeat_index in expanded
         ]
-        case_count, resolved = self._scenario_case_count(spec)
-        per_run = spec.trials_per_run or 1
-        max_potential_calls = len(cells) * per_run * case_count
-        violations = _violations(spec)
-        if (
-            spec.budget_policy.max_total_calls < max_potential_calls
-            and not any(item["code"] == "BUDGET_EXCEEDED" for item in violations)
-        ):
-            violations.append({
-                "code": "BUDGET_EXCEEDED",
-                "message": (
-                    f"max_potential_calls {max_potential_calls} exceeds budget "
-                    f"max_total_calls {spec.budget_policy.max_total_calls}"
-                ),
-            })
+        max_potential_calls = 0
+        case_counts: set[int] = set()
+        if self.resources is None:
+            raise ExperimentError("RESOURCE_UNRESOLVED", "experiment resources are unavailable")
+        _validate_task_resource(spec, self.resources)
+        if spec.task_ref["suite"] == "gsm8k":
+            from motte_contracts.gsm8k import PRESET
+
+            cap = spec.controlled_conditions.get("max_output_tokens")
+            fixed_cap = PRESET["max_output_tokens"]
+            if cap is not None and cap != fixed_cap:
+                raise ExperimentError(
+                    "CONTROLLED_CONDITION_UNSUPPORTED",
+                    f"gsm8k fixes max_output_tokens at {fixed_cap}; received {cap}",
+                )
+        for (assignment, _repeat_index), cell in zip(expanded, cells, strict=True):
+            try:
+                resolved_manifest, case_ids = prepare_run(
+                    spec.task_ref["scenario_version"], self._build_manifest(spec, {
+                        "factor_assignment": assignment.model_dump(mode="json"),
+                    }),
+                    [], self.resources,
+                )
+            except ManifestResolutionError as error:
+                raise ExperimentError(error.code, str(error)) from error
+            case_counts.add(len(case_ids))
+            provider = resolved_manifest.get("provider") or {}
+            retries = provider.get("max_retries", 0) if isinstance(provider, dict) else 0
+            if type(retries) is not int or retries < 0:
+                raise ExperimentError("BUDGET_UNRESOLVED", "provider retry limit is unknown")
+            model_steps = 1
+            if spec.task_ref["suite"] == "agent-tasks":
+                agent_budget = (resolved_manifest.get("agent_config") or {}).get("budget") or {}
+                model_steps = agent_budget.get("max_steps")
+                if type(model_steps) is not int or model_steps < 1:
+                    raise ExperimentError("BUDGET_UNRESOLVED", "agent model step limit is unknown")
+            max_potential_calls += len(case_ids) * model_steps * (1 + retries)
+        case_count = next(iter(case_counts)) if len(case_counts) == 1 else None
+        violations = _violations(spec, max_potential_calls)
         return {
             "experiment_id": spec.experiment_id,
             "version": spec.version,
@@ -233,30 +325,10 @@ class ExperimentService:
             "cell_count": len(cells),
             "max_potential_calls": max_potential_calls,
             "case_count": case_count,
-            "case_count_resolved": resolved,
+            "case_count_resolved": case_count is not None,
             "budget": _budget_view(spec.budget_policy),
             "violations": violations,
         }
-
-    def _scenario_case_count(self, spec: ExperimentSpec) -> tuple[int, bool]:
-        """解析场景的真实 case 数（预算核算用）；资源缺失时保守返回 (1, False)。"""
-        if spec.selected_case_keys:
-            return len(spec.selected_case_keys), True
-        if self.resources is None:
-            return 1, False
-        scenario_ref = spec.task_ref.get("scenario_version") or ""
-        name, _, version = scenario_ref.rpartition("@")
-        scenario = getattr(self.resources, "scenarios", None)
-        record = scenario.get(name, version) if scenario is not None else None
-        dataset_ref = (record or {}).get("dataset")
-        if not dataset_ref:
-            return 1, False
-        dataset_name, _, dataset_version = str(dataset_ref).rpartition("@")
-        dataset = self.resources.datasets.get(dataset_name, dataset_version)
-        cases = (dataset or {}).get("cases")
-        if isinstance(cases, list) and cases:
-            return len(cases), True
-        return 1, False
 
     # ------------------------------------------------------------------- create
 
@@ -267,22 +339,55 @@ class ExperimentService:
         request_key: str | None = None,
     ) -> dict[str, Any]:
         """发布 spec（幂等）+ 铺 cell（幂等）+ 分配。超限整体拒绝。"""
+        from .execution_lock import experiment_allocation_lock
+
         spec = ExperimentSpec.model_validate(spec_payload)
-        violations = _violations(spec)
+        with self._allocation_lock, experiment_allocation_lock(
+            self.store, spec.experiment_id, spec.version,
+        ):
+            return self._create_locked(spec_payload, request_key=request_key)
+
+    def _create_locked(
+        self, spec_payload: dict[str, Any], *, request_key: str | None,
+    ) -> dict[str, Any]:
+        spec = ExperimentSpec.model_validate(spec_payload)
+        content_hash = spec.content_hash()
+        registry_key = "experiment:create:" + request_key if request_key is not None else None
+        resource_ref = f"{spec.experiment_id}@{spec.version}"
+        if registry_key is not None:
+            seen = self._requests.get(registry_key)
+            if seen is not None and (seen["canonical_hash"] != content_hash
+                                     or seen["run_id"] != resource_ref):
+                raise ExperimentError(
+                    "REQUEST_KEY_CONFLICT",
+                    f"request_key {request_key!r} already created different spec content",
+                )
+            if seen is not None:
+                stored_replay = self.store.experiments.get_spec(spec.experiment_id, spec.version)
+                if stored_replay == spec.model_dump(mode="json"):
+                    # Fully allocated replays need no mutable resource lookup. If
+                    # cells remain pending, allocate() still performs preflight.
+                    return {
+                        "experiment_id": spec.experiment_id, "version": spec.version,
+                        "created": False, "spec": stored_replay,
+                        **self._allocate_locked(spec.experiment_id, spec.version),
+                    }
+        compiled = self._compile(spec)
+        violations = compiled["violations"]
         if violations:
             raise ExperimentError(
                 "EXPERIMENT_INVALID",
                 "; ".join(f"{item['code']}: {item['message']}" for item in violations),
             )
         _validate_supported_suite(spec)
-        content_hash = spec.content_hash()
-        if request_key is not None:
-            seen = self._request_keys.get(request_key)
-            if seen is not None and seen != content_hash:
-                raise ExperimentError(
-                    "REQUEST_KEY_CONFLICT",
-                    f"request_key {request_key!r} already created different spec content",
-                )
+        if registry_key is not None:
+            # Atomic cross-process reservation before any executable object.
+            from motte_storage.platform import RequestConflict
+
+            try:
+                self._requests.bind(registry_key, content_hash, resource_ref)
+            except RequestConflict as error:
+                raise ExperimentError("REQUEST_KEY_CONFLICT", str(error)) from error
         # JSON 规范化（tuple→list）：与 sqlite/pg 落盘读回的形状一致，
         # 幂等重放不会因容器类型误判"异内容"（与 baseline store 同一规则）。
         dump = spec.model_dump(mode="json")
@@ -291,11 +396,9 @@ class ExperimentService:
         if stored is None or stored != dump:
             # 同 (id,version) 异内容：透传存储层的 ValueError。
             self.store.experiments.put_spec(dump)
-        if request_key is not None:
-            self._request_keys[request_key] = content_hash
         for assignment, repeat_index in _expand_matrix(spec):
             self._ensure_cell(spec, assignment, repeat_index)
-        allocation = self.allocate(spec.experiment_id, spec.version)
+        allocation = self._allocate_locked(spec.experiment_id, spec.version)
         return {
             "experiment_id": spec.experiment_id,
             "version": spec.version,
@@ -308,6 +411,14 @@ class ExperimentService:
 
     def allocate(self, experiment_id: str, version: str) -> dict[str, Any]:
         """可重入的分配/恢复入口：每 cell 恰好一个 initial Run。"""
+        from .execution_lock import experiment_allocation_lock
+
+        with self._allocation_lock, experiment_allocation_lock(
+            self.store, experiment_id, version,
+        ):
+            return self._allocate_locked(experiment_id, version)
+
+    def _allocate_locked(self, experiment_id: str, version: str) -> dict[str, Any]:
         stored = self.store.experiments.get_spec(experiment_id, version)
         if stored is None:
             raise ExperimentError(
@@ -316,6 +427,14 @@ class ExperimentService:
             )
         spec = ExperimentSpec.model_validate(stored)
         _validate_supported_suite(spec)
+        if any(cell.get("allocation_status") in ("pending", "allocating") for cell in
+               self.store.experiments.list_cells(experiment_id, version)):
+            violations = self._compile(spec)["violations"]
+            if violations:
+                raise ExperimentError(
+                    "EXPERIMENT_INVALID",
+                    "; ".join(f"{item['code']}: {item['message']}" for item in violations),
+                )
         allocated = 0
         skipped = 0
         failures: list[dict[str, str]] = []
@@ -409,6 +528,7 @@ class ExperimentService:
         from motte_sdk.resolve import ManifestResolutionError, prepare_run
 
         scenario = spec.task_ref["scenario_version"]
+        _validate_task_resource(spec, self.resources)
         manifest = self._build_manifest(spec, cell)
         try:
             prepared, case_ids = prepare_run(scenario, manifest, [], self.resources)
@@ -427,26 +547,31 @@ class ExperimentService:
         spec: ExperimentSpec,
         cell: dict[str, Any],
     ) -> dict[str, Any]:
-        """direct-llm 套件组装器：因素 → model/reasoning_level，条件进顶层。"""
+        """Suite-specific manifest assembly, followed by the shared prepare_run chain."""
         _validate_supported_suite(spec)
         assignment = FactorAssignment.model_validate(
             cell["factor_assignment"],
         ).as_dict()
-        manifest: dict[str, Any] = {}
-        if "model_profile" in assignment:
-            manifest["model"] = assignment["model_profile"]
+        suite = spec.task_ref["suite"]
+        if suite == "direct-llm":
+            manifest: dict[str, Any] = {"model": assignment["model_profile"]}
+        elif suite == "gsm8k":
+            # GSM8K's standalone route accepts the same model/reasoning selectors
+            # but its own plugin freezes dataset, prompt, scorer and case selection.
+            manifest = {"model": assignment["model_profile"]}
+        elif suite == "agent-tasks":
+            manifest = {"model": assignment["model_profile"],
+                        "agent": {"mode": "legacy-json"}}
+        else:
+            raise ExperimentError("SUITE_UNSUPPORTED", str(suite))
         if assignment.get("reasoning_level") is not None:
             manifest["reasoning_level"] = assignment["reasoning_level"]
         for key, value in spec.controlled_conditions.items():
             if value is None:
                 continue
-            if key == "parameters" and isinstance(value, dict):
+            if key == "max_output_tokens":
                 merged = dict(manifest.get("parameters") or {})
-                merged.update(value)
-                manifest["parameters"] = merged
-            elif key == "max_output_tokens":
-                merged = dict(manifest.get("parameters") or {})
-                merged.setdefault("max_output_tokens", value)
+                merged["max_output_tokens"] = value
                 manifest["parameters"] = merged
         if spec.selected_case_keys:
             manifest["case_selection"] = {

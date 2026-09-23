@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import os
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Iterator
 
 
 class WorkerAlreadyRunning(RuntimeError):
@@ -124,3 +124,51 @@ def worker_execution_lock(
     postgres_dsn: str | None = None,
 ) -> WorkerExecutionLock:
     return WorkerExecutionLock(db_path, backend=backend, postgres_dsn=postgres_dsn)
+
+
+@contextmanager
+def experiment_allocation_lock(store: Any, experiment_id: str, version: str) -> Iterator[None]:
+    """Serialize an experiment's create/recovery window across service processes.
+
+    A committed ``allocating`` cell without a Run is recoverable only after its
+    owner has exited. The same database lock spans claim, Run creation and cell
+    completion, so another service cannot mistake an active claim for a crash.
+    """
+    dsn = getattr(store, "dsn", None)
+    if dsn:
+        from motte_storage.postgres import _connect
+
+        key = f"motteavl:experiment:{experiment_id}@{version}"
+        with _connect(dsn) as connection:
+            connection.autocommit = True
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_lock(hashtext(%s))", (key,))
+            try:
+                yield
+            finally:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_advisory_unlock(hashtext(%s))", (key,))
+        return
+
+    db_path = getattr(getattr(store, "runs", None), "_path", None)
+    if db_path is None:
+        yield  # InMemoryRunStore is guarded by the service RLock.
+        return
+    lock_path = Path(f"{Path(db_path).resolve()}.experiment.lock")
+    with lock_path.open("a+b") as handle:
+        if os.fstat(handle.fileno()).st_size == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            WorkerExecutionLock._unlock_file(handle)

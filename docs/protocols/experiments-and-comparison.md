@@ -3,6 +3,23 @@
 状态：**authoritative（T00 冻结版）**。本文是 M6 所有实现必须遵守的身份层级、真值表与
 hash 规则。实现与其冲突时，以本文为准并修复实现；修订本文必须随代码同一提交。
 
+> M8 实现范围（2026-09-23）：Direct LLM 和 GSM8K Experiment 只接受
+> `model_profile` / `reasoning_level`；Agent Tasks 固定 `legacy-json` 模式，
+> 只接受 `model_profile`。其他因子在 preview/create 拒绝。
+> controlled_conditions 当前仅接受正整数 `max_output_tokens`；GSM8K 的
+> suite 预设固定为 1024，实验若显式给出其他值，preview/create 在持久化前
+> 一致拒绝。Direct LLM 与受限 Agent Tasks 可使用该运行级上限。标量
+> `parameters` 无法组成请求参数，必须拒绝而非静默丢弃。
+> `max_total_tokens`、`max_cost_usd`、非默认停止政策及非默认 scoring 当前无
+> 实验级强制消费者，同样拒绝。`max_total_calls` 根据固定题集与已解析 retry
+> 上界预检；Agent Tasks 按冻结的每 Case `max_steps` 乘以题数、Cell 数和
+> Provider retry 上界，不能沿用单次调用预算。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService
+> 读取质量与可比性；成本按币种分列，部分未知保留 unknown 数。此范围说明
+> 不改变下文目标协议；C-Eval、Scenario/Skill、Harbor 的实验装配仍未实现。
+> 固定 Pass 的 Task 内 Trial pass@k 已接入比较/JSON 导出消费者，独立持久发布的
+> 统计报告及 live 独立性仍未验收。证据见
+> `docs/verification/M8.md`。
+
 M6 是**结果治理层**：只消费已持久化的 Run / Trial / Observation / ScoreSet /
 ScoringPass / Artifact 引用。compare / report / gate / history / export 一律只读，
 零 Provider / Judge / Runner / 业务工具调用。Experiment 只编排既有
@@ -175,6 +192,24 @@ ExperimentSpec 同一规则：发布后不可变，新内容 = 新版本。
   Trial（transport/operator retry 不计）且 1≤k≤n；k>n / 计划不足 / 含未知 Trial /
   违反独立条件 → `not_applicable`（不是 0）。验收样例 n=5, c=2, k=2 → 0.7。
 - 不提供未事前定义的加权总排名；综合分必须有独立版本化政策。
+
+M8 当前只读消费者：`ComparisonService.paired_statistics`、
+`GET /api/v1/comparisons/statistics`、`motte compare --statistics` 和通用 Web 比较页。
+输入是两个固定 Run/ScoringPass 引用及允许变化因子；输出保留固定引用、
+`statistical_policy@1` 的内容 hash、实现版本、Task/Case 单位、bootstrap
+seed/迭代次数、选中/完整/缺失对数、差值与区间资格。一个 Case 只贡献一个配对
+Task；缺失、失败或不确定 Case 使区间不适用，不能按完成样本重新缩小分母。
+Terminal-Bench 的 Trial 由本消费者按冻结 TrialPlan 在 Task 内聚合。`k` 是显式输入
+（缺省 1）；仅唯一的事前计划 Trial ID/repeat、所选 Pass 的完整有效评分行，且未
+复用非空 `source_trial_id` 时才计算各 Task pass@k。未计划评分行单列排除，
+transport/operator retry 不增加 n；缺失、无效、重复上游 Trial 或 k 超出计划数
+返回具名不适用。完整 Task 的 pass@k 才进入 Task 配对 bootstrap；结果带固定
+RunReportRef、政策 hash、单位、seed、次数、k 与每 Task 资格。CLI JSON 文件是
+固定输入的可导出比较结果，另行持久发布的统计报告仍未实现，不能把当前切片写成
+完整 T06 或 live 统计验收。
+一次比较/统计读取在入口固定两个 ScoringPass ID，后续资格、引用、成本和 Trial
+聚合只用这些 ID；HTTP 比较响应返回实际固定引用，Web 统计请求复用该引用。
+若比较响应缺引用，Web 显示统计不可用，不再重新解析可漂移的 current 指针。
 
 ## 11. 退出与回退
 

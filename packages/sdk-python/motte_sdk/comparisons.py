@@ -82,6 +82,80 @@ def _planned_trials(manifest: Mapping[str, Any]) -> list[Any]:
     return plan if isinstance(plan, list) else []
 
 
+def _terminal_trial_statistics(
+    manifest: Mapping[str, Any], selected_tasks: list[str],
+    scores: list[dict[str, Any]], *, run_id: str, k: int,
+) -> dict[str, Any]:
+    """Pass@k per Task from one fixed pass and the Run's pre-dispatch TrialPlan.
+
+    Only matching planned Trial IDs can contribute. Attempt rows and a later
+    operator retry Run have no matching plan identity and cannot increase n.
+    """
+    from motte_eval.statistics import pass_at_k
+
+    plans = _planned_trials(manifest)
+    planned_ids = {
+        str(plan.get("trial_id")) for plan in plans if isinstance(plan, dict)
+    }
+    trial_scores = [row for row in scores if row.get("unit") == "trial"]
+    by_trial: dict[str, list[dict[str, Any]]] = {}
+    for row in trial_scores:
+        by_trial.setdefault(str(row.get("trial_id") or ""), []).append(row)
+    per_task: dict[str, Any] = {}
+    for task_key in selected_tasks:
+        task_plans = [plan for plan in plans if isinstance(plan, dict)
+                      and plan.get("task_key") == task_key]
+        identities = [str(plan.get("trial_id") or "") for plan in task_plans]
+        repeats = [plan.get("repeat_index") for plan in task_plans]
+        valid_plan = bool(task_plans) and all(
+            trial_id and plan.get("run_id") == run_id
+            and type(repeat) is int and repeat >= 0
+            for trial_id, plan, repeat in zip(identities, task_plans, repeats, strict=True)
+        ) and len(set(identities)) == len(identities) and len(set(repeats)) == len(repeats)
+        valid = 0
+        passed = 0
+        source_ids: list[str] = []
+        if valid_plan:
+            for plan, trial_id in zip(task_plans, identities, strict=True):
+                rows = by_trial.get(trial_id, [])
+                if len(rows) != 1:
+                    continue
+                row = rows[0]
+                if (row.get("case_id") != task_key
+                        or row.get("denominator") is not True
+                        or not isinstance(row.get("passed"), bool)):
+                    continue
+                detail_repeat = (row.get("details") or {}).get("repeat_index")
+                if detail_repeat is not None and detail_repeat != plan["repeat_index"]:
+                    continue
+                valid += 1
+                passed += int(row["passed"])
+                source_id = (row.get("details") or {}).get("source_trial_id")
+                if isinstance(source_id, str) and source_id:
+                    source_ids.append(source_id)
+        independent = len(source_ids) == len(set(source_ids))
+        reason = ("invalid_trial_plan" if not valid_plan else
+                  "missing_or_invalid_trial" if valid != len(task_plans) else
+                  "non_independent_trials" if not independent else None)
+        result = (
+            {"applicable": False, "value": None, "reason": reason}
+            if reason else pass_at_k(valid, passed, k)
+        )
+        per_task[task_key] = {
+            "n_planned": len(task_plans), "n_valid": valid,
+            "n_passed": passed, "k": k, "pass_at_k": result,
+        }
+    return {
+        "unit": "task_within_trial", "k": k,
+        "n_selected_tasks": len(selected_tasks),
+        "n_complete_tasks": sum(item["pass_at_k"]["applicable"] for item in per_task.values()),
+        "excluded_unplanned_score_rows": sum(
+            str(row.get("trial_id") or "") not in planned_ids for row in trial_scores
+        ),
+        "per_task": per_task,
+    }
+
+
 def _is_trial_aggregate(aggregate: Mapping[str, Any]) -> bool:
     return all(key in aggregate for key in _TRIAL_AGGREGATE_KEYS)
 
@@ -671,6 +745,15 @@ class ComparisonService:
     ) -> ComparisonResult:
         # 成本资格从**所选 pass 的冻结汇总**取（成本在评分期聚合，不在 run
         # manifest 顶层）；与 candidate_summary/report 同一事实源。
+        for run_id in (baseline_run_id, candidate_run_id):
+            if self.store.runs.get(run_id) is None:
+                raise KeyError(run_id)
+        baseline_pass_id = str(_resolve_pass(
+            self.store, baseline_run_id, baseline_pass_id,
+        )["id"])
+        candidate_pass_id = str(_resolve_pass(
+            self.store, candidate_run_id, candidate_pass_id,
+        )["id"])
         return compare_run_reports(
             self.report_ref(baseline_run_id, scoring_pass_id=baseline_pass_id),
             self.report_ref(candidate_run_id, scoring_pass_id=candidate_pass_id),
@@ -699,10 +782,11 @@ class ComparisonService:
         if isinstance(cost, dict) and cost.get("unknown_cost") is False:
             total = _number(cost.get("known_cost_usd"))
             if total is not None:
-                return {"known": True, "total_usd": total, "currency": "USD"}
+                return {"known": True, "total_usd": total, "currencies": ["USD"]}
         summary_cost, total_usd = self._case_cost_summary(run_id)
         return {
-            "known": summary_cost.known, "total_usd": total_usd, "currency": "USD",
+            "known": summary_cost.known, "total_usd": total_usd,
+            "currencies": sorted(summary_cost.totals()),
         }
 
     def _case_cost_summary(self, run_id: str) -> tuple[CostSummary, float | None]:
@@ -715,42 +799,155 @@ class ComparisonService:
         if case_runs is None or not hasattr(case_runs, "list_for_run"):
             return CostSummary(entries=(), unknown_usage_count=1, source="cases"), None
         cases = case_runs.list_for_run(run_id)
-        blocks: list[dict[str, Any]] = []
-        for case in cases:
-            result = case.get("result")
-            if isinstance(result, dict) and isinstance(result.get("cost"), dict):
-                blocks.append(result["cost"])
         attempted = [
             case for case in cases
             if isinstance(case.get("result"), dict)
         ]
-        totals = [
-            float(block["total"]) for block in blocks
-            if block.get("total") is not None
-        ]
-        if attempted and len(totals) == len(attempted) and totals:
-            total = round(sum(totals), 8)
-            versions = sorted({
-                str(block["price_table_version"]) for block in blocks
-                if block.get("price_table_version")
-            })
-            return (
-                CostSummary(
-                    entries=(
-                        CostEntry(
-                            scope="subject", currency="USD", amount=total,
-                            price_table_versions=tuple(versions),
-                        ),
-                    ),
-                    unknown_usage_count=0, source="case_results",
-                ),
-                total,
-            )
-        # 无成本证据本身就是"未知"（null 不是 0），不用 0 冒充确认无未知。
-        return (
-            CostSummary(entries=(), unknown_usage_count=1, source="case_results"),
-            None,
+        totals: dict[str, float] = {}
+        versions: dict[str, set[str]] = {}
+        unknown = 0
+        for case in attempted:
+            block = case["result"].get("cost")
+            amount = _number(block.get("total")) if isinstance(block, dict) else None
+            if amount is None or amount < 0:
+                unknown += 1
+                continue
+            currency = str(block.get("currency") or "USD")
+            totals[currency] = totals.get(currency, 0.0) + amount
+            if block.get("price_table_version"):
+                versions.setdefault(currency, set()).add(str(block["price_table_version"]))
+        summary = CostSummary(
+            entries=tuple(
+                CostEntry(
+                    scope="subject", currency=currency, amount=round(amount, 8),
+                    price_table_versions=tuple(sorted(versions.get(currency, set()))),
+                )
+                for currency, amount in sorted(totals.items())
+            ),
+            unknown_usage_count=unknown if attempted else 1,
+            source="case_results",
         )
+        return summary, summary.total_usd() if summary.known else None
+
+    def paired_statistics(
+        self, baseline_run_id: str, candidate_run_id: str, *,
+        allowed_factors: list[str] | tuple[str, ...],
+        baseline_pass_id: str | None = None,
+        candidate_pass_id: str | None = None,
+        k: int = 1,
+    ) -> dict[str, Any]:
+        """Read-only paired Task/Case statistics from two fixed ScoreSets.
+
+        Each selected Case contributes once. Missing, uncertain and failed calls
+        remain visible and prevent an inferential interval; transport retries are
+        never interpreted as independent Trials.
+        """
+        if type(k) is not int or k < 1:
+            raise ValueError("k must be a positive integer")
+        from motte_eval.statistics import (
+            STATISTICAL_POLICY_V1, paired_difference, statistical_policy_hash,
+        )
+
+        comparison = self.compare(
+            baseline_run_id, candidate_run_id, allowed_factors=allowed_factors,
+            baseline_pass_id=baseline_pass_id, candidate_pass_id=candidate_pass_id,
+        )
+        baseline_pass_id = comparison.baseline_ref.scoring_pass_id
+        candidate_pass_id = comparison.candidate_ref.scoring_pass_id
+        refs = {
+            "baseline": comparison.baseline_ref.model_dump(mode="json"),
+            "candidate": comparison.candidate_ref.model_dump(mode="json"),
+        }
+        base_run = self.store.runs.get(baseline_run_id)
+        candidate_run = self.store.runs.get(candidate_run_id)
+        selected = list(base_run.get("case_ids") or [])
+        view: dict[str, Any] = {
+            "refs": refs,
+            "unit": "task(case)",
+            "method": "paired_task_cluster_bootstrap",
+            "policy_ref": STATISTICAL_POLICY_V1["policy_id"],
+            "policy_hash": statistical_policy_hash(),
+            "implementation_version": STATISTICAL_POLICY_V1["implementation_version"],
+            "seed": STATISTICAL_POLICY_V1["bootstrap_seed"],
+            "iterations": STATISTICAL_POLICY_V1["bootstrap_iterations"],
+            "missing_policy": "keep_visible_fail_closed",
+            "n_selected": len(selected),
+            "n_pairs": 0,
+            "missing_pairs": len(selected),
+            "applicable": False,
+            "reason": None,
+            "statistics": None,
+        }
+        terminal_base = _is_terminal_bench_run(base_run.get("manifest") or {})
+        terminal_candidate = _is_terminal_bench_run(candidate_run.get("manifest") or {})
+        if terminal_base or terminal_candidate:
+            view["unit"] = "task(trials)"
+            view["method"] = "pass_at_k_paired_task_cluster_bootstrap"
+            if not (terminal_base and terminal_candidate):
+                view["reason"] = "trial_suite_mismatch"
+                return view
+            base_pass = _resolve_pass(self.store, baseline_run_id, baseline_pass_id)
+            candidate_pass = _resolve_pass(self.store, candidate_run_id, candidate_pass_id)
+            base_aggregate = _terminal_trial_statistics(
+                base_run.get("manifest") or {}, selected, self._score_rows(base_pass),
+                run_id=baseline_run_id, k=k,
+            )
+            candidate_aggregate = _terminal_trial_statistics(
+                candidate_run.get("manifest") or {}, selected, self._score_rows(candidate_pass),
+                run_id=candidate_run_id, k=k,
+            )
+            view["trial_aggregation"] = {
+                "baseline": base_aggregate, "candidate": candidate_aggregate,
+            }
+            if not comparison.metric_eligibility.get("quality"):
+                view["reason"] = "not_comparable"
+                return view
+            paired = [
+                (base_aggregate["per_task"][task]["pass_at_k"]["value"],
+                 candidate_aggregate["per_task"][task]["pass_at_k"]["value"])
+                for task in selected
+                if base_aggregate["per_task"][task]["pass_at_k"]["applicable"]
+                and candidate_aggregate["per_task"][task]["pass_at_k"]["applicable"]
+            ]
+            view["n_pairs"] = len(paired)
+            view["missing_pairs"] = len(selected) - len(paired)
+            if view["missing_pairs"]:
+                reasons = {
+                    item["pass_at_k"].get("reason")
+                    for aggregate in (base_aggregate, candidate_aggregate)
+                    for item in aggregate["per_task"].values()
+                }
+                view["reason"] = (
+                    "insufficient_planned_trials" if reasons == {"k_out_of_range"}
+                    else "missing_or_invalid_trial"
+                )
+                return view
+            statistics = paired_difference(paired)
+            view["statistics"] = statistics
+            view["applicable"] = bool(statistics["interval"]["applicable"])
+            view["reason"] = None if view["applicable"] else "insufficient_tasks"
+            return view
+        if not comparison.metric_eligibility.get("quality"):
+            view["reason"] = "not_comparable"
+            return view
+        base_outcomes = self.case_outcomes(baseline_run_id, baseline_pass_id)
+        candidate_outcomes = self.case_outcomes(candidate_run_id, candidate_pass_id)
+        pairs = [
+            (float(base_outcomes[case_id]), float(candidate_outcomes[case_id]))
+            for case_id in selected
+            if base_outcomes.get(case_id) is not None
+            and candidate_outcomes.get(case_id) is not None
+        ]
+        view["n_pairs"] = len(pairs)
+        view["missing_pairs"] = len(selected) - len(pairs)
+        if view["missing_pairs"]:
+            view["reason"] = "missing_or_uncertain_case"
+            return view
+        statistics = paired_difference(pairs)
+        view["statistics"] = statistics
+        view["applicable"] = bool(statistics["interval"]["applicable"])
+        view["reason"] = None if view["applicable"] else "insufficient_tasks"
+        return view
 
     # ------------------------------------------------------------------ 门禁
 

@@ -55,6 +55,7 @@ class WorkerReporter:
             ("completion_tokens", int),
             ("total_tokens", int),
             ("cost_total", (int, float)),
+            ("cost_currency", str),
             ("price_table_version", str),
         ):
             self._copy(progress, fields, key, expected)

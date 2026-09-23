@@ -1057,6 +1057,10 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate-pass", dest="candidate_pass",
                          help="固定候选 scoring pass id（缺省 current）")
     compare.add_argument("--json", dest="json_out", help="把比较 JSON 写入文件")
+    compare.add_argument("--statistics", action="store_true",
+                         help="附带固定 Case/Task 配对统计与资格（只读）")
+    compare.add_argument("--k", type=int, default=1,
+                         help="Terminal-Bench 的事前计划 Trial pass@k（默认 1）")
     compare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     remote.add_mode_arguments(compare)
 
@@ -2232,14 +2236,23 @@ def _compare_command(args) -> int:
     from motte_sdk.comparisons import ComparisonError
     from motte_sdk.export import comparison_to_json
 
+    if args.statistics and args.k < 1:
+        return _error("POLICY_INVALID", "k must be a positive integer")
     factors = [item.strip() for item in (args.factors or "model").split(",") if item.strip()]
     if remote.is_server(args):
         def invoke(client):
-            return client.compare(
+            payload = client.compare(
                 args.baseline, args.candidate,
                 factors=",".join(factors),
                 baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
             ).raw
+            if args.statistics:
+                payload["statistics"] = client.compare_statistics(
+                    args.baseline, args.candidate, factors=",".join(factors),
+                    baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
+                    k=args.k,
+                )
+            return payload
 
         outcome = remote.call_remote(args, invoke, default_code="RUN_NOT_FOUND")
         if isinstance(outcome, remote.RemoteOk):
@@ -2264,6 +2277,10 @@ def _compare_command(args) -> int:
     payload = comparison_to_json({
         "level": result.level.value,
         "eligible": result.eligible,
+        "refs": {
+            "baseline": result.baseline_ref.model_dump(mode="json"),
+            "candidate": result.candidate_ref.model_dump(mode="json"),
+        },
         "structural_reasons": list(result.structural_reasons),
         "metric_reasons": list(result.metric_reasons),
         "metric_eligibility": dict(result.metric_eligibility),
@@ -2272,6 +2289,12 @@ def _compare_command(args) -> int:
     })
     # exporter 视图不含聚合 reasons；补上保持"全部事实"完整（协议 §6）。
     payload["reasons"] = list(result.reasons)
+    if args.statistics:
+        payload["statistics"] = service.paired_statistics(
+            args.baseline, args.candidate, allowed_factors=factors,
+            baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+            k=args.k,
+        )
     if args.json_out:
         _write_text(args.json_out, _m6_json(payload))
     print(_m6_json(payload))

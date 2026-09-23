@@ -67,13 +67,34 @@ PY
 `consistent_backup_postgres(dsn, target, artifacts_root=...)`：屏障 +
 `pg_dump --format=custom`（argv 列表）+ 同一套引用制工件快照与 Manifest v2；
 PATH 无 `pg_dump` 时抛 `BackupUnsupported`（支持矩阵如实登记 blocked）。
-手工等价：
+M8 的 `restore_postgres_staging(backup_dir, staging_dsn, artifacts_target)` 只接受
+**已创建但没有用户对象的独立 staging 数据库**与空 Artifact 目标。调用前核对
+Manifest v2 自身、dump 和每个 Artifact 的大小/hash；损坏备份在连接目标前拒绝。
+它用 `pg_restore --single-transaction --exit-on-error` 写入空目标，随即设置 `restored_from_backup`
+守卫并清除 dump 继承的 maintenance 标志，然后核对 Alembic revision、
+Run/Pass/Baseline/Gate 计数和引用文件；失败时不覆盖来源库，部分恢复目标
+留给操作者调查。
+报告只返回实际数据库名，不回显带凭据的 staging DSN；`pg_restore` 失败也只给
+退出码与调查提示，不把可能包含连接参数的 stderr 写进公共错误。
+不使用 `--clean` 删除现有数据库对象，也不自动解除守卫或启动 Worker。
 
+操作员把 staging DSN 作为环境变量引用传入，不在命令行写凭据正文。例如在已
+准备好**新的空库**和空工件目录后，从受控脚本调用：
+
+```python
+import os
+from motte_storage.maintenance import restore_postgres_staging
+
+report = restore_postgres_staging(
+    "./backup", os.environ["MOTTE_STAGING_PG_DSN"], "./staging-artifacts",
+    expected_manifest_sha256="从备份收据固定的 manifest_sha256",
+)
+print(report)
 ```
-pg_dump -Fc -h <host> -U motteavl -d motteavl -f motteavl-$(date +%Y%m%d).dump
-pg_restore -h <host> -U motteavl -d motteavl --clean --if-exists motteavl-20260915.dump
-tar -czf artifacts-$(date +%Y%m%d).tgz var/artifacts/
-```
+
+先核对 `unresolved_runs`、引用、工件与环境版本；`restore-guard clear --yes`
+必须是另一次显式操作。当前没有 Compose build/up 与生产恢复演练收据，不能因
+一次性 CI 数据库通过就声明生产恢复就绪。
 
 ## Artifact 清理 / GC（M7）
 

@@ -358,6 +358,76 @@ def test_compare_not_comparable_exits_5_and_comparable_exits_0(db, tmp_path, cap
     assert payload["metric_eligibility"]["quality"] is True
 
 
+def test_compare_statistics_cli_pins_pass_and_records_method(db, capsys, tmp_path):
+    output = tmp_path / "paired.json"
+    code, out, err = run_cli(
+        capsys, "compare", "--baseline", RUN_BASE, "--candidate", RUN_BASE,
+        "--baseline-pass", "pass-base", "--candidate-pass", "pass-base",
+        "--statistics", "--json", str(output), "--db", str(db),
+    )
+    assert code == 0, err
+    stats = json.loads(out)["statistics"]
+    assert json.loads(out)["refs"]["baseline"]["scoring_pass_id"] == "pass-base"
+    assert stats["applicable"] is True
+    assert stats["n_pairs"] == 2
+    assert stats["method"] == "paired_task_cluster_bootstrap"
+    assert stats["statistics"]["interval"]["seed"] == 20260921
+    assert json.loads(output.read_text(encoding="utf-8"))["statistics"] == stats
+
+
+def test_compare_statistics_cli_exports_terminal_trial_qualification(db, capsys, tmp_path):
+    store = create_run_store(str(db))
+    for run_id in ("tb-base", "tb-candidate"):
+        plan = [
+            {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+             "repeat_index": repeat, "run_id": run_id,
+             "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+            for task in ("a", "b") for repeat in range(2)
+        ]
+        store.runs.create({
+            "id": run_id, "schema_version": 2, "revision": 1,
+            "scenario_version": "terminal-bench@1", "status": "completed",
+            "manifest": {"benchmark_provenance": {"suite": "terminal-bench-harbor"},
+                         "task_manifest": {"trials": plan},
+                         "evaluation": {"scorer_id": "harbor", "scorer_version": "1"}},
+            "requested_manifest": {}, "case_ids": ["a", "b"],
+            "created_at": TIMESTAMP, "updated_at": TIMESTAMP,
+        })
+        store.scoring_passes.append({
+            "id": f"pass-{run_id}", "run_id": run_id, "scorer_id": "harbor",
+            "scorer_version": "1", "created_at": TIMESTAMP, "source": "initial",
+            "source_run_revision": 1, "summary": {},
+        }, [{
+            "case_id": task, "trial_id": f"{run_id}-{task}-{repeat}",
+            "metric_id": "reward", "evaluator_id": "harbor",
+            "evaluator_version": "1", "metric_status": "scored",
+            "unit": "trial", "value": 1.0 if repeat == 0 else 0.0,
+            "passed": repeat == 0, "denominator": True,
+            "details": {"repeat_index": repeat},
+        } for task in ("a", "b") for repeat in range(2)])
+    output = tmp_path / "terminal-statistics.json"
+    code, out, err = run_cli(
+        capsys, "compare", "--baseline", "tb-base", "--candidate", "tb-candidate",
+        "--baseline-pass", "pass-tb-base", "--candidate-pass", "pass-tb-candidate",
+        "--statistics", "--k", "2", "--json", str(output), "--db", str(db),
+    )
+    assert code == 0, err
+    stats = json.loads(out)["statistics"]
+    assert stats["trial_aggregation"]["baseline"]["k"] == 2
+    assert stats["trial_aggregation"]["baseline"]["per_task"]["a"]["pass_at_k"]["value"] == 1.0
+    assert stats["refs"]["baseline"]["scoring_pass_id"] == "pass-tb-base"
+    assert json.loads(output.read_text(encoding="utf-8"))["statistics"] == stats
+
+
+def test_compare_statistics_cli_rejects_invalid_k_as_request_error(db, capsys):
+    code, _out, err = run_cli(
+        capsys, "compare", "--baseline", RUN_BASE, "--candidate", RUN_BASE,
+        "--statistics", "--k", "0", "--db", str(db),
+    )
+    assert code == 2
+    assert json.loads(err)["error"]["code"] == "POLICY_INVALID"
+
+
 def test_compare_rejects_unknown_run_and_unknown_factor(db, capsys):
     code, _, err = run_cli(
         capsys, "compare", "--baseline", "run-nope", "--candidate", RUN_BASE,
@@ -443,9 +513,9 @@ def test_baseline_create_rejects_incomplete_reference(db, capsys):
 # ---------------------------------------------------------------- experiment
 
 
-def test_experiment_preview_violations_exit_2(db, capsys):
+def test_experiment_preview_violations_exit_2(exp_db, capsys):
     code, out, err = run_cli(
-        capsys, "experiment", "preview", "--db", str(db),
+        capsys, "experiment", "preview", "--db", str(exp_db),
         "--spec", json.dumps(experiment_spec(max_cells=1)))
     assert code == 2, (out, err)
     payload = json.loads(out)
@@ -453,11 +523,11 @@ def test_experiment_preview_violations_exit_2(db, capsys):
     assert [item["code"] for item in payload["violations"]] == ["MATRIX_TOO_LARGE"]
 
 
-def test_experiment_preview_ok_exit_0_and_contract_error(db, tmp_path, capsys):
+def test_experiment_preview_ok_exit_0_and_contract_error(exp_db, tmp_path, capsys):
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps(experiment_spec()), encoding="utf-8")
     code, out, err = run_cli(
-        capsys, "experiment", "preview", "--db", str(db),
+        capsys, "experiment", "preview", "--db", str(exp_db),
         "--spec", f"@{spec_file}")
     assert code == 0, err
     payload = json.loads(out)
@@ -466,7 +536,7 @@ def test_experiment_preview_ok_exit_0_and_contract_error(db, tmp_path, capsys):
     assert payload["violations"] == []
 
     code, out, err = run_cli(
-        capsys, "experiment", "preview", "--db", str(db),
+        capsys, "experiment", "preview", "--db", str(exp_db),
         "--spec", json.dumps(experiment_spec(factors={"bogus": ["x"]})))
     assert code == 2
     assert json.loads(err)["error"]["code"] == "EXPERIMENT_INVALID"

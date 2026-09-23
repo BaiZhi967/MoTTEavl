@@ -286,6 +286,34 @@ def test_consistent_backup_postgres_reports_blocked_without_pg_dump(tmp_path, mo
         consistent_backup_postgres("postgresql://localhost/motte", tmp_path / "backups")
 
 
+def test_postgres_staging_restore_rejects_corrupt_dump_before_target_write(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "pg_restore")
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    (backups / "source.dump").write_bytes(b"damaged-dump")
+    manifest = {
+        "manifest_version": 2, "status": "complete", "backend": "postgres",
+        "database": {"snapshot": "source.dump", "sha256": "0" * 64},
+        "artifacts": None, "counts": {}, "alembic_revision": None,
+    }
+    manifest["manifest_sha256"] = maintenance._manifest_content_sha256(manifest)
+    (backups / "manifest-test.json").write_text(json.dumps(manifest), encoding="utf-8")
+    target = tmp_path / "staging-artifacts"
+    with pytest.raises(RestoreIncomplete, match="database snapshot hash mismatch"):
+        maintenance.restore_postgres_staging(
+            backups, "postgresql://localhost/unreachable", target,
+        )
+    assert not target.exists()
+
+
+def test_postgres_staging_report_database_identity_excludes_credentials():
+    label = maintenance._postgres_database_name(
+        "postgresql://operator:private-value@localhost/source?dbname=m8_staging"
+    )
+    assert label == "m8_staging"
+    assert "private-value" not in label
+
+
 @pytest.mark.skipif(
     not os.environ.get("MOTTE_PG_DSN"),
     reason="set MOTTE_PG_DSN to run PostgreSQL integration tests",

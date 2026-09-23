@@ -1,54 +1,28 @@
 import { useEffect, useState } from "react";
 import { Board } from "../../board/Board";
 import { Link, useSearchParams } from "react-router-dom";
-import { getReport, getRun, modelLabel, type RunRecord } from "../../api/client";
 import { suiteRoutes } from "../registry";
+import { loadSuiteComparison, snapshotCost, snapshotRate, usageTotal, type SuiteComparison } from "../suiteComparison";
 
 const ROUTES = suiteRoutes("gsm8k");
-
-interface Column {
-  runId: string;
-  model: string;
-  accuracy: number | null;
-  tokens: number;
-  cost: number | null;
-  failedCases: string[];
-  run: RunRecord;
-}
-
-function collect(run: RunRecord, report: { cost?: { total?: number | null } } | null): Column {
-  const scores = run.scores ?? [];
-  const passed = scores.filter((score) => score.passed);
-  const tokens = (run.cases ?? []).reduce((sum, row) => sum + (row.result?.usage?.total_tokens ?? 0), 0);
-  return {
-    runId: run.id,
-    model: modelLabel(run) ?? run.id,
-    accuracy: scores.length > 0 ? Math.round((passed.length / scores.length) * 100) : null,
-    tokens,
-    cost: report?.cost?.total ?? null,
-    failedCases: scores
-      .filter((score) => !score.passed && typeof score.case_id === "string")
-      .map((score) => score.case_id as string),
-    run,
-  };
-}
 
 export function Gsm8kCompare() {
   const [params] = useSearchParams();
   const runIds = (params.get("runs") ?? "").split(",").filter(Boolean);
-  const [columns, setColumns] = useState<Column[] | null>(null);
+  const [comparison, setComparison] = useState<SuiteComparison | null>(null);
   const [error, setError] = useState("");
   const [openCase, setOpenCase] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    setColumns(null);
+    setComparison(null);
     setError("");
-    Promise.all(runIds.map((id) => Promise.all([getRun(id), getReport(id).catch(() => null)])))
-      .then((entries) => { if (alive) setColumns(entries.map(([run, report]) => collect(run, report))); })
+    if (!runIds.length) return () => { alive = false; };
+    loadSuiteComparison(runIds, runIds.map((_, index) => params.get(`pass${index}`) ?? undefined))
+      .then((result) => { if (alive) setComparison(result); })
       .catch((caught) => { if (alive) setError(String(caught)); });
     return () => { alive = false; };
-  }, [runIds.join(",")]);
+  }, [params.toString()]);
 
   if (runIds.length === 0) {
     return (
@@ -65,40 +39,33 @@ export function Gsm8kCompare() {
   }
 
   if (error) return <div className="page"><section className="panel detail"><p className="error">{error}</p></section></div>;
-  if (!columns) return <div className="page"><section className="panel detail"><p className="empty">加载中</p></section></div>;
+  if (!comparison) return <div className="page"><section className="panel detail"><p className="empty">加载中</p></section></div>;
 
-  /* 空数组 reduce 无初值会抛错（/gsm8k/compare 不带 runs 参数可直接到达），单列时语义保持为该 run 自己的答错集 */
-  const sharedFailed = columns.length > 0
-    ? columns
-        .map((column) => new Set(column.failedCases))
-        .reduce((acc, set) => new Set([...acc].filter((id) => set.has(id))))
-    : new Set<string>();
+  const { columns, comparable, reasons, sharedFailed } = comparison;
 
   const snapshotCases = (columns[0]?.run.manifest?.benchmark_snapshot?.dataset?.cases ?? []) as
     { case_id: string; input: any; expected: any }[];
-  /* 子集运行可以各选不同题目：题数不一致时 accuracy 不可直接横向比较。 */
-  const sizes = [...new Set(columns.map((column) => column.run.case_ids?.length ?? 0))];
-
   return (
     <div className="page">
       <section className="panel detail">
         <div className="panel-head">
           <h2>GSM8K · 多模型对比</h2>
         </div>
-        {sizes.length > 1 && (
-          <p className="hint">
-            各列选中的题目数不同（{sizes.join(" / ")} 题），accuracy 不是同一题集上的比较。
-          </p>
+        {!comparable ? (
+          <p className="error" role="alert">所选运行不可比：{reasons.join("；")}。未生成质量对比矩阵。</p>
+        ) : <>
+        {comparison.comparisons.some((item) => item.metric_eligibility?.cost === false) && (
+          <p className="hint" role="status">成本指标不可比：{comparison.comparisons.flatMap((item) => item.metric_reasons ?? []).join("；") || "证据不足"}</p>
         )}
         <Board
           label="数据板面"
           head={<>
             <th>指标</th>
             {columns.map((column) => (
-            <th key={column.runId}>
+            <th key={column.run.id}>
             {column.model}
-            <span className="muted mono"> {column.runId}</span>
-            <Link className="link" to={ROUTES.result(column.runId)}>详情</Link>
+            <span className="muted mono"> {column.run.id} · {column.snapshot.ref.scoring_pass_id}</span>
+            <Link className="link" to={ROUTES.result(column.run.id)}>详情</Link>
             </th>
             ))}
           </>}
@@ -106,12 +73,13 @@ export function Gsm8kCompare() {
 
           
 
-            <tr><td>accuracy</td>{columns.map((c) => <td key={c.runId} className="mono">{c.accuracy == null ? "—" : `${c.accuracy}%`}</td>)}</tr>
-            <tr><td>tokens</td>{columns.map((c) => <td key={c.runId} className="mono">{c.tokens}</td>)}</tr>
-            <tr><td>成本</td>{columns.map((c) => <td key={c.runId} className="mono">{c.cost == null ? "—" : `¥${c.cost}`}</td>)}</tr>
-            <tr><td>答错题重合</td><td colSpan={Math.max(1, columns.length)} className="mono">{[...sharedFailed].join(", ") || "无"}</td></tr>
+            <tr><td>accuracy</td>{columns.map((c) => <td key={c.run.id} className="mono">{snapshotRate(c.snapshot, "accuracy")}</td>)}</tr>
+            <tr><td>tokens</td>{columns.map((c) => <td key={c.run.id} className="mono">{usageTotal(c.run)}</td>)}</tr>
+            <tr><td>成本</td>{columns.map((c) => <td key={c.run.id} className="mono">{snapshotCost(c.snapshot)}</td>)}</tr>
+            <tr><td>答错题重合</td><td colSpan={Math.max(1, columns.length)} className="mono">{sharedFailed.join(", ") || "无"}</td></tr>
 
         </Board>
+        </>}
 
         <h3 className="embed-title">逐题下钻</h3>
         <ul className="compare-case-list">
@@ -127,7 +95,7 @@ export function Gsm8kCompare() {
                   {columns.map((column) => {
                     const result = column.run.cases?.find((item) => item.case_id === caseId)?.result;
                     return (
-                      <p key={column.runId}>
+                  <p key={column.run.id}>
                         <span className="field-label">{column.model}</span>
                         <span className="mono">{typeof result?.content === "string" ? result.content : result?.content != null ? JSON.stringify(result.content) : "（无结果）"}</span>
                       </p>

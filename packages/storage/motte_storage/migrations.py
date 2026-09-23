@@ -34,6 +34,7 @@ def alembic_config(dsn: str | None = None) -> Config:
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     if dsn is not None:
         cfg.set_main_option("sqlalchemy.url", _psycopg_url(dsn))
+        cfg.attributes["motte_explicit_dsn"] = True
     return cfg
 
 

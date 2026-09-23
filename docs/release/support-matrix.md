@@ -1,5 +1,9 @@
 # MoTTEavl 支持矩阵（M7 RC）
 
+> M8 候选增量以 `docs/verification/M8.md` 为准。下表原 M7 收据只证明其各自
+> 记录的 SHA/环境，不自动证明 M8 候选；M8 的 `stable_supported` 与
+> `cutover_ready` 均未达到。
+
 > 状态：draft（随 T11 证据回填）。取值：`tested`（本仓真实执行证据）＞ `supported`
 > （tested 子集 + 无已知反例）＞ `experimental`（有实现、证据不足或已知限制）＞
 > `blocked`（环境/授权缺失）＞ `not_run`（未执行）。skip 不计入 supported。
@@ -62,3 +66,16 @@
 
 只有上表所有声明 supported/tested 的行都有真实证据时，才可输出 `stable_supported`；
 任一 not_run/blocked 存在时如实标注 `offline_verified` + `external_pending`。
+
+## 7. M8 候选增量（2026-09-23）
+
+| 能力 / 环境 | 本候选状态 | 证据或缺口 |
+|---|---|---|
+| Direct/GSM8K 固定 Pass 比较 | offline_verified + live_scoped | M8 T04 的 HTTP 与 Web 测试；付费 Direct 单 Case 双 Run 的固定 Pass/CNY 成本比较通过。截图未复验，其他输入变体未获 live 覆盖 |
+| Direct/GSM8K/Agent Tasks Experiment | offline_partial + live_scoped | M8 T02/T03/T05；付费 Direct 和单个合成 GSM8K Case 经隔离 Worker 完成；Agent Tasks 仅离线，C-Eval、Scenario/Skill、Harbor 未接入。GSM8K 非 1024 输出上限在 preview/create 一致拒绝 |
+| 固定 Pass Case/Task 与 Terminal Trial 统计 | offline_partial + live_scoped | M8 T06 SDK/HTTP/CLI JSON/Web 消费固定引用、政策、`k`、缺失资格和计划 Trial pass@k；付费 Direct 单 Case 双 Run 的统计明确 `insufficient_tasks`。另行持久发布的统计报告与 live Trial 独立性仍未闭合 |
+| PostgreSQL 隔离迁移与实验分配 | integration_scoped | 原 T01 migration/owner CI `f5c4374` / `35815300827`；M8 T03 两进程同 key、单 initial Run 在 task-owned PG 库通过两次（`ac05062` / `35829305820`, `35829308936`）。本机无 DSN |
+| PostgreSQL dump/restore（一次性 staging） | integration_scoped | M8 T09 `ac05062` 手工、`e96407e` guarded helper 各两次 `-vv` 节点通过；空目标、Run/TrialPlan/Pass/Baseline/Artifact/guard 对账，损坏 dump 离线拒绝。生产恢复、在途写入与 GC/Compose 仍未演练 |
+| Docker Compose build/up | blocked_local | 本机无 Docker；Linux CI 仅 compose config，通过不代表 build/up/health/Worker 演练 |
+| 配置网关的 DeepSeek 单轮 Provider | live_scoped | 用户授权下 6 次真实 HTTP 尝试、0 重试；5 个隔离合成 Run 完成，显式 CNY 回执的双 Run 比较质量/成本合格。网关上游模型版本和实际账单未独立核验；见 M8 付费收据 |
+| 其他真实 Harness/Judge 与生产切换 | external_pending | C-Eval/Harbor/native Agent/Scenario/Skill/Judge 尚无本轮 live 收据；真实标签、环境和单独执行边界仍缺，未发布或切换 |

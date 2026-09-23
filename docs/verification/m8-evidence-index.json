@@ -1,0 +1,3764 @@
+{
+  "schema_version": 1,
+  "assessment": "docs/review/2026-09-22-m1-m7-assessment/MoTTEavl_M1-M7_Assessment_2026-09-22.md",
+  "goals": [
+    {
+      "goal_id": "M1-G01",
+      "original_goal": "注册并实际执行 builtin-agent@1",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G02",
+      "original_goal": "模式、prompt、工具、预算及模型快照固定",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G03",
+      "original_goal": "native-tool 不支持时预检拒绝且不降级",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G04",
+      "original_goal": "每 Case 消息和 workspace 隔离",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G05",
+      "original_goal": "模型/工具/拒绝/终止持久证据",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G06",
+      "original_goal": "工具错误回灌、恢复与未知工具拒绝",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G07",
+      "original_goal": "步数/时长/工具/可观察 token 预算",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G08",
+      "original_goal": "取消阻断后续动作并记录清理",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "离线取消与部分历史实测存在；双模型 Supported 的实际取消/清理收据仍需固定版本补齐。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G09",
+      "original_goal": "不确定副作用进入 needs_review",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G10",
+      "original_goal": "Artifact 安全路径、类型、大小、hash、可用状态",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G11",
+      "original_goal": "同 Observation 多指标及版本/分母",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G12",
+      "original_goal": "缺期望/缺证据/评分错误不当通过",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G13",
+      "original_goal": "追加评分、报告只读、rescore 不调 subject",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G14",
+      "original_goal": "gold/隐藏规则/凭据不进模型输入",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G15",
+      "original_goal": "Web/CLI/Worker/API 同一状态和分数",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G16",
+      "original_goal": "正常/恢复/越权预算代表任务验收",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "三类任务已有历史正向/预算实测；原双模型范围与当前支持环境未完整复验。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G17",
+      "original_goal": "Direct/GSM8K/Replay 评分恢复无退化",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "既有专项有记录；当前总 CI 未全绿，需跑受影响域并保存 node ID。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07",
+        "T01"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M1-G18",
+      "original_goal": "支持声明包含版本、环境和分层证据",
+      "original_roadmap": "docs/roadmap/M1-native-agent-and-evaluation.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E1 明确 Supported 未满足；后续 E5/E9 补了单模型，不能自动扩展为所有支持组合。",
+        "receipt_ref": "docs/verification/M1.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G01",
+      "original_goal": "一 Job 不逐题重启 Runner",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G02",
+      "original_goal": "持久化 Job 句柄、所有权、配置与 cursor",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G03",
+      "original_goal": "启动不确定/非零/缺结果/部分/取消处理",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G04",
+      "original_goal": "重复导入幂等、异内容冲突",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G05",
+      "original_goal": "Catalog 四级状态与阻断原因",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G06",
+      "original_goal": "Dataset/Profile/Runner/scorer/选样冻结",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "本地受控资源与 E2 真 Runner 测试成立；正式官方数据/Profile/live 范围仍需收据。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G07",
+      "original_goal": "数据与代码许可/来源分开",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "本地受控资源与 E2 真 Runner 测试成立；正式官方数据/Profile/live 范围仍需收据。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G08",
+      "original_goal": "C-Eval 学科、split、few-shot、提取及 token 解释",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G09",
+      "original_goal": "目标 gold 与模型输入隔离",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G10",
+      "original_goal": "原始 Runner 与诊断指标分离",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G11",
+      "original_goal": "每 selected Case 有 disposition",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G12",
+      "original_goal": "调用路径/身份/费用覆盖/重试证据",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G13",
+      "original_goal": "fake、真 Runner 确定性、live 分层验收",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "本地受控资源与 E2 真 Runner 测试成立；正式官方数据/Profile/live 范围仍需收据。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G14",
+      "original_goal": "C-Eval 五类页面与公共组件",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G15",
+      "original_goal": "M6-Lite 覆盖与阈值",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G16",
+      "original_goal": "新旧 Parser 对照及版本化差异报告",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "需取得可复核的新旧解析差异总表；不以一般 Parser 单测代替迁移语义验收。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M2-G17",
+      "original_goal": "关闭 adapter 不影响旧功能及历史",
+      "original_roadmap": "docs/roadmap/M2-llm-benchmarks-and-ceval.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M2-R4-fixes-2026-09-20.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G01",
+      "original_goal": "TB 版本/revision/task hash/runner 固定",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E3 有真 Harbor/Docker 的自有 oracle 任务；官方固定任务×真实 Agent 支持范围需独立验收。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G02",
+      "original_goal": "受控任务准备且不自动执行脚本",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G03",
+      "original_goal": "任务唯一身份不依赖 basename",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G04",
+      "original_goal": "Trial 与 transport/operator retry 区分",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass statistical consumer excludes unplanned retry rows; full Trial lifecycle remains historical evidence",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "packages/contracts/motte_contracts/trial.py"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M3-G05",
+      "original_goal": "Case/Trial/Attempt/Score/Artifact 关联",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G06",
+      "original_goal": "Agent/model/tools/env/verifier/budget 快照",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G07",
+      "original_goal": "同 Dispatcher 管理多 Task/Trial Job",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G08",
+      "original_goal": "reward 0/缺失/畸形/Verifier 错误四态",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G09",
+      "original_goal": "正常进程退出不当质量通过",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G10",
+      "original_goal": "部分失败保留证据及完整 dispositions",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G11",
+      "original_goal": "取消/超时/残留清理可追溯",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "取消/残留已有测试及修复；最新环境 cleanup unknown 语义仍需专项确认。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G12",
+      "original_goal": "不确定句柄或副作用保守恢复",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G13",
+      "original_goal": "原始日志/轨迹/工件完整度",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G14",
+      "original_goal": "隔离/gold/凭据/网络实际记录",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E3 有真 Harbor/Docker 的自有 oracle 任务；官方固定任务×真实 Agent 支持范围需独立验收。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G15",
+      "original_goal": "指标分母/单位/覆盖/重复次数",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass Task/Trial denominator and k consumer verified offline; live Profile coverage pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "packages/evaluators/motte_eval/statistics.py"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+          "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M3-G16",
+      "original_goal": "Task/Trial/终端/工件评分界面",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G17",
+      "original_goal": "确定性+真 Docker+真 Agent 分层验收",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E3 有真 Harbor/Docker 的自有 oracle 任务；官方固定任务×真实 Agent 支持范围需独立验收。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M3-G18",
+      "original_goal": "按数据/Agent/环境组合登记支持",
+      "original_roadmap": "docs/roadmap/M3-harbor-and-terminal-bench.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E3 有真 Harbor/Docker 的自有 oracle 任务；官方固定任务×真实 Agent 支持范围需独立验收。",
+        "receipt_ref": "docs/verification/M3.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G01",
+      "original_goal": "Runtime 实现/协议/配置版本固定",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G02",
+      "original_goal": "installed/protocol/execution readiness 分开",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G03",
+      "original_goal": "真正使用固定版本 Pi SDK",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E4 有实际 SDK/原生协议/进程证据，但正式运行时的真实模型小任务与停止验收仍 live_pending。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G04",
+      "original_goal": "Case session/workspace 隔离",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G05",
+      "original_goal": "Pi 模型调用路径及工具权限",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E4 有实际 SDK/原生协议/进程证据，但正式运行时的真实模型小任务与停止验收仍 live_pending。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G06",
+      "original_goal": "CLI transport/binary/native/cwd 固定",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E4 有实际 SDK/原生协议/进程证据，但正式运行时的真实模型小任务与停止验收仍 live_pending。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G07",
+      "original_goal": "自动发现配置/Skill/MCP/插件有记录",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G08",
+      "original_goal": "事件 source/seq/parser/完整度",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G09",
+      "original_goal": "stdout/stderr 有界并行消费",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G10",
+      "original_goal": "取消/超时/进程树/残留测试",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E4 有实际 SDK/原生协议/进程证据，但正式运行时的真实模型小任务与停止验收仍 live_pending。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G11",
+      "original_goal": "无终态或副作用不确定不自动重放",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G12",
+      "original_goal": "Artifact 与评分非退出码判通过",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G13",
+      "original_goal": "未知模型/usage/cost 不伪造",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G14",
+      "original_goal": "Harness 控制差异进入可比性",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G15",
+      "original_goal": "API/CLI/Web 配置运行证据及 retry",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G16",
+      "original_goal": "正式后端 offline fixture 与真实小任务",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "E4 有实际 SDK/原生协议/进程证据，但正式运行时的真实模型小任务与停止验收仍 live_pending。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G17",
+      "original_goal": "交互消费者接通后才开放 ack",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "O",
+        "note": "@2 consumer 和干预审计有实现记录；交互为原增强项，真实审批/取消按支持声明另验。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M4-G18",
+      "original_goal": "人工干预/批准/提示进入审计比较",
+      "original_roadmap": "docs/roadmap/M4-pi-and-external-harnesses.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "O",
+        "note": "@2 consumer 和干预审计有实现记录；交互为原增强项，真实审批/取消按支持声明另验。",
+        "receipt_ref": "docs/verification/M4-completion-review-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G01",
+      "original_goal": "Scenario 引用发布 WorkflowVersion",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G02",
+      "original_goal": "有界顺序/分支/循环/检查点",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G03",
+      "original_goal": "受限表达式禁止 eval/import/shell",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G04",
+      "original_goal": "Fixture 所有权和 prepare/reset/cleanup",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G05",
+      "original_goal": "多轮上下文及 Case 隔离",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G06",
+      "original_goal": "步骤期限实际中断",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G07",
+      "original_goal": "工具模式与有效权限固定",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G08",
+      "original_goal": "工具参数/顺序/确认/状态/副作用评分",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G09",
+      "original_goal": "隐藏 checker/gold 与 subject 隔离",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G10",
+      "original_goal": "指令/资源/可执行 Skill 分别验证",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G11",
+      "original_goal": "Skill 内容/依赖/hash/顺序/权限固定",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G12",
+      "original_goal": "Skill fixture 输入输出/副作用/清理",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G13",
+      "original_goal": "无 Skill/v1/v2 受控对照",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "需完整三臂/成本及业务流程收据；G18 另需至少 30 条真实人工校准（项目门，不是通用充分样本量）。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G14",
+      "original_goal": "Skill token/tool/cost 与质量共同报告",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "需完整三臂/成本及业务流程收据；G18 另需至少 30 条真实人工校准（项目门，不是通用充分样本量）。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G15",
+      "original_goal": "Judge profile/rubric/params/evidence 固定",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T08"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G16",
+      "original_goal": "Judge 畸形/拒绝/错误不判通过",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T08"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G17",
+      "original_goal": "Judge 独立授权/预算/不确定性",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T08"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G18",
+      "original_goal": "人工校准/位置交换/非合成人工真值",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "需完整三臂/成本及业务流程收据；G18 另需至少 30 条真实人工校准（项目门，不是通用充分样本量）。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T08"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G19",
+      "original_goal": "人工修订/rescore 追加评分不改基线",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "追加评分基础存在；人工修订公共入口到冻结 pass/旧基线的一体化证据需补验。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T08"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G20",
+      "original_goal": "完整业务主流程及失败恢复验收",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "需完整三臂/成本及业务流程收据；G18 另需至少 30 条真实人工校准（项目门，不是通用充分样本量）。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G21",
+      "original_goal": "场景/Skill/Judge 公共配置执行下钻",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "旧 Judge 405 已修；最新报告仍注明最终桌面/移动复看未重验，不能按旧错误或按自动通过判断。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M5-G22",
+      "original_goal": "原 suite 契约及恢复回归",
+      "original_roadmap": "docs/roadmap/M5-scenarios-skills-and-judges.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "原套件局部回归存在；当前整仓门禁仍有失败。",
+        "receipt_ref": "docs/verification/M1-M5-acceptance-report-2026-09-21.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T07",
+        "T01"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G01",
+      "original_goal": "Experiment 任务/因子/预算/评分/停止政策固定",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-01/F-02/F-03：因子声明/执行不一致、suite 仅 Direct、预算创建校验需闭合。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T02",
+        "T03",
+        "T05",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; paid single-Case Direct and synthetic GSM8K Experiment creation/execution observed; full suite matrix pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/resolve.py"
+        ],
+        "test_nodes": [
+          "tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects",
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation",
+          "tests/sdk/test_m6_experiments.py::test_unassembled_suite_preview_and_create_fail_closed",
+          "tests/sdk/test_m6_experiments.py::test_agent_runtime_factor_cannot_silently_use_legacy_json"
+        ],
+        "environment": "Windows 11 / Python 3.12.10 / task-owned SQLite / operator-configured paid gateway / synthetic single-Case Runs",
+        "verification_layer": "live_scoped",
+        "receipt_ref": "docs/verification/m8-deepseek-live-receipt.json",
+        "artifact_hash": "sha256:516c5c54cadeaf39668970bb3250affc865bb26d6e62040281f28fb9dbbf5ade",
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G02",
+      "original_goal": "矩阵预览校验、幂等分配与恢复",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-01/F-02/F-03：因子声明/执行不一致、suite 仅 Direct、预算创建校验需闭合。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T02",
+        "T03",
+        "T05"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; task-owned PostgreSQL process race and SQLite drift/recovery verified; broader resource races pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/execution_lock.py",
+          "packages/storage/motte_storage/platform.py"
+        ],
+        "test_nodes": [
+          "tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild",
+          "tests/sdk/test_m6_experiments.py::test_active_sqlite_allocation_is_not_reset_by_second_service",
+          "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence",
+          "tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell"
+        ],
+        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI e96407e",
+        "verification_layer": "integration_scoped",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G03",
+      "original_goal": "Experiment 复用 Dispatcher",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T02",
+        "T03",
+        "T05",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; paid single-Case Direct and synthetic GSM8K Dispatcher/Worker path observed; other suites pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/dispatcher.py",
+          "apps/worker/motte_worker/runtime.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_experiment_to_gate_full_slice"
+        ],
+        "environment": "Windows 11 / Python 3.12.10 / task-owned SQLite / operator-configured paid gateway / synthetic single-Case Runs",
+        "verification_layer": "live_scoped",
+        "receipt_ref": "docs/verification/m8-deepseek-live-receipt.json",
+        "artifact_hash": "sha256:516c5c54cadeaf39668970bb3250affc865bb26d6e62040281f28fb9dbbf5ade",
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G04",
+      "original_goal": "执行指纹与允许变化比较条件分开",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G05",
+      "original_goal": "三级可比性及具体原因",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04",
+        "T07"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; explicit-CNY fixed-pass Direct cost comparison observed live; broader eligibility matrix pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts",
+          "packages/provider-runtime/motte_provider/pricing.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare",
+          "tests/provider/test_openai_compatible.py::test_cost_keeps_explicit_price_table_currency_in_provider_evidence"
+        ],
+        "environment": "Windows 11 / Python 3.12.10 / task-owned SQLite / operator-configured paid gateway / synthetic single-Case Runs",
+        "verification_layer": "live_scoped",
+        "receipt_ref": "docs/verification/m8-deepseek-live-receipt.json",
+        "artifact_hash": "sha256:516c5c54cadeaf39668970bb3250affc865bb26d6e62040281f28fb9dbbf5ade",
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G06",
+      "original_goal": "稳定样本内容匹配与增删变化",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G07",
+      "original_goal": "suite 合法分母保持",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G08",
+      "original_goal": "disposition 与覆盖完整展示",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G09",
+      "original_goal": "缺失/失败不能静默提分",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G10",
+      "original_goal": "统计单位/权重/区间/seed 可追溯",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "统计函数和资格测试有记录；正式报告/导出消费者的全链路仍需专项举证。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T06"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass Case and Trial statistics consumed by SDK/HTTP/CLI JSON/Web; persisted published report pending",
+        "consumer_paths": [
+          "packages/evaluators/motte_eval/statistics.py",
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/api/app/main.py",
+          "packages/cli/motte_cli/main.py",
+          "apps/web/src/pages/m6/ComparePage.tsx"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_pin_current_once_when_pass_changes_mid_read",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_pins_pass_and_records_method",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_rejects_invalid_k_as_request_error",
+          "apps/web/tests/M6.test.tsx::ComparePage"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G11",
+      "original_goal": "Trial/retry 区分及 pass@k 资格",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "统计函数和资格测试有记录；正式报告/导出消费者的全链路仍需专项举证。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T06"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; planned valid Trial pass@k and retry distinction have fixed-pass consumers; live independence not verified",
+        "consumer_paths": [
+          "packages/evaluators/motte_eval/statistics.py",
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/api/app/main.py",
+          "packages/cli/motte_cli/main.py",
+          "apps/web/src/pages/m6/ComparePage.tsx"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_reused_upstream_trial_identity",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_pin_current_once_when_pass_changes_mid_read",
+          "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
+          "apps/web/tests/M6.test.tsx::ComparePage"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G12",
+      "original_goal": "成本币种/计量/unknown 分离",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G13",
+      "original_goal": "Baseline 固定 Run/Pass/Policy",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G14",
+      "original_goal": "新失败/修复/持续失败/不稳定/未覆盖",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T06"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G15",
+      "original_goal": "版本化 GatePolicy 与规则政策",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T06"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G16",
+      "original_goal": "六类 Gate 结论区分",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T06"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G17",
+      "original_goal": "相同证据和政策确定求值且零模型",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T06"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G18",
+      "original_goal": "干预/runtime/Judge 变化影响比较",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-01/F-02/F-03：因子声明/执行不一致、suite 仅 Direct、预算创建校验需闭合。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T02",
+        "T03",
+        "T05"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; Direct/GSM8K/Agent controlled factors verified, runtime/Judge factor coverage pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/resolve.py"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation",
+          "tests/sdk/test_m6_experiments.py::test_agent_tasks_experiment_matches_standalone_and_counts_steps"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G19",
+      "original_goal": "全部 UI/CLI 共用比较 Gate 服务",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M6-G20",
+      "original_goal": "CI 非零原因与 completed/pass 区分",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M6-G21",
+      "original_goal": "升级/重评/导入/删除证据不改历史结论",
+      "original_roadmap": "docs/roadmap/M6-experiments-comparison-and-gates.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "I",
+        "note": "F-04：中央服务有实现，但旧比较入口仍绕过，固定 pass/资格/unknown/币种不统一。",
+        "receipt_ref": "docs/verification/M6.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T04"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/web/src/evalTypes/suiteComparison.ts"
+        ],
+        "test_nodes": [
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M7-G01",
+      "original_goal": "类型化同步客户端/错误/版本/能力",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G02",
+      "original_goal": "公共 API 生命周期报告比较 Gate 可用",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G03",
+      "original_goal": "付费 POST 安全重试/请求幂等",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G04",
+      "original_goal": "server 失败不转 local 执行",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G05",
+      "original_goal": "SSE 补页/游标恢复/最后事件",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G06",
+      "original_goal": "pytest 默认不付费/明确 opt-in",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G07",
+      "original_goal": "JSON/JUnit/退出语义完整",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G08",
+      "original_goal": "wheel/Web 干净安装无隐式 PYTHONPATH",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12",
+        "T01"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G09",
+      "original_goal": "workspace 依赖与 Runner 隔离",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G10",
+      "original_goal": "旧资源 dry-run/映射/诊断/幂等",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "合成来源迁移有记录；实际旧导出与资源映射的可执行性/只读边界需核对。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T10",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; synthetic dry-run/apply idempotency verified; authorized private export pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/migration/plan.py",
+          "packages/sdk-python/motte_sdk/migration/apply.py"
+        ],
+        "test_nodes": [
+          "tests/migration/test_import_plan.py::test_plan_is_a_pure_dry_run",
+          "tests/migration/test_legacy_import.py::test_second_apply_of_same_source_is_all_reused"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M7-G11",
+      "original_goal": "仅迁 SecretRef 不迁真实秘密",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T10",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G12",
+      "original_goal": "历史 Run/Score/Artifact 只读不入队",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T10",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G13",
+      "original_goal": "历史未知保持未知不反推",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T10",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G14",
+      "original_goal": "导入恢复与回退不删共享资产",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T09",
+        "T10",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; synthetic interruption/rollback verified; private export and PG restore pending",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/migration/apply.py",
+          "packages/sdk-python/motte_sdk/migration/rollback.py"
+        ],
+        "test_nodes": [
+          "tests/migration/test_import_resume_rollback.py::test_crash_mid_apply_resumes_without_duplicates",
+          "tests/migration/test_import_resume_rollback.py::test_rollback_deletes_only_own_unreferenced_objects"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M7-G15",
+      "original_goal": "DB+Artifact 一致备份/校验",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T09",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; SQLite recovery and guarded task-owned PostgreSQL staging restore verified; Compose and production recovery pending",
+        "consumer_paths": [
+          "packages/storage/motte_storage/maintenance.py",
+          "tests/storage/conftest.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
+          "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims",
+          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_restore_rejects_corrupt_dump_before_target_write",
+          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_report_database_identity_excludes_credentials",
+          "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host",
+          "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact"
+        ],
+        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI e96407e",
+        "verification_layer": "integration_scoped",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M7-G16",
+      "original_goal": "支持环境升级/回退/旧 schema 演练",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T09",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; synthetic old-shape SQLite upgrade/recovery verified; supported PG upgrade/rollback pending",
+        "consumer_paths": [
+          "packages/storage/motte_storage/maintenance.py",
+          "packages/storage/motte_storage/migrations.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_release_smoke.py::test_release_upgrade_old_shape_database_gets_platform_tables",
+          "tests/integration/test_release_smoke.py::test_release_recovery_path_from_backup"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M7-G17",
+      "original_goal": "本地/远程认证与加密边界",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "E",
+        "note": "阶段记录有对应实现/行为测试；当前版本完整验收仍须核对实际消费者与指定环境。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G18",
+      "original_goal": "retention 保护 pinned/needs_review 并审计",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "Artifact 引用保护已有修复；Trace DB 行裁剪明确未实现，需确定承诺范围与完成条件。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T09",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G19",
+      "original_goal": "发布秘密/私有数据/依赖/许可审查",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G20",
+      "original_goal": "正式后端各版本环境有真实证据",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G21",
+      "original_goal": "三个旧平台替代场景与迁移归类",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "partial_m8; three synthetic scenarios checked, real replacement acceptance and cutover pending",
+        "consumer_paths": [
+          "tests/integration/test_cutover_readiness.py"
+        ],
+        "test_nodes": [
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_1_model_evaluation_two_runs",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_2_agent_benchmark_offline_evidence",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_3_business_regression_offline_evidence"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
+        "artifact_hash": null,
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
+      }
+    },
+    {
+      "goal_id": "M7-G22",
+      "original_goal": "文档/样例/矩阵与真实能力一致",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "R",
+        "note": "存在滚动账本与修订附录状态差异，需按提交/环境归一并生成支持矩阵。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    },
+    {
+      "goal_id": "M7-G23",
+      "original_goal": "功能切换与历史迁移分别验收",
+      "original_roadmap": "docs/roadmap/M7-sdk-migration-and-release.md",
+      "historical_assessment": {
+        "sha": "fc1e7d56c47d36952fb338bf9cb3b1f8c0fbfb3d",
+        "status": "V",
+        "note": "合成/SQLite 局部已验证；真实 PG/旧导出/正式支持和切换门尚未闭合，不能据此宣告完成。",
+        "receipt_ref": "docs/verification/M7.md"
+      },
+      "m8_work_packages": [
+        "T00",
+        "T11",
+        "T12"
+      ],
+      "current": {
+        "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_status": "not_reverified",
+        "consumer_paths": [],
+        "test_nodes": [],
+        "environment": null,
+        "verification_layer": "not_reverified",
+        "receipt_ref": null,
+        "artifact_hash": null,
+        "supersedes": null
+      }
+    }
+  ]
+}

@@ -11,7 +11,7 @@ from __future__ import annotations
 import tempfile
 from itertools import product
 from pathlib import Path
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
 
 import pytest
 
@@ -84,6 +84,236 @@ def spec_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def test_gsm8k_experiment_matches_standalone_preparation() -> None:
+    import json
+
+    from motte_sdk.benchmark import import_benchmark_split
+    from motte_sdk.resolve import prepare_run
+
+    store, _run_service, service = make_service()
+    raw = "\n".join(json.dumps({"question": f"Q{i}", "answer": f"work\n#### {i}"})
+                    for i in range(25)).encode()
+    scenario = import_benchmark_split(
+        raw, name="m8-gsm", version="1", revision="synthetic",
+        license_id="internal-sample", scope="smoke", resources=service.resources,
+        synthetic=True,
+    )["scenario"]
+    _whole, all_cases = prepare_run(scenario, {"model": "model-a"}, [], service.resources)
+    selected = all_cases[:2]
+    payload = spec_payload(
+        experiment_id="m8-gsm-exp", task_ref={"suite": "gsm8k", "scenario_version": scenario},
+        factors={"model_profile": ("model-a",)}, repeats=1,
+        selected_case_keys=selected,
+        controlled_conditions={"max_output_tokens": 1024},
+    )
+    preview = service.preview(payload)
+    assert preview["violations"] == []
+    assert preview["max_potential_calls"] == 2
+    created = service.create(payload)
+    assert created["failed"] == []
+    run = store.runs.get(created["cells"][0]["run_id"])
+    assert run is not None
+    standalone, standalone_cases = prepare_run(
+        scenario, {"model": "model-a", "parameters": {"max_output_tokens": 1024},
+                   "case_selection": {"mode": "ids", "case_ids": selected}},
+        [], service.resources,
+    )
+    assert run["case_ids"] == standalone_cases
+    assert run["manifest"]["benchmark_snapshot"] == standalone["benchmark_snapshot"]
+    assert run["manifest"]["provider"] == standalone["provider"]
+    assert run["manifest"]["provider"]["parameters"]["max_output_tokens"] == 1024
+    assert len(store.runs.list()) == 1
+
+
+def test_gsm8k_experiment_rejects_output_cap_below_fixed_suite_preset() -> None:
+    import json
+
+    from motte_sdk.benchmark import import_benchmark_split
+    from motte_sdk.resolve import prepare_run
+
+    store, _run_service, service = make_service()
+    raw = "\n".join(json.dumps({"question": f"Q{i}", "answer": f"work\n#### {i}"})
+                    for i in range(20)).encode()
+    scenario = import_benchmark_split(
+        raw, name="m8-gsm-cap", version="1", revision="synthetic",
+        license_id="internal-sample", scope="smoke", resources=service.resources,
+        synthetic=True,
+    )["scenario"]
+    _, selected = prepare_run(scenario, {"model": "model-a"}, [], service.resources)
+    payload = spec_payload(
+        experiment_id="m8-gsm-cap-exp",
+        task_ref={"suite": "gsm8k", "scenario_version": scenario},
+        factors={"model_profile": ("model-a",)}, repeats=1,
+        selected_case_keys=selected[:1],
+        controlled_conditions={"max_output_tokens": 128},
+        budget_policy={"max_total_calls": 1},
+    )
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_UNSUPPORTED"):
+        service.preview(payload)
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_UNSUPPORTED"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
+def test_agent_tasks_experiment_matches_standalone_and_counts_steps() -> None:
+    from motte_sdk.agent_tasks import persist_agent_tasks_dataset
+    from motte_sdk.resolve import prepare_run
+
+    store, _run_service, service = make_service()
+    imported = persist_agent_tasks_dataset({
+        "name": "m8-agent", "version": "1", "cases": [
+            {"case_id": "task-1", "input": "Write one file", "fixture": {}},
+            {"case_id": "task-2", "input": "Read one file", "fixture": {}},
+        ],
+    }, service.resources, version="1")
+    scenario = imported["scenario"]
+    service.resources.models.put({
+        "id": "model-c", "provider": "local", "model": "probe-2",
+        "capabilities": {}, "max_output_tokens": 4096,
+    })
+    payload = spec_payload(
+        experiment_id="m8-agent-exp",
+        task_ref={"suite": "agent-tasks", "scenario_version": scenario},
+        factors={"model_profile": ("model-a", "model-c")}, repeats=1,
+        selected_case_keys=["task-1", "task-2"],
+        controlled_conditions={"max_output_tokens": 512},
+        budget_policy={"max_total_calls": 31},
+    )
+    preview = service.preview(payload)
+    assert preview["max_potential_calls"] == 32  # 2 Cell × 2 Case × 8 model steps
+    assert [item["code"] for item in preview["violations"]] == ["BUDGET_EXCEEDED"]
+    with pytest.raises(ExperimentError, match="BUDGET_EXCEEDED"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+    payload["budget_policy"] = {"max_total_calls": 32}
+    created = service.create(payload)
+    assert created["failed"] == []
+    runs = [store.runs.get(cell["run_id"]) for cell in created["cells"]]
+    assert len(runs) == 2 and all(run is not None for run in runs)
+    assert {run["manifest"]["provider"]["model"] for run in runs} == {"probe-1", "probe-2"}
+    run = next(run for run in runs if run["requested_manifest"]["model"] == "model-a")
+    assert run is not None
+    standalone, standalone_cases = prepare_run(scenario, {
+        "model": "model-a", "agent": {"mode": "legacy-json"},
+        "parameters": {"max_output_tokens": 512},
+        "case_selection": {"mode": "ids", "case_ids": ["task-1", "task-2"]},
+    }, [], service.resources)
+    assert run["case_ids"] == standalone_cases
+    assert run["manifest"]["benchmark_snapshot"] == standalone["benchmark_snapshot"]
+    assert run["manifest"]["provider"] == standalone["provider"]
+    assert run["manifest"]["agent_config"] == standalone["agent_config"]
+    assert run["manifest"]["provider"]["parameters"]["max_output_tokens"] == 512
+
+    unsupported = {**payload, "experiment_id": "m8-agent-unsupported",
+                   "factors": {"model_profile": ("model-a",),
+                               "reasoning_level": ("high",)}}
+    with pytest.raises(ExperimentError, match="FACTOR_UNSUPPORTED"):
+        service.preview(unsupported)
+    with pytest.raises(ExperimentError, match="FACTOR_UNSUPPORTED"):
+        service.create(unsupported)
+    assert store.experiments.get_spec("m8-agent-unsupported", "v1") is None
+
+
+def test_experiment_suite_mismatch_rejects_before_creating_cells() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(task_ref={"suite": "gsm8k",
+                                     "scenario_version": "direct-llm-exact-answer@1"})
+    with pytest.raises(ExperimentError, match="SUITE_MISMATCH"):
+        service.preview(payload)
+    with pytest.raises(ExperimentError, match="SUITE_MISMATCH"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
+@pytest.mark.parametrize("suite", [
+    "ceval-external", "scenario", "terminal-bench-harbor",
+])
+def test_unassembled_suite_preview_and_create_fail_closed(suite: str) -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(task_ref={"suite": suite, "scenario_version": "candidate@1"})
+    for operation in (service.preview, service.create):
+        with pytest.raises(ExperimentError) as error:
+            operation(payload)
+        assert error.value.code == "SUITE_UNSUPPORTED"
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
+def test_agent_runtime_factor_cannot_silently_use_legacy_json() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(
+        task_ref={"suite": "agent-tasks", "scenario_version": "candidate@1"},
+        factors={"model_profile": ("model-a",), "runtime_version": ("pi-agent@1",)},
+    )
+    for operation in (service.preview, service.create):
+        with pytest.raises(ExperimentError) as error:
+            operation(payload)
+        assert error.value.code == "FACTOR_UNSUPPORTED"
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
+def test_idempotent_completed_create_replay_does_not_require_live_resources() -> None:
+    store, run_service, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    first = service.create(payload, request_key="m8-completed-replay")
+    rebuilt = ExperimentService(store, run_service, resources=None)
+    replay = rebuilt.create(payload, request_key="m8-completed-replay")
+    assert [cell["run_id"] for cell in replay["cells"]] == [
+        cell["run_id"] for cell in first["cells"]
+    ]
+    assert len(store.runs.list()) == 1
+
+
+def test_resource_ceiling_drift_after_preview_rejects_before_persistence() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(
+        experiment_id="m8-resource-drift",
+        factors={"model_profile": ("model-a",)}, repeats=1,
+    )
+    assert service.preview(payload)["violations"] == []
+    model = service.resources.models.get("model-a")
+    service.resources.models.put(
+        {**model, "max_output_tokens": 256, "generation": 2},
+        expected_generation=1,
+    )
+    with pytest.raises(ExperimentError):
+        service.create(payload, request_key="m8-drift-key")
+    assert store.experiments.get_spec("m8-resource-drift", "v1") is None
+    assert store.experiments.list_cells("m8-resource-drift", "v1") == []
+    assert store.runs.list() == []
+
+    # Repaired draft resource can be used on a fresh authorized submission;
+    # the rejected request key did not reserve an executable operation.
+    service.resources.models.put(
+        {**model, "generation": 3}, expected_generation=2,
+    )
+    created = service.create(payload, request_key="m8-drift-key")
+    assert created["allocated"] == 1
+    assert len(store.runs.list()) == 1
+
+
+@pytest.mark.parametrize("conditions", [
+    {"parameters": "silently-ignored"},
+    {"reasoning_level": "high"},
+])
+def test_unconsumed_or_conflicting_controlled_conditions_reject_before_persistence(
+    conditions: dict[str, object],
+) -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(controlled_conditions=conditions)
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_INVALID"):
+        service.preview(payload)
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_INVALID"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
 def put_manual_cells(
     store: object,
     payload: dict[str, object],
@@ -142,11 +372,11 @@ def allocate_one_manually(
 
 def test_preview_expands_matrix_without_touching_store() -> None:
     store, _run_service, service = make_service()
-    result = service.preview(spec_payload(trials_per_run=3))
+    result = service.preview(spec_payload())
     assert result["cell_count"] == 8  # 2×2 因素 × 2 repeats
-    # 真实场景 case 数（内置样例 8 题）参与预算核算：8 cell × 3 trial × 8 题。
+    # 真实场景 case 数（内置样例 8 题）参与预算核算：8 cell × 8 题。
     assert result["case_count"] == 8 and result["case_count_resolved"] is True
-    assert result["max_potential_calls"] == 8 * 3 * 8
+    assert result["max_potential_calls"] == 8 * 8
     assert len({cell["cell_id"] for cell in result["cells"]}) == 8
     assert {cell["repeat_index"] for cell in result["cells"]} == {0, 1}
     assert result["violations"] == []
@@ -168,6 +398,7 @@ def test_preview_reports_unknown_cost_not_zero() -> None:
     assert budget["cost_known"] == "unknown_until_run"
     assert budget["known_cost_usd"] is None
     assert budget["unknown"] is True
+    assert {item["code"] for item in result["violations"]} == {"POLICY_UNSUPPORTED"}
 
 
 def test_preview_flags_violations_and_create_rejects_wholesale() -> None:
@@ -231,6 +462,37 @@ def test_direct_llm_manifest_assembly() -> None:
     assert run["manifest"]["cases"] or "cases" in run["manifest"]
 
 
+def test_reasoning_factor_reaches_captured_provider_request() -> None:
+    import json
+
+    from motte_contracts.messages import Message, ModelRequest
+    from motte_provider.config import build_case_provider
+    from tests.provider.test_openai_compatible import FakeResponse
+
+    _store, run_service, service = make_service()
+    result = service.create(spec_payload(
+        factors={"model_profile": ("model-a",), "reasoning_level": ("low", "high")},
+        repeats=1,
+    ))
+    wire: dict[str, dict] = {}
+    for cell in result["cells"]:
+        level = cell["factor_assignment"]["reasoning_level"]
+        snapshot = run_service.get_run(cell["run_id"])["manifest"]["provider"]
+        assert snapshot["reasoning_level"] == level
+        provider = build_case_provider(snapshot, api_key="").provider
+
+        def opener(request, **kwargs):
+            wire[level] = json.loads(request.data)
+            return FakeResponse({"model": "probe-1", "choices": [
+                {"message": {"content": "ok"}, "finish_reason": "stop"},
+            ]})
+
+        provider.transport._opener = opener
+        provider.complete(ModelRequest(model="probe-1", messages=[Message(role="user", content="hi")]))
+    assert wire["low"]["reasoning_effort"] == "low"
+    assert wire["high"]["reasoning_effort"] == "high"
+
+
 def test_unknown_suite_is_rejected_honestly() -> None:
     store, _run_service, service = make_service()
     payload = spec_payload(task_ref={"suite": "harbor", "scenario_version": "harbor@1"})
@@ -238,6 +500,66 @@ def test_unknown_suite_is_rejected_honestly() -> None:
         service.create(payload)
     assert excinfo.value.code == "SUITE_UNSUPPORTED"
     assert "harbor" in str(excinfo.value)
+    assert store.runs.list() == []
+
+
+def test_full_ten_cases_two_cells_cap_five_rejects_before_any_executable_record() -> None:
+    import json
+
+    from motte_sdk.direct_llm import import_direct_llm_split
+
+    store, _run_service, service = make_service()
+    raw = ("\n".join(json.dumps({"case_id": f"case-{index}", "input": f"Question {index}",
+                                  "expected": str(index)}) for index in range(10)) + "\n").encode()
+    imported = import_direct_llm_split(raw, name="m8-ten", version="1",
+                                       license_id="internal-sample", resources=service.resources,
+                                       synthetic=True)
+    payload = spec_payload(
+        task_ref={"suite": "direct-llm", "scenario_version": imported["scenario"]},
+        factors={"model_profile": ("model-a", "model-b")}, repeats=1,
+        budget_policy={"max_total_calls": 5},
+    )
+    preview = service.preview(payload)
+    assert preview["case_count"] == 10
+    assert preview["max_potential_calls"] == 20
+    assert {item["code"] for item in preview["violations"]} == {"BUDGET_EXCEEDED"}
+    with pytest.raises(ExperimentError, match="max_potential_calls 20"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.experiments.list_cells("exp-alpha") == []
+    assert store.runs.list() == []
+
+
+@pytest.mark.parametrize("policy", [
+    {"budget_policy": {"max_total_calls": 2000, "max_total_tokens": 1000}},
+    {"budget_policy": {"max_total_calls": 2000, "max_cost_usd": 10.0}},
+    {"stop_policy": {"on_first_failure": True}},
+    {"stop_policy": {"max_failures": 1}},
+    {"stop_policy": {"wall_clock_seconds": 30}},
+    {"trials_per_run": 2},
+])
+def test_unenforced_experiment_policy_is_rejected_before_creation(policy):
+    store, _run_service, service = make_service()
+    payload = spec_payload(**policy)
+    preview = service.preview(payload)
+    assert any(item["code"] == "POLICY_UNSUPPORTED" for item in preview["violations"])
+    with pytest.raises(ExperimentError, match="POLICY_UNSUPPORTED"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
+@pytest.mark.parametrize("factor", ["prompt_version", "runtime_version", "skill_version"])
+def test_direct_unconsumed_factor_is_rejected_by_both_entries_before_persistence(factor):
+    store, _run_service, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",), factor: ("v1", "v2")})
+    for entry in (service.preview, service.create):
+        with pytest.raises(ExperimentError) as excinfo:
+            entry(payload)
+        assert excinfo.value.code == "FACTOR_UNSUPPORTED"
+        assert factor in excinfo.value.message
+    assert store.experiments.list_specs() == []
+    assert store.experiments.list_cells("exp-alpha") == []
     assert store.runs.list() == []
 
 
@@ -260,6 +582,25 @@ def test_request_key_conflict_and_plain_spec_conflict() -> None:
         service.create(conflicting, request_key="key-2")
     assert type(spec_conflict.value) is ValueError
     assert "immutable" in str(spec_conflict.value)
+
+
+def test_request_key_binding_survives_service_and_sqlite_store_reconstruction() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    first = service.create(payload, request_key="m8-persisted-key")
+    reopened = SQLiteRunStore(store.runs._path)
+    rebuilt = ExperimentService(reopened, RunService(reopened), resources=service.resources)
+    again = rebuilt.create(payload, request_key="m8-persisted-key")
+    assert [cell["run_id"] for cell in again["cells"]] == [
+        cell["run_id"] for cell in first["cells"]
+    ]
+    assert len(reopened.runs.list()) == 1
+    with pytest.raises(ExperimentError) as excinfo:
+        rebuilt.create(spec_payload(experiment_id="exp-other", version="v2",
+                                    factors={"model_profile": ("model-a",)}, repeats=1),
+                       request_key="m8-persisted-key")
+    assert excinfo.value.code == "REQUEST_KEY_CONFLICT"
+    assert reopened.experiments.list_specs("exp-other") == []
 
 
 # ------------------------------------------------------------ A07 concurrency
@@ -291,6 +632,91 @@ def test_concurrent_create_gives_each_cell_exactly_one_run() -> None:
     assert len(set(run_ids)) == 8
     assert all(store.runs.get(run_id) is not None for run_id in run_ids)
     assert len(store.runs.list()) == 8
+
+
+def test_two_sqlite_services_share_request_key_and_single_initial_run() -> None:
+    first_store, _first_runs, first = make_service()
+    path = first_store.runs._path
+    second_store = SQLiteRunStore(path)
+    second = ExperimentService(
+        second_store, RunService(second_store),
+        resources=SQLiteResourceStore(path, content_store=default_content_store()),
+    )
+    payload = spec_payload(experiment_id="m8-two-services",
+                           factors={"model_profile": ("model-a",)}, repeats=1)
+    barrier = Barrier(2)
+    errors: list[BaseException] = []
+
+    def create(service: ExperimentService) -> None:
+        try:
+            barrier.wait()
+            service.create(payload, request_key="m8-same-key")
+        except BaseException as error:  # noqa: BLE001 - surface worker exception
+            errors.append(error)
+
+    threads = [Thread(target=create, args=(service,)) for service in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    cells = first_store.experiments.list_cells("m8-two-services", "v1")
+    assert len(cells) == 1
+    assert cells[0]["allocation_status"] == "allocated"
+    assert len(first_store.runs.list()) == 1
+
+
+def test_active_sqlite_allocation_is_not_reset_by_second_service() -> None:
+    first_store, _first_runs, first = make_service()
+    path = first_store.runs._path
+    second_store = SQLiteRunStore(path)
+    second = ExperimentService(
+        second_store, RunService(second_store),
+        resources=SQLiteResourceStore(path, content_store=default_content_store()),
+    )
+    payload = spec_payload(experiment_id="m8-active-claim",
+                           factors={"model_profile": ("model-a",)}, repeats=1)
+    entered = Event()
+    release = Event()
+    calls: list[str] = []
+    errors: list[BaseException] = []
+    original_first = first._create_cell_run
+    original_second = second._create_cell_run
+
+    def paused_first(*args, **kwargs):
+        calls.append("first")
+        entered.set()
+        assert release.wait(5), "test failed to release the active allocation"
+        return original_first(*args, **kwargs)
+
+    def counted_second(*args, **kwargs):
+        calls.append("second")
+        return original_second(*args, **kwargs)
+
+    first._create_cell_run = paused_first
+    second._create_cell_run = counted_second
+
+    def create(service: ExperimentService) -> None:
+        try:
+            service.create(payload, request_key="m8-active-key")
+        except BaseException as error:  # noqa: BLE001 - surface thread failure
+            errors.append(error)
+
+    first_thread = Thread(target=create, args=(first,))
+    second_thread = Thread(target=create, args=(second,))
+    first_thread.start()
+    assert entered.wait(5), "first service did not claim the cell"
+    second_thread.start()
+    try:
+        second_thread.join(timeout=1)
+    finally:
+        release.set()
+    first_thread.join(timeout=10)
+    second_thread.join(timeout=10)
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert errors == []
+    assert calls == ["first"]
+    assert len(first_store.runs.list()) == 1
 
 
 # ----------------------------------------------------------- A08 crash resume

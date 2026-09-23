@@ -1726,6 +1726,8 @@ export const COMPARISON_FACTORS: readonly string[] = [
 export interface ComparabilityView {
   /** 兼容字段：质量指标是否可比（level ∈ comparable/partially 且质量 metric eligible）。 */
   eligible: boolean;
+  /** 本次比较实际固定的两个 Pass；下一次统计读取必须复用它们。 */
+  refs?: Record<"baseline" | "candidate", { run_id: string; scoring_pass_id: string }>;
   /** comparable | partially_comparable | not_comparable；未知字符串按原样显示。 */
   level: string;
   reasons?: string[];
@@ -1752,6 +1754,54 @@ export const compareRunReports = (params: {
   if (params.baseline_pass) query.set("baseline_pass", params.baseline_pass);
   if (params.candidate_pass) query.set("candidate_pass", params.candidate_pass);
   return request<ComparabilityView>(`/api/v1/comparisons?${query.toString()}`);
+};
+
+/** 固定两个 ScoringPass 的只读 Task/Case 配对统计；不把缺失折算为 0。 */
+export interface ComparisonStatisticsView {
+  refs: Record<string, { run_id: string; scoring_pass_id: string }>;
+  unit: string;
+  method: string;
+  policy_ref: string;
+  policy_hash: string;
+  seed: number;
+  iterations: number;
+  n_selected: number;
+  n_pairs: number;
+  missing_pairs: number;
+  applicable: boolean;
+  reason: string | null;
+  statistics: {
+    mean_diff: number | null;
+    interval: { low: number | null; high: number | null; seed: number; iterations: number };
+  } | null;
+  trial_aggregation?: Record<"baseline" | "candidate", {
+    k: number;
+    n_selected_tasks: number;
+    n_complete_tasks: number;
+    excluded_unplanned_score_rows: number;
+    per_task: Record<string, {
+      n_planned: number;
+      n_valid: number;
+      n_passed: number;
+      pass_at_k: { applicable: boolean; value: number | null; reason: string | null };
+    }>;
+  }>;
+}
+
+export const getComparisonStatistics = (params: {
+  baseline: string;
+  candidate: string;
+  factors?: string[];
+  baseline_pass?: string;
+  candidate_pass?: string;
+  k?: number;
+}) => {
+  const query = new URLSearchParams({ baseline: params.baseline, candidate: params.candidate });
+  query.set("factors", (params.factors ?? ["model"]).join(","));
+  if (params.baseline_pass) query.set("baseline_pass", params.baseline_pass);
+  if (params.candidate_pass) query.set("candidate_pass", params.candidate_pass);
+  if (params.k !== undefined) query.set("k", String(params.k));
+  return request<ComparisonStatisticsView>(`/api/v1/comparisons/statistics?${query.toString()}`);
 };
 
 /** 回归分类（GET /regressions）：结论照实渲染，页面不自己下结论。 */
