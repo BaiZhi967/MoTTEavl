@@ -84,6 +84,58 @@ def spec_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def test_gsm8k_experiment_matches_standalone_preparation() -> None:
+    import json
+
+    from motte_sdk.benchmark import import_benchmark_split
+    from motte_sdk.resolve import prepare_run
+
+    store, _run_service, service = make_service()
+    raw = "\n".join(json.dumps({"question": f"Q{i}", "answer": f"work\n#### {i}"})
+                    for i in range(25)).encode()
+    scenario = import_benchmark_split(
+        raw, name="m8-gsm", version="1", revision="synthetic",
+        license_id="internal-sample", scope="smoke", resources=service.resources,
+        synthetic=True,
+    )["scenario"]
+    _whole, all_cases = prepare_run(scenario, {"model": "model-a"}, [], service.resources)
+    selected = all_cases[:2]
+    payload = spec_payload(
+        experiment_id="m8-gsm-exp", task_ref={"suite": "gsm8k", "scenario_version": scenario},
+        factors={"model_profile": ("model-a",)}, repeats=1,
+        selected_case_keys=selected,
+        controlled_conditions={"max_output_tokens": 512},
+    )
+    preview = service.preview(payload)
+    assert preview["violations"] == []
+    assert preview["max_potential_calls"] == 2
+    created = service.create(payload)
+    assert created["failed"] == []
+    run = store.runs.get(created["cells"][0]["run_id"])
+    assert run is not None
+    standalone, standalone_cases = prepare_run(
+        scenario, {"model": "model-a", "parameters": {"max_output_tokens": 512},
+                   "case_selection": {"mode": "ids", "case_ids": selected}},
+        [], service.resources,
+    )
+    assert run["case_ids"] == standalone_cases
+    assert run["manifest"]["benchmark_snapshot"] == standalone["benchmark_snapshot"]
+    assert run["manifest"]["provider"] == standalone["provider"]
+    assert len(store.runs.list()) == 1
+
+
+def test_experiment_suite_mismatch_rejects_before_creating_cells() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(task_ref={"suite": "gsm8k",
+                                     "scenario_version": "direct-llm-exact-answer@1"})
+    with pytest.raises(ExperimentError, match="SUITE_MISMATCH"):
+        service.preview(payload)
+    with pytest.raises(ExperimentError, match="SUITE_MISMATCH"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
 def put_manual_cells(
     store: object,
     payload: dict[str, object],

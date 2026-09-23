@@ -30,11 +30,12 @@ from motte_contracts.experiment import (
 from motte_storage.integrity import RunConflictError
 
 #: 本服务能组装 manifest 的套件；其余套件诚实拒绝，不假装支持。
-SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm"})
+SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm", "gsm8k"})
 SUPPORTED_FACTORS: dict[str, frozenset[str]] = {
     # Direct's frozen prompt is the dataset case input (verbatim); it has no
     # published prompt/runtime/skill selector to compile into a request.
     "direct-llm": frozenset({"model_profile", "reasoning_level"}),
+    "gsm8k": frozenset({"model_profile", "reasoning_level"}),
 }
 
 #: Cell → Run 身份前缀：恢复/并发路径必须得到同一个 run_id。
@@ -196,7 +197,29 @@ def _validate_supported_suite(spec: ExperimentSpec) -> None:
             "FACTOR_UNSUPPORTED",
             f"suite {suite!r} cannot consume factors: {','.join(unconsumed)}",
         )
+    if "model_profile" not in spec.factors:
+        raise ExperimentError("FACTOR_REQUIRED", "model_profile is required for this suite")
     _validate_controlled_conditions(spec)
+
+
+def _validate_task_resource(spec: ExperimentSpec, resources: Any) -> None:
+    """A missing or mismatched managed scenario must not become an empty generic Run."""
+    from motte_sdk.benchmark_plugins import plugin_for_scenario
+
+    name, sep, version = spec.task_ref["scenario_version"].rpartition("@")
+    scenario = resources.scenarios.get(name, version) if sep else None
+    if scenario is None:
+        raise ExperimentError("SCENARIO_NOT_FOUND", spec.task_ref["scenario_version"])
+    try:
+        identity = plugin_for_scenario(scenario)
+    except ValueError as error:
+        raise ExperimentError("SCENARIO_INVALID", str(error)) from error
+    if identity is None or identity[0] != spec.task_ref["suite"]:
+        raise ExperimentError(
+            "SUITE_MISMATCH",
+            f"scenario {spec.task_ref['scenario_version']} is {identity}, "
+            f"not {spec.task_ref['suite']}",
+        )
 
 
 class ExperimentService:
@@ -252,6 +275,7 @@ class ExperimentService:
         case_counts: set[int] = set()
         if self.resources is None:
             raise ExperimentError("RESOURCE_UNRESOLVED", "experiment resources are unavailable")
+        _validate_task_resource(spec, self.resources)
         for (assignment, _repeat_index), cell in zip(expanded, cells, strict=True):
             try:
                 resolved_manifest, case_ids = prepare_run(
@@ -461,6 +485,7 @@ class ExperimentService:
         from motte_sdk.resolve import ManifestResolutionError, prepare_run
 
         scenario = spec.task_ref["scenario_version"]
+        _validate_task_resource(spec, self.resources)
         manifest = self._build_manifest(spec, cell)
         try:
             prepared, case_ids = prepare_run(scenario, manifest, [], self.resources)
@@ -479,14 +504,20 @@ class ExperimentService:
         spec: ExperimentSpec,
         cell: dict[str, Any],
     ) -> dict[str, Any]:
-        """direct-llm 套件组装器：因素 → model/reasoning_level，条件进顶层。"""
+        """Suite-specific manifest assembly, followed by the shared prepare_run chain."""
         _validate_supported_suite(spec)
         assignment = FactorAssignment.model_validate(
             cell["factor_assignment"],
         ).as_dict()
-        manifest: dict[str, Any] = {}
-        if "model_profile" in assignment:
-            manifest["model"] = assignment["model_profile"]
+        suite = spec.task_ref["suite"]
+        if suite == "direct-llm":
+            manifest: dict[str, Any] = {"model": assignment["model_profile"]}
+        elif suite == "gsm8k":
+            # GSM8K's standalone route accepts the same model/reasoning selectors
+            # but its own plugin freezes dataset, prompt, scorer and case selection.
+            manifest = {"model": assignment["model_profile"]}
+        else:
+            raise ExperimentError("SUITE_UNSUPPORTED", str(suite))
         if assignment.get("reasoning_level") is not None:
             manifest["reasoning_level"] = assignment["reasoning_level"]
         for key, value in spec.controlled_conditions.items():
