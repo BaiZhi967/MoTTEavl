@@ -162,8 +162,16 @@ export function ComparePage() {
       const payload = await compareRunReports(params);
       if (compareSeq.current !== seq) return; // 已发起新的比较：迟到结论丢弃
       setResult(payload);
+      if (!payload.refs?.baseline?.scoring_pass_id || !payload.refs?.candidate?.scoring_pass_id) {
+        setStatisticsError("统计不可用：比较响应缺少固定 Pass 引用");
+        return;
+      }
       try {
-        const paired = await getComparisonStatistics(params);
+        const paired = await getComparisonStatistics({
+          ...params,
+          baseline_pass: payload.refs.baseline.scoring_pass_id,
+          candidate_pass: payload.refs.candidate.scoring_pass_id,
+        });
         if (compareSeq.current === seq) setStatistics(paired);
       } catch (caught) {
         if (compareSeq.current === seq) {

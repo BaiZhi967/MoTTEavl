@@ -367,6 +367,7 @@ def test_compare_statistics_cli_pins_pass_and_records_method(db, capsys, tmp_pat
     )
     assert code == 0, err
     stats = json.loads(out)["statistics"]
+    assert json.loads(out)["refs"]["baseline"]["scoring_pass_id"] == "pass-base"
     assert stats["applicable"] is True
     assert stats["n_pairs"] == 2
     assert stats["method"] == "paired_task_cluster_bootstrap"

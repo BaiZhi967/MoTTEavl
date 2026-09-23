@@ -423,6 +423,50 @@ def test_terminal_statistics_reject_reused_upstream_trial_identity() -> None:
     assert result["trial_aggregation"]["baseline"]["per_task"]["task-b"]["pass_at_k"]["applicable"] is True
 
 
+def test_terminal_statistics_pin_current_once_when_pass_changes_mid_read() -> None:
+    store = InMemoryRunStore()
+    for run_id in ("base", "candidate"):
+        make_run(store, run_id, case_ids=["a", "b"], manifest={
+            "benchmark_provenance": {"suite": "terminal-bench-harbor"},
+            "task_manifest": {"trials": [
+                {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+                 "repeat_index": repeat, "run_id": run_id,
+                 "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+                for task in ("a", "b") for repeat in range(2)
+            ]},
+        })
+        append_pass(store, run_id, f"old-{run_id}", [
+            {**score_row(task, passed=run_id == "candidate"),
+             "trial_id": f"{run_id}-{task}-{repeat}", "unit": "trial",
+             "metric_id": "reward", "details": {"repeat_index": repeat}}
+            for task in ("a", "b") for repeat in range(2)
+        ])
+
+    class SwitchingService(ComparisonService):
+        baseline_ref_calls = 0
+
+        def report_ref(self, run_id, *, scoring_pass_id=None):
+            ref = super().report_ref(run_id, scoring_pass_id=scoring_pass_id)
+            if run_id == "base":
+                self.baseline_ref_calls += 1
+                if self.baseline_ref_calls == 1:
+                    append_pass(store, "base", "new-base", [
+                        {**score_row(task, passed=True),
+                         "trial_id": f"base-{task}-{repeat}", "unit": "trial",
+                         "metric_id": "reward", "details": {"repeat_index": repeat}}
+                        for task in ("a", "b") for repeat in range(2)
+                    ])
+            return ref
+
+    result = SwitchingService(store).paired_statistics(
+        "base", "candidate", allowed_factors=[], k=2,
+    )
+    assert store.scoring_passes.current("base")["id"] == "new-base"
+    assert result["refs"]["baseline"]["scoring_pass_id"] == "old-base"
+    assert result["trial_aggregation"]["baseline"]["per_task"]["a"]["pass_at_k"]["value"] == 0.0
+    assert result["statistics"]["mean_diff"] == 1.0
+
+
 def test_report_snapshot_needs_review_run_keeps_uncertain_cases_visible() -> None:
     store = InMemoryRunStore()
     make_run(store, "run-review", case_ids=["c1", "c2"], status="needs_review")

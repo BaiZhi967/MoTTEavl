@@ -205,6 +205,9 @@ transport/operator retry 不增加 n；缺失、无效、重复上游 Trial 或 
 RunReportRef、政策 hash、单位、seed、次数、k 与每 Task 资格。CLI JSON 文件是
 固定输入的可导出比较结果，另行持久发布的统计报告仍未实现，不能把当前切片写成
 完整 T06 或 live 统计验收。
+一次比较/统计读取在入口固定两个 ScoringPass ID，后续资格、引用、成本和 Trial
+聚合只用这些 ID；HTTP 比较响应返回实际固定引用，Web 统计请求复用该引用。
+若比较响应缺引用，Web 显示统计不可用，不再重新解析可漂移的 current 指针。
 
 ## 11. 退出与回退
 

@@ -745,6 +745,15 @@ class ComparisonService:
     ) -> ComparisonResult:
         # 成本资格从**所选 pass 的冻结汇总**取（成本在评分期聚合，不在 run
         # manifest 顶层）；与 candidate_summary/report 同一事实源。
+        for run_id in (baseline_run_id, candidate_run_id):
+            if self.store.runs.get(run_id) is None:
+                raise KeyError(run_id)
+        baseline_pass_id = str(_resolve_pass(
+            self.store, baseline_run_id, baseline_pass_id,
+        )["id"])
+        candidate_pass_id = str(_resolve_pass(
+            self.store, candidate_run_id, candidate_pass_id,
+        )["id"])
         return compare_run_reports(
             self.report_ref(baseline_run_id, scoring_pass_id=baseline_pass_id),
             self.report_ref(candidate_run_id, scoring_pass_id=candidate_pass_id),
@@ -843,13 +852,11 @@ class ComparisonService:
             baseline_run_id, candidate_run_id, allowed_factors=allowed_factors,
             baseline_pass_id=baseline_pass_id, candidate_pass_id=candidate_pass_id,
         )
+        baseline_pass_id = comparison.baseline_ref.scoring_pass_id
+        candidate_pass_id = comparison.candidate_ref.scoring_pass_id
         refs = {
-            "baseline": self.report_ref(
-                baseline_run_id, scoring_pass_id=baseline_pass_id,
-            ).model_dump(mode="json"),
-            "candidate": self.report_ref(
-                candidate_run_id, scoring_pass_id=candidate_pass_id,
-            ).model_dump(mode="json"),
+            "baseline": comparison.baseline_ref.model_dump(mode="json"),
+            "candidate": comparison.candidate_ref.model_dump(mode="json"),
         }
         base_run = self.store.runs.get(baseline_run_id)
         candidate_run = self.store.runs.get(candidate_run_id)

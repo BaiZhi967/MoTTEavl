@@ -3850,6 +3850,10 @@ def create_app(
             )
         return {
             "eligible": result.eligible,
+            "refs": {
+                "baseline": result.baseline_ref.model_dump(mode="json"),
+                "candidate": result.candidate_ref.model_dump(mode="json"),
+            },
             "level": result.level.value,
             "reasons": list(result.reasons),
             "structural_reasons": list(result.structural_reasons),

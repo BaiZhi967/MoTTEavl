@@ -2277,6 +2277,10 @@ def _compare_command(args) -> int:
     payload = comparison_to_json({
         "level": result.level.value,
         "eligible": result.eligible,
+        "refs": {
+            "baseline": result.baseline_ref.model_dump(mode="json"),
+            "candidate": result.candidate_ref.model_dump(mode="json"),
+        },
         "structural_reasons": list(result.structural_reasons),
         "metric_reasons": list(result.metric_reasons),
         "metric_eligibility": dict(result.metric_eligibility),

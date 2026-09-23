@@ -1726,6 +1726,8 @@ export const COMPARISON_FACTORS: readonly string[] = [
 export interface ComparabilityView {
   /** 兼容字段：质量指标是否可比（level ∈ comparable/partially 且质量 metric eligible）。 */
   eligible: boolean;
+  /** 本次比较实际固定的两个 Pass；下一次统计读取必须复用它们。 */
+  refs?: Record<"baseline" | "candidate", { run_id: string; scoring_pass_id: string }>;
   /** comparable | partially_comparable | not_comparable；未知字符串按原样显示。 */
   level: string;
   reasons?: string[];

@@ -20,6 +20,8 @@ from motte_contracts.comparison import ComparabilityLevel, ComparisonPolicy, Run
 class ComparisonResult:
     eligible: bool
     reasons: tuple[str, ...]
+    baseline_ref: RunReportRef
+    candidate_ref: RunReportRef
     metric_eligibility: dict[str, bool] = field(default_factory=dict)
     case_diff: dict[str, list[str]] = field(
         default_factory=lambda: {"added": [], "removed": [], "changed": []},
@@ -781,6 +783,8 @@ def compare_run_reports(
     return ComparisonResult(
         eligible=structural_ok,
         reasons=tuple(reasons),
+        baseline_ref=baseline_ref,
+        candidate_ref=candidate_ref,
         metric_eligibility=metric_eligibility,
         case_diff={
             "added": added,

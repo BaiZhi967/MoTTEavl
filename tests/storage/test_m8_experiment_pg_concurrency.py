@@ -62,6 +62,7 @@ def test_two_postgres_processes_do_not_reclaim_active_cell(isolated_pg_database:
         "task_ref": {"suite": "direct-llm", "scenario_version": "direct-llm-exact-answer@1"},
         "factors": {"model_profile": ["model-a"]}, "repeats": 1,
         "budget_policy": {"max_total_calls": 10},
+        "created_by": "m8-disposable-pg-test", "reason": "process allocation race",
     }
     # pytest loads threaded libraries; fork inherited their locks and the
     # first child never reached allocation on Linux CI. Fresh spawn processes

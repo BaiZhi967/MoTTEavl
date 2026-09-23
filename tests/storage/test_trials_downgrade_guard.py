@@ -163,6 +163,7 @@ def test_downgrade_proceeds_when_no_trial_evidence_exists(monkeypatch) -> None:
 
 
 def test_isolated_pg_database_keeps_uri_form_for_migrations() -> None:
+    from psycopg.conninfo import conninfo_to_dict
     from motte_storage.postgres import normalize_dsn
     from tests.storage.conftest import isolated_database_uri
 
@@ -170,6 +171,22 @@ def test_isolated_pg_database_keeps_uri_form_for_migrations() -> None:
     target = isolated_database_uri(source, "m8_test_abc")
     assert target == "postgresql://tester:secret@localhost:5432/m8_test_abc?sslmode=disable"
     assert normalize_dsn(target) == target
+    overridden = isolated_database_uri(source + "&dbname=motteavl", "m8_test_abc")
+    assert conninfo_to_dict(overridden)["dbname"] == "m8_test_abc"
+    assert "dbname=" not in overridden
+
+
+def test_disposable_pg_cluster_rejects_effective_remote_host() -> None:
+    from tests.storage.conftest import require_loopback_pg_cluster
+
+    with pytest.raises(ValueError, match="loopback"):
+        require_loopback_pg_cluster(
+            "postgresql://tester@localhost/motteavl?host=remote.example"
+        )
+    with pytest.raises(ValueError, match="loopback"):
+        require_loopback_pg_cluster(
+            "postgresql://tester@localhost/motteavl?hostaddr=192.0.2.1"
+        )
 
 
 def test_programmatic_migration_marks_explicit_target() -> None:

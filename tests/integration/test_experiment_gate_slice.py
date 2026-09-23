@@ -172,6 +172,8 @@ def test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes(sli
     })
     assert first.status_code == 200, first.text
     assert first.json()["metric_eligibility"]["quality"] is True
+    assert first.json()["refs"]["baseline"]["scoring_pass_id"] == "old-m8-base"
+    assert first.json()["refs"]["candidate"]["scoring_pass_id"] == "old-m8-same"
     statistics = client.get("/api/v1/comparisons/statistics", params={
         "baseline": "m8-base", "candidate": "m8-same", "factors": "model",
         "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-same",

@@ -210,10 +210,41 @@ describe("ExperimentsPage", () => {
 // ---------------------------------------------------------------- 比较
 
 describe("ComparePage", () => {
+  it("比较响应缺固定 Pass 引用时不发起可能漂移的统计读取", async () => {
+    clientMocks.compareRunReports.mockResolvedValue({
+      eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],
+      metric_eligibility: { quality: true }, case_diff: { added: [], removed: [], changed: [] },
+    });
+    render(wrap(<ComparePage />));
+    fireEvent.change(screen.getByLabelText(/基线 Run/), { target: { value: "run-a" } });
+    fireEvent.change(screen.getByLabelText(/候选 Run/), { target: { value: "run-b" } });
+    fireEvent.click(screen.getByTestId("compare-submit"));
+    await waitFor(() => expect(screen.getByTestId("compare-statistics-error")).toBeTruthy());
+    expect(clientMocks.getComparisonStatistics).not.toHaveBeenCalled();
+    expect(screen.getByTestId("compare-result")).toBeTruthy();
+  });
+  it("比较后统计锁定首次响应的 Pass，避免 current 指针竞态", async () => {
+    clientMocks.compareRunReports.mockResolvedValue({
+      eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],
+      metric_eligibility: { quality: true }, case_diff: { added: [], removed: [], changed: [] },
+      refs: { baseline: { run_id: "run-a", scoring_pass_id: "first-a" },
+              candidate: { run_id: "run-b", scoring_pass_id: "first-b" } },
+    });
+    render(wrap(<ComparePage />));
+    fireEvent.change(screen.getByLabelText(/基线 Run/), { target: { value: "run-a" } });
+    fireEvent.change(screen.getByLabelText(/候选 Run/), { target: { value: "run-b" } });
+    fireEvent.click(screen.getByTestId("compare-submit"));
+    await waitFor(() => expect(clientMocks.getComparisonStatistics).toHaveBeenCalledTimes(1));
+    expect(clientMocks.getComparisonStatistics.mock.calls[0][0]).toMatchObject({
+      baseline_pass: "first-a", candidate_pass: "first-b",
+    });
+  });
   it("展示固定 Trial pass@k 的 Task 资格和未计划行，并传递 k", async () => {
     clientMocks.compareRunReports.mockResolvedValue({
       eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],
       metric_eligibility: { quality: true }, case_diff: { added: [], removed: [], changed: [] },
+      refs: { baseline: { run_id: "run-a", scoring_pass_id: "pass-a" },
+              candidate: { run_id: "run-b", scoring_pass_id: "pass-b" } },
     });
     clientMocks.getComparisonStatistics.mockResolvedValue({
       applicable: false, reason: "missing_or_invalid_trial", n_selected: 2,
@@ -250,6 +281,8 @@ describe("ComparePage", () => {
     clientMocks.compareRunReports.mockResolvedValue({
       eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],
       metric_eligibility: { quality: true }, case_diff: { added: [], removed: [], changed: [] },
+      refs: { baseline: { run_id: "run-b", scoring_pass_id: "pass-b" },
+              candidate: { run_id: "run-c", scoring_pass_id: "pass-c" } },
     });
     clientMocks.getComparisonStatistics.mockResolvedValueOnce({
       applicable: false, reason: "missing_or_uncertain_case", n_selected: 3,

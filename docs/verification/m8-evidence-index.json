@@ -2745,6 +2745,7 @@
         ],
         "test_nodes": [
           "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_pin_current_once_when_pass_changes_mid_read",
           "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
           "tests/cli/test_m6_cli.py::test_compare_statistics_cli_pins_pass_and_records_method",
           "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
@@ -2786,6 +2787,7 @@
           "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
           "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows",
           "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_reused_upstream_trial_identity",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_pin_current_once_when_pass_changes_mid_read",
           "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k",
           "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
           "apps/web/tests/M6.test.tsx::ComparePage"
@@ -3498,11 +3500,13 @@
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
         "implementation_status": "partial_m8; SQLite DB+Artifact backup/restore verified; isolated PG dump/restore awaits CI",
         "consumer_paths": [
-          "packages/storage/motte_storage/maintenance.py"
+          "packages/storage/motte_storage/maintenance.py",
+          "tests/storage/conftest.py"
         ],
         "test_nodes": [
           "tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning",
-          "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims"
+          "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims",
+          "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",

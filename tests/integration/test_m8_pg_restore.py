@@ -10,7 +10,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
@@ -19,16 +18,16 @@ from motte_sdk.comparisons import ComparisonService
 from motte_sdk.service import RunService
 from motte_storage.artifacts import ArtifactStore
 from motte_storage.factory import create_run_store
-from motte_storage.maintenance import consistent_backup_postgres, maintenance_status
+from motte_storage.maintenance import (
+    MAINTENANCE_FLAG,
+    MAINTENANCE_STARTED_AT,
+    consistent_backup_postgres,
+    maintenance_status,
+)
 from motte_storage.migrations import upgrade
 from motte_storage.platform import platform_for
-from motte_storage.postgres import normalize_dsn
 from apps.worker.motte_worker.runtime import WorkerLoop
-
-
-def _with_database(dsn: str, name: str) -> str:
-    parsed = urlsplit(dsn)
-    return urlunsplit(parsed._replace(path="/" + name))
+from tests.storage.conftest import isolated_database_uri, require_loopback_pg_cluster
 
 
 @pytest.fixture
@@ -39,10 +38,10 @@ def disposable_pg_pair():
     raw = os.environ.get("MOTTE_PG_DSN")
     if not raw:
         pytest.skip("MOTTE_PG_DSN absent; no disposable PostgreSQL test cluster")
-    admin_dsn = normalize_dsn(raw)
-    parsed = urlsplit(admin_dsn)
-    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        pytest.skip("M8 destructive database fixture requires a loopback test cluster")
+    try:
+        admin_dsn = require_loopback_pg_cluster(raw)
+    except ValueError as error:
+        pytest.skip(str(error))
     names = ["m8_test_restore_" + uuid4().hex for _ in range(2)]
     created: list[str] = []
     try:
@@ -50,7 +49,12 @@ def disposable_pg_pair():
             for name in names:
                 admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
                 created.append(name)
-        yield tuple(_with_database(admin_dsn, name) for name in names)
+        targets = tuple(isolated_database_uri(admin_dsn, name) for name in names)
+        for name, target_dsn in zip(names, targets, strict=True):
+            with psycopg.connect(target_dsn) as target, target.cursor() as cursor:
+                cursor.execute("SELECT current_database()")
+                assert cursor.fetchone()[0] == name
+        yield targets
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as admin:
             for name in created:
@@ -138,8 +142,14 @@ def test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact(
     assert manifest["artifacts"]["files"][0]["sha256"] == artifact.sha256
     # pg_restore is currently a manual operation. The test sets the same
     # guard an operator must set before any Worker is allowed near staging.
-    platform_for(restored).meta.set("restored_from_backup", "m8-manual-pg-restore")
-    assert platform_for(restored).meta.get("restored_from_backup") is not None
+    meta = platform_for(restored).meta
+    meta.set("restored_from_backup", "m8-manual-pg-restore")
+    # The dump captures maintenance=active. Remove that inherited flag while
+    # the restore guard is held, so the assertion tests the guard itself.
+    meta.delete(MAINTENANCE_FLAG)
+    meta.delete(MAINTENANCE_STARTED_AT)
+    assert meta.get("restored_from_backup") is not None
     worker = WorkerLoop(RunService(restored), execution_lock_held=True, scoring_jobs=None)
+    assert worker._platform_block_reason() == "restore_guard_active"
     assert worker.run_once() is None
     assert restored.runs.get("m8-restore-queued")["status"] == "queued"
