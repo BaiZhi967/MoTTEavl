@@ -124,6 +124,67 @@ def test_gsm8k_experiment_matches_standalone_preparation() -> None:
     assert len(store.runs.list()) == 1
 
 
+def test_agent_tasks_experiment_matches_standalone_and_counts_steps() -> None:
+    from motte_sdk.agent_tasks import persist_agent_tasks_dataset
+    from motte_sdk.resolve import prepare_run
+
+    store, _run_service, service = make_service()
+    imported = persist_agent_tasks_dataset({
+        "name": "m8-agent", "version": "1", "cases": [
+            {"case_id": "task-1", "input": "Write one file", "fixture": {}},
+            {"case_id": "task-2", "input": "Read one file", "fixture": {}},
+        ],
+    }, service.resources, version="1")
+    scenario = imported["scenario"]
+    service.resources.models.put({
+        "id": "model-c", "provider": "local", "model": "probe-2",
+        "capabilities": {}, "max_output_tokens": 4096,
+    })
+    payload = spec_payload(
+        experiment_id="m8-agent-exp",
+        task_ref={"suite": "agent-tasks", "scenario_version": scenario},
+        factors={"model_profile": ("model-a", "model-c")}, repeats=1,
+        selected_case_keys=["task-1", "task-2"],
+        controlled_conditions={"max_output_tokens": 512},
+        budget_policy={"max_total_calls": 31},
+    )
+    preview = service.preview(payload)
+    assert preview["max_potential_calls"] == 32  # 2 Cell × 2 Case × 8 model steps
+    assert [item["code"] for item in preview["violations"]] == ["BUDGET_EXCEEDED"]
+    with pytest.raises(ExperimentError, match="BUDGET_EXCEEDED"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+    payload["budget_policy"] = {"max_total_calls": 32}
+    created = service.create(payload)
+    assert created["failed"] == []
+    runs = [store.runs.get(cell["run_id"]) for cell in created["cells"]]
+    assert len(runs) == 2 and all(run is not None for run in runs)
+    assert {run["manifest"]["provider"]["model"] for run in runs} == {"probe-1", "probe-2"}
+    run = next(run for run in runs if run["requested_manifest"]["model"] == "model-a")
+    assert run is not None
+    standalone, standalone_cases = prepare_run(scenario, {
+        "model": "model-a", "agent": {"mode": "legacy-json"},
+        "parameters": {"max_output_tokens": 512},
+        "case_selection": {"mode": "ids", "case_ids": ["task-1", "task-2"]},
+    }, [], service.resources)
+    assert run["case_ids"] == standalone_cases
+    assert run["manifest"]["benchmark_snapshot"] == standalone["benchmark_snapshot"]
+    assert run["manifest"]["provider"] == standalone["provider"]
+    assert run["manifest"]["agent_config"] == standalone["agent_config"]
+    assert run["manifest"]["provider"]["parameters"]["max_output_tokens"] == 512
+
+    unsupported = {**payload, "experiment_id": "m8-agent-unsupported",
+                   "factors": {"model_profile": ("model-a",),
+                               "reasoning_level": ("high",)}}
+    with pytest.raises(ExperimentError, match="FACTOR_UNSUPPORTED"):
+        service.preview(unsupported)
+    with pytest.raises(ExperimentError, match="FACTOR_UNSUPPORTED"):
+        service.create(unsupported)
+    assert store.experiments.get_spec("m8-agent-unsupported", "v1") is None
+
+
 def test_experiment_suite_mismatch_rejects_before_creating_cells() -> None:
     store, _run_service, service = make_service()
     payload = spec_payload(task_ref={"suite": "gsm8k",

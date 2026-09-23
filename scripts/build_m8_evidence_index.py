@@ -54,8 +54,9 @@ CURRENT_EVIDENCE = {
     ),
     "M6-G18": (
         ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
-        ["tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"],
-        "partial_m8; runtime/Judge factor coverage pending",
+        ["tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation",
+         "tests/sdk/test_m6_experiments.py::test_agent_tasks_experiment_matches_standalone_and_counts_steps"],
+        "partial_m8; Direct/GSM8K/Agent controlled factors verified, runtime/Judge factor coverage pending",
     ),
     **{
         goal_id: (

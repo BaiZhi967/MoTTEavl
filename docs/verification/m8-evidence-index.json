@@ -2949,13 +2949,14 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; runtime/Judge factor coverage pending",
+        "implementation_status": "partial_m8; Direct/GSM8K/Agent controlled factors verified, runtime/Judge factor coverage pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
           "packages/sdk-python/motte_sdk/resolve.py"
         ],
         "test_nodes": [
-          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation",
+          "tests/sdk/test_m6_experiments.py::test_agent_tasks_experiment_matches_standalone_and_counts_steps"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",

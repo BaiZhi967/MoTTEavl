@@ -30,12 +30,15 @@ from motte_contracts.experiment import (
 from motte_storage.integrity import RunConflictError
 
 #: 本服务能组装 manifest 的套件；其余套件诚实拒绝，不假装支持。
-SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm", "gsm8k"})
+SUPPORTED_SUITES: frozenset[str] = frozenset({"direct-llm", "gsm8k", "agent-tasks"})
 SUPPORTED_FACTORS: dict[str, frozenset[str]] = {
     # Direct's frozen prompt is the dataset case input (verbatim); it has no
     # published prompt/runtime/skill selector to compile into a request.
     "direct-llm": frozenset({"model_profile", "reasoning_level"}),
     "gsm8k": frozenset({"model_profile", "reasoning_level"}),
+    # Agent uses its published managed scenario and fixed legacy-json mode.
+    # Runtime and prompt variants require a separate bounded assembler.
+    "agent-tasks": frozenset({"model_profile"}),
 }
 
 #: Cell → Run 身份前缀：恢复/并发路径必须得到同一个 run_id。
@@ -131,12 +134,12 @@ def _violations(spec: ExperimentSpec, max_calls: int) -> list[dict[str, Any]]:
     if spec.stop_policy.wall_clock_seconds is not None:
         unsupported.append("stop_policy.wall_clock_seconds")
     if spec.trials_per_run is not None:
-        unsupported.append("trials_per_run for direct-llm")
+        unsupported.append("trials_per_run")
     if spec.evaluation_ref.scoring != "default" or spec.evaluation_ref.scoring_pass_hint:
         unsupported.append("evaluation_ref.scoring")
     if unsupported:
         found.append({"code": "POLICY_UNSUPPORTED", "message": ", ".join(unsupported)
-                      + " has no enforced Direct experiment consumer"})
+                      + " has no enforced experiment consumer"})
     return found
 
 
@@ -296,7 +299,13 @@ class ExperimentService:
             retries = provider.get("max_retries", 0) if isinstance(provider, dict) else 0
             if type(retries) is not int or retries < 0:
                 raise ExperimentError("BUDGET_UNRESOLVED", "provider retry limit is unknown")
-            max_potential_calls += len(case_ids) * (1 + retries)
+            model_steps = 1
+            if spec.task_ref["suite"] == "agent-tasks":
+                agent_budget = (resolved_manifest.get("agent_config") or {}).get("budget") or {}
+                model_steps = agent_budget.get("max_steps")
+                if type(model_steps) is not int or model_steps < 1:
+                    raise ExperimentError("BUDGET_UNRESOLVED", "agent model step limit is unknown")
+            max_potential_calls += len(case_ids) * model_steps * (1 + retries)
         case_count = next(iter(case_counts)) if len(case_counts) == 1 else None
         violations = _violations(spec, max_potential_calls)
         return {
@@ -531,6 +540,9 @@ class ExperimentService:
             # GSM8K's standalone route accepts the same model/reasoning selectors
             # but its own plugin freezes dataset, prompt, scorer and case selection.
             manifest = {"model": assignment["model_profile"]}
+        elif suite == "agent-tasks":
+            manifest = {"model": assignment["model_profile"],
+                        "agent": {"mode": "legacy-json"}}
         else:
             raise ExperimentError("SUITE_UNSUPPORTED", str(suite))
         if assignment.get("reasoning_level") is not None:

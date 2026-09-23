@@ -4,14 +4,17 @@
 hash 规则。实现与其冲突时，以本文为准并修复实现；修订本文必须随代码同一提交。
 
 > M8 实现范围（2026-09-23）：Direct LLM 和 GSM8K Experiment 只接受
-> `model_profile` / `reasoning_level`；其他因子在 preview/create 拒绝。
+> `model_profile` / `reasoning_level`；Agent Tasks 固定 `legacy-json` 模式，
+> 只接受 `model_profile`。其他因子在 preview/create 拒绝。
 > controlled_conditions 当前仅接受正整数 `max_output_tokens`；标量
 > `parameters` 无法组成请求参数，必须拒绝而非静默丢弃。
 > `max_total_tokens`、`max_cost_usd`、非默认停止政策及非默认 scoring 当前无
 > 实验级强制消费者，同样拒绝。`max_total_calls` 根据固定题集与已解析 retry
-> 上界预检。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService
+> 上界预检；Agent Tasks 按冻结的每 Case `max_steps` 乘以题数、Cell 数和
+> Provider retry 上界，不能沿用单次调用预算。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService
 > 读取质量与可比性；成本按币种分列，部分未知保留 unknown 数。此范围说明
-> 不改变下文目标协议，也不把其他 suite 或统计消费者标为已实现。证据见
+> 不改变下文目标协议；C-Eval、Scenario/Skill、Harbor 的实验装配以及 Trial
+> 统计消费者仍未实现。证据见
 > `docs/verification/M8.md`。
 
 M6 是**结果治理层**：只消费已持久化的 Run / Trial / Observation / ScoreSet /
