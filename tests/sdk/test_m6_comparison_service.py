@@ -303,10 +303,124 @@ def test_paired_statistics_never_treats_terminal_retries_as_trials() -> None:
         "base", "candidate", allowed_factors=[],
     )
     assert result["applicable"] is False
-    assert result["reason"] == "trial_unit_requires_separate_aggregation"
+    assert result["reason"] == "missing_or_invalid_trial"
     assert result["statistics"] is None
-    assert result["unit"] == "task(case)"
+    assert result["unit"] == "task(trials)"
+    assert result["trial_aggregation"]["baseline"]["per_task"]["task-a"]["n_planned"] == 0
     assert result["seed"] == 20260921
+
+
+def test_terminal_statistics_aggregate_only_fixed_planned_valid_trials() -> None:
+    store = InMemoryRunStore()
+    for run_id, pass_counts in (("base", (1, 1)), ("candidate", (2, 2))):
+        plan = [
+            {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+             "repeat_index": repeat, "run_id": run_id,
+             "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+            for task in ("task-a", "task-b") for repeat in range(3)
+        ]
+        make_run(store, run_id, case_ids=["task-a", "task-b"], manifest={
+            "benchmark_provenance": {"suite": "terminal-bench-harbor"},
+            "task_manifest": {"trials": plan},
+        })
+        rows = []
+        for task, passed_count in zip(("task-a", "task-b"), pass_counts, strict=True):
+            for repeat in range(3):
+                rows.append({
+                    **score_row(task, passed=repeat < passed_count),
+                    "trial_id": f"{run_id}-{task}-{repeat}",
+                    "unit": "trial", "metric_id": "terminal.reward",
+                    "details": {"repeat_index": repeat},
+                })
+        rows.append({
+            **score_row("task-a", passed=True), "trial_id": f"{run_id}-transport-retry",
+            "unit": "trial", "metric_id": "terminal.reward",
+        })
+        append_pass(store, run_id, f"pass-{run_id}", rows)
+    service = ComparisonService(store)
+    fixed = service.paired_statistics(
+        "base", "candidate", allowed_factors=[],
+        baseline_pass_id="pass-base", candidate_pass_id="pass-candidate", k=2,
+    )
+    assert fixed["unit"] == "task(trials)"
+    assert fixed["trial_aggregation"]["baseline"]["per_task"]["task-a"]["pass_at_k"]["value"] == pytest.approx(2 / 3)
+    assert fixed["trial_aggregation"]["candidate"]["per_task"]["task-a"]["pass_at_k"]["value"] == 1.0
+    assert fixed["trial_aggregation"]["baseline"]["excluded_unplanned_score_rows"] == 1
+    assert fixed["trial_aggregation"]["baseline"]["per_task"]["task-a"]["n_planned"] == 3
+    assert fixed["n_pairs"] == 2
+    assert fixed["statistics"]["mean_diff"] == pytest.approx(1 / 3)
+    assert fixed["refs"]["baseline"]["scoring_pass_id"] == "pass-base"
+    # A new current pass cannot move a fixed statistical report.
+    append_pass(store, "base", "new-base", [])
+    assert service.paired_statistics(
+        "base", "candidate", allowed_factors=[],
+        baseline_pass_id="pass-base", candidate_pass_id="pass-candidate", k=2,
+    ) == fixed
+    insufficient = service.paired_statistics(
+        "base", "candidate", allowed_factors=[],
+        baseline_pass_id="pass-base", candidate_pass_id="pass-candidate", k=4,
+    )
+    assert insufficient["applicable"] is False
+    assert insufficient["reason"] == "insufficient_planned_trials"
+    assert insufficient["statistics"] is None
+
+
+def test_terminal_statistics_reject_missing_trial_and_retry_rows() -> None:
+    store = InMemoryRunStore()
+    for run_id in ("base", "candidate"):
+        make_run(store, run_id, case_ids=["task-a", "task-b"], manifest={
+            "benchmark_provenance": {"suite": "terminal-bench-harbor"},
+            "task_manifest": {"trials": [
+                {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+                 "repeat_index": repeat, "run_id": run_id,
+                 "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+                for task in ("task-a", "task-b") for repeat in range(2)
+            ]},
+        })
+        append_pass(store, run_id, f"pass-{run_id}", [
+            {**score_row(task, passed=True), "trial_id": f"{run_id}-{task}-0",
+             "unit": "trial", "metric_id": "terminal.reward"}
+            for task in ("task-a", "task-b")
+        ] + [
+            {**score_row("task-a", passed=True), "trial_id": f"{run_id}-retry",
+             "unit": "trial", "metric_id": "terminal.reward"},
+        ])
+    result = ComparisonService(store).paired_statistics(
+        "base", "candidate", allowed_factors=[], k=2,
+    )
+    assert result["applicable"] is False
+    assert result["reason"] == "missing_or_invalid_trial"
+    assert result["statistics"] is None
+    assert result["trial_aggregation"]["baseline"]["per_task"]["task-a"]["n_planned"] == 2
+    assert result["trial_aggregation"]["baseline"]["per_task"]["task-a"]["n_valid"] == 1
+    assert result["trial_aggregation"]["baseline"]["per_task"]["task-a"]["pass_at_k"]["applicable"] is False
+
+
+def test_terminal_statistics_reject_reused_upstream_trial_identity() -> None:
+    store = InMemoryRunStore()
+    for run_id in ("base", "candidate"):
+        make_run(store, run_id, case_ids=["task-a", "task-b"], manifest={
+            "benchmark_provenance": {"suite": "terminal-bench-harbor"},
+            "task_manifest": {"trials": [
+                {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+                 "repeat_index": repeat, "run_id": run_id,
+                 "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+                for task in ("task-a", "task-b") for repeat in range(2)
+            ]},
+        })
+        append_pass(store, run_id, f"pass-{run_id}", [
+            {**score_row(task, passed=True), "trial_id": f"{run_id}-{task}-{repeat}",
+             "unit": "trial", "metric_id": "reward",
+             "details": {"repeat_index": repeat,
+                         "source_trial_id": "reused-upstream" if task == "task-a" else f"{task}-{repeat}"}}
+            for task in ("task-a", "task-b") for repeat in range(2)
+        ])
+    result = ComparisonService(store).paired_statistics(
+        "base", "candidate", allowed_factors=[], k=2,
+    )
+    assert result["applicable"] is False
+    assert result["trial_aggregation"]["baseline"]["per_task"]["task-a"]["pass_at_k"]["reason"] == "non_independent_trials"
+    assert result["trial_aggregation"]["baseline"]["per_task"]["task-b"]["pass_at_k"]["applicable"] is True
 
 
 def test_report_snapshot_needs_review_run_keeps_uncertain_cases_visible() -> None:

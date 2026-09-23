@@ -41,16 +41,29 @@ HISTORICAL_RECEIPT = {
 }
 
 CURRENT_EVIDENCE = {
+    "M3-G04": (
+        ["packages/sdk-python/motte_sdk/comparisons.py",
+         "packages/contracts/motte_contracts/trial.py"],
+        ["tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+         "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows"],
+        "partial_m8; fixed-pass statistical consumer excludes unplanned retry rows; full Trial lifecycle remains historical evidence",
+    ),
     "M6-G01": (
         ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
         ["tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects",
-         "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"],
+         "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation",
+         "tests/sdk/test_m6_experiments.py::test_unassembled_suite_preview_and_create_fail_closed",
+         "tests/sdk/test_m6_experiments.py::test_agent_runtime_factor_cannot_silently_use_legacy_json"],
         "partial_m8; other suites and real execution pending",
     ),
     "M6-G02": (
-        ["packages/sdk-python/motte_sdk/experiments.py", "packages/storage/motte_storage/platform.py"],
-        ["tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild"],
-        "partial_m8; cross-process resource races pending",
+        ["packages/sdk-python/motte_sdk/experiments.py",
+         "packages/sdk-python/motte_sdk/execution_lock.py",
+         "packages/storage/motte_storage/platform.py"],
+        ["tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild",
+         "tests/sdk/test_m6_experiments.py::test_active_sqlite_allocation_is_not_reset_by_second_service",
+         "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence"],
+        "partial_m8; cross-process lock and drift verified on SQLite; PostgreSQL process test pending CI receipt",
     ),
     "M6-G18": (
         ["packages/sdk-python/motte_sdk/experiments.py", "packages/sdk-python/motte_sdk/resolve.py"],
@@ -76,14 +89,22 @@ CURRENT_EVIDENCE = {
         ["tests/sdk/test_m6_comparison_service.py::test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible",
          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_pins_pass_and_records_method",
+         "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
+         "tests/cli/test_m6_cli.py::test_compare_statistics_cli_rejects_invalid_k_as_request_error",
          "apps/web/tests/M6.test.tsx::ComparePage"],
-        "partial_m8; paired Case/Task fixed-pass API/CLI/Web consumer; Trial aggregation/export pending",
+        "partial_m8; fixed-pass Case and Trial statistics consumed by SDK/HTTP/CLI JSON/Web; persisted published report pending",
     ),
     "M6-G11": (
         ["packages/evaluators/motte_eval/statistics.py",
-         "packages/sdk-python/motte_sdk/comparisons.py"],
-        ["tests/sdk/test_m6_comparison_service.py::test_paired_statistics_never_treats_terminal_retries_as_trials"],
-        "partial_m8; terminal Trial/retry inputs rejected, pass@k consumer pending",
+         "packages/sdk-python/motte_sdk/comparisons.py", "apps/api/app/main.py",
+         "packages/cli/motte_cli/main.py", "apps/web/src/pages/m6/ComparePage.tsx"],
+        ["tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+         "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows",
+         "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_reused_upstream_trial_identity",
+         "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k",
+         "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
+         "apps/web/tests/M6.test.tsx::ComparePage"],
+        "partial_m8; planned valid Trial pass@k and retry distinction have fixed-pass consumers; live independence not verified",
     ),
 }
 

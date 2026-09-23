@@ -1059,6 +1059,8 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--json", dest="json_out", help="把比较 JSON 写入文件")
     compare.add_argument("--statistics", action="store_true",
                          help="附带固定 Case/Task 配对统计与资格（只读）")
+    compare.add_argument("--k", type=int, default=1,
+                         help="Terminal-Bench 的事前计划 Trial pass@k（默认 1）")
     compare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     remote.add_mode_arguments(compare)
 
@@ -2234,6 +2236,8 @@ def _compare_command(args) -> int:
     from motte_sdk.comparisons import ComparisonError
     from motte_sdk.export import comparison_to_json
 
+    if args.statistics and args.k < 1:
+        return _error("POLICY_INVALID", "k must be a positive integer")
     factors = [item.strip() for item in (args.factors or "model").split(",") if item.strip()]
     if remote.is_server(args):
         def invoke(client):
@@ -2246,6 +2250,7 @@ def _compare_command(args) -> int:
                 payload["statistics"] = client.compare_statistics(
                     args.baseline, args.candidate, factors=",".join(factors),
                     baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
+                    k=args.k,
                 )
             return payload
 
@@ -2284,6 +2289,7 @@ def _compare_command(args) -> int:
         payload["statistics"] = service.paired_statistics(
             args.baseline, args.candidate, allowed_factors=factors,
             baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+            k=args.k,
         )
     if args.json_out:
         _write_text(args.json_out, _m6_json(payload))

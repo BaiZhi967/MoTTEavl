@@ -5150,6 +5150,7 @@ export interface operations {
                 factors?: string;
                 baseline_pass?: string | null;
                 candidate_pass?: string | null;
+                k?: number;
             };
             header?: never;
             path?: never;

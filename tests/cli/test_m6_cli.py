@@ -374,6 +374,59 @@ def test_compare_statistics_cli_pins_pass_and_records_method(db, capsys, tmp_pat
     assert json.loads(output.read_text(encoding="utf-8"))["statistics"] == stats
 
 
+def test_compare_statistics_cli_exports_terminal_trial_qualification(db, capsys, tmp_path):
+    store = create_run_store(str(db))
+    for run_id in ("tb-base", "tb-candidate"):
+        plan = [
+            {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+             "repeat_index": repeat, "run_id": run_id,
+             "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+            for task in ("a", "b") for repeat in range(2)
+        ]
+        store.runs.create({
+            "id": run_id, "schema_version": 2, "revision": 1,
+            "scenario_version": "terminal-bench@1", "status": "completed",
+            "manifest": {"benchmark_provenance": {"suite": "terminal-bench-harbor"},
+                         "task_manifest": {"trials": plan},
+                         "evaluation": {"scorer_id": "harbor", "scorer_version": "1"}},
+            "requested_manifest": {}, "case_ids": ["a", "b"],
+            "created_at": TIMESTAMP, "updated_at": TIMESTAMP,
+        })
+        store.scoring_passes.append({
+            "id": f"pass-{run_id}", "run_id": run_id, "scorer_id": "harbor",
+            "scorer_version": "1", "created_at": TIMESTAMP, "source": "initial",
+            "source_run_revision": 1, "summary": {},
+        }, [{
+            "case_id": task, "trial_id": f"{run_id}-{task}-{repeat}",
+            "metric_id": "reward", "evaluator_id": "harbor",
+            "evaluator_version": "1", "metric_status": "scored",
+            "unit": "trial", "value": 1.0 if repeat == 0 else 0.0,
+            "passed": repeat == 0, "denominator": True,
+            "details": {"repeat_index": repeat},
+        } for task in ("a", "b") for repeat in range(2)])
+    output = tmp_path / "terminal-statistics.json"
+    code, out, err = run_cli(
+        capsys, "compare", "--baseline", "tb-base", "--candidate", "tb-candidate",
+        "--baseline-pass", "pass-tb-base", "--candidate-pass", "pass-tb-candidate",
+        "--statistics", "--k", "2", "--json", str(output), "--db", str(db),
+    )
+    assert code == 0, err
+    stats = json.loads(out)["statistics"]
+    assert stats["trial_aggregation"]["baseline"]["k"] == 2
+    assert stats["trial_aggregation"]["baseline"]["per_task"]["a"]["pass_at_k"]["value"] == 1.0
+    assert stats["refs"]["baseline"]["scoring_pass_id"] == "pass-tb-base"
+    assert json.loads(output.read_text(encoding="utf-8"))["statistics"] == stats
+
+
+def test_compare_statistics_cli_rejects_invalid_k_as_request_error(db, capsys):
+    code, _out, err = run_cli(
+        capsys, "compare", "--baseline", RUN_BASE, "--candidate", RUN_BASE,
+        "--statistics", "--k", "0", "--db", str(db),
+    )
+    assert code == 2
+    assert json.loads(err)["error"]["code"] == "POLICY_INVALID"
+
+
 def test_compare_rejects_unknown_run_and_unknown_factor(db, capsys):
     code, _, err = run_cli(
         capsys, "compare", "--baseline", "run-nope", "--candidate", RUN_BASE,

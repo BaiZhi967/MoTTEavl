@@ -210,6 +210,42 @@ describe("ExperimentsPage", () => {
 // ---------------------------------------------------------------- 比较
 
 describe("ComparePage", () => {
+  it("展示固定 Trial pass@k 的 Task 资格和未计划行，并传递 k", async () => {
+    clientMocks.compareRunReports.mockResolvedValue({
+      eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],
+      metric_eligibility: { quality: true }, case_diff: { added: [], removed: [], changed: [] },
+    });
+    clientMocks.getComparisonStatistics.mockResolvedValue({
+      applicable: false, reason: "missing_or_invalid_trial", n_selected: 2,
+      n_pairs: 1, missing_pairs: 1, unit: "task(trials)",
+      method: "pass_at_k_paired_task_cluster_bootstrap", policy_ref: "statistical_policy@1",
+      policy_hash: "sha256:policy", seed: 20260921, iterations: 2000,
+      refs: { baseline: { scoring_pass_id: "pass-a" }, candidate: { scoring_pass_id: "pass-b" } },
+      statistics: null,
+      trial_aggregation: {
+        baseline: { k: 2, n_selected_tasks: 2, n_complete_tasks: 1,
+          excluded_unplanned_score_rows: 1,
+          per_task: { "task-a": { n_planned: 2, n_valid: 1, n_passed: 1,
+            pass_at_k: { applicable: false, value: null, reason: "missing_or_invalid_trial" } } } },
+        candidate: { k: 2, n_selected_tasks: 2, n_complete_tasks: 2,
+          excluded_unplanned_score_rows: 0,
+          per_task: { "task-a": { n_planned: 2, n_valid: 2, n_passed: 1,
+            pass_at_k: { applicable: true, value: 1, reason: null } } } },
+      },
+    });
+    render(wrap(<ComparePage />));
+    fireEvent.change(screen.getByLabelText(/基线 Run/), { target: { value: "run-a" } });
+    fireEvent.change(screen.getByLabelText(/候选 Run/), { target: { value: "run-b" } });
+    fireEvent.change(screen.getByLabelText(/Trial pass@k/), { target: { value: "2" } });
+    fireEvent.click(screen.getByTestId("compare-submit"));
+    await waitFor(() => expect(screen.getByTestId("compare-trial-statistics")).toBeTruthy());
+    expect(clientMocks.getComparisonStatistics.mock.calls[0][0]).toMatchObject({ k: 2 });
+    const view = screen.getByTestId("compare-trial-statistics").textContent ?? "";
+    expect(view).toContain("task-a");
+    expect(view).toContain("1 / 2");
+    expect(view).toContain("missing_or_invalid_trial");
+    expect(view).toContain("未计划评分行 1");
+  });
   it("显示固定 pass 统计与缺失资格，统计请求失败不抹掉比较结果", async () => {
     clientMocks.compareRunReports.mockResolvedValue({
       eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],

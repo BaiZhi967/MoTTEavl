@@ -3805,12 +3805,14 @@ def create_app(
         factors: str = "model",
         baseline_pass: str | None = None,
         candidate_pass: str | None = None,
+        k: int = 1,
     ):
         """Fixed-pass paired Case/Task statistics; no Provider, Judge or writes."""
         try:
             return comparisons_service.paired_statistics(
                 baseline, candidate, allowed_factors=factors.split(","),
                 baseline_pass_id=baseline_pass, candidate_pass_id=candidate_pass,
+                k=k,
             )
         except KeyError as error:
             return JSONResponse(

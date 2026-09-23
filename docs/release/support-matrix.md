@@ -73,7 +73,7 @@
 |---|---|---|
 | Direct/GSM8K 固定 Pass 比较 | offline_verified | M8 T04 的真实 HTTP 与 Web 测试；live/截图未复验 |
 | Direct/GSM8K/Agent Tasks Experiment | offline_partial | M8 T02/T03/T05；GSM8K 与 Agent Tasks 的 standalone 冻结快照一致，Agent 按最多模型步骤预检；C-Eval、Scenario/Skill、Harbor 未接入 |
-| 固定 Pass Case/Task 配对统计 | offline_partial | M8 T06 SDK/HTTP/CLI JSON/Web 消费固定引用、政策和缺失资格；Trial/pass@k 与正式持久导出未闭合 |
+| 固定 Pass Case/Task 与 Terminal Trial 统计 | offline_partial | M8 T06 SDK/HTTP/CLI JSON/Web 消费固定引用、政策、`k`、缺失资格和计划 Trial pass@k；另行持久发布的统计报告与 live 独立性仍未闭合 |
 | PostgreSQL 隔离迁移 | CI_tested | `f5c4374` Linux CI `35815300827` 的真实 PG migration/owner 测试通过；本机无 DSN，pg_dump/restore 未执行 |
 | PostgreSQL dump/restore、Compose build/up | blocked_local | 本机无 Docker/DSN；不能以 config 检查替代恢复收据 |
 | 真实 Provider/Harness/Judge 与生产切换 | authorization_pending | 需单独有界授权；无本轮 live/cutover 收据 |

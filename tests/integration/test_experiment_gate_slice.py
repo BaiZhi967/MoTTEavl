@@ -218,6 +218,52 @@ def test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes(sli
     assert provider.calls == []
 
 
+def test_terminal_trial_statistics_http_uses_fixed_pass_and_k(slice_env):
+    client, application, provider = slice_env
+    store = application.state.run_service.store
+    for run_id in ("tb-base", "tb-candidate"):
+        plan = [
+            {"trial_id": f"{run_id}-{task}-{repeat}", "task_key": task,
+             "repeat_index": repeat, "run_id": run_id,
+             "agent_config_hash": "agent-a", "environment_hash": "env-a"}
+            for task in ("a", "b") for repeat in range(2)
+        ]
+        store.runs.create({
+            "id": run_id, "schema_version": 2, "revision": 1,
+            "scenario_version": "terminal-bench@1", "status": "completed",
+            "manifest": {"benchmark_provenance": {"suite": "terminal-bench-harbor"},
+                         "task_manifest": {"trials": plan},
+                         "evaluation": {"scorer_id": "harbor", "scorer_version": "1"}},
+            "requested_manifest": {}, "case_ids": ["a", "b"],
+            "created_at": "2026-09-23T00:00:00Z", "updated_at": "2026-09-23T00:00:00Z",
+        })
+        store.scoring_passes.append({
+            "id": f"pass-{run_id}", "run_id": run_id,
+            "scorer_id": "harbor", "scorer_version": "1",
+            "created_at": "2026-09-23T00:00:00Z", "source": "initial",
+            "source_run_revision": 1, "summary": {},
+        }, [{
+            "case_id": task, "trial_id": f"{run_id}-{task}-{repeat}",
+            "metric_id": "reward", "evaluator_id": "harbor",
+            "evaluator_version": "1", "metric_status": "scored",
+            "unit": "trial", "value": 1.0 if repeat == 0 else 0.0,
+            "passed": repeat == 0, "denominator": True,
+            "details": {"repeat_index": repeat},
+        } for task in ("a", "b") for repeat in range(2)])
+    params = {"baseline": "tb-base", "candidate": "tb-candidate", "factors": "model",
+              "baseline_pass": "pass-tb-base", "candidate_pass": "pass-tb-candidate",
+              "k": 2}
+    response = client.get("/api/v1/comparisons/statistics", params=params)
+    assert response.status_code == 200, response.text
+    stats = response.json()
+    assert stats["trial_aggregation"]["baseline"]["per_task"]["a"]["pass_at_k"]["value"] == 1.0
+    assert stats["refs"]["baseline"]["scoring_pass_id"] == "pass-tb-base"
+    assert stats["n_pairs"] == 2
+    invalid = client.get("/api/v1/comparisons/statistics", params={**params, "k": 0})
+    assert invalid.status_code == 422
+    assert provider.calls == []
+
+
 def test_experiment_to_gate_full_slice(slice_env):
     """端到端：Run → ScoringPass → ReportSnapshot → Compare → Baseline → Gate → Export。"""
     client, application, provider = slice_env

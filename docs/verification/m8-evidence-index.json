@@ -1007,14 +1007,20 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "not_reverified",
-        "consumer_paths": [],
-        "test_nodes": [],
-        "environment": null,
-        "verification_layer": "not_reverified",
-        "receipt_ref": null,
+        "implementation_status": "partial_m8; fixed-pass statistical consumer excludes unplanned retry rows; full Trial lifecycle remains historical evidence",
+        "consumer_paths": [
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "packages/contracts/motte_contracts/trial.py"
+        ],
+        "test_nodes": [
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows"
+        ],
+        "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
+        "verification_layer": "offline_component_or_http",
+        "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
-        "supersedes": null
+        "supersedes": "assessment@fc1e7d56 (current slice only)"
       }
     },
     {
@@ -2447,7 +2453,9 @@
         ],
         "test_nodes": [
           "tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects",
-          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation"
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation",
+          "tests/sdk/test_m6_experiments.py::test_unassembled_suite_preview_and_create_fail_closed",
+          "tests/sdk/test_m6_experiments.py::test_agent_runtime_factor_cannot_silently_use_legacy_json"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",
@@ -2474,13 +2482,16 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; cross-process resource races pending",
+        "implementation_status": "partial_m8; cross-process lock and drift verified on SQLite; PostgreSQL process test pending CI receipt",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
+          "packages/sdk-python/motte_sdk/execution_lock.py",
           "packages/storage/motte_storage/platform.py"
         ],
         "test_nodes": [
-          "tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild"
+          "tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild",
+          "tests/sdk/test_m6_experiments.py::test_active_sqlite_allocation_is_not_reset_by_second_service",
+          "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",
@@ -2718,7 +2729,7 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; paired Case/Task fixed-pass API/CLI/Web consumer; Trial aggregation/export pending",
+        "implementation_status": "partial_m8; fixed-pass Case and Trial statistics consumed by SDK/HTTP/CLI JSON/Web; persisted published report pending",
         "consumer_paths": [
           "packages/evaluators/motte_eval/statistics.py",
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2730,6 +2741,8 @@
           "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible",
           "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
           "tests/cli/test_m6_cli.py::test_compare_statistics_cli_pins_pass_and_records_method",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_rejects_invalid_k_as_request_error",
           "apps/web/tests/M6.test.tsx::ComparePage"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
@@ -2755,13 +2768,21 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; terminal Trial/retry inputs rejected, pass@k consumer pending",
+        "implementation_status": "partial_m8; planned valid Trial pass@k and retry distinction have fixed-pass consumers; live independence not verified",
         "consumer_paths": [
           "packages/evaluators/motte_eval/statistics.py",
-          "packages/sdk-python/motte_sdk/comparisons.py"
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/api/app/main.py",
+          "packages/cli/motte_cli/main.py",
+          "apps/web/src/pages/m6/ComparePage.tsx"
         ],
         "test_nodes": [
-          "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_never_treats_terminal_retries_as_trials"
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_reused_upstream_trial_identity",
+          "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification",
+          "apps/web/tests/M6.test.tsx::ComparePage"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",

@@ -6947,6 +6947,16 @@
               ],
               "title": "Candidate Pass"
             }
+          },
+          {
+            "in": "query",
+            "name": "k",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "K",
+              "type": "integer"
+            }
           }
         ],
         "responses": {

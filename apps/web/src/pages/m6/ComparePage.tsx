@@ -125,6 +125,7 @@ export function ComparePage() {
   const [candidateRun, setCandidateRun] = useState("");
   const [baselinePass, setBaselinePass] = useState("");
   const [candidatePass, setCandidatePass] = useState("");
+  const [trialK, setTrialK] = useState("1");
   const [factors, setFactors] = useState<string[]>(["model"]);
   const [result, setResult] = useState<ComparabilityView | null>(null);
   const [statistics, setStatistics] = useState<ComparisonStatisticsView | null>(null);
@@ -138,7 +139,8 @@ export function ComparePage() {
     setFactors((items) => checked ? [...new Set([...items, factor])] : items.filter((item) => item !== factor));
   };
 
-  const canCompare = baselineRun.trim() !== "" && candidateRun.trim() !== "" && factors.length > 0 && !busy;
+  const validK = /^[1-9]\d*$/.test(trialK) && Number.isSafeInteger(Number(trialK));
+  const canCompare = baselineRun.trim() !== "" && candidateRun.trim() !== "" && factors.length > 0 && validK && !busy;
 
   const onCompare = async (event: FormEvent) => {
     event.preventDefault();
@@ -155,6 +157,7 @@ export function ComparePage() {
         factors,
         baseline_pass: baselinePass.trim() === "" ? undefined : baselinePass.trim(),
         candidate_pass: candidatePass.trim() === "" ? undefined : candidatePass.trim(),
+        k: Number(trialK),
       };
       const payload = await compareRunReports(params);
       if (compareSeq.current !== seq) return; // 已发起新的比较：迟到结论丢弃
@@ -223,6 +226,17 @@ export function ComparePage() {
                 onChange={(change) => setCandidatePass(change.target.value)}
               />
             </Field>
+            <Field label="Trial pass@k（Terminal-Bench）" hint="只计入事前计划且有效的 Trial；其它套件忽略此值。">
+              <input
+                id="compare-trial-k"
+                className="mono"
+                type="number"
+                min="1"
+                step="1"
+                value={trialK}
+                onChange={(change) => setTrialK(change.target.value)}
+              />
+            </Field>
           </FieldGrid>
 
           <div className="model-picker-group" data-testid="compare-factors">
@@ -278,6 +292,28 @@ export function ComparePage() {
               <p className="mono">baseline pass {statistics.refs.baseline?.scoring_pass_id ?? "未知"} · candidate pass {statistics.refs.candidate?.scoring_pass_id ?? "未知"}</p>
               {statistics.statistics && (
                 <p className="mono">差值 {statistics.statistics.mean_diff ?? "未知"} · 95% 区间 {statistics.statistics.interval.low ?? "不适用"} ～ {statistics.statistics.interval.high ?? "不适用"}</p>
+              )}
+              {statistics.trial_aggregation && (
+                <div data-testid="compare-trial-statistics">
+                  {(["baseline", "candidate"] as const).map((arm) => {
+                    const aggregate = statistics.trial_aggregation?.[arm];
+                    if (!aggregate) return null;
+                    return (
+                      <div key={arm}>
+                        <p className="mono">{arm} · pass@{aggregate.k} · 完整 Task {aggregate.n_complete_tasks} / {aggregate.n_selected_tasks} · 未计划评分行 {aggregate.excluded_unplanned_score_rows}</p>
+                        <Board label={`${arm} Trial 统计`} head={<><th>Task</th><th>有效 / 计划</th><th>pass@k</th></>}>
+                          {Object.entries(aggregate.per_task).map(([task, item]) => (
+                            <tr key={task}>
+                              <td className="mono">{task}</td>
+                              <td className="mono">{item.n_valid} / {item.n_planned}</td>
+                              <td className="mono">{item.pass_at_k.applicable ? item.pass_at_k.value : `不适用：${item.pass_at_k.reason ?? "原因未知"}`}</td>
+                            </tr>
+                          ))}
+                        </Board>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}

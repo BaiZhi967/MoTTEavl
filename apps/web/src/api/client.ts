@@ -1772,6 +1772,18 @@ export interface ComparisonStatisticsView {
     mean_diff: number | null;
     interval: { low: number | null; high: number | null; seed: number; iterations: number };
   } | null;
+  trial_aggregation?: Record<"baseline" | "candidate", {
+    k: number;
+    n_selected_tasks: number;
+    n_complete_tasks: number;
+    excluded_unplanned_score_rows: number;
+    per_task: Record<string, {
+      n_planned: number;
+      n_valid: number;
+      n_passed: number;
+      pass_at_k: { applicable: boolean; value: number | null; reason: string | null };
+    }>;
+  }>;
 }
 
 export const getComparisonStatistics = (params: {
@@ -1780,11 +1792,13 @@ export const getComparisonStatistics = (params: {
   factors?: string[];
   baseline_pass?: string;
   candidate_pass?: string;
+  k?: number;
 }) => {
   const query = new URLSearchParams({ baseline: params.baseline, candidate: params.candidate });
   query.set("factors", (params.factors ?? ["model"]).join(","));
   if (params.baseline_pass) query.set("baseline_pass", params.baseline_pass);
   if (params.candidate_pass) query.set("candidate_pass", params.candidate_pass);
+  if (params.k !== undefined) query.set("k", String(params.k));
   return request<ComparisonStatisticsView>(`/api/v1/comparisons/statistics?${query.toString()}`);
 };
 

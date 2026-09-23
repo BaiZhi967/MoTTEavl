@@ -13,8 +13,9 @@ hash 规则。实现与其冲突时，以本文为准并修复实现；修订本
 > 上界预检；Agent Tasks 按冻结的每 Case `max_steps` 乘以题数、Cell 数和
 > Provider retry 上界，不能沿用单次调用预算。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService
 > 读取质量与可比性；成本按币种分列，部分未知保留 unknown 数。此范围说明
-> 不改变下文目标协议；C-Eval、Scenario/Skill、Harbor 的实验装配以及 Trial
-> 统计消费者仍未实现。证据见
+> 不改变下文目标协议；C-Eval、Scenario/Skill、Harbor 的实验装配仍未实现。
+> 固定 Pass 的 Task 内 Trial pass@k 已接入比较/JSON 导出消费者，独立持久发布的
+> 统计报告及 live 独立性仍未验收。证据见
 > `docs/verification/M8.md`。
 
 M6 是**结果治理层**：只消费已持久化的 Run / Trial / Observation / ScoreSet /
@@ -196,9 +197,14 @@ M8 当前只读消费者：`ComparisonService.paired_statistics`、
 `statistical_policy@1` 的内容 hash、实现版本、Task/Case 单位、bootstrap
 seed/迭代次数、选中/完整/缺失对数、差值与区间资格。一个 Case 只贡献一个配对
 Task；缺失、失败或不确定 Case 使区间不适用，不能按完成样本重新缩小分母。
-Terminal-Bench 的 Trial 需要独立的 Task 内有效 Trial 聚合；此消费者返回
-`trial_unit_requires_separate_aggregation`，不得将 transport/operator retry
-冒充 Trial 或给出 pass@k。当前切片未提供 Trial 聚合、pass@k 报告和持久统计导出。
+Terminal-Bench 的 Trial 由本消费者按冻结 TrialPlan 在 Task 内聚合。`k` 是显式输入
+（缺省 1）；仅唯一的事前计划 Trial ID/repeat、所选 Pass 的完整有效评分行，且未
+复用非空 `source_trial_id` 时才计算各 Task pass@k。未计划评分行单列排除，
+transport/operator retry 不增加 n；缺失、无效、重复上游 Trial 或 k 超出计划数
+返回具名不适用。完整 Task 的 pass@k 才进入 Task 配对 bootstrap；结果带固定
+RunReportRef、政策 hash、单位、seed、次数、k 与每 Task 资格。CLI JSON 文件是
+固定输入的可导出比较结果，另行持久发布的统计报告仍未实现，不能把当前切片写成
+完整 T06 或 live 统计验收。
 
 ## 11. 退出与回退
 
