@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { BatchMonitor } from "../src/components/BatchMonitor";
 import { DirectLlmCases } from "../src/evalTypes/directllm/DirectLlmCases";
 import { DirectLlmCompare } from "../src/evalTypes/directllm/DirectLlmCompare";
@@ -1769,6 +1769,23 @@ describe("DirectLlmResult", () => {
 
 describe("DirectLlmCompare", () => {
   beforeEach(mockSuiteComparisonApis);
+  it("路由切换后忽略晚到的旧请求", async () => {
+    let releaseOld: ((value: any) => void) | undefined;
+    clientMocks.getRun.mockImplementation((id: string) =>
+      id === "old" ? new Promise((resolve) => { releaseOld = resolve; })
+        : Promise.resolve(directRun({ id })));
+    function Switch() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate("/direct-llm/compare?runs=new")}>切换</button>;
+    }
+    render(<MemoryRouter initialEntries={["/direct-llm/compare?runs=old"]}>
+      <Switch /><DirectLlmCompare />
+    </MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "切换" }));
+    await screen.findByText(/new · pass-new/);
+    releaseOld?.(directRun({ id: "old" }));
+    await waitFor(() => expect(screen.queryByText(/old · pass-old/)).toBeNull());
+  });
   it("以指定旧 pass 的快照评分和成本展示，并把固定 pass 传给比较服务", async () => {
     clientMocks.getRun.mockImplementation(async (id: string) => directRun({
       id, scores: [{ case_id: "case-1", passed: false }],
