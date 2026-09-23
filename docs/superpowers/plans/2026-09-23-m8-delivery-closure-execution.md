@@ -16,4 +16,6 @@ Receipt update: `ac05062` passed two Linux CI runs, including repeated explicit-
 
 T09 continuation: the manual restore parity exposed a recoverability gap: `pg_restore` alone leaves the dump's maintenance flag and cannot verify a preflight manifest or set the staging guard. Add `restore_postgres_staging` for an empty target, first prove a damaged dump is rejected before any target access, then rerun the task-owned PG parity test through that helper. This does not authorize a production target or claim Compose/GC/in-flight verification.
 
+T09 receipt: `e96407e` ran the guarded helper on two task-owned PostgreSQL source/staging database pairs in each of two Linux CI workflows; both explicit-node runs passed. Keep Compose build/up, in-flight snapshot, GC/pin and production recovery outside this scoped receipt.
+
 Every package gets a focused commit after red/green tests and `git diff --check`. Before PR, run current Makefile/CI gates and publish an implementation PR as draft while required gates or acceptance receipts remain open. Do not merge or release.

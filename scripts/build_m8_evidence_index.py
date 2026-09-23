@@ -139,7 +139,7 @@ CURRENT_EVIDENCE = {
          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_report_database_identity_excludes_credentials",
          "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host",
          "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact"],
-        "partial_m8; SQLite recovery and task-owned PostgreSQL dump/restore parity verified; automated PG staging restore pending",
+        "partial_m8; SQLite recovery and guarded task-owned PostgreSQL staging restore verified; Compose and production recovery pending",
     ),
     "M7-G16": (
         ["packages/storage/motte_storage/maintenance.py",
@@ -222,7 +222,7 @@ def main() -> None:
                     "verification_layer": "integration_scoped",
                     "environment": (
                         "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; "
-                        "task-owned disposable databases; CI ac05062"
+                        "task-owned disposable databases; CI e96407e"
                     ),
                 })
         goals.append({

@@ -2500,7 +2500,7 @@
           "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence",
           "tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell"
         ],
-        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI ac05062",
+        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI e96407e",
         "verification_layer": "integration_scoped",
         "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
@@ -3499,7 +3499,7 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "partial_m8; SQLite recovery and task-owned PostgreSQL dump/restore parity verified; automated PG staging restore pending",
+        "implementation_status": "partial_m8; SQLite recovery and guarded task-owned PostgreSQL staging restore verified; Compose and production recovery pending",
         "consumer_paths": [
           "packages/storage/motte_storage/maintenance.py",
           "tests/storage/conftest.py"
@@ -3512,7 +3512,7 @@
           "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host",
           "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact"
         ],
-        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI ac05062",
+        "environment": "Linux ubuntu-latest / PostgreSQL 16 service / Python 3.12; task-owned disposable databases; CI e96407e",
         "verification_layer": "integration_scoped",
         "receipt_ref": "docs/verification/M8.md",
         "artifact_hash": null,
