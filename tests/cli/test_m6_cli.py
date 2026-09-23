@@ -443,9 +443,9 @@ def test_baseline_create_rejects_incomplete_reference(db, capsys):
 # ---------------------------------------------------------------- experiment
 
 
-def test_experiment_preview_violations_exit_2(db, capsys):
+def test_experiment_preview_violations_exit_2(exp_db, capsys):
     code, out, err = run_cli(
-        capsys, "experiment", "preview", "--db", str(db),
+        capsys, "experiment", "preview", "--db", str(exp_db),
         "--spec", json.dumps(experiment_spec(max_cells=1)))
     assert code == 2, (out, err)
     payload = json.loads(out)
@@ -453,11 +453,11 @@ def test_experiment_preview_violations_exit_2(db, capsys):
     assert [item["code"] for item in payload["violations"]] == ["MATRIX_TOO_LARGE"]
 
 
-def test_experiment_preview_ok_exit_0_and_contract_error(db, tmp_path, capsys):
+def test_experiment_preview_ok_exit_0_and_contract_error(exp_db, tmp_path, capsys):
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps(experiment_spec()), encoding="utf-8")
     code, out, err = run_cli(
-        capsys, "experiment", "preview", "--db", str(db),
+        capsys, "experiment", "preview", "--db", str(exp_db),
         "--spec", f"@{spec_file}")
     assert code == 0, err
     payload = json.loads(out)
@@ -466,7 +466,7 @@ def test_experiment_preview_ok_exit_0_and_contract_error(db, tmp_path, capsys):
     assert payload["violations"] == []
 
     code, out, err = run_cli(
-        capsys, "experiment", "preview", "--db", str(db),
+        capsys, "experiment", "preview", "--db", str(exp_db),
         "--spec", json.dumps(experiment_spec(factors={"bogus": ["x"]})))
     assert code == 2
     assert json.loads(err)["error"]["code"] == "EXPERIMENT_INVALID"

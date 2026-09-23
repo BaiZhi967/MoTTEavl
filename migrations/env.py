@@ -21,11 +21,16 @@ if REPO_ROOT not in sys.path:
 def _database_url() -> str:
     from motte_storage.postgres import normalize_dsn
 
-    dsn = (
-        os.environ.get("MOTTE_PG_DSN")
-        or os.environ.get("DATABASE_URL")
-        or config.get_main_option("sqlalchemy.url")
-    )
+    # Programmatic upgrade(dsn) must target its explicit database even when a
+    # cluster-wide MOTTE_PG_DSN is present (notably disposable migration tests).
+    if config.attributes.get("motte_explicit_dsn"):
+        dsn = config.get_main_option("sqlalchemy.url")
+    else:
+        dsn = (
+            os.environ.get("MOTTE_PG_DSN")
+            or os.environ.get("DATABASE_URL")
+            or config.get_main_option("sqlalchemy.url")
+        )
     if not dsn:
         raise SystemExit("缺少 DSN：设置 MOTTE_PG_DSN 或 DATABASE_URL，或在 alembic.ini 配置 sqlalchemy.url")
     return normalize_dsn(dsn).replace("postgresql://", "postgresql+psycopg://", 1)

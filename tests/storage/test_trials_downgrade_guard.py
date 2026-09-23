@@ -172,6 +172,14 @@ def test_isolated_pg_database_keeps_uri_form_for_migrations() -> None:
     assert normalize_dsn(target) == target
 
 
+def test_programmatic_migration_marks_explicit_target() -> None:
+    from motte_storage.migrations import alembic_config
+
+    config = alembic_config("postgresql://tester:secret@localhost/m8_test_abc")
+    assert config.attributes["motte_explicit_dsn"] is True
+    assert config.get_main_option("sqlalchemy.url").endswith("/m8_test_abc")
+
+
 @pytest.mark.skipif(
     not os.environ.get("MOTTE_PG_DSN"),
     reason="real PostgreSQL required (MOTTE_PG_DSN)",
