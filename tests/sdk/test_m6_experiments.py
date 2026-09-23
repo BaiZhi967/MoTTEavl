@@ -148,6 +148,23 @@ def test_idempotent_completed_create_replay_does_not_require_live_resources() ->
     assert len(store.runs.list()) == 1
 
 
+@pytest.mark.parametrize("conditions", [
+    {"parameters": "silently-ignored"},
+    {"reasoning_level": "high"},
+])
+def test_unconsumed_or_conflicting_controlled_conditions_reject_before_persistence(
+    conditions: dict[str, object],
+) -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(controlled_conditions=conditions)
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_INVALID"):
+        service.preview(payload)
+    with pytest.raises(ExperimentError, match="CONTROLLED_CONDITION_INVALID"):
+        service.create(payload)
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
 def put_manual_cells(
     store: object,
     payload: dict[str, object],

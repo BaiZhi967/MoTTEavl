@@ -5,6 +5,8 @@ hash 规则。实现与其冲突时，以本文为准并修复实现；修订本
 
 > M8 实现范围（2026-09-23）：Direct LLM 和 GSM8K Experiment 只接受
 > `model_profile` / `reasoning_level`；其他因子在 preview/create 拒绝。
+> controlled_conditions 当前仅接受正整数 `max_output_tokens`；标量
+> `parameters` 无法组成请求参数，必须拒绝而非静默丢弃。
 > `max_total_tokens`、`max_cost_usd`、非默认停止政策及非默认 scoring 当前无
 > 实验级强制消费者，同样拒绝。`max_total_calls` 根据固定题集与已解析 retry
 > 上界预检。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService

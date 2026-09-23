@@ -158,8 +158,7 @@ def _budget_view(budget: Any) -> dict[str, Any]:
 #: 的条件允许声明；未知条件在 preview/create 即拒绝，不在分配期才爆
 #: RESOLVED_MANIFEST_INVALID。
 _CONTROLLED_CONDITION_KEYS: frozenset[str] = frozenset({
-    "parameters",           # dict：并入 manifest.parameters（如 max_output_tokens）
-    "max_output_tokens",    # int：等价 parameters.max_output_tokens 简写
+    "max_output_tokens",    # scalar contract → manifest.parameters.max_output_tokens
 })
 
 
@@ -175,6 +174,12 @@ def _validate_controlled_conditions(spec: ExperimentSpec) -> None:
             "controlled_conditions keys not consumable by the run manifest: "
             + ",".join(unknown)
             + " (known: " + ",".join(sorted(_CONTROLLED_CONDITION_KEYS)) + ")",
+        )
+    output_cap = spec.controlled_conditions.get("max_output_tokens")
+    if output_cap is not None and (type(output_cap) is not int or output_cap <= 0):
+        raise ExperimentError(
+            "CONTROLLED_CONDITION_INVALID",
+            "max_output_tokens must be a positive integer",
         )
 
 
@@ -533,13 +538,9 @@ class ExperimentService:
         for key, value in spec.controlled_conditions.items():
             if value is None:
                 continue
-            if key == "parameters" and isinstance(value, dict):
+            if key == "max_output_tokens":
                 merged = dict(manifest.get("parameters") or {})
-                merged.update(value)
-                manifest["parameters"] = merged
-            elif key == "max_output_tokens":
-                merged = dict(manifest.get("parameters") or {})
-                merged.setdefault("max_output_tokens", value)
+                merged["max_output_tokens"] = value
                 manifest["parameters"] = merged
         if spec.selected_case_keys:
             manifest["case_selection"] = {
