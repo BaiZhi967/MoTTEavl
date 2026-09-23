@@ -1,0 +1,13 @@
+# M8 implementation plan (actual baseline)
+
+Start: `origin/main` `0ad766fd8020e852b61b88ef82e92d010c553584`, 2026-09-23, Windows 11 / Python 3.12 via uv / Node 24.18.0. The source checkout contained an untracked `skills-lock.json`; work takes place in the separate `codex/m8-delivery-closure` worktree. Assessment baseline `fc1e7d5` and document-parent `807f84c` are historical; the document PR is merged at this start SHA.
+
+1. **T00**: preserve the archived 137 rows, record one current status per goal, and link work packages. Current evidence is blank unless independently checked. `scripts/build_m8_evidence_index.py` validates count and uniqueness. Record CI, environment, and superseding reviews in `docs/verification/M8.md`.
+2. **T01**: align ControlledRoot backend test with create/reopen paths; construct a consistent PG scoring fixture; isolate downgrade migration in a task-owned PG database. Reproduce each failure and preserve negative owner/path/downgrade assertions. Run individually, combined, reverse order, then full suite and CI.
+3. **T02**: trace Direct factors through `ExperimentService` → manifest → `prepare_run` → Worker/provider. Reject unconsumed prompt/runtime/skill factors at preview/create before persistence. Test actual manifest/request differences for accepted factors.
+4. **T03**: share one read-only matrix/resource/budget compiler for preview/create/allocate; 10×2 with cap 5 must reject before specs/cells/runs. Reject unsupported token/cost/stop constraints; use existing persistent RequestRegistry for operation-scoped idempotency. Test replay after service reconstruction and same-key different-body conflict.
+5. **T04**: connect Direct/GSM8K compare pages to fixed `ComparisonService` references through real API contracts. Keep page layout and drilldown; remove local eligibility/quality arithmetic, preserve unknown metering and currencies. Run Web tests/build and generated contract checks.
+6. **T05/T06**: add suite assemblers only when semantics and tests match standalone runs; trace statistics through API/CLI/Web/export and close independently supported slices. Leave unsupported combinations explicit.
+7. **T07–T12**: execute authorized offline/integration work and create precise external execution cards. Real provider/harness/judge spend, private exports, production operations, Release and cutover remain pending explicit authorization. Never promote synthetic evidence to live, stable or cutover readiness.
+
+Every package gets a focused commit after red/green tests and `git diff --check`. Before PR, run current Makefile/CI gates and publish an implementation PR as draft while required gates or acceptance receipts remain open. Do not merge or release.
