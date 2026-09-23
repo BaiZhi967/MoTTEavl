@@ -2718,12 +2718,19 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "consumer_gap; statistical functions have tests but no fixed-report API/CLI/Web/export consumer",
+        "implementation_status": "partial_m8; paired Case/Task fixed-pass API/CLI/Web consumer; Trial aggregation/export pending",
         "consumer_paths": [
-          "packages/evaluators/motte_eval/statistics.py"
+          "packages/evaluators/motte_eval/statistics.py",
+          "packages/sdk-python/motte_sdk/comparisons.py",
+          "apps/api/app/main.py",
+          "packages/cli/motte_cli/main.py",
+          "apps/web/src/pages/m6/ComparePage.tsx"
         ],
         "test_nodes": [
-          "tests/evaluators/test_statistics.py"
+          "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_pins_pass_and_records_method",
+          "apps/web/tests/M6.test.tsx::ComparePage"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",
@@ -2748,12 +2755,13 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
-        "implementation_status": "consumer_gap; statistical functions have tests but no fixed-report API/CLI/Web/export consumer",
+        "implementation_status": "partial_m8; terminal Trial/retry inputs rejected, pass@k consumer pending",
         "consumer_paths": [
-          "packages/evaluators/motte_eval/statistics.py"
+          "packages/evaluators/motte_eval/statistics.py",
+          "packages/sdk-python/motte_sdk/comparisons.py"
         ],
         "test_nodes": [
-          "tests/evaluators/test_statistics.py"
+          "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_never_treats_terminal_retries_as_trials"
         ],
         "environment": "Windows 11 / Python 3.12 / Node 24; synthetic offline",
         "verification_layer": "offline_component_or_http",

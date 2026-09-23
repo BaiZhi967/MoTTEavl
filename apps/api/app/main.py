@@ -3798,6 +3798,31 @@ def create_app(
         baselines=getattr(service.store, "baselines", None),
     )
 
+    @application.get("/api/v1/comparisons/statistics")
+    def comparison_statistics(
+        baseline: str,
+        candidate: str,
+        factors: str = "model",
+        baseline_pass: str | None = None,
+        candidate_pass: str | None = None,
+    ):
+        """Fixed-pass paired Case/Task statistics; no Provider, Judge or writes."""
+        try:
+            return comparisons_service.paired_statistics(
+                baseline, candidate, allowed_factors=factors.split(","),
+                baseline_pass_id=baseline_pass, candidate_pass_id=candidate_pass,
+            )
+        except KeyError as error:
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"code": "RUN_NOT_FOUND", "message": str(error)}},
+            )
+        except (ValueError, ComparisonError) as error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": {"code": "POLICY_INVALID", "message": str(error)}},
+            )
+
     @application.get("/api/v1/comparisons")
     def compare_runs(
         baseline: str,

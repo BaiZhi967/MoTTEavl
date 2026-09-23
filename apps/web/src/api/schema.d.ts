@@ -690,6 +690,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/comparisons/statistics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Comparison Statistics
+         * @description Fixed-pass paired Case/Task statistics; no Provider, Judge or writes.
+         */
+        get: operations["comparison_statistics_api_v1_comparisons_statistics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/credentials": {
         parameters: {
             query?: never;
@@ -5088,6 +5108,41 @@ export interface operations {
         };
     };
     compare_runs_api_v1_comparisons_get: {
+        parameters: {
+            query: {
+                baseline: string;
+                candidate: string;
+                factors?: string;
+                baseline_pass?: string | null;
+                candidate_pass?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    comparison_statistics_api_v1_comparisons_statistics_get: {
         parameters: {
             query: {
                 baseline: string;

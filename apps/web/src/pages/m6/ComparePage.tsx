@@ -7,8 +7,10 @@ import { ArrowsLeftRightIcon } from "@phosphor-icons/react";
 import {
   COMPARISON_FACTORS,
   compareRunReports,
+  getComparisonStatistics,
   describeApiError,
   type ComparabilityView,
+  type ComparisonStatisticsView,
 } from "../../api/client";
 import { StatusBadge } from "../../components/StatusBadge";
 
@@ -125,6 +127,8 @@ export function ComparePage() {
   const [candidatePass, setCandidatePass] = useState("");
   const [factors, setFactors] = useState<string[]>(["model"]);
   const [result, setResult] = useState<ComparabilityView | null>(null);
+  const [statistics, setStatistics] = useState<ComparisonStatisticsView | null>(null);
+  const [statisticsError, setStatisticsError] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   /** 迟到响应丢弃：新的比较发起后，旧结论不得覆盖。 */
@@ -142,16 +146,28 @@ export function ComparePage() {
     const seq = ++compareSeq.current;
     setBusy(true);
     setError("");
+    setStatistics(null);
+    setStatisticsError("");
     try {
-      const payload = await compareRunReports({
+      const params = {
         baseline: baselineRun.trim(),
         candidate: candidateRun.trim(),
         factors,
         baseline_pass: baselinePass.trim() === "" ? undefined : baselinePass.trim(),
         candidate_pass: candidatePass.trim() === "" ? undefined : candidatePass.trim(),
-      });
+      };
+      const payload = await compareRunReports(params);
       if (compareSeq.current !== seq) return; // 已发起新的比较：迟到结论丢弃
       setResult(payload);
+      try {
+        const paired = await getComparisonStatistics(params);
+        if (compareSeq.current === seq) setStatistics(paired);
+      } catch (caught) {
+        if (compareSeq.current === seq) {
+          const described = describeApiError(caught);
+          setStatisticsError(`统计不可用：${described.message}`);
+        }
+      }
     } catch (caught) {
       if (compareSeq.current !== seq) return;
       setResult(null);
@@ -249,6 +265,24 @@ export function ComparePage() {
               next="在左侧填入基线 Run 与候选 Run（至少允许一个变化因子），结果会出现在这里"
             />
           </section>}
+      {result && (
+        <section className="panel" aria-label="配对统计">
+          <div className="panel-head"><h2>配对统计</h2></div>
+          {statisticsError && <p className="hint" role="status" data-testid="compare-statistics-error">{statisticsError}</p>}
+          {statistics && (
+            <div data-testid="compare-statistics">
+              <p className="hint">{statistics.applicable ? "区间适用" : `区间不适用：${statistics.reason ?? "原因未知"}`}</p>
+              <p className="mono">{statistics.n_pairs} / {statistics.n_selected} Task · 缺失 {statistics.missing_pairs}</p>
+              <p className="mono">{statistics.unit} · {statistics.method} · {statistics.policy_ref} · seed {statistics.seed} · {statistics.iterations} 次</p>
+              <p className="mono">policy hash {statistics.policy_hash}</p>
+              <p className="mono">baseline pass {statistics.refs.baseline?.scoring_pass_id ?? "未知"} · candidate pass {statistics.refs.candidate?.scoring_pass_id ?? "未知"}</p>
+              {statistics.statistics && (
+                <p className="mono">差值 {statistics.statistics.mean_diff ?? "未知"} · 95% 区间 {statistics.statistics.interval.low ?? "不适用"} ～ {statistics.statistics.interval.high ?? "不适用"}</p>
+              )}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

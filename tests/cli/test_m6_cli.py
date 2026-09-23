@@ -358,6 +358,22 @@ def test_compare_not_comparable_exits_5_and_comparable_exits_0(db, tmp_path, cap
     assert payload["metric_eligibility"]["quality"] is True
 
 
+def test_compare_statistics_cli_pins_pass_and_records_method(db, capsys, tmp_path):
+    output = tmp_path / "paired.json"
+    code, out, err = run_cli(
+        capsys, "compare", "--baseline", RUN_BASE, "--candidate", RUN_BASE,
+        "--baseline-pass", "pass-base", "--candidate-pass", "pass-base",
+        "--statistics", "--json", str(output), "--db", str(db),
+    )
+    assert code == 0, err
+    stats = json.loads(out)["statistics"]
+    assert stats["applicable"] is True
+    assert stats["n_pairs"] == 2
+    assert stats["method"] == "paired_task_cluster_bootstrap"
+    assert stats["statistics"]["interval"]["seed"] == 20260921
+    assert json.loads(output.read_text(encoding="utf-8"))["statistics"] == stats
+
+
 def test_compare_rejects_unknown_run_and_unknown_factor(db, capsys):
     code, _, err = run_cli(
         capsys, "compare", "--baseline", "run-nope", "--candidate", RUN_BASE,

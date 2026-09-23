@@ -172,6 +172,14 @@ def test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes(sli
     })
     assert first.status_code == 200, first.text
     assert first.json()["metric_eligibility"]["quality"] is True
+    statistics = client.get("/api/v1/comparisons/statistics", params={
+        "baseline": "m8-base", "candidate": "m8-same", "factors": "model",
+        "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-same",
+    })
+    assert statistics.status_code == 200, statistics.text
+    assert statistics.json()["applicable"] is True
+    assert statistics.json()["n_pairs"] == 2
+    assert statistics.json()["statistics"]["interval"]["seed"] == 20260921
     different = client.get("/api/v1/comparisons", params={
         "baseline": "m8-base", "candidate": "m8-different", "factors": "model",
         "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-different",
@@ -202,6 +210,11 @@ def test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes(sli
     })
     assert changed.status_code == 200, changed.text
     assert changed.json()["metric_eligibility"]["quality"] is False
+    fixed_statistics = client.get("/api/v1/comparisons/statistics", params={
+        "baseline": "m8-base", "candidate": "m8-same", "factors": "model",
+        "baseline_pass": "old-m8-base", "candidate_pass": "old-m8-same",
+    })
+    assert fixed_statistics.json() == statistics.json()
     assert provider.calls == []
 
 

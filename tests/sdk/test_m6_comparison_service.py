@@ -261,6 +261,54 @@ def test_cost_comparison_requires_matching_currency() -> None:
     assert "COST_CURRENCY_MISMATCH" in result.metric_reasons
 
 
+def test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible() -> None:
+    store = InMemoryRunStore()
+    for run_id, outcomes in [("base", [True, False, True]),
+                             ("candidate", [True, True, True])]:
+        make_run(store, run_id, case_ids=["a", "b", "c"])
+        append_pass(store, run_id, f"old-{run_id}", [
+            score_row(case_id, passed=value)
+            for case_id, value in zip(["a", "b", "c"], outcomes, strict=True)
+        ])
+    service = ComparisonService(store)
+    fixed = service.paired_statistics("base", "candidate", allowed_factors=[],
+                                      baseline_pass_id="old-base",
+                                      candidate_pass_id="old-candidate")
+    assert fixed["applicable"] is True
+    assert fixed["unit"] == "task(case)"
+    assert fixed["n_selected"] == fixed["n_pairs"] == 3
+    assert fixed["statistics"]["mean_diff"] == pytest.approx(1 / 3)
+    assert fixed["statistics"]["interval"]["seed"] == 20260921
+    assert fixed["refs"]["baseline"]["scoring_pass_id"] == "old-base"
+    append_pass(store, "base", "new-base", [score_row("a", passed=False)])
+    assert service.paired_statistics("base", "candidate", allowed_factors=[],
+                                     baseline_pass_id="old-base",
+                                     candidate_pass_id="old-candidate") == fixed
+    current = service.paired_statistics("base", "candidate", allowed_factors=[])
+    assert current["applicable"] is False
+    assert current["reason"] == "missing_or_uncertain_case"
+    assert current["missing_pairs"] == 2
+
+
+def test_paired_statistics_never_treats_terminal_retries_as_trials() -> None:
+    store = InMemoryRunStore()
+    for run_id in ("base", "candidate"):
+        make_run(store, run_id, case_ids=["task-a", "task-b"], manifest={
+            "benchmark_provenance": {"suite": "terminal-bench-harbor"},
+        })
+        append_pass(store, run_id, f"pass-{run_id}", [
+            score_row("task-a", passed=True), score_row("task-b", passed=True),
+        ])
+    result = ComparisonService(store).paired_statistics(
+        "base", "candidate", allowed_factors=[],
+    )
+    assert result["applicable"] is False
+    assert result["reason"] == "trial_unit_requires_separate_aggregation"
+    assert result["statistics"] is None
+    assert result["unit"] == "task(case)"
+    assert result["seed"] == 20260921
+
+
 def test_report_snapshot_needs_review_run_keeps_uncertain_cases_visible() -> None:
     store = InMemoryRunStore()
     make_run(store, "run-review", case_ids=["c1", "c2"], status="needs_review")

@@ -552,6 +552,15 @@ class MotteClient:
             self._get(f"{_API_PREFIX}/comparisons", params=query)
         )
 
+    def compare_statistics(
+        self, baseline_run_id: str, candidate_run_id: str, **params: Any,
+    ) -> dict[str, Any]:
+        """Fixed-pass paired statistics (read-only, no model calls)."""
+        return self._get(
+            f"{_API_PREFIX}/comparisons/statistics",
+            params={"baseline": baseline_run_id, "candidate": candidate_run_id, **params},
+        )
+
     def classify_regression(
         self,
         baseline_run_id: str,

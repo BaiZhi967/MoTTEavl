@@ -187,6 +187,16 @@ ExperimentSpec 同一规则：发布后不可变，新内容 = 新版本。
   违反独立条件 → `not_applicable`（不是 0）。验收样例 n=5, c=2, k=2 → 0.7。
 - 不提供未事前定义的加权总排名；综合分必须有独立版本化政策。
 
+M8 当前只读消费者：`ComparisonService.paired_statistics`、
+`GET /api/v1/comparisons/statistics`、`motte compare --statistics` 和通用 Web 比较页。
+输入是两个固定 Run/ScoringPass 引用及允许变化因子；输出保留固定引用、
+`statistical_policy@1` 的内容 hash、实现版本、Task/Case 单位、bootstrap
+seed/迭代次数、选中/完整/缺失对数、差值与区间资格。一个 Case 只贡献一个配对
+Task；缺失、失败或不确定 Case 使区间不适用，不能按完成样本重新缩小分母。
+Terminal-Bench 的 Trial 需要独立的 Task 内有效 Trial 聚合；此消费者返回
+`trial_unit_requires_separate_aggregation`，不得将 transport/operator retry
+冒充 Trial 或给出 pass@k。当前切片未提供 Trial 聚合、pass@k 报告和持久统计导出。
+
 ## 11. 退出与回退
 
 回退顺序：停 Experiment 新建/领取与新 GatePolicy 发布 → 确认自有活动进程停止 →

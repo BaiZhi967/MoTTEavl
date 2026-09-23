@@ -19,6 +19,7 @@ const clientMocks = vi.hoisted(() => ({
   cancelExperiment: vi.fn(),
   retryExperimentCell: vi.fn(),
   compareRunReports: vi.fn(),
+  getComparisonStatistics: vi.fn(),
   getBaselines: vi.fn(),
   getBaseline: vi.fn(),
   getDefaultBaseline: vi.fn(),
@@ -42,6 +43,12 @@ function wrap(node: React.ReactNode, route = "/") {
 
 beforeEach(() => {
   for (const mock of Object.values(clientMocks)) mock.mockReset();
+  clientMocks.getComparisonStatistics.mockResolvedValue({
+    applicable: false, reason: "insufficient_tasks", n_selected: 1,
+    n_pairs: 1, missing_pairs: 0, policy_ref: "statistical_policy@1",
+    policy_hash: "sha256:policy", method: "paired_task_cluster_bootstrap",
+    unit: "task(case)", refs: {}, statistics: null,
+  });
 });
 
 afterEach(cleanup);
@@ -203,6 +210,36 @@ describe("ExperimentsPage", () => {
 // ---------------------------------------------------------------- 比较
 
 describe("ComparePage", () => {
+  it("显示固定 pass 统计与缺失资格，统计请求失败不抹掉比较结果", async () => {
+    clientMocks.compareRunReports.mockResolvedValue({
+      eligible: true, level: "comparable", structural_reasons: [], metric_reasons: [],
+      metric_eligibility: { quality: true }, case_diff: { added: [], removed: [], changed: [] },
+    });
+    clientMocks.getComparisonStatistics.mockResolvedValueOnce({
+      applicable: false, reason: "missing_or_uncertain_case", n_selected: 3,
+      n_pairs: 2, missing_pairs: 1, policy_ref: "statistical_policy@1",
+      policy_hash: "sha256:policy", method: "paired_task_cluster_bootstrap",
+      unit: "task(case)", refs: {
+        baseline: { run_id: "run-b", scoring_pass_id: "pass-b" },
+        candidate: { run_id: "run-c", scoring_pass_id: "pass-c" },
+      }, statistics: null,
+    }).mockRejectedValueOnce(new Error("statistics offline"));
+    render(wrap(<ComparePage />));
+    fireEvent.change(screen.getByLabelText(/基线 Run/), { target: { value: "run-b" } });
+    fireEvent.change(screen.getByLabelText(/候选 Run/), { target: { value: "run-c" } });
+    fireEvent.change(screen.getByLabelText(/基线 ScoringPass/), { target: { value: "pass-b" } });
+    fireEvent.change(screen.getByLabelText(/候选 ScoringPass/), { target: { value: "pass-c" } });
+    fireEvent.click(screen.getByTestId("compare-submit"));
+    await waitFor(() => expect(screen.getByTestId("compare-statistics").textContent).toContain("missing_or_uncertain_case"));
+    expect(screen.getByTestId("compare-statistics").textContent).toContain("2 / 3");
+    expect(screen.getByTestId("compare-statistics").textContent).toContain("pass-b");
+    expect(clientMocks.getComparisonStatistics.mock.calls[0][0]).toMatchObject({
+      baseline_pass: "pass-b", candidate_pass: "pass-c", factors: ["model"],
+    });
+    fireEvent.click(screen.getByTestId("compare-submit"));
+    await waitFor(() => expect(screen.getByTestId("compare-statistics-error").textContent).toContain("statistics offline"));
+    expect(screen.getByTestId("compare-result")).toBeTruthy();
+  });
   it("渲染三级结论、分组原因、case diff 与指标资格；model 因子默认允许", async () => {
     clientMocks.compareRunReports.mockResolvedValue({
       eligible: false,

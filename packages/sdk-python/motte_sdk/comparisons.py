@@ -746,6 +746,81 @@ class ComparisonService:
         )
         return summary, summary.total_usd() if summary.known else None
 
+    def paired_statistics(
+        self, baseline_run_id: str, candidate_run_id: str, *,
+        allowed_factors: list[str] | tuple[str, ...],
+        baseline_pass_id: str | None = None,
+        candidate_pass_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only paired Task/Case statistics from two fixed ScoreSets.
+
+        Each selected Case contributes once. Missing, uncertain and failed calls
+        remain visible and prevent an inferential interval; transport retries are
+        never interpreted as independent Trials.
+        """
+        from motte_eval.statistics import (
+            STATISTICAL_POLICY_V1, paired_difference, statistical_policy_hash,
+        )
+
+        comparison = self.compare(
+            baseline_run_id, candidate_run_id, allowed_factors=allowed_factors,
+            baseline_pass_id=baseline_pass_id, candidate_pass_id=candidate_pass_id,
+        )
+        refs = {
+            "baseline": self.report_ref(
+                baseline_run_id, scoring_pass_id=baseline_pass_id,
+            ).model_dump(mode="json"),
+            "candidate": self.report_ref(
+                candidate_run_id, scoring_pass_id=candidate_pass_id,
+            ).model_dump(mode="json"),
+        }
+        base_run = self.store.runs.get(baseline_run_id)
+        candidate_run = self.store.runs.get(candidate_run_id)
+        selected = list(base_run.get("case_ids") or [])
+        view: dict[str, Any] = {
+            "refs": refs,
+            "unit": "task(case)",
+            "method": "paired_task_cluster_bootstrap",
+            "policy_ref": STATISTICAL_POLICY_V1["policy_id"],
+            "policy_hash": statistical_policy_hash(),
+            "implementation_version": STATISTICAL_POLICY_V1["implementation_version"],
+            "seed": STATISTICAL_POLICY_V1["bootstrap_seed"],
+            "iterations": STATISTICAL_POLICY_V1["bootstrap_iterations"],
+            "missing_policy": "keep_visible_fail_closed",
+            "n_selected": len(selected),
+            "n_pairs": 0,
+            "missing_pairs": len(selected),
+            "applicable": False,
+            "reason": None,
+            "statistics": None,
+        }
+        if not comparison.metric_eligibility.get("quality"):
+            view["reason"] = "not_comparable"
+            return view
+        if _is_terminal_bench_run(base_run.get("manifest") or {}) or _is_terminal_bench_run(
+            candidate_run.get("manifest") or {}
+        ):
+            view["reason"] = "trial_unit_requires_separate_aggregation"
+            return view
+        base_outcomes = self.case_outcomes(baseline_run_id, baseline_pass_id)
+        candidate_outcomes = self.case_outcomes(candidate_run_id, candidate_pass_id)
+        pairs = [
+            (float(base_outcomes[case_id]), float(candidate_outcomes[case_id]))
+            for case_id in selected
+            if base_outcomes.get(case_id) is not None
+            and candidate_outcomes.get(case_id) is not None
+        ]
+        view["n_pairs"] = len(pairs)
+        view["missing_pairs"] = len(selected) - len(pairs)
+        if view["missing_pairs"]:
+            view["reason"] = "missing_or_uncertain_case"
+            return view
+        statistics = paired_difference(pairs)
+        view["statistics"] = statistics
+        view["applicable"] = bool(statistics["interval"]["applicable"])
+        view["reason"] = None if view["applicable"] else "insufficient_tasks"
+        return view
+
     # ------------------------------------------------------------------ 门禁
 
     def evaluate_gate(

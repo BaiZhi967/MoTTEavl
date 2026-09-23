@@ -1754,6 +1754,40 @@ export const compareRunReports = (params: {
   return request<ComparabilityView>(`/api/v1/comparisons?${query.toString()}`);
 };
 
+/** 固定两个 ScoringPass 的只读 Task/Case 配对统计；不把缺失折算为 0。 */
+export interface ComparisonStatisticsView {
+  refs: Record<string, { run_id: string; scoring_pass_id: string }>;
+  unit: string;
+  method: string;
+  policy_ref: string;
+  policy_hash: string;
+  seed: number;
+  iterations: number;
+  n_selected: number;
+  n_pairs: number;
+  missing_pairs: number;
+  applicable: boolean;
+  reason: string | null;
+  statistics: {
+    mean_diff: number | null;
+    interval: { low: number | null; high: number | null; seed: number; iterations: number };
+  } | null;
+}
+
+export const getComparisonStatistics = (params: {
+  baseline: string;
+  candidate: string;
+  factors?: string[];
+  baseline_pass?: string;
+  candidate_pass?: string;
+}) => {
+  const query = new URLSearchParams({ baseline: params.baseline, candidate: params.candidate });
+  query.set("factors", (params.factors ?? ["model"]).join(","));
+  if (params.baseline_pass) query.set("baseline_pass", params.baseline_pass);
+  if (params.candidate_pass) query.set("candidate_pass", params.candidate_pass);
+  return request<ComparisonStatisticsView>(`/api/v1/comparisons/statistics?${query.toString()}`);
+};
+
 /** 回归分类（GET /regressions）：结论照实渲染，页面不自己下结论。 */
 export const getRegressionClassification = (params: {
   baseline: string;

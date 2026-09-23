@@ -6883,6 +6883,95 @@
         "summary": "Compare Runs"
       }
     },
+    "/api/v1/comparisons/statistics": {
+      "get": {
+        "description": "Fixed-pass paired Case/Task statistics; no Provider, Judge or writes.",
+        "operationId": "comparison_statistics_api_v1_comparisons_statistics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "baseline",
+            "required": true,
+            "schema": {
+              "title": "Baseline",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate",
+            "required": true,
+            "schema": {
+              "title": "Candidate",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "factors",
+            "required": false,
+            "schema": {
+              "default": "model",
+              "title": "Factors",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "baseline_pass",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Baseline Pass"
+            }
+          },
+          {
+            "in": "query",
+            "name": "candidate_pass",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Pass"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Comparison Statistics"
+      }
+    },
     "/api/v1/credentials": {
       "get": {
         "operationId": "list_credentials_api_v1_credentials_get",
