@@ -11,7 +11,7 @@ from __future__ import annotations
 import tempfile
 from itertools import product
 from pathlib import Path
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
 
 import pytest
 
@@ -197,6 +197,34 @@ def test_experiment_suite_mismatch_rejects_before_creating_cells() -> None:
     assert store.runs.list() == []
 
 
+@pytest.mark.parametrize("suite", [
+    "ceval-external", "scenario", "terminal-bench-harbor",
+])
+def test_unassembled_suite_preview_and_create_fail_closed(suite: str) -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(task_ref={"suite": suite, "scenario_version": "candidate@1"})
+    for operation in (service.preview, service.create):
+        with pytest.raises(ExperimentError) as error:
+            operation(payload)
+        assert error.value.code == "SUITE_UNSUPPORTED"
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
+def test_agent_runtime_factor_cannot_silently_use_legacy_json() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(
+        task_ref={"suite": "agent-tasks", "scenario_version": "candidate@1"},
+        factors={"model_profile": ("model-a",), "runtime_version": ("pi-agent@1",)},
+    )
+    for operation in (service.preview, service.create):
+        with pytest.raises(ExperimentError) as error:
+            operation(payload)
+        assert error.value.code == "FACTOR_UNSUPPORTED"
+    assert store.experiments.list_specs() == []
+    assert store.runs.list() == []
+
+
 def test_idempotent_completed_create_replay_does_not_require_live_resources() -> None:
     store, run_service, service = make_service()
     payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
@@ -206,6 +234,34 @@ def test_idempotent_completed_create_replay_does_not_require_live_resources() ->
     assert [cell["run_id"] for cell in replay["cells"]] == [
         cell["run_id"] for cell in first["cells"]
     ]
+    assert len(store.runs.list()) == 1
+
+
+def test_resource_ceiling_drift_after_preview_rejects_before_persistence() -> None:
+    store, _run_service, service = make_service()
+    payload = spec_payload(
+        experiment_id="m8-resource-drift",
+        factors={"model_profile": ("model-a",)}, repeats=1,
+    )
+    assert service.preview(payload)["violations"] == []
+    model = service.resources.models.get("model-a")
+    service.resources.models.put(
+        {**model, "max_output_tokens": 256, "generation": 2},
+        expected_generation=1,
+    )
+    with pytest.raises(ExperimentError):
+        service.create(payload, request_key="m8-drift-key")
+    assert store.experiments.get_spec("m8-resource-drift", "v1") is None
+    assert store.experiments.list_cells("m8-resource-drift", "v1") == []
+    assert store.runs.list() == []
+
+    # Repaired draft resource can be used on a fresh authorized submission;
+    # the rejected request key did not reserve an executable operation.
+    service.resources.models.put(
+        {**model, "generation": 3}, expected_generation=2,
+    )
+    created = service.create(payload, request_key="m8-drift-key")
+    assert created["allocated"] == 1
     assert len(store.runs.list()) == 1
 
 
@@ -575,6 +631,59 @@ def test_two_sqlite_services_share_request_key_and_single_initial_run() -> None:
     cells = first_store.experiments.list_cells("m8-two-services", "v1")
     assert len(cells) == 1
     assert cells[0]["allocation_status"] == "allocated"
+    assert len(first_store.runs.list()) == 1
+
+
+def test_active_sqlite_allocation_is_not_reset_by_second_service() -> None:
+    first_store, _first_runs, first = make_service()
+    path = first_store.runs._path
+    second_store = SQLiteRunStore(path)
+    second = ExperimentService(
+        second_store, RunService(second_store),
+        resources=SQLiteResourceStore(path, content_store=default_content_store()),
+    )
+    payload = spec_payload(experiment_id="m8-active-claim",
+                           factors={"model_profile": ("model-a",)}, repeats=1)
+    entered = Event()
+    release = Event()
+    calls: list[str] = []
+    errors: list[BaseException] = []
+    original_first = first._create_cell_run
+    original_second = second._create_cell_run
+
+    def paused_first(*args, **kwargs):
+        calls.append("first")
+        entered.set()
+        assert release.wait(5), "test failed to release the active allocation"
+        return original_first(*args, **kwargs)
+
+    def counted_second(*args, **kwargs):
+        calls.append("second")
+        return original_second(*args, **kwargs)
+
+    first._create_cell_run = paused_first
+    second._create_cell_run = counted_second
+
+    def create(service: ExperimentService) -> None:
+        try:
+            service.create(payload, request_key="m8-active-key")
+        except BaseException as error:  # noqa: BLE001 - surface thread failure
+            errors.append(error)
+
+    first_thread = Thread(target=create, args=(first,))
+    second_thread = Thread(target=create, args=(second,))
+    first_thread.start()
+    assert entered.wait(5), "first service did not claim the cell"
+    second_thread.start()
+    try:
+        second_thread.join(timeout=1)
+    finally:
+        release.set()
+    first_thread.join(timeout=10)
+    second_thread.join(timeout=10)
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert errors == []
+    assert calls == ["first"]
     assert len(first_store.runs.list()) == 1
 
 

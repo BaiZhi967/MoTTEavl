@@ -329,7 +329,12 @@ class ExperimentService:
         request_key: str | None = None,
     ) -> dict[str, Any]:
         """发布 spec（幂等）+ 铺 cell（幂等）+ 分配。超限整体拒绝。"""
-        with self._allocation_lock:
+        from .execution_lock import experiment_allocation_lock
+
+        spec = ExperimentSpec.model_validate(spec_payload)
+        with self._allocation_lock, experiment_allocation_lock(
+            self.store, spec.experiment_id, spec.version,
+        ):
             return self._create_locked(spec_payload, request_key=request_key)
 
     def _create_locked(
@@ -355,7 +360,7 @@ class ExperimentService:
                     return {
                         "experiment_id": spec.experiment_id, "version": spec.version,
                         "created": False, "spec": stored_replay,
-                        **self.allocate(spec.experiment_id, spec.version),
+                        **self._allocate_locked(spec.experiment_id, spec.version),
                     }
         compiled = self._compile(spec)
         violations = compiled["violations"]
@@ -383,7 +388,7 @@ class ExperimentService:
             self.store.experiments.put_spec(dump)
         for assignment, repeat_index in _expand_matrix(spec):
             self._ensure_cell(spec, assignment, repeat_index)
-        allocation = self.allocate(spec.experiment_id, spec.version)
+        allocation = self._allocate_locked(spec.experiment_id, spec.version)
         return {
             "experiment_id": spec.experiment_id,
             "version": spec.version,
@@ -396,7 +401,11 @@ class ExperimentService:
 
     def allocate(self, experiment_id: str, version: str) -> dict[str, Any]:
         """可重入的分配/恢复入口：每 cell 恰好一个 initial Run。"""
-        with self._allocation_lock:
+        from .execution_lock import experiment_allocation_lock
+
+        with self._allocation_lock, experiment_allocation_lock(
+            self.store, experiment_id, version,
+        ):
             return self._allocate_locked(experiment_id, version)
 
     def _allocate_locked(self, experiment_id: str, version: str) -> dict[str, Any]:
