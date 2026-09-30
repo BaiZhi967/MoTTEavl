@@ -8,6 +8,7 @@ envelope 是所有入口（Run/CLI/SDK）共享的结果形状：
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 from typing import Any
 
 from motte_contracts.messages import Message, ModelRequest, ModelResponse
@@ -231,6 +232,7 @@ class CaseDrivenProvider:
             system=case.get("system"),
             tools=list(case.get("tools") or self.tools),
             tool_choice=case.get("tool_choice"),
+            metadata={"session_id": uuid4().hex},
         )
         return self.provider.complete(request)
 

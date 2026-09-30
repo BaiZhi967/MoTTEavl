@@ -19,6 +19,7 @@ from motte_trace.redaction import redact
 from .capabilities import validate_parameters
 from .errors import ProviderError, ProviderHTTPError, ProviderProtocolError, classify_exception
 from .identity import assess_identity, validate_identity_config
+from .opencode_go import conversation_headers
 from .pricing import PriceTable, cost_detail, parse_price_table
 from .transport import HTTPTransport, TransportOutcome
 
@@ -108,6 +109,9 @@ class BaseHTTPProvider:
     def build_request_body(self, request: ModelRequest) -> dict[str, Any]:
         raise NotImplementedError
 
+    def request_headers(self, request: ModelRequest) -> dict[str, str]:
+        return conversation_headers(getattr(self.transport, "base_url", ""), request.metadata)
+
     def normalize_response(self, body: dict[str, Any]) -> ModelResponse:
         raise NotImplementedError
 
@@ -153,7 +157,10 @@ class BaseHTTPProvider:
         chunks = 0
         terminal_seen = False
         try:
-            for sse in self.transport.post_sse(self.request_path, body):
+            for sse in self.transport.post_sse(
+                self.request_path, body,
+                **({"headers_extra": headers} if (headers := self.request_headers(request)) else {}),
+            ):
                 data_text = sse["data"]
                 if isinstance(data_text, str) and data_text.strip() == "[DONE]":
                     # 传输层终止哨兵：不是 JSON 事件，也不是 assistant 终态。
@@ -256,7 +263,10 @@ class BaseHTTPProvider:
         # Final, nonrecursive top-level merge. Validate again immediately before network.
         body.update(reasoning_patch(self.reasoning, self.reasoning_level))
         try:
-            outcome = self.transport.post_json_detailed(self.request_path, body)
+            outcome = self.transport.post_json_detailed(
+                self.request_path, body,
+                **({"headers_extra": headers} if (headers := self.request_headers(request)) else {}),
+            )
         except ProviderError as error:
             outcome: TransportOutcome | None = getattr(error, "outcome", None)
             envelope = self._envelope(body, outcome, error=error)

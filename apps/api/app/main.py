@@ -1841,6 +1841,8 @@ def create_app(
             config["max_output_tokens"] = bound
             provider = build_case_provider(config).provider
             model = provider.model
+            from uuid import uuid4
+
             request = ModelRequest(
                 model=model,
                 messages=[
@@ -1850,6 +1852,7 @@ def create_app(
                     )
                 ],
                 max_output_tokens=bound,
+                metadata={"session_id": uuid4().hex},
             )
             envelope = provider.complete(request)
         except ProviderCallError as error:

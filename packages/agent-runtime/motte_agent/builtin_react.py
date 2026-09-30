@@ -424,6 +424,7 @@ class BuiltinReActRuntime(AgentRuntime):
             model=self.model,
             messages=list(context),
             system=self._build_system_prompt(),
+            metadata={"session_id": self._session.session_id},
             tools=[TOOL_DECLARATIONS[name] for name in self.declared_tools
                    if name in TOOL_DECLARATIONS] if self.mode == "native-tool" else [],
             # 输出预算进入请求（#4）；Provider 侧 ceiling 校验兜底
