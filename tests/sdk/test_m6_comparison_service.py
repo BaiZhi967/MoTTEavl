@@ -261,6 +261,68 @@ def test_cost_comparison_requires_matching_currency() -> None:
     assert "COST_CURRENCY_MISMATCH" in result.metric_reasons
 
 
+@pytest.mark.parametrize("cost", [
+    {"total": 1.0},
+    {"total": 0.0},
+    {"total": 1.0, "currency": None},
+    {"total": 1.0, "currency": ""},
+    {"total": 1.0, "currency": "  "},
+    {"total": 1.0, "currency": 0},
+    {"total": 1.0, "currency": False},
+])
+def test_report_snapshot_requires_explicit_case_currency(cost) -> None:
+    store = InMemoryRunStore()
+    make_run(store, "legacy-cost", case_ids=["c1"], manifest={"cost": {"known": False}})
+    append_pass(store, "legacy-cost", "pass-legacy", [score_row("c1", passed=True)])
+    store.case_runs.upsert({
+        "run_id": "legacy-cost", "case_id": "c1", "result": {"cost": cost},
+    })
+
+    snapshot = ComparisonService(store).report_snapshot("legacy-cost")
+    assert snapshot.cost.known is False
+    assert snapshot.cost.unknown_usage_count == 1
+    assert snapshot.cost.totals() == {}
+    assert snapshot.metric_values["cost.total_usd"] is None
+    assert snapshot.metric_values["cost.per_success_usd"] is None
+
+
+def test_report_snapshot_preserves_priced_cases_when_one_currency_is_missing() -> None:
+    store = InMemoryRunStore()
+    make_run(store, "partial-cost", case_ids=["c1", "c2", "c3"],
+             manifest={"cost": {"known": False}})
+    append_pass(store, "partial-cost", "pass-partial", [
+        score_row(case_id, passed=True) for case_id in ("c1", "c2", "c3")
+    ])
+    for case_id, cost in [("c1", {"total": 2.0, "currency": "CNY"}),
+                          ("c2", {"total": 0.5, "currency": "USD"}),
+                          ("c3", {"total": 1.0})]:
+        store.case_runs.upsert({
+            "run_id": "partial-cost", "case_id": case_id, "result": {"cost": cost},
+        })
+
+    snapshot = ComparisonService(store).report_snapshot("partial-cost")
+    assert snapshot.cost.totals() == {"CNY": 2.0, "USD": 0.5}
+    assert snapshot.cost.known is False
+    assert snapshot.cost.unknown_usage_count == 1
+    assert snapshot.metric_values["cost.total_usd"] is None
+
+
+def test_cost_comparison_keeps_missing_case_currencies_unknown() -> None:
+    store = InMemoryRunStore()
+    for run_id in ("base", "candidate"):
+        make_run(store, run_id, case_ids=["c1"], manifest={"cost": {"known": False}})
+        append_pass(store, run_id, f"pass-{run_id}", [score_row("c1", passed=True)])
+        store.case_runs.upsert({
+            "run_id": run_id, "case_id": "c1", "result": {"cost": {"total": 1.0}},
+        })
+
+    result = ComparisonService(store).compare("base", "candidate", allowed_factors=[])
+    assert result.metric_eligibility["quality"] is True
+    assert result.metric_eligibility["cost"] is False
+    assert "COST_UNKNOWN:baseline" in result.metric_reasons
+    assert "COST_UNKNOWN:candidate" in result.metric_reasons
+
+
 def test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible() -> None:
     store = InMemoryRunStore()
     for run_id, outcomes in [("base", [True, False, True]),

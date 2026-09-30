@@ -792,8 +792,8 @@ class ComparisonService:
     def _case_cost_summary(self, run_id: str) -> tuple[CostSummary, float | None]:
         """从 case 结果的逐题成本块汇总（与 API report 同口径）。
 
-        每个有结果的 case 都带定价成本才算 known；无任何成本证据时
-        unknown（null 不是 0）。
+        每个有结果的 case 都带定价成本和显式币种才算 known；无任何成本
+        证据或历史成本缺少币种时 unknown（null 不是 0，不推定 USD）。
         """
         case_runs = getattr(self.store, "case_runs", None)
         if case_runs is None or not hasattr(case_runs, "list_for_run"):
@@ -809,10 +809,11 @@ class ComparisonService:
         for case in attempted:
             block = case["result"].get("cost")
             amount = _number(block.get("total")) if isinstance(block, dict) else None
-            if amount is None or amount < 0:
+            currency = block.get("currency") if isinstance(block, dict) else None
+            if (amount is None or amount < 0
+                    or not isinstance(currency, str) or not currency.strip()):
                 unknown += 1
                 continue
-            currency = str(block.get("currency") or "USD")
             totals[currency] = totals.get(currency, 0.0) + amount
             if block.get("price_table_version"):
                 versions.setdefault(currency, set()).add(str(block["price_table_version"]))

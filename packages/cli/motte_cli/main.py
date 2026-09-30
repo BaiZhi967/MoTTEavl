@@ -1024,6 +1024,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     exp_create.add_argument("--spec", required=True, help="ExperimentSpec JSON 或 @文件")
     exp_create.add_argument("--request-key", dest="request_key", help="幂等键（同键异内容拒绝）")
+    exp_create.add_argument("--preview-hash", help="绑定此前 preview 的 hash；资源或 spec 变化时拒绝")
     exp_create.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     remote.add_mode_arguments(exp_create)
     exp_status = experiment_sub.add_parser("status", help="读取实验状态与 cell 进度（只读）")
@@ -2162,6 +2163,7 @@ def _experiment_command(args) -> int:
             if command == "create":
                 return client.experiment_create(
                     document, request_key=getattr(args, "request_key", None),
+                    preview_hash=args.preview_hash,
                 )
             if command == "status":
                 return client.experiment_status(
@@ -2193,6 +2195,7 @@ def _experiment_command(args) -> int:
             else:
                 outcome = service.create(
                     document, request_key=getattr(args, "request_key", None),
+                    expected_preview_hash=args.preview_hash,
                 )
         except ValidationError as error:
             return _error("EXPERIMENT_INVALID", str(error))
@@ -2205,7 +2208,7 @@ def _experiment_command(args) -> int:
             return 2 if view.get("violations") else 0
         print(_m6_json({key: outcome.get(key) for key in (
             "experiment_id", "version", "created", "allocated",
-            "skipped_existing", "failed", "cells",
+            "skipped_existing", "failed", "cells", "preview_hash", "preflight_mode",
         )}))
         return 0
 
@@ -2247,9 +2250,11 @@ def _compare_command(args) -> int:
                 baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
             ).raw
             if args.statistics:
+                # Reuse the resolved Pass pair; current may change between requests.
                 payload["statistics"] = client.compare_statistics(
                     args.baseline, args.candidate, factors=",".join(factors),
-                    baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
+                    baseline_pass=payload["refs"]["baseline"]["scoring_pass_id"],
+                    candidate_pass=payload["refs"]["candidate"]["scoring_pass_id"],
                     k=args.k,
                 )
             return payload
@@ -2292,7 +2297,8 @@ def _compare_command(args) -> int:
     if args.statistics:
         payload["statistics"] = service.paired_statistics(
             args.baseline, args.candidate, allowed_factors=factors,
-            baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+            baseline_pass_id=result.baseline_ref.scoring_pass_id,
+            candidate_pass_id=result.candidate_ref.scoring_pass_id,
             k=args.k,
         )
     if args.json_out:
