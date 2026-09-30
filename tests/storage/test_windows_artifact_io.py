@@ -418,21 +418,41 @@ def test_native_raced_alias_preserves_verified_evidence(ntfs_root, monkeypatch, 
     identity = archive.stat().st_ino
     leaf, replacement = store.root / "ordinary.bin", store.root / "attacker-alias.bin"
     leaf.write_bytes(b"ordinary original")
+    # Both operations must work outside the pinned transaction: a later refusal
+    # must not silently stand in for missing fixture capabilities/permissions.
+    control = store.root / "control-alias.bin"
+    if alias == "symlink":
+        _required_symlink(control, archive)
+    else:
+        os.link(archive, control)
+    assert control.read_bytes() == data
+    os.replace(control, leaf)
+    assert leaf.read_bytes() == data
+    leaf.unlink()
+    leaf.write_bytes(b"ordinary original")
+    assert archive.stat().st_ino == identity
+    _assert_verified_archive(store, archive, data, receipt)
     api, outcomes = win._api(), []
     original_open, original_truncate = api.open, api.truncate
 
     def attack():
-        if alias == "symlink":
-            _required_symlink(replacement, archive)
-        else:
-            os.link(archive, replacement)
+        _assert_verified_archive(store, archive, data, receipt)
+        try:
+            if alias == "symlink":
+                replacement.symlink_to(archive)
+            else:
+                os.link(archive, replacement)
+        except OSError as error:
+            assert error.winerror in {5, 32}, error
+            outcomes.append(("creation_blocked", error.winerror))
+            return
         assert replacement.read_bytes() == data  # The actual canonical target, not an orphan.
         _assert_verified_archive(store, archive, data, receipt)
         try:
             os.replace(replacement, leaf)
         except OSError as error:
-            assert boundary == "truncate" and error.winerror in {5, 32}, error
-            outcomes.append(("blocked", error.winerror))
+            assert error.winerror in {5, 32}, error
+            outcomes.append(("replacement_blocked", error.winerror))
         else:
             outcomes.append(("replaced", None))
 
@@ -448,16 +468,87 @@ def test_native_raced_alias_preserves_verified_evidence(ntfs_root, monkeypatch, 
 
     monkeypatch.setattr(api, "open", open_file)
     monkeypatch.setattr(api, "truncate", truncate)
-    if boundary == "before_open":
-        with pytest.raises((ValueError, OSError)):
-            store.put_bytes(leaf.name, b"changed ordinary")
-        assert outcomes == [("replaced", None)]
-    else:
+    mutation_error = None
+    try:
         store.put_bytes(leaf.name, b"changed ordinary")
-        assert len(outcomes) == 1 and outcomes[0][0] == "blocked"
+    except (ValueError, OSError) as error:
+        mutation_error = error
+    assert len(outcomes) == 1, outcomes  # An actual attack call must reach a known outcome.
+    if outcomes[0][0] == "replaced":
+        assert boundary == "before_open" and mutation_error is not None
+    else:
+        assert outcomes[0][0] in {"creation_blocked", "replacement_blocked"}
+        assert mutation_error is None, mutation_error  # Ordinary writes must still succeed.
         assert leaf.read_bytes() == b"changed ordinary"
     assert archive.stat().st_ino == identity
     _assert_verified_archive(store, archive, data, receipt)
+    print(f"Verified archive race {boundary}/{alias}: {outcomes[0]}; "
+          "outside-transaction alias/replacement succeeded; canonical inode/bytes/receipt unchanged")
+
+
+@pytest.mark.parametrize("alias,boundary,denied_operation", [
+    ("symlink", "before_open", "replace"),
+    ("hardlink", "before_open", "link"),
+    ("hardlink", "truncate", "link"),
+    ("symlink", "truncate", "replace"),
+])
+@pytest.mark.parametrize("error_code", [5, 32])
+def test_portable_raced_archive_harness_preserves_earlier_refusal(
+    tmp_path, monkeypatch, alias, boundary, denied_operation, error_code,
+):
+    """Exercise the native test's assertions, not emulate/prove Windows sharing."""
+    from motte_storage import _windows_artifact_io as win
+    from motte_storage.artifacts import ArtifactStore
+
+    denied = []
+    original_link, original_replace = os.link, os.replace
+
+    def sharing_refusal(operation, original):
+        def invoke(source, destination, *args, **kwargs):
+            if operation == denied_operation and (
+                Path(destination).name == "attacker-alias.bin" if operation == "link"
+                else Path(source).name == "attacker-alias.bin"
+            ):
+                denied.append(operation)
+                error = PermissionError("scripted Windows sharing/access refusal")
+                error.winerror = error_code
+                raise error
+            return original(source, destination, *args, **kwargs)
+        return invoke
+
+    api = SimpleNamespace(open=lambda *args, **kwargs: None, truncate=lambda handle: None)
+
+    def exercise_boundary(store, artifact_id, data):
+        api.open(None, None, artifact_id, create=True)
+        api.truncate(None)
+        # Only the ordinary file may be written in this portable harness control.
+        leaf = store.root / artifact_id
+        assert not leaf.is_symlink() and leaf.stat().st_nlink == 1
+        leaf.write_bytes(data)
+
+    original_fixture = _verified_archive_fixture
+
+    def prepare_fixture(root):
+        result = original_fixture(root)
+        # On Windows let the real constructor acquire/release its root handles
+        # before this portable harness substitutes only the mutation boundary.
+        monkeypatch.setattr(win, "_api", lambda: api)
+        return result
+
+    monkeypatch.setitem(globals(), "_verified_archive_fixture", prepare_fixture)
+    monkeypatch.setattr(ArtifactStore, "put_bytes", exercise_boundary)
+    monkeypatch.setattr(os, "link", sharing_refusal("link", original_link))
+    monkeypatch.setattr(os, "replace", sharing_refusal("replace", original_replace))
+    test_native_raced_alias_preserves_verified_evidence(tmp_path, monkeypatch, alias, boundary)
+    assert denied == [denied_operation]
+
+
+@pytest.mark.parametrize("error_code", [2, 87, 1314])
+def test_portable_raced_archive_harness_does_not_accept_other_errors(tmp_path, monkeypatch, error_code):
+    with pytest.raises(AssertionError, match="scripted Windows sharing/access refusal"):
+        test_portable_raced_archive_harness_preserves_earlier_refusal(
+            tmp_path, monkeypatch, "hardlink", "truncate", "link", error_code,
+        )
 
 
 @native

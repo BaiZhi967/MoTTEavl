@@ -255,6 +255,13 @@ HTTP client 的依赖只有 `httpx`（新增 extras，见 §8）。执行类模�
   checkout 外目录运行，断言无 cwd/PYTHONPATH 依赖、资源可读、fake API 可调。
 - Docker 镜像：单阶段 python:3.12-slim + uv sync（既有）+ `HEALTHCHECK`；
   compose 保持 loopback 端口绑定。真实 build/up 证据按环境登记。
+  镜像默认探测 API 的 `http://127.0.0.1:8000/health`，API 服务继承这一检查。
+  同一镜像的 Worker 和一次性 migrate 服务不提供 HTTP 健康端点，正式 Compose
+  为这两种角色设置 `healthcheck.disable: true`；migrate 以退出码 0 为成功，
+  Worker 的 running 状态仅表示进程运行，不代表任务执行健康。实际验收必须继续
+  检查 queued Run 完成、固定 ScoringPass、共享 Artifact 以及重启后的持久性。
+  单独运行镜像时，API 默认探活保持不变；若改用 Worker／迁移命令，部署方需要
+  显式禁用 API 探活（例如 `docker run --no-healthcheck`），并按相同角色语义验证。
 
 ## 9. 备份、恢复与 GC
 

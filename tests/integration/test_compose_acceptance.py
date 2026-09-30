@@ -12,10 +12,13 @@ from pathlib import Path
 import subprocess
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = "m8-accept-" + "a" * 32
+IMAGE_HEALTHCHECK = ('python -c "import urllib.request; '
+    "urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\"")
 
 
 def controller():
@@ -38,11 +41,12 @@ def base_model():
     return {"name": "infra", "services": {
         "app-image": {**image, "profiles": ["build"]},
         "migrate": {**image, "command": ["alembic", "upgrade", "head"],
+                    "healthcheck": {"disable": True},
                     "depends_on": {"postgres": {"condition": "service_healthy"}}},
         "api": {**app, "command": ["python", "-m", "uvicorn"],
                 "ports": [{"target": 8000, "published": "8000", "host_ip": "127.0.0.1"}]},
         "worker": {**deepcopy(app), "command": ["python", "-m", "apps.worker.motte_worker"],
-                   "healthcheck": {"test": ["CMD", "real-health-probe"]}},
+                   "healthcheck": {"disable": True}},
         "postgres": {"image": "postgres:16-alpine", "networks": {"default": None},
                      "volumes": [{"type": "volume", "source": "postgres-data",
                                   "target": "/var/lib/postgresql/data"}],
@@ -52,6 +56,39 @@ def base_model():
         "otel-collector": {"image": "otel/opentelemetry-collector:0.109.0"},
     }, "volumes": {"postgres-data": {"name": "infra_postgres-data"}},
         "networks": {"default": {"name": "infra_default"}}}
+
+
+def test_image_health_probe_preserves_standalone_api_contract():
+    instructions = [line.strip()
+                    for line in (ROOT / "Dockerfile").read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+    assert [line for line in instructions if line.startswith("HEALTHCHECK ")] == [
+        "HEALTHCHECK CMD " + IMAGE_HEALTHCHECK]
+
+
+def test_shipped_non_http_roles_disable_inherited_api_probe():
+    services = yaml.safe_load((ROOT / "infra/docker-compose.yml").read_text())["services"]
+    assert "healthcheck" not in services["api"]  # Inherit the unchanged image probe.
+    for name in ("worker", "migrate"):
+        assert services[name].get("healthcheck") == {"disable": True}
+    assert services["postgres"]["healthcheck"]["test"] == [
+        "CMD-SHELL", "pg_isready -U motteavl -d motteavl"]
+
+
+def test_acceptance_preserves_shipped_service_health_semantics():
+    services = yaml.safe_load((ROOT / "infra/docker-compose.yml").read_text())["services"]
+    model = base_model()
+    # Copy role exceptions from shipped configuration, never add a test-only override.
+    for name in controller().SERVICES:
+        model["services"][name].pop("healthcheck", None)
+        if "healthcheck" in services[name]:
+            model["services"][name]["healthcheck"] = deepcopy(services[name]["healthcheck"])
+    isolated = controller().isolate_model(model, PROJECT)
+    assert "healthcheck" not in isolated["services"]["api"]
+    for name in ("worker", "migrate"):
+        assert isolated["services"][name].get("healthcheck") == {"disable": True}
+    for name in controller().SERVICES:
+        assert isolated["services"][name].get("healthcheck") == services[name].get("healthcheck")
 
 
 def test_isolation_retains_commands_dependencies_and_health_but_owns_every_resource():
