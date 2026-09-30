@@ -1,0 +1,145 @@
+{
+  "live": true,
+  "model": "space-bunny-free",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "feature_limits": {
+    "judge_pairwise": 2,
+    "judge_calibration": 2
+  },
+  "max_http_requests": 4,
+  "concurrency": 1,
+  "retries": 0,
+  "output_token_limits": {
+    "judge_pairwise": 4096,
+    "judge_calibration": 4096
+  },
+  "socket_timeout_sec": {
+    "judge_pairwise": 120,
+    "judge_calibration": 120
+  },
+  "feature_timeout_sec": {
+    "judge_pairwise": 240,
+    "judge_calibration": 240
+  },
+  "prior_http_requests": 75,
+  "features": [
+    {
+      "name": "judge_pairwise",
+      "status": "passed",
+      "evidence": {
+        "ok": true,
+        "job_id": "sjob-c31aede67e164feda2ce158675babd3a",
+        "billed_calls": 2,
+        "mode": "pairwise",
+        "subject_source": "synthetic_frozen_fixture",
+        "report_immutable": true,
+        "idempotent_submit": true,
+        "metric_rows": 8
+      },
+      "http_requests": 2
+    },
+    {
+      "name": "judge_calibration",
+      "status": "failed",
+      "error_type": "JudgeWitnessFailure",
+      "error_class": "judge_calibration_repeat_inconsistent",
+      "error_code": "judge_calibration_repeat_inconsistent",
+      "diagnostics": {
+        "planned_calls": 2,
+        "billed_calls": 2,
+        "returned_calls": 2,
+        "settled_calls": 2,
+        "parse_failure_count": 0,
+        "non_scored_count": 0,
+        "completion_tokens": 1012,
+        "calls_at_output_cap": 0,
+        "job_status_code": 4
+      },
+      "http_requests": 2
+    }
+  ],
+  "requests": [
+    {
+      "feature": "judge_pairwise",
+      "ordinal": 1,
+      "sent_at": "2026-09-30T21:28:27.092037+00:00",
+      "stream": false,
+      "max_tokens": 4096,
+      "session_sha256": "9eaae151769f1fc66b345a9beda5f731a70981fa69160828fc97ec80d26b1681",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 825,
+        "completion_tokens": 1052,
+        "total_tokens": 1877
+      }
+    },
+    {
+      "feature": "judge_pairwise",
+      "ordinal": 2,
+      "sent_at": "2026-09-30T21:28:42.647552+00:00",
+      "stream": false,
+      "max_tokens": 4096,
+      "session_sha256": "10ddd9ffcecf95c91e67a7b2b3b5e1cc86c6b9b981dc2e7070215d4b3285c3bb",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 825,
+        "completion_tokens": 998,
+        "total_tokens": 1823
+      }
+    },
+    {
+      "feature": "judge_calibration",
+      "ordinal": 3,
+      "sent_at": "2026-09-30T21:29:04.604478+00:00",
+      "stream": false,
+      "max_tokens": 4096,
+      "session_sha256": "4ab1bdbc4bdb7d2db016deb1f47b7c19d8bef02519f39436aeb00b7ca3508f3e",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 903,
+        "completion_tokens": 634,
+        "total_tokens": 1537
+      }
+    },
+    {
+      "feature": "judge_calibration",
+      "ordinal": 4,
+      "sent_at": "2026-09-30T21:29:13.476129+00:00",
+      "stream": false,
+      "max_tokens": 4096,
+      "session_sha256": "2787e2e8682d25c089a155fd5ebf05919434f162a682c227957d82e1ac4f531b",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 903,
+        "completion_tokens": 378,
+        "total_tokens": 1281
+      }
+    }
+  ],
+  "source_sha": "bdcedbc7839e463b526c5a9520ef0bcd10102f90",
+  "started_at": "2026-09-30T21:28:26.724233+00:00",
+  "http_requests": 4,
+  "cumulative_http_requests": 79,
+  "finished_at": "2026-09-30T21:29:19.374686+00:00",
+  "status": "incomplete_or_failed"
+}

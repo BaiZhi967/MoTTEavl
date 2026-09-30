@@ -9,7 +9,7 @@
 experimental、blocked、not_run各有自身含义，不按线性等级排名。skip不计入通过或支持。
 137个原目标未被改写，当前窄软件映射不授予整体验收；`stable_supported=false`、`cutover_ready=false`。
 
-## 当前候选唯一结论
+## M8 软件基线与后续接入证据
 
 本地47dec4f（tree167a52409c05959a1028e407abe255a90121e615）make check退出0：
 Python5972 passed /60 skipped /1 live deselected，Web304 passed；PG16.15实际选中节点已运行。
@@ -35,6 +35,33 @@ packaging、Web304与Python。CI Python5948 passed /84 skipped /1 live deselecte
 | 发布依赖 / six wheels | 当前主工作区审计及安装通过 | urllib3 2.8.0，其余100锁定包未改；183源码条目一致，隔离Python -I真实HTTP CLI通过；严格TS另有49条相同既有诊断 |
 | 浏览器G04/T11/A18 | not_reverified | 当前build与HTTP10资产一致；浏览器/预览阻断，无UI、窄屏、>500事件或鉴权过期证据 |
 | 真实支持组合 / 私有迁移 / 三个替代场景 / RC与cutover | 未闭合 | 新付费、人审、私有来源、完整平台、正式发布与生产授权及验收仍需补齐 |
+
+## a400 精确源码回归与 Go 功能验收补充（2026-09-30 21:22 UTC）
+
+`a400aef8d6d81a2d09792e92d049e0853717f5de` 与本地 `2373820` 的完整树为
+`809793f16bf141664753870a584b1a15c0a64598`。
+[PR CI 36773403850](https://github.com/BaiZhi967/MoTTEavl/actions/runs/36773403850)
+及 [push CI 36773398634](https://github.com/BaiZhi967/MoTTEavl/actions/runs/36773398634)
+各五项全部成功：每轮 Python 6131 passed / 84 skipped / 1 deselected / 3 warnings，
+另有 PostgreSQL 分配/恢复 2 项及 Trace 事务 114 项；Web 304、Windows 83、
+真实 Compose 镜像/迁移/Worker/重启/清理、仓库外六包干净安装通过。
+这些数量存在重叠，不累加为覆盖目标数；跳过不计通过。
+这是 a400 的已执行结果，不证明后续 Go 验收脚本变更已通过其各自最终 CI。
+
+当前 Go 限定编码功能的逐项状态和原始失败历史见
+[功能矩阵](../verification/opencode-go-feature-matrix.md)及
+[真实调用证据](../verification/opencode-go-live-2026-09-30/summary.json)。
+它们补充原生 Agent、Scenario、Skill 和 Judge 的受限真实模型路径，
+不覆盖本文件表格中注明的正式人审资格、非编码数据集或其他 Provider/Runtime。
+第 8 节原始 Task 4 表中的“本轮没有新增真实模型证据”仅描述当时范围，
+不能用于否认这些后续单独绑定源码的编码证据。
+功能路径能够执行并正确拒绝不稳定结果，不等于选定模型获得校准资格；
+当前模型仍未取得正式资格，必须另有真实、合规复核的样本和资格证据。
+
+浏览器验收仍未完成：旧 `47dec4f` 构建和 HTTP 资产校验不能证明当前 UI。
+云浏览器本地导航被策略阻止，当前环境没有受支持的预览入口；没有绕过访问限制。
+`stable_supported=false`、`cutover_ready=false` 继续保留。
+CI 通过说明该限定增量的回归门禁通过，不把生产/完整 M8 验收自动标记完成。
 
 ## 历史 M7 记录（以下不是当前候选结论）
 

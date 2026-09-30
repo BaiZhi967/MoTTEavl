@@ -43,10 +43,16 @@ SAFE_FAILURE_CODES = frozenset("judge_" + code for code in (
     "report_scores_changed", "report_rebilled", "calibration_plan_expanded",
     "calibration_child_count", "calibration_not_honest", "calibration_ledger_incomplete",
     "calibration_report_changed", "calibration_replay_changed", "calibration_rebilled",
+    "calibration_repeat_inconsistent", "calibration_code_review_did_not_pass",
+    "calibration_repeat_metric_mismatch", "calibration_call_evidence_invalid",
+    "calibration_gate_reason_mismatch",
 ))
 SAFE_DIAGNOSTIC_KEYS = frozenset((
     "job_status_code", "planned_calls", "billed_calls", "returned_calls", "settled_calls",
     "parse_failure_count", "non_scored_count", "completion_tokens", "calls_at_output_cap",
+    "calibration_call_count", "repeat_measured", "repeat_sample_count", "repeat_stable_count",
+    "repeat_unstable_count", "repeat_rate_is_one", "criterion_disagreement_count",
+    "criterion_false_count", "criterion_missing_count", "calibration_invalid_call_count",
 ))
 JOB_STATUS_CODES = {name: index for index, name in enumerate((
     "queued", "prepared", "dispatching", "settled", "completed", "failed", "cancelled",
@@ -72,7 +78,7 @@ def _require(condition, code, diagnostics=None):
 
 def _output_cap(config):
     value = config.get("max_output_tokens", 512)
-    _require(type(value) is int and 1 <= value <= 1024, "output_cap_invalid")
+    _require(type(value) is int and 1 <= value <= 4096, "output_cap_invalid")
     return value
 
 
@@ -113,7 +119,7 @@ def _setup(ctx, label):
     config = ctx.provider_config()
     output_cap = _output_cap(config)
     timeout = config.get("timeout",20)
-    _require(type(timeout) in (int,float) and 0 < timeout <= 60,"request_timeout_invalid")
+    _require(type(timeout) in (int,float) and 0 < timeout <= 120,"request_timeout_invalid")
     connection = {key: config[key] for key in
                   ("kind", "base_url", "credentials", "api_key_env") if key in config}
     resources.providers.put({**connection, "name": "go-judge", "generation": 1,
@@ -126,6 +132,30 @@ def _setup(ctx, label):
         "published_at": datetime.now(UTC).isoformat(),
     })
     return path, SQLiteRunStore(path), resources
+
+
+def _calibration_diagnostics(report, criteria):
+    """Count report facts without retaining model explanations or dynamic labels."""
+    grades = report.calls
+    stability = report.repeat_stability
+    values = {
+        "calibration_call_count": len(grades),
+        "repeat_measured": int(stability.get("measured") is True),
+        "repeat_sample_count": stability.get("samples"),
+        "repeat_stable_count": stability.get("stable"),
+        "repeat_unstable_count": len(stability.get("unstable_samples") or []),
+        "repeat_rate_is_one": int(stability.get("rate") == 1.0),
+        "criterion_disagreement_count": sum(
+            len({grade.criteria.get(key) for grade in grades}) > 1 for key in criteria),
+        "criterion_false_count": sum(
+            grade.criteria.get(key) is False for grade in grades for key in criteria),
+        "criterion_missing_count": sum(
+            key not in grade.criteria for grade in grades for key in criteria),
+        "calibration_invalid_call_count": sum(
+            grade.sample_id != CASE_ID or grade.kind not in {"single", "repeat"}
+            or grade.status != "ok" or grade.outcome != "succeeded" for grade in grades),
+    }
+    return JudgeWitnessFailure("judge_witness_failure", values).diagnostics
 
 
 def _spec_request(calls, output_cap):
@@ -292,10 +322,33 @@ def check_judge_calibration(ctx):
     diagnostics = _job_diagnostics(saved)
     service = JudgeCalibrationService(store, SQLiteResourceStore(path), scoring_jobs=scoring)
     report = service.publish_report(execution.execution_id)
+    diagnostics.update(_calibration_diagnostics(report.report, spec.criteria))
     _require(report.report.call_count == 2 and report.report.human_reviewed_count == 0
-             and report.report.candidate_only_count == 1 and not report.report.gate_eligible,
+             and report.report.candidate_only_count == 1 and not report.report.gate_eligible
+             and not report.report.qualified and report.report.experimental
+             and "calibration is not human-reviewed at the required level" in report.report.reasons
+             and bool(report.report.not_run),
              "calibration_not_honest", diagnostics)
     _require(report.report.coverage["ledger"]["complete"], "calibration_ledger_incomplete", diagnostics)
+    grades = report.report.calls
+    _require(len(grades) == 2 and {grade.kind for grade in grades} == {"single", "repeat"}
+             and all(grade.sample_id == CASE_ID and grade.status == "ok"
+                     and grade.outcome == "succeeded"
+                     and set(grade.criteria) == set(spec.criteria)
+                     and all(type(value) is bool for value in grade.criteria.values()) for grade in grades),
+             "calibration_call_evidence_invalid", diagnostics)
+    # Lifecycle acceptance requires truthful repeat metrics, even when this
+    # synthetic witness's model judgements disagree or reject the code.
+    by_kind = {grade.kind: grade for grade in grades}
+    labels = [{key: by_kind[kind].criteria[key] for key in spec.criteria}
+              for kind in ("single", "repeat")]
+    stable = labels[0] == labels[1]
+    expected_stability = {"measured": True, "samples": 1, "stable": int(stable),
+                          "rate": float(stable), "unstable_samples": [] if stable else [CASE_ID]}
+    _require(report.report.repeat_stability == expected_stability,
+             "calibration_repeat_metric_mismatch", diagnostics)
+    instability_reason = any(reason.startswith("repeat stability ") for reason in report.report.reasons)
+    _require(instability_reason is (not stable), "calibration_gate_reason_mismatch", diagnostics)
     repeated = service.publish_report(execution.execution_id)
     _require(repeated == report and service.get_report(report.report_id) == report,
              "calibration_report_changed", diagnostics)
@@ -303,5 +356,11 @@ def check_judge_calibration(ctx):
     _require(len(store.invocations.list_for_job(saved["job_id"])) == 2, "calibration_rebilled", diagnostics)
     return {"ok": True, "execution_id":execution.execution_id,
             "billed_calls": 2, "human_reviewed_count": 0, "candidate_only_count": 1,
-            "gate_eligible": False, "qualification": "blocked_missing_human_review",
-            "report_immutable": True, "ledger_complete": True}
+            "gate_eligible": False, "qualified": False, "qualification": "blocked_missing_human_review",
+            "report_immutable": True, "ledger_complete": True,
+            "criterion_labels": labels, "repeat_stable": stable,
+            "instability_gate_reason_present": instability_reason,
+            "repeat_stability": {key: report.report.repeat_stability[key]
+                                 for key in ("measured", "samples", "stable", "rate")},
+            "model_quality_passed": all(value for grade in labels for value in grade.values()),
+            "diagnostics": diagnostics}

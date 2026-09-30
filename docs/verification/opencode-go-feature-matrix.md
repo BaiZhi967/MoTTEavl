@@ -24,10 +24,10 @@ This is feature-path coverage, **not** a full benchmark or production qualificat
 
 The executable harness derives its hard total from selected per-feature caps; it
 never silently expands a feature or uses paid fallbacks. Each request also has a
-512-token output cap for ordinary coding features (1024 only for bounded structured
-code-review Judge witnesses), a 20-second ordinary / 60-second Judge socket timeout,
+512-token output cap for ordinary coding features (4096 only for bounded structured
+code-review Judge witnesses), a 20-second ordinary / 120-second Judge socket timeout,
 redirects disabled, and zero retries. Each feature also has an absolute deadline of
-min(120 seconds, its call cap × that feature's socket timeout);
+min(120 seconds for ordinary features / 240 seconds for Judge, its call cap × that feature's socket timeout);
 the whole batch is capped at 900 seconds, and an in-flight timeout stops later dispatch.
 A batch stops on authentication errors, 429, network uncertainty, or reported-model
 mismatch. Zero automatic retries means Retry-After is recorded, never ignored by a
@@ -69,12 +69,12 @@ Prior evidence is preserved: 36 real requests, 10 successful coding cases and on
 historical three-step-budget termination. Expansions add a separate cumulative ledger;
 they do not overwrite that failure or relabel a local run as a published/full CI gate.
 
-## Final observed result (2026-09-30)
+## Historical observed result (2026-09-30, before 21:28 acceptance)
 
 Machine-readable receipt: [live summary](opencode-go-live-2026-09-30/summary.json).
 All raw provider messages and credentials are excluded from these receipts.
 
-| Feature family | Latest real result | Evidence |
+| Feature family | Result at 20:14 checkpoint | Evidence |
 |---|---|---|
 | Nonstream completion, identity and usage | PASS | core |
 | Provider text SSE | PASS, repeated after production identity fix | core + final |
@@ -101,7 +101,7 @@ SSE terminal reconciliation, without extra model calls.
 
 - Prior coding smoke: 36 authorized HTTP attempts; 10 cases passed and one old
   three-step budget termination remains recorded
-- Expanded feature checks: 39 authorized attempts; latest results are 14 passed
+- Expanded feature checks: 39 authorized attempts; results at that checkpoint were 14 passed
   feature families and 2 failed families, with all earlier trials retained
 - Combined authorized attempts: **75**, including one outcome-unknown network attempt
 - Separate test-isolation incident: **3 synthetic-key attempts** (one confirmed 401,
@@ -119,11 +119,10 @@ fresh diagnostic batch used 60-second Judge socket timeouts, a 120-second absolu
 feature deadline, at most four new requests, and no retries. It sent three requests:
 Pairwise stopped after a length-limited response; calibration returned one normal
 response and one length-limited response, leaving one parse failure and three
-unscored metrics. The earlier timed-out job was never replayed. No further model
-calls were made to chase a green result.
+unscored metrics. The earlier timed-out job was never replayed. Those historical failures remain preserved. A later acceptance batch is recorded below.
 
 Ordinary coding witnesses retain a 512-token/20-second socket cap. Judge witnesses
-are separately bounded at 1024 tokens/60 seconds; selected feature call caps and
+are now separately bounded at 4096 tokens/120 seconds; selected feature call caps and
 the 900-second absolute batch limit still apply. All execution was serial with no
 paid-model fallback or redirect following.
 
@@ -135,3 +134,48 @@ route, Docker/Harbor execution, other wire protocols, unsupported modalities,
 generic noncoding benchmark datasets, remote Celery infrastructure, or genuine
 human-reviewed calibration qualification. Passing these tiny coding witnesses does
 not establish a production gate, statistical model quality, or service guarantees.
+
+
+### Adequate-budget acceptance (21:28 UTC)
+
+The user requested completion of the recoverable Judge acceptance gaps. Source
+`bdcedbc7839e463b526c5a9520ef0bcd10102f90` used 4096 output tokens, 120-second
+request timeouts, 240-second feature deadlines, and at most four new serial sends.
+All four returned HTTP 200, the exact reported model, and `finish_reason=stop`.
+Pairwise passed both swapped presentations with immutable reports and idempotent
+submission. Candidate calibration completed its durable job and parsed every
+criterion, but the two real grades disagreed: the stronger model-consistency
+assertion correctly failed. This is genuine observed model-quality instability,
+not truncation or a software lifecycle failure. The prior receipt is retained as
+[acceptance.json](opencode-go-live-2026-09-30/acceptance.json).
+
+Functional calibration acceptance checks that measured repeat stability and the
+qualification gate match the actual grades. It must not require model-quality
+success or label synthetic candidate data as genuine human-reviewed calibration.
+
+## Final functional acceptance (21:37 UTC)
+
+A single additional two-call diagnostic, source
+`f2a15ef8dc011c271258aa60a7243d2d118242b3`, retained the actual synthetic
+criterion booleans. The first response marked task completion, constraint adherence,
+and evidence grounding false; the repeat marked all three true. Both completed
+normally with exact model identity. The platform correctly reported stability 0/1,
+recorded an instability rejection reason, kept `qualified=false` and
+`gate_eligible=false`, and preserved a complete immutable ledger. There are zero
+human-reviewed samples. Thus the **calibration lifecycle is accepted; this Judge
+model's quality/qualification is not accepted**. No more requests were made.
+
+Latest functional coverage is 16 passed witnesses. Historical failures remain in
+all original receipts. Final accounting is 81 authorized attempts plus the separate
+3 synthetic-key isolation incident attempts, conservatively 84 total. Expanded
+coverage used 45 authorized attempts; reported usage is available for 43 of them:
+24,747 prompt + 11,220 completion = 35,967 tokens. The earlier usage limitations
+remain. See [final receipt](opencode-go-live-2026-09-30/calibration-lifecycle.json)
+and [current summary](opencode-go-live-2026-09-30/summary.json).
+
+Final focused regression: 368 passed, two existing deprecation warnings; separate
+qualification suite 39 passed / one environment skip. Independent harness/helper
+review reran 65 tests and Ruff successfully. Deterministic software-only fixtures
+verify that measured stable/correct judgments require proper reviewed provenance,
+while stable-but-wrong, unstable, incomplete, or fabricated provenance remains
+ineligible. These fixture tests are not genuine human calibration data.

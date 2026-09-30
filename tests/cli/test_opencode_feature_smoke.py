@@ -245,12 +245,12 @@ def test_only_judge_features_have_a_bounded_larger_output_cap(tmp_path):
     with pytest.raises(ValueError):
         ctx.send(request(max_tokens=1024),timeout=20)
     ctx.start_feature('judge_pairwise')
-    assert ctx.provider_config()['max_output_tokens']==1024
-    with ctx.send(request(max_tokens=1024),timeout=20) as response:
+    assert ctx.provider_config()['max_output_tokens']==4096
+    with ctx.send(request(max_tokens=4096),timeout=20) as response:
         response.read()
     assert ctx.requests[-1]['finish_reason']=='length'
     with pytest.raises(ValueError):
-        ctx.send(request(max_tokens=1025),timeout=20)
+        ctx.send(request(max_tokens=4097),timeout=20)
 
 
 def test_failure_report_only_accepts_typed_allowlisted_judge_diagnostics():
@@ -263,7 +263,7 @@ def test_failure_report_only_accepts_typed_allowlisted_judge_diagnostics():
     assert mod.safe_failure_fields(RuntimeError('secret'))=={}
 
 
-def test_judge_diagnostic_timeout_is_sixty_but_other_features_stay_twenty(tmp_path):
+def test_judge_diagnostic_timeout_is_one_twenty_but_other_features_stay_twenty(tmp_path):
     mod=module()
     timeouts=[]
     ctx=mod.LiveContext(tmp_path,'fake',{'nonstream':1,'judge_pairwise':2},opener=lambda req,**kw:
@@ -272,10 +272,10 @@ def test_judge_diagnostic_timeout_is_sixty_but_other_features_stay_twenty(tmp_pa
     with ctx.send(request(),timeout=99):
         pass
     ctx.start_feature('judge_pairwise')
-    assert ctx.provider_config()['timeout']==60
-    with ctx.send(request(max_tokens=1024),timeout=99):
+    assert ctx.provider_config()['timeout']==120
+    with ctx.send(request(max_tokens=4096),timeout=999):
         pass
-    assert timeouts[0]<=20 and 59<timeouts[1]<=60
+    assert timeouts[0]<=20 and 119<timeouts[1]<=120
 
 
 def test_absolute_feature_deadline_includes_setup_and_last_read_time(tmp_path):
@@ -289,3 +289,18 @@ def test_absolute_feature_deadline_includes_setup_and_last_read_time(tmp_path):
     with pytest.raises(mod.FeatureTimeout):
         mod.run_with_deadline(ctx,finishes_late,timeout=20)
     assert ctx.stopped
+
+
+def test_two_call_judge_feature_has_240_second_absolute_deadline(tmp_path):
+    mod=module()
+    ctx=mod.LiveContext(tmp_path,'fake',{'judge_pairwise':2},clock=lambda:0.0)
+    ctx.start_feature('judge_pairwise')
+    assert ctx.feature_deadline == 240
+    assert ctx.deadline == 900
+
+
+def test_ordinary_multi_turn_feature_keeps_120_second_deadline(tmp_path):
+    mod=module()
+    ctx=mod.LiveContext(tmp_path,'fake',{'multi_turn_tools':8},clock=lambda:0.0)
+    ctx.start_feature('multi_turn_tools')
+    assert ctx.feature_deadline == 120

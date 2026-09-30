@@ -36,10 +36,12 @@ FEATURE_LIMITS = {
     'judge_single': 1, 'judge_pairwise': 2, 'judge_calibration': 2,
     'direct_v2': 1, 'experiment_cell': 1, 'skill_ablation': 6,
 }
-FEATURE_OUTPUT_CAPS = {name:(1024 if name.startswith('judge_') else 512)
+FEATURE_OUTPUT_CAPS = {name:(4096 if name.startswith('judge_') else 512)
                        for name in FEATURE_LIMITS}
-FEATURE_SOCKET_TIMEOUTS = {name:(60 if name.startswith('judge_') else 20)
+FEATURE_SOCKET_TIMEOUTS = {name:(120 if name.startswith('judge_') else 20)
                            for name in FEATURE_LIMITS}
+FEATURE_DEADLINE_CAPS = {name:(240 if name.startswith('judge_') else 120)
+                         for name in FEATURE_LIMITS}
 CORE_FEATURES = ('nonstream','stream_text','stream_tools','stream_cancel',
                  'multi_turn_tools','legacy_json')
 
@@ -196,7 +198,7 @@ class LiveContext:
             raise ValueError('unknown feature')
         self.feature = feature
         self.feature_deadline = min(self.deadline,self._clock()+min(
-            120,self.limits[feature]*FEATURE_SOCKET_TIMEOUTS.get(feature,20)))
+            FEATURE_DEADLINE_CAPS.get(feature,120),self.limits[feature]*FEATURE_SOCKET_TIMEOUTS.get(feature,20)))
 
     def provider_config(self):
         return {'kind':'openai_compatible','base_url':GO_BASE_URL,'model':SPACE_BUNNY_MODEL,
@@ -441,7 +443,7 @@ def main(argv=None):
             'feature_limits':limits,'max_http_requests':sum(limits.values()),'concurrency':1,
             'retries':0,'output_token_limits':{name:FEATURE_OUTPUT_CAPS[name] for name in limits},
             'socket_timeout_sec':{name:FEATURE_SOCKET_TIMEOUTS[name] for name in limits},
-            'feature_timeout_sec':{name:min(120,cap*FEATURE_SOCKET_TIMEOUTS[name])
+            'feature_timeout_sec':{name:min(FEATURE_DEADLINE_CAPS[name],cap*FEATURE_SOCKET_TIMEOUTS[name])
                                    for name,cap in limits.items()},
             'prior_http_requests':args.prior_http_requests,'features':[],'requests':[]}
     if not args.live:
@@ -467,7 +469,7 @@ def main(argv=None):
                     if function is None:
                         entry={'name':name,'status':'blocked','reason':'witness_not_implemented'}
                     else:
-                        evidence=run_with_deadline(ctx,function,timeout=min(120,limits[name]*FEATURE_SOCKET_TIMEOUTS[name]))
+                        evidence=run_with_deadline(ctx,function,timeout=min(FEATURE_DEADLINE_CAPS[name],limits[name]*FEATURE_SOCKET_TIMEOUTS[name]))
                         verify_completed_requests(ctx,start,name)
                         if name in ('multi_turn_tools','native_agent_queue','scenario_multiturn'):
                             evidence['session_stable'] = True
