@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_commit": "15f99bfc0729a83fb4d5a9e500bf72e472eca52a",
+  "source_commit": "50b806d9ce10233f0a40cf7b5202ef46c672f3f2",
   "baseline_commit": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
   "source_branch": "fix/m8-closure-20260930",
   "environment": {
@@ -11,16 +11,16 @@
     "postgres": "not available",
     "docker": "not available"
   },
-  "scope": "offline and synthetic repairs; draft PR #8 published, this successor code verified locally; no paid calls/private exports/production/merge",
-  "started_at_utc": "2026-09-30T02:50:28.812808+00:00",
+  "scope": "offline and isolated synthetic repairs; draft PR publication authorized; no paid calls, private exports, production or merge",
+  "started_at_utc": "2026-09-30T02:28:29Z",
   "python": {
-    "tests": 3376,
+    "tests": 3336,
     "failures": 0,
     "errors": 0,
     "skipped": 88,
-    "passed": 3288,
+    "passed": 3248,
     "live_deselected": 1,
-    "junit_sha256": "b9c5473cc3a86c40a3bf9cf774b754b62ea7860a416999e3696bedbc46ab2735",
+    "junit_sha256": "82f842021eb778ddf05883208b8423a9b56b001dd93410eb4e1a6c75f13be1cc",
     "skip_reasons": {
       "Windows drive-letter compose syntax": 1,
       "set MOTTE_PG_DSN to run the PostgreSQL manual-revision CAS test": 1,
@@ -45,7 +45,7 @@
   "make_check": {
     "exit_code": 2,
     "blocked_at": "docker compose config: executable unavailable",
-    "log_sha256": "5c5522213f796cbd4f895a8fcefd244e5a0c0655cc810aea8665dd4dceecdf34"
+    "log_sha256": "36dd7b5a9e09393678db3c1a43f670946df9d5b507fe7beff1b959f9ee87b111"
   },
   "wheels": {
     "exit_code": 0,
@@ -61,7 +61,7 @@
       },
       {
         "name": "motte_eval-0.1.0-py3-none-any.whl",
-        "sha256": "26f5ffbff8b52a9a83b2b56ad663329f3c2b66110f8cc6c66d2daaf3f31c8d42"
+        "sha256": "35965123a0be66b21b91ea79b142ad9931c3198b37ac74d4cbd963d7aa31e208"
       },
       {
         "name": "motte_sdk-0.1.0-py3-none-any.whl",
@@ -112,8 +112,7 @@
     "judge_native": "no remaining high-priority issue",
     "statistics_exports": "no P1/P2",
     "storage_safety": "no remaining P1/P2; real PG/Windows not exercised",
-    "resumed_repairs": "no remaining P1/P2 at50b806d; independent113passed/1PGskip, finalAPI17passed",
-    "pairwise_evidence": "no blockers in independent parser/overall metric review at15f99bf; scoped147passed/1PGskip, full3288passed/88skip"
+    "resumed_repairs": "no remaining P1/P2 at50b806d; independent113passed/1PGskip, finalAPI17passed"
   },
   "checks": {
     "ruff": {
@@ -151,59 +150,57 @@
     "openapi_check": {
       "result": "passed",
       "command": "uv run python scripts/check_openapi.py",
-      "log_sha256": "7cc24325a9407b3dddb991cc95e5361b56579ece47c6e3ca6f1f39bbf93dc700"
+      "log_sha256": "f9e7ff23a9eb021b121a47b0156e523837131c58abb6ad8069b50fdf155c4902"
     },
     "python_dependency_audit": {
       "result": "passed",
       "command": "uv run pip-audit --skip-editable",
       "scope": "no known vulnerabilities in audited noneditable dependencies",
-      "log_sha256": "ff0bc4a073f1ae336cb4dbb61ac31f360c1a5ae57b9b35563ab53b579f7efba7",
-      "verified_dependency_state": "unchanged dependency manifests/lock versus audited50b806d"
+      "log_sha256": "ff0bc4a073f1ae336cb4dbb61ac31f360c1a5ae57b9b35563ab53b579f7efba7"
     },
     "web_dependency_audit": {
       "result": "passed",
       "command": "pnpm --dir apps/web audit --audit-level high",
-      "log_sha256": "15950a68a7ed99c59779717acefdceb3f69cfd31bde67d2c954f2a3cea4d7955",
-      "verified_dependency_state": "unchanged dependency manifests/lock versus audited50b806d"
+      "log_sha256": "15950a68a7ed99c59779717acefdceb3f69cfd31bde67d2c954f2a3cea4d7955"
     },
     "wheel_clean_install": {
       "result": "passed",
       "scope": "new external venv, no PYTHONPATH; install six wheels; SDK import and CLI help",
-      "log_sha256": "671ad45af2899dd61a514da066440283f3a8c68ea37b95a6d41fc23252966d1f"
+      "log_sha256": "e191ad69a22114fc54bb666a151a35b6cc8355958720862e88630754f7d9e499"
     }
   },
   "verified_source_trees": {
-    "packages": "fa20d19e2f56c7aba749a166cc0df732dc6f5f1b",
+    "packages": "23296e583eb0fe9ae3c74186f86456da0e39fc6a",
     "apps": "e901e683500157e15b5b733ef1dbffdb8232c9ee",
-    "tests": "3967e01bef8343b833c954841e565413fb5c65eb",
+    "tests": "29fd5348a1f9cc5974cd30362608d9f3d39aa21e",
     "scripts": "9ca5d1629abeb8d7a8b20e9f78710893f737ff33",
     "bridges": "aab9b82c42ee10355f80c0ba5d5cb07e904a0897",
     "api": "d05bdb2806fdcb52ba91f6cd1e458a0195afb18f"
   },
   "web_assets": [
     {
-      "path": "apps/web/dist/assets/DirectLlmOperate-CpjPJxrx.js",
-      "sha256": "c21384d519636072eab5b8e72675fb57ae3f2f5510f84ba90bd407c1f13df5c2"
+      "path": "apps/web/dist/assets/DirectLlmOperate-DIG6N7nl.js",
+      "sha256": "b3961a1fab91149b15f1402fcd896741b737acb9a764a933d82c460591261818"
     },
     {
-      "path": "apps/web/dist/assets/JudgesPage--AGWT1Ie.js",
-      "sha256": "e7c498bda83fbaed5de4a709f99cce068688b523b68464dc286c52cf38977778"
+      "path": "apps/web/dist/assets/JudgesPage-3IDxovAf.js",
+      "sha256": "7eea5cc06bd4b8fefe3e0df06ae81d8ed1bcd35fec8ba800890c4ce141973040"
     },
     {
-      "path": "apps/web/dist/assets/ResourcesPage-BsT4Y8j3.js",
-      "sha256": "aaf7779ea39fa79c274765bb62adffcec3010a49917fb817da51f34cbc94e751"
+      "path": "apps/web/dist/assets/ResourcesPage-CNXF-Chi.js",
+      "sha256": "f68e4d3700cdec6d829ec9cf705e2be6c61bb1c1c9e3a572c752eaf094b84f8b"
     },
     {
-      "path": "apps/web/dist/assets/ScenarioPages-CNVZ4Hqk.js",
-      "sha256": "504c92f4b301ffb900a5082d5bb8d76a99ad3449c3669cfc4a458dfb05d4bd15"
+      "path": "apps/web/dist/assets/ScenarioPages-DDuI5TKe.js",
+      "sha256": "ac1cf26367e2f4423bdb0d89e8d3a0f4f2b2663cebf314ebee9096315b5a2914"
     },
     {
-      "path": "apps/web/dist/assets/SkillPages-DYa_fSKz.js",
-      "sha256": "11d078eca03cc2bc011fa9fedd00f703f08ebdd681d4629b1e10cb67b8bbde04"
+      "path": "apps/web/dist/assets/SkillPages-HqVgGnQl.js",
+      "sha256": "256cbc7aa9ef06d6b5adf6f56c9d04c303cd780957fa25c05309f060654cad8e"
     },
     {
-      "path": "apps/web/dist/assets/TerminalBenchPages-mL_UJd9Y.js",
-      "sha256": "dc8d95780b2bbdea0602c7609badaa7d0ae279a37f0ec6fd581cd2c8f4e77515"
+      "path": "apps/web/dist/assets/TerminalBenchPages-tWX5DOPd.js",
+      "sha256": "3b7e01657bfcf2b829596c1012a50e8c4e9b99d36eae8674b0f85ad3361b6678"
     },
     {
       "path": "apps/web/dist/assets/barlow-semi-condensed-500-latin-G0uxJNrM.woff2",
@@ -218,12 +215,12 @@
       "sha256": "fb958c8c20a05552ac8a85d925d96028d52565792650e941a5fe96b6997aa5cb"
     },
     {
-      "path": "apps/web/dist/assets/index-BzqyGsQW.css",
-      "sha256": "2f12514b4a7c9a418c1e827e3045c5841d82ed86908cd3cddb84f858b07d22be"
+      "path": "apps/web/dist/assets/index-BOLzHQ6G.js",
+      "sha256": "0a7de909c18f7d886581d581004a75784e836cd8bc203cf26dc256623b9028aa"
     },
     {
-      "path": "apps/web/dist/assets/index-e2WefI9A.js",
-      "sha256": "85a06844f22936a6978e1cb12eb4aa2bb01a85231513d9fcf2a1f99d4fcc6527"
+      "path": "apps/web/dist/assets/index-BzqyGsQW.css",
+      "sha256": "2f12514b4a7c9a418c1e827e3045c5841d82ed86908cd3cddb84f858b07d22be"
     },
     {
       "path": "apps/web/dist/assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2",
@@ -279,7 +276,7 @@
     }
   ],
   "main_verified_at_finish": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
-  "previous_receipt": "docs/verification/m8-repair-resume-receipt.json",
+  "previous_receipt": "docs/verification/m8-repair-initial-receipt.json",
   "design_status": "written persistent-capability design approved; detailed implementation plans awaiting review; no new subsystem code in this receipt",
   "resumed_checks": {
     "openapi": "passed standalone",
@@ -292,10 +289,5 @@
     "pnpm_audit": "no known vulnerabilities; official network approval retry passed",
     "wheel_smoke": "six local wheels installed in fresh isolated venv, import/CLI outside checkout with PYTHONPATH unset passed",
     "interrupted_tests": "superseded pre-review and worker runs, no full-suite claims"
-  },
-  "publication": {
-    "draft_pr": "https://github.com/BaiZhi967/MoTTEavl/pull/8",
-    "initial_remote_head": "0e5415714945a067385b8f721a1f0586613eaf0e",
-    "status": "successor source publication and exact-head CI pending at this receipt; do not substitute initial-head checks"
   }
 }

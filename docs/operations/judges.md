@@ -217,3 +217,11 @@ Lite 保留 Case 覆盖与指标并追加失败的 `judge_qualification` 规则�
 候选对之外的 winner 均保留为无效测量，不再被覆盖或从分母中丢掉。
 原固定合格阈值与有效调用的结果不变；费用仍逐调用统计。
 这只修复库内统计校验，不证明外部提交的账本真实，也不新增公开校准提交、持久资格或真人复核。
+
+### 库内 pairwise 缺证据与整体偏好（2026-09-30）
+
+pairwise 与 single 一样核对 rubric 的 `evidence_required`：必需引用的判据没有实际白名单
+证据时，输出 `missing_evidence` 并投影为既有 `insufficient_evidence` 指标；不要求证据的
+判据仍可正常评分。仅声明平局不能绕过缺失判据。整体 `pairwise_preference` 只接受
+`status=ok` 的完整有效结果，伪造引用、缺证据或缺判据不再生成 scored 整体偏好；
+原始 winner 仅保留为诊断信息。此修复不改校准阈值，不启用公开校准或正式资格。
