@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from motte_contracts.comparison import ComparabilityLevel, ComparisonPolicy, RunReportRef
+from motte_contracts.pairwise_quality import PairwiseQualitySnapshot
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,17 @@ class ComparisonResult:
     structural_reasons: tuple[str, ...] = ()
     #: 指标级原因（如 COST_UNKNOWN）；只影响对应 metric 资格。
     metric_reasons: tuple[str, ...] = ()
+    pairwise_comparison: dict[str, Any] | None = None
+
+
+
+def pairwise_comparison_eligibility(
+    baseline: PairwiseQualitySnapshot | None, candidate: PairwiseQualitySnapshot | None,
+) -> dict[str, Any]:
+    """Version 1 defines an absolute metric, no baseline-delta inference."""
+    return {"eligible": False, "reason": "pairwise_baseline_comparison_unsupported",
+            "baseline_value": baseline.value if baseline is not None else None,
+            "candidate_value": candidate.value if candidate is not None else None}
 
 
 def _external(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -693,6 +705,8 @@ def compare_run_reports(
     policy: ComparisonPolicy,
     baseline_cost: dict[str, Any] | None = None,
     candidate_cost: dict[str, Any] | None = None,
+    baseline_pairwise: PairwiseQualitySnapshot | None = None,
+    candidate_pairwise: PairwiseQualitySnapshot | None = None,
 ) -> ComparisonResult:
     reasons: list[str] = []
     metric_eligibility: dict[str, bool] = {}
@@ -769,6 +783,14 @@ def compare_run_reports(
             metric_reasons.append("COST_UNKNOWN:candidate")
         if baseline_cost_known and candidate_cost_known and not currency_match:
             metric_reasons.append("COST_CURRENCY_MISMATCH")
+    pairwise_comparison = None
+    if (baseline_pairwise is not None or candidate_pairwise is not None
+            or baseline_ref.report_schema == "report-pairwise-v1"
+            or candidate_ref.report_schema == "report-pairwise-v1"):
+        pairwise_comparison = pairwise_comparison_eligibility(baseline_pairwise, candidate_pairwise)
+        metric_eligibility["pairwise_challenger_score@1"] = False
+        metric_eligibility["pairwise_challenger_score"] = False
+        metric_reasons.append(pairwise_comparison["reason"])
     reasons.extend(metric_reasons)
 
     # 三级结论（协议 §3）：结构性阻断 → not_comparable；仅指标级资格不足 →
@@ -795,4 +817,5 @@ def compare_run_reports(
         level=level,
         structural_reasons=structural_reasons,
         metric_reasons=tuple(metric_reasons),
+        pairwise_comparison=pairwise_comparison,
     )

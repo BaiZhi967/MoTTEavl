@@ -116,12 +116,13 @@ class MemoryBaselineStore:
 
 
 class SQLiteBaselineStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         from .run_store import _SCHEMA
 
         self._path = path
-        with closing(_connect(path)) as connection:
-            create_and_upgrade(connection, _SCHEMA)
+        if initialize:
+            with closing(_connect(path)) as connection:
+                create_and_upgrade(connection, _SCHEMA)
 
     def put(self, payload: dict[str, Any]) -> dict[str, Any]:
         snapshot = _validate(payload)

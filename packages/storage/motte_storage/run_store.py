@@ -441,6 +441,21 @@ class _SQLiteTraceEvents:
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def read_window(self, run_id: str, after: int) -> trace_metadata.TraceEventWindow:
+        """One SQL statement sees events and receipt high-water in the same snapshot."""
+        with closing(_connect(self._path)) as connection:
+            rows = connection.execute(
+                "SELECT e.payload, r.trimmed_through FROM "
+                "(SELECT COALESCE(MAX(last_seq), 0) AS trimmed_through "
+                "FROM trace_archive_receipts WHERE run_id = ?) r "
+                "LEFT JOIN trace_events e ON e.run_id = ? AND e.seq > ? ORDER BY e.seq",
+                (run_id, run_id, after),
+            ).fetchall()
+        return trace_metadata.TraceEventWindow(
+            events=[json.loads(payload) for payload, _ in rows if payload is not None],
+            trimmed_through=rows[0][1],
+        )
+
     def list_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
         with closing(_connect(self._path)) as connection:
             rows = connection.execute(
@@ -616,9 +631,10 @@ class _InMemoryCaseRuns:
 
 
 class _InMemoryTraceEvents:
-    def __init__(self, lock: RLock) -> None:
+    def __init__(self, lock: RLock, archives: Any) -> None:
         self._events: dict[str, list[dict[str, Any]]] = {}
         self._stored_at: dict[tuple[str, int], Any] = {}
+        self._archives = archives
         self._lock = lock
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -640,6 +656,14 @@ class _InMemoryTraceEvents:
     def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:
             return deepcopy(self._events.get(run_id, []))
+
+    def read_window(self, run_id: str, after: int) -> trace_metadata.TraceEventWindow:
+        with self._lock:
+            receipts = self._archives.list_for_run(run_id)
+            return trace_metadata.TraceEventWindow(
+                events=sorted(self.list_after(run_id, after), key=lambda event: event["seq"]),
+                trimmed_through=max((row.prefix.last_seq for row in receipts), default=0),
+            )
 
     def list_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
         with self._lock:
@@ -698,18 +722,42 @@ class RunStore:
             platform_for(self)  # Eager ledger: read-only reference scans never fabricate one.
 
 
-def SQLiteRunStore(path: str | Path) -> RunStore:
+def SQLiteRunStore(path: str | Path, *, initialize: bool = True) -> RunStore:
     from .audit_store import SQLiteAttempts, SQLiteCommands, SQLiteScoreSets, SQLiteScoringPasses
     from .sqlite_schema import create_and_upgrade
 
     path = str(path)
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with closing(_connect(path)) as connection:
-        connection.execute("PRAGMA journal_mode=WAL")
-        # 建缺失表，并把旧库对齐到当前 schema（验收 F-01）：只缺列就补列，主键
-        # 不同就按当前 DDL 重建并保留共有列。旧实现在 metric_id 已存在时提前返回，
-        # 于是"有 metric_id、没有 trial_id"的中间形状永远补不上，结算期缺列失败。
-        create_and_upgrade(connection, _SCHEMA)
+    if initialize:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with closing(_connect(path)) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            # Ordinary construction preserves automatic legacy schema upgrades.
+            create_and_upgrade(connection, _SCHEMA)
+    else:
+        # Validate required schema read-only before binding any repositories.
+        # Plan must never create a missing database or silently migrate legacy data.
+        from urllib.parse import quote
+        import re
+        uri = "file:" + quote(str(Path(path).resolve()), safe="/") + "?mode=ro"
+        try:
+            with closing(sqlite3.connect(uri, uri=True)) as connection:
+                required = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _SCHEMA))
+                present = {row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )}
+                if required - present:
+                    raise ValueError("missing tables: " + ", ".join(sorted(required - present)))
+                connection.execute("SELECT stored_at FROM trace_events LIMIT 0")
+                connection.execute(
+                    "SELECT archive_id, plan_id, run_id, first_seq, last_seq, payload "
+                    "FROM trace_archive_receipts LIMIT 0"
+                )
+        except (sqlite3.DatabaseError, ValueError) as error:
+            raise ValueError(
+                "Trace retention requires an existing current-schema SQLite database; "
+                "initialize or upgrade it separately before planning: " + str(error)
+            ) from error
+    from .scoring_jobs import SQLiteScoringJobs
     from .baselines import SQLiteBaselines
     from .baseline_store import SQLiteBaselineStore
     from .benchmark_datasets import SQLiteBenchmarkDatasets
@@ -732,24 +780,28 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         score_sets=SQLiteScoreSets(path),
         commands=SQLiteCommands(path),
         invocations=SQLiteInvocations(path),
-        external_jobs=SQLiteExternalJobs(path),
-        benchmark_datasets=SQLiteBenchmarkDatasets(path),
-        baselines=SQLiteBaselines(path),
-        trials=SQLiteTrials(path),
-        experiments=SQLiteExperiments(path),
-        gate_store=SQLiteGateStore(path),
-        baseline_store=SQLiteBaselineStore(path),
+        external_jobs=SQLiteExternalJobs(path, initialize=initialize),
+        benchmark_datasets=SQLiteBenchmarkDatasets(path, initialize=initialize),
+        baselines=SQLiteBaselines(path, initialize=initialize),
+        trials=SQLiteTrials(path, initialize=initialize),
+        experiments=SQLiteExperiments(path, initialize=initialize),
+        gate_store=SQLiteGateStore(path, initialize=initialize),
+        baseline_store=SQLiteBaselineStore(path, initialize=initialize),
         statistical_reports=SQLiteStatisticalReports(path),
         calibrations=SQLiteCalibrations(path),
         trace_archives=SQLiteTraceArchives(path),
+        scoring_jobs=SQLiteScoringJobs(path, initialize=initialize),
     )
 
 
 def InMemoryRunStore() -> RunStore:
     from .audit_store import MemoryAttempts, MemoryCommands, MemoryScoreSets, MemoryScoringPasses
 
+    from .trace_archives import MemoryTraceArchives
+
     lock = RLock()
-    events = _InMemoryTraceEvents(lock)
+    archives = MemoryTraceArchives(lock)
+    events = _InMemoryTraceEvents(lock, archives)
     runs = _InMemoryRuns(events, lock)
     cases = _InMemoryCaseRuns(lock)
     score_sets = MemoryScoreSets(lock)
@@ -764,7 +816,6 @@ def InMemoryRunStore() -> RunStore:
     from .trials import MemoryTrials
     from .statistical_reports import MemoryStatisticalReports
     from .calibrations import MemoryCalibrations
-    from .trace_archives import MemoryTraceArchives
 
     return RunStore(
         runs=runs,
@@ -785,5 +836,5 @@ def InMemoryRunStore() -> RunStore:
         baseline_store=MemoryBaselineStore(lock),
         statistical_reports=MemoryStatisticalReports(lock),
         calibrations=MemoryCalibrations(lock),
-        trace_archives=MemoryTraceArchives(lock),
+        trace_archives=archives,
     )

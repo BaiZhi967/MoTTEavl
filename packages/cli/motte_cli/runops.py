@@ -192,7 +192,11 @@ def run_events_command(args) -> int:
         service.get_run(args.run_id)
     except KeyError:
         return remote.cli_error("RUN_NOT_FOUND", f"run not found: {args.run_id}")
-    events = service.events_after(args.run_id, after)
+    window = service.events_window(args.run_id, after)
+    events = window.events
+    partial = window.trimmed_through > 0 or bool(events and events[0]["seq"] > after + 1)
+    if partial:
+        _warn_partial_history(args.run_id, after, trimmed_through=window.trimmed_through)
     if args.snapshot:
         return _emit(args, events)
     for event in events:
@@ -200,12 +204,25 @@ def run_events_command(args) -> int:
     return 0
 
 
+def _warn_partial_history(run_id: str, after: int, *, trimmed_through: int | None = None) -> None:
+    """Metadata goes to stderr; stdout remains compatible event-only JSON/JSONL."""
+    metadata = {"code": "TRACE_HISTORY_PARTIAL", "run_id": run_id, "after": after,
+                "partial": True, "message": "Trace history is incomplete; events may have been trimmed or are missing"}
+    if trimmed_through is not None:
+        metadata["trimmed_through"] = trimmed_through
+    print(json.dumps(metadata, ensure_ascii=False), file=sys.stderr)
+
+
 def _server_snapshot_events(client, run_id: str, after: int) -> list[dict]:
     """Read every snapshot page while rejecting a non-advancing server cursor."""
     events: list[dict] = []
     cursor = after
+    warned = False
     while True:
         snapshot = client.run_events_snapshot(run_id, after=cursor)
+        if not warned and (snapshot.partial or snapshot.extra.get("trimmed_through", 0) > 0):
+            _warn_partial_history(run_id, after, trimmed_through=snapshot.extra.get("trimmed_through"))
+            warned = True  # Later complete pages cannot erase the earlier gap.
         events.extend(snapshot.events)
         if not snapshot.has_more:
             return events

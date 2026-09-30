@@ -419,3 +419,62 @@ def test_web_build_artifact_configured() -> None:
     assert any(line.strip() == "dist/" for line in gitignore.splitlines()), (
         "dist/ must stay git-ignored"
     )
+
+
+def test_remote_comparison_and_statistical_report_dispatch_in_six_wheels(clean_venv, tmp_path):
+    """Real loopback HTTP commands with workspace runtime packages absent."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    paths = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            if self.path == "/api/v1/capabilities":
+                payload = {"api_version": "v1"}
+            elif self.path.startswith("/api/v1/comparisons?"):
+                payload = {"level": "comparable", "eligible": True, "refs": {
+                    "baseline": {"run_id": "a", "scoring_pass_id": "pa"},
+                    "candidate": {"run_id": "b", "scoring_pass_id": "pb"},
+                }}
+            elif self.path == "/api/v1/statistical-reports/saved":
+                payload = {"report_id": "saved", "software_only_fixture": True}
+            else:
+                raise AssertionError(self.path)
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    code = '''
+import importlib.util, sys
+for name in ('motte_provider', 'motte_agent', 'motte_harness', 'motte_benchmark', 'motte_scenario', 'motte_skill', 'motte_sandbox'):
+    assert importlib.util.find_spec(name) is None, name
+from motte_sdk.comparisons import ComparisonService
+from motte_cli.main import main
+for argv in [['compare', '--baseline', 'a', '--candidate', 'b'], ['statistical-report', 'get', 'saved']]:
+    assert main(argv + ['--mode', 'server', '--api-url', sys.argv[1]]) == 0
+assert 'motte_sdk.calibration_ledger' not in sys.modules
+assert 'motte_sdk.scoring_jobs' not in sys.modules
+'''
+    try:
+        env = {key: value for key, value in _stripped_env().items() if key.lower() != "all_proxy"}
+        proc = subprocess.run([str(clean_venv), "-I", "-c", code, f"http://127.0.0.1:{server.server_port}"],
+                              cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert len(paths) == 4, paths
+        assert any(path.startswith('/api/v1/comparisons?') for path in paths)
+        assert '/api/v1/statistical-reports/saved' in paths
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

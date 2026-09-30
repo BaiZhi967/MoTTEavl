@@ -47,6 +47,7 @@ from apps.api.app.schemas import (
     DirectLlmOverviewResponse,
     DirectLlmRunRequest,
     EventsSnapshotResponse,
+    ExperimentRequest,
     JudgeCancelView,
     JudgeJobListResponse,
     JudgeJobView,
@@ -211,6 +212,18 @@ def _contract_field_errors(error) -> list[dict[str, str]]:
 def _error_json(status_code: int, code: str, message: str, **extra: Any) -> JSONResponse:
     payload = {"error": {"code": code, "message": message, **extra}}
     return JSONResponse(status_code=status_code, content=payload)
+
+
+def judge_request_validation_response(path: str, error) -> JSONResponse | None:
+    """Composable dispatch: return None for unrelated validation handlers."""
+    if path == "/api/v1/judge-calibrations" or path.startswith("/api/v1/judge-calibrations/"):
+        # Do not echo user-controlled dictionary keys, values, or validation context.
+        return _error_json(422, "CALIBRATION_CONTRACT_INVALID",
+                           "calibration request does not satisfy its contract")
+    if path in {"/api/v1/judges", "/api/v1/judges/preflight"}:
+        return _error_json(422, "JUDGE_CONTRACT_INVALID", "judge request does not satisfy its contract",
+                           fields=_contract_field_errors(error))
+    return None
 
 
 def _workflow_publication_record(
@@ -444,10 +457,9 @@ def create_app(
         )
 
     async def judge_request_validation(request, error):
-        if request.url.path in {"/api/v1/judges", "/api/v1/judges/preflight"}:
-            # Do not echo invalid JSON numbers (NaN/Infinity) into JSONResponse.
-            return _error_json(422, "JUDGE_CONTRACT_INVALID", "judge request does not satisfy its contract",
-                               fields=_contract_field_errors(error))
+        response = judge_request_validation_response(request.url.path, error)
+        if response is not None:
+            return response
         return await request_validation_exception_handler(request, error)
 
     @application.exception_handler(RunConflictError)
@@ -974,7 +986,7 @@ def create_app(
         last_event_id = request.headers.get("last-event-id")
         if last_event_id is not None:
             try:
-                cursor = max(after, int(last_event_id))
+                cursor = max(0, after, int(last_event_id))
             except ValueError:
                 raise HTTPException(
                     status_code=400,
@@ -983,7 +995,7 @@ def create_app(
                     )},
                 ) from None
         else:
-            cursor = after
+            cursor = max(0, after)
 
         def _envelope(event: dict[str, Any]) -> str:
             # R3 #4：SSE 公共流按值形状脱敏；持久 trace 原文不动
@@ -995,20 +1007,26 @@ def create_app(
         async def stream():
             nonlocal cursor
             while True:
-                pending = service.events_after(run_id, cursor)
-                if pending:
-                    # 协议 §2 gap：请求的游标之后第一帧之前存在被清理的段时，
-                    # 先发命名事件 motte-gap，客户端负责 partial 标记与持久补齐。
-                    first_seq = pending[0]["seq"]
-                    if first_seq > cursor + 1:
-                        gap = {
-                            "type": "gap", "after": cursor,
-                            "next_seq": first_seq, "partial": True,
-                        }
-                        yield (
-                            "event: motte-gap\ndata: "
-                            + json.dumps(gap, ensure_ascii=False) + "\n\n"
-                        )
+                window = service.events_window(run_id, cursor)
+                pending = window.events
+                # Receipt evidence is authoritative even when no live rows remain.
+                # Move the cursor after signaling so an empty active stream does
+                # not repeat the same gap on every poll.
+                if cursor < window.trimmed_through:
+                    gap = {
+                        "type": "gap", "after": cursor,
+                        "next_seq": window.trimmed_through + 1, "partial": True,
+                    }
+                    yield "event: motte-gap\ndata: " + json.dumps(gap) + "\n\n"
+                    cursor = window.trimmed_through
+                if pending and pending[0]["seq"] > cursor + 1:
+                    # Legacy unexplained gaps remain conservatively visible.
+                    gap = {
+                        "type": "gap", "after": cursor,
+                        "next_seq": pending[0]["seq"], "partial": True,
+                    }
+                    yield "event: motte-gap\ndata: " + json.dumps(gap) + "\n\n"
+                    cursor = pending[0]["seq"] - 1
                 batch = pending[:SSE_EVENTS_PER_POLL]
                 for event in batch:
                     cursor = event["seq"]
@@ -1034,7 +1052,9 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         bounded = max(1, min(limit, EVENTS_SNAPSHOT_LIMIT))
-        available = service.events_after(run_id, max(0, after))
+        cursor = max(0, after)
+        window = service.events_window(run_id, cursor)
+        available = window.events
         pending = available[:bounded]
         has_more = len(available) > len(pending)
         return {
@@ -1048,7 +1068,10 @@ def create_app(
             "next_after": pending[-1]["seq"] if has_more and pending else None,
             "has_more": has_more,
             "run_status": run.get("status"),
-            "partial": False,
+            "trimmed_through": window.trimmed_through,
+            "partial": cursor < window.trimmed_through or bool(
+                available and available[0]["seq"] > cursor + 1
+            ),
         }
 
     @application.get(
@@ -1104,6 +1127,14 @@ def create_app(
                 service.store, provider_factory=factory,
             )
         return judge_state["service"]
+
+    from apps.api.app.judge_calibrations import register_calibration_routes
+    from motte_sdk.calibration_transport import CalibrationLifecycle
+    from motte_sdk.judge_calibrations import JudgeCalibrationService
+
+    register_calibration_routes(application, lambda: CalibrationLifecycle(
+        JudgeCalibrationService(service.store, resources, scoring_jobs=_judge_service()),
+    ))
 
     def _judge_error(error: Exception) -> JSONResponse:
         """把 Judge 契约错误映射成结构化响应；未知异常继续向上抛。"""
@@ -3826,6 +3857,14 @@ def create_app(
 
     @application.exception_handler(RequestValidationError)
     async def statistical_report_request_validation(request: Request, error: RequestValidationError):
+        if request.method == "POST" and getattr(request.scope.get("route"), "path", None) in {
+            "/api/v1/experiments", "/api/v1/experiments/preview",
+        }:
+            # Do not serialize arbitrary invalid input or exception ctx (NaN,
+            # non-JSON values, or user-supplied secrets) into the error response.
+            return _error_json(422, "EXPERIMENT_INVALID", "; ".join(
+                str(item["msg"]) for item in error.errors()
+            ))
         if (request.method != "POST" or getattr(request.scope.get("route"), "path", None)
                 != "/api/v1/statistical-reports"):
             # Compose both endpoint-scoped renderers through one registration.
@@ -4002,6 +4041,8 @@ def create_app(
             "metric_eligibility": result.metric_eligibility,
             "case_diff": result.case_diff,
             "allowed_differences": list(result.allowed_differences),
+            **({"pairwise_comparison": result.pairwise_comparison}
+               if result.pairwise_comparison is not None else {}),
         }
 
     @application.post("/api/v1/gates")
@@ -4285,20 +4326,20 @@ def create_app(
     application.state.experiments = experiments_service
 
     @application.post("/api/v1/experiments/preview")
-    def preview_experiment(body: dict):
+    def preview_experiment(body: ExperimentRequest):
         try:
-            return experiments_service.preview(body)
+            return experiments_service.preview(body.model_dump(mode="json"))
         except Exception as error:
             code = getattr(error, "code", "EXPERIMENT_INVALID")
             return _error_json(422, str(code), str(error))
 
     @application.post("/api/v1/experiments")
-    def create_experiment(body: dict):
-        request_key = body.pop("_request_key", None) or body.pop("request_key", None)
-        preview_hash = body.pop("_preview_hash", None)
+    def create_experiment(body: ExperimentRequest):
+        request_key = body.request_key
+        preview_hash = body.preview_hash
         try:
             outcome = experiments_service.create(
-                body, request_key=request_key, expected_preview_hash=preview_hash,
+                body.model_dump(mode="json"), request_key=request_key, expected_preview_hash=preview_hash,
             )
         except ExperimentError as error:
             status = 409 if error.code in {"REQUEST_KEY_CONFLICT", "PREVIEW_STALE"} else 422

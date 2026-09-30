@@ -8,8 +8,8 @@
   证据视为 pinned；
 - 每次删除写 tombstone（gc_run_id、artifact_id、sha256、bytes、原因、时间）到
   motte_gc_tombstones；
-- trace 事件没有可靠时间戳，M7 GC v1 不做 DB 行裁剪；plan 里如实输出
-  trace_retention 报告（受保护 run 清单），不假装可裁剪。
+- GC 不裁剪 Trace DB 行；Trace 保留通过默认关闭的独立 trace-retention plan/apply
+  显式操作，先持久归档再裁剪。GC 始终保护归档命名空间。
 """
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ from typing import Any
 from uuid import uuid4
 
 from .artifact_refs import (
-    collect_artifact_refs, iter_artifact_records, referenced_artifact_hashes, resolve_artifact_refs,
+    canonical_artifact_id, collect_artifact_refs, iter_artifact_records,
+    referenced_artifact_hashes, resolve_artifact_refs,
 )
 from .artifacts import ArtifactMutationUnsupported, ArtifactStore
 from .deletion_audit import audit_missing_artifact, delete_with_audit
@@ -33,6 +34,23 @@ from .trace_archives import is_trace_archive_id
 
 PINNED_RUN_STATUSES = ("needs_review",)
 IMPORTED_PREFIX = "imports/"
+
+
+class _ReadOnlyArtifactReader:
+    """Read canonical evidence without ArtifactStore's root-creation side effect."""
+
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+
+    def read_bytes(self, artifact_id: str) -> bytes:
+        relative = canonical_artifact_id(artifact_id)
+        resolved = (self.root / relative).resolve()
+        try:
+            # Keep the constructor-resolved boundary if the root is replaced.
+            resolved.relative_to(self.root)
+        except ValueError as error:
+            raise ValueError("artifact path escapes root") from error
+        return resolved.read_bytes()
 
 
 @dataclass
@@ -102,13 +120,15 @@ def plan_gc(
     """只读计算删除计划；不修改任何状态（默认 dry-run 的事实来源）。"""
     plan = GCPlan(gc_run_id="gc-" + uuid4().hex[:16])
     root = Path(artifacts_root)
+    from .trace_archives import verify_trace_archives
+    verify_trace_archives(store, _ReadOnlyArtifactReader(root))
     referenced_hashes: set[str] = set()
     referenced = resolve_artifact_refs(
         referenced_artifact_hashes(store, hashes=referenced_hashes), root,
     )
     pinned_runs = _pinned_run_ids(store)
     plan.trace_retention = {
-        "db_row_pruning": "not_implemented_no_event_timestamps",
+        "db_row_pruning": "explicit_trace_retention_plan_apply_only_default_disabled",
         "pinned_run_count": len(pinned_runs),
         "pinned_run_ids": sorted(pinned_runs),
     }
@@ -173,6 +193,8 @@ def apply_gc(
     deleted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     try:
+        from .trace_archives import verify_trace_archives
+        verify_trace_archives(store, ArtifactStore(root))
         # Same decoder and repository traversal as planning and backup.
         referenced_hashes: set[str] = set()
         referenced = resolve_artifact_refs(

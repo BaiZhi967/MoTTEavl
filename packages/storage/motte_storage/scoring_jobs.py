@@ -259,11 +259,12 @@ def job_view(record: dict[str, Any]) -> dict[str, Any]:
 
 
 class SQLiteScoringJobs:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         self._path = path
-        with closing(_connect(path)) as connection:
-            # F-01：建缺失表并把旧库对齐到当前形状（主键不同则重建）。
-            create_and_upgrade(connection, _SCHEMA)
+        if initialize:
+            with closing(_connect(path)) as connection:
+                # Ordinary construction retains automatic schema upgrades.
+                create_and_upgrade(connection, _SCHEMA)
 
     # ------------------------------------------------------------- 读取
     def get(self, job_id: str) -> dict[str, Any] | None:

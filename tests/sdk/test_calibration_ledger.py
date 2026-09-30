@@ -44,7 +44,7 @@ class ScriptedCalibrationTransport:
         )
 
 
-def completed_environment(tmp_path, *, memory=True, approved_missing=True, execute=True, store=None):
+def completed_environment(tmp_path, *, memory=True, approved_missing=True, execute=True, store=None, identity_config=None):
     """30 labelled software fixtures, six honest missing-evidence cases, real Worker ledger."""
     store = store or (InMemoryRunStore() if memory else SQLiteRunStore(tmp_path / "ledger.db"))
     service, scoring, resources, provider, factory, _, _ = calibration_environment(
@@ -75,6 +75,9 @@ def completed_environment(tmp_path, *, memory=True, approved_missing=True, execu
             value["pairwise_gold"] = {key: {"kind": "tie"} for key in value["pairwise_gold"]}
         fixed_reviews.append(HumanReviewInput.model_validate(value))
     version = service.review(parent.reference, new_version="reviewed", reviews=fixed_reviews)
+    if identity_config:
+        connection = resources.providers.get("judge-conn")
+        resources.providers.put({**connection, **identity_config})
     execution = service.submit(version.reference, request)
     samples = {sample.sample_id: sample for sample in version.calibration.samples}
     responses = []

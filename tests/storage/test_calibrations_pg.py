@@ -2,7 +2,7 @@
 import pytest
 from alembic import command
 
-from motte_storage.migrations import alembic_config, current
+from motte_storage.migrations import alembic_config, current, upgrade
 from motte_storage.postgres import create_postgres_run_store
 from tests.storage.test_calibrations import RepositoryContract, migration
 
@@ -10,7 +10,7 @@ from tests.storage.test_calibrations import RepositoryContract, migration
 class TestPostgresCalibrations(RepositoryContract):
     @pytest.fixture
     def store(self, isolated_pg_database):
-        command.upgrade(alembic_config(isolated_pg_database), '0017_judge_calibrations')
+        upgrade(isolated_pg_database)
         return create_postgres_run_store(isolated_pg_database)
 
 
@@ -36,7 +36,7 @@ from tests.storage.test_calibrations import CorruptionContract
 class TestPostgresCalibrationCorruption(CorruptionContract):
     @pytest.fixture
     def store(self, isolated_pg_database):
-        command.upgrade(alembic_config(isolated_pg_database), '0017_judge_calibrations')
+        upgrade(isolated_pg_database)
         return create_postgres_run_store(isolated_pg_database)
 
 
@@ -46,7 +46,7 @@ from tests.storage.test_calibrations import TransactionFaultContract
 class TestPostgresCalibrationTransactions(TransactionFaultContract):
     @pytest.fixture
     def store(self, isolated_pg_database):
-        command.upgrade(alembic_config(isolated_pg_database), '0017_judge_calibrations')
+        upgrade(isolated_pg_database)
         return create_postgres_run_store(isolated_pg_database)
 
 
@@ -172,7 +172,7 @@ from tests.storage.test_calibrations import CalibrationEvidenceContract
 class TestPostgresCalibrationEvidence(CalibrationEvidenceContract):
     @pytest.fixture
     def store(self, isolated_pg_database):
-        command.upgrade(alembic_config(isolated_pg_database), '0017_judge_calibrations')
+        upgrade(isolated_pg_database)
         return create_postgres_run_store(isolated_pg_database)
 
 

@@ -300,3 +300,118 @@ retry_cell 从初始 Run 读取已冻结的 executable manifest、ordered case_i
 这同样适用于没有 prepared_run 字段的历史 Cell。原 Run 缺失时拒绝创建，不能以空 Cases
 生成替代记录。新 Run 的执行身份通过既有 refreeze helper 派生，保留原 Run 与父子审计链。
 重试继续检查 suite 支持边界，不能通过手写持久 Spec/Cell 绕过未支持外部 Runtime 的拒绝。
+
+
+### Subject pairwise 的显式角色与历史兼容（Scope B Task 7）
+
+新的 pairwise 预检／提交仅接受保存的 attempt 引用。每条 `pairwise_refs` 必须携带
+`case_id`、`candidate_a_attempt_id`、`candidate_b_attempt_id` 和必填的
+`challenger_attempt_id`；后者必须恰好指向这两个不同、同 Run／Case 的终态 attempt
+之一，另一方为 reference。每个选中的 Case 只允许一个 pair，重复、反转后的额外
+副本或同 Case 的另一组 pair 都在调用／持久化前拒绝。未选 Case、跨归属、开放
+attempt、缺失／损坏 FrozenObservation 也拒绝。内容只能来自保存的 attempt，不能
+来自当前 CaseRun 或客户端正文。
+
+服务器生成 `PairwiseRoleBinding`，其中 `candidate_input_sha256` 对每个完整候选输入
+（候选身份、正文、证据白名单等）的规范 JSON 取摘要。角色列表按 Case／pair 固定
+排序，其 `roles_sha256` 进入 subject Job 的 fingerprint，并在 Job、每次冻结 call
+plan、Invocation request summary、最终 Pass 和 receipt 中保存。每条 plan 的
+`role_binding` 在重复／正反展示调用中完全相同。A/B、字典序及当前设置均不决定
+challenger；改变显式 challenger 会改变角色及 Job 身份，展示顺序只改变相应调用
+输入／计划身份。Worker 重启后仅消费保存的角色与输入，不重新选择模型或 attempt。
+新建的内部 subject Job 也必须核验完整角色与保存的终态 attempt 输入；calibration
+owner 使用独立、已核验的 calibration/sample 命名空间，不借用 subject 角色。
+
+历史缺角色 Job／Pass 的 GET 保持可读；没有补默认字段或重写历史 fingerprint。
+缺角色的旧 HTTP body 在新的严格公开契约下返回 422，需要显式角色和新请求键
+重新提交。内部固定输入的原 Job 精确重放只返回原 Job／receipt，零新调用、零角色
+补写；修改输入或为旧 Job 补角色产生冲突。排队／prepared 的缺角色 subject Job
+不会发出新调用，记录 `PAIRWISE_ROLES_REQUIRED` 并要求显式重新提交。部分已结算
+的历史 dispatch 恢复保留原账本及不确定状态，另记录相同的角色恢复原因；不重发。
+只有 Job／receipt、plan、call、关联 Invocation 身份元数据及 submission 引用中
+完全不存在新角色标记，并且保存字段按旧规范公式计算的 fingerprint 与原值完全
+一致，才适用旧格式例外；仅删可见字段不能沿用新角色 fingerprint，显式 null 也
+不算缺席。缺顶层 roles 却
+保留角色摘要／绑定或显式 challenger 引用属于矛盾新记录，以
+`PAIRWISE_ROLES_INVALID` 拒绝，不能猜角色、补角色或改 fingerprint。
+全部计划调用已结算时，可确定性解析／发布原历史结果而不构造 Provider，仍不具有
+pairwise quality；已完成结果继续只读重放。Worker 在派发／发布前核对候选与 attempt 的显式映射、保存的 Run／Case 归属，
+并用提交时同一规范公式复核角色／计划的 Job fingerprint；重算局部摘要不能沿用
+另一角色的原 Job 身份。新记录角色摘要／plan 绑定不一致时以
+`PAIRWISE_ROLES_INVALID` 停止，不能派发或发布。
+
+本步骤只冻结测量身份。原 `pairwise_preference` 行仍保持 `passed=None`，不会映射
+成 accuracy／cost-per-success 或自动通过 Gate。独立 metric 重建和显式阈值政策分别
+由后续 Task 8／9 实现；此处不能声称正向质量 Gate 闭环。
+
+### 固定 subject pairwise 质量重建（Scope B Task 8）
+
+`reconstruct_pairwise_quality(store, scoring_pass_id)` 从所选 Judge Pass、其完成的
+subject ScoringJob、完整冻结 plan/roles/spec/provider 及实际 Invocation 原始响应
+只读重建。Job 与 Pass 的 owner、调用清单、角色、发布 receipt 和评分身份必须一致；
+每条计划 call 及 Invocation 必须唯一、成功结算、相同输入／展示顺序／角色绑定，
+Provider 回报身份及唯一响应 ID 可验证，且确定性 parser 为 `ok`、全部 criterion
+为 scored。Job.result、summary 数字或编辑后的 Boolean ScoreSet 不是质量证据。
+不重新读取 current、模型资源或 attempt，不执行 Provider；calibration owner 不能
+作为 subject 质量测量。旧格式角色缺失保持 unavailable，不猜测 challenger。
+
+`pairwise_challenger_score@1` 按稳定 winner identity 给予 challenger=1、reference=0，
+只有显式且完整的 tie=1/2。同 pair 的计划调用先作算术平均，再等权平均所有计划 pair；
+内部使用 Fraction，公开输出仅在最后转为有限 float，不作显示舍入后再求 Gate。
+重复数不均不会改变 pair 权重。缺失、重复、失败、不确定、非 scored 或矛盾证据均使
+全局值为 null，保留逐 pair 值／缺失原因、planned/valid pairs、planned/settled calls
+及实际覆盖。正确识别的 calibration 非 scored 例外也不能在此视为 tie。
+
+计划分母优先来自 Job 的冻结 plan，并保留所选 Pass 的冻结 `judge.calls` 中独立保存
+但已从 Job 丢失的调用身份。若 Job 缺失，仍保留 Pass 可证明曾计划的身份，Job／plan／
+ledger 摘要分别为 null 并说明缺失；若两份来源矛盾，则全局值与有效覆盖不可获得。
+这些保留项只表达已知缺失，不会把损坏的额外身份提升为可信测量。真正空计划为 null，
+不返回零分或完整覆盖。旧 Pass 连 pair 身份也无法恢复时，显式记录
+`planned_pair_identities_unavailable`，不能按重复调用数捏造 pair 身份或分母。
+
+Pairwise 来源使用 `PairwiseReportSnapshot`、`report-pairwise-v1` 和
+`metric-registry@2`；report ref 绑定 roles、plan、ledger、quality 的内容摘要。
+`candidate_summary` 增加同一 `pairwise_quality` JSON 区段、显式版本 metric 值与
+所选 `scoring_pass_id`／report schema／registry version。原 Boolean counts／coverage
+不改口径，accuracy、judged_accuracy、cost-per-success 仍不可用，原 ScoreSet 行继续
+`passed=None`。人工后代的 quality source ID 绑定所选人工 Pass，值不可用且原因为
+`manual_pairwise_quality_unsupported`；资格可沿来源验证，但不忽略人工修订以复制数值。
+
+结构比较及旧指标资格保持原义；任一方为 pairwise 时，新增 metric 的比较资格为 false，
+原因为 `pairwise_baseline_comparison_unsupported`，双方绝对值仍可读取。当前版本不定义
+跨 Run baseline delta、pairwise critical-case、配对统计推断或 pairwise pass@k；统计入口
+返回 `pairwise_statistical_inference_unsupported`，case Boolean 结果保持 unknown。
+此限制不排除 Task 9 单独实现的显式绝对阈值质量 Gate，也不授予 Judge 校准资格。
+
+### 实际 Judge 模型身份与限定 HTTP 发送边界
+
+校准与 subject pairwise 调用的 Invocation result_summary 和 call.raw_response
+同时保存 requested_model、reported_model、resolved_model_identity、identity_evidence、
+identity_policy、identity_policy_result、policy_passed。只读重建重新按冻结 Judge model
+及明确版本化 alias map 核验这些字段；legacy `model` 只表示请求的模型，不能证明
+实际模型身份。缺失/不匹配实际身份、alias 内容或版本不一致均不可取得校准资格或
+pairwise quality，两个公开 Gate 都 fail closed。普通 `report_only` 仍允许执行；
+执行成功本身不授予资格。重启及当前资源变化不替换已冻结身份，缺证据的旧账本不补写。
+
+所有新建、具有原生硬调用上界的实验（Scenario、Skill、Agent、Direct/GSM）冻结
+`provider_transport_policy="bounded-http@1"`。该配置进入 requested/prepared manifest
+和 preview binding，实际执行禁止 HTTP redirect，包括保留 POST 的 307/308；每次
+HTTPTransport attempt 最多一个客户端发送，显式重试仍计入 `1 + max_retries`。
+普通未声明此限定策略的历史/独立运行保留既有同源跳转兼容行为，不能因此获得更强的
+历史预算保证。已有 C-Eval 限定 profile 继续使用其固定 no-redirect 传输实现。
+
+### 类型化实验请求与传输控制
+
+preview/create 的 OpenAPI request schema 公开同一判别式 suite_config。未知字段、
+错 suite、非法预算等请求返回安全的 422 / `EXPERIMENT_INVALID`，零 Spec/Cell/Run。
+`request_key`、旧别名 `_request_key` 与 `_preview_hash` 是传输字段；两种 request key
+同时出现时非空 `_request_key` 优先，所有控制字段都不进入 Spec fingerprint 或 preview
+身份。local/server CLI 保留对应错误与零写入边界，过期 preview 仍为 409。
+
+Judge 的已授权单次调用也遵守同一发送边界：新 ProviderSnapshot 在 `transport` 中
+冻结 `follow_redirects=false` 与整数 `max_retries=0`，两者进入快照摘要。实际
+FrozenProviderFactory 对已排队的旧快照也禁用跳转和自动重试，且不修改保存的快照。
+通用 standalone Provider 的默认跳转/幂等重试行为保持不变。权威校准与 subject 质量
+重建必须看到严格的 false 和整数 0；缺失、字符串、数值 0 代替 false、布尔 false
+代替整数 0 都不构成发送上界证明。历史报告及原摘要仍可读取，不自动升级；旧记录
+缺少证明时，其实时资格验证与 Gate 使用保持不可用，需要新的明确冻结测量。

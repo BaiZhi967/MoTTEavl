@@ -531,3 +531,40 @@ def test_statistical_publication_response_loss_and_stored_exports(monkeypatch):
     finally:
         client.close()
         asgi.close()
+
+
+def test_sdk_preserves_partial_after_reconciliation(tmp_path, monkeypatch):
+    """A trim after the last delivered frame must be reflected by the final probe."""
+    from tests.api.test_trace_retention import RUN, seed, trim
+    from tests.sdk.test_wait_and_events import CannedSSETransport
+
+    store = SQLiteRunStore(tmp_path / 'history.db')
+    seed(store, monkeypatch)
+    app = create_app(store=store)
+    root = tmp_path / 'artifacts'
+    root.mkdir()
+    payload = {'seq': 1, 'run_id': RUN, 'type': 'note', 'payload': {}}
+    body = ('id: 1\ndata: ' + json.dumps(payload) + '\n\n').encode()
+    client = _client(CannedSSETransport(SyncASGITransport(app), body))
+    observed = []
+    def on_event(event, state):
+        observed.append(state)
+        trim(store, root)
+    assert [event['seq'] for event, state in client.stream_events(RUN, on_event=on_event)] == [1]
+    assert observed[0].finished and observed[0].partial
+    assert observed[0].reconciliation_mismatch
+
+
+def test_sdk_retention_gap_stays_partial_after_complete_snapshot(tmp_path, monkeypatch):
+    from tests.api.test_trace_retention import RUN, seed, trim
+    store = SQLiteRunStore(tmp_path / 'history.db')
+    seed(store, monkeypatch)
+    root = tmp_path / 'artifacts'
+    root.mkdir()
+    trim(store, root)
+    client = _client(SyncASGITransport(create_app(store=store)))
+    delivered = list(client.stream_events(RUN))
+    assert [event['seq'] for event, state in delivered] == [4]
+    state = delivered[-1][1]
+    assert state.finished and state.partial and not state.reconciliation_mismatch
+    assert state.gaps == [{'type': 'gap', 'after': 0, 'next_seq': 4, 'partial': True}]

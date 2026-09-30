@@ -6,6 +6,7 @@ GateResult 的结论等价性：同 evaluation_input_hash + 同 result_semantics
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
@@ -109,6 +110,23 @@ class GateRule(Contract):
     experimental_evidence: bool = False
     #: model_identity 规则的期望实际模型身份（报告侧回报值，不是请求值）。
     expected: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _pairwise_numbers_are_not_coerced(cls, value: Any) -> Any:
+        # Protect normal typed construction before float parsing loses whether
+        # the caller supplied a bool/string/Decimal. Legacy rule coercion stays
+        # unchanged; complete pairwise policy validation is an evaluator boundary.
+        if isinstance(value, Mapping):
+            metric = value.get("metric_id")
+            if isinstance(metric, str) and (
+                metric == "pairwise_challenger_score" or metric.startswith("pairwise_challenger_score@")
+            ):
+                for field in ("threshold", "min_coverage"):
+                    number = value.get(field)
+                    if number is not None and type(number) not in (int, float):
+                        raise ValueError(f"pairwise {field} must be an uncoerced JSON number")
+        return value
 
     @field_validator("kind")
     @classmethod

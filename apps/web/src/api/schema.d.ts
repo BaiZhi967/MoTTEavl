@@ -1089,6 +1089,183 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/judge-calibrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Catalog */
+        get: operations["catalog_api_v1_judge_calibrations_get"];
+        put?: never;
+        /**
+         * Import Version
+         * @description Import unreviewed inputs only; declared names are not authentication.
+         */
+        post: operations["import_version_api_v1_judge_calibrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/jobs/{execution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job */
+        get: operations["job_api_v1_judge_calibrations__calibration_id__jobs__execution_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/jobs/{execution_id}/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reports */
+        get: operations["reports_api_v1_judge_calibrations__calibration_id__jobs__execution_id__reports_get"];
+        put?: never;
+        /** Publish */
+        post: operations["publish_api_v1_judge_calibrations__calibration_id__jobs__execution_id__reports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/qualifications/{qualification_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Qualification */
+        get: operations["qualification_api_v1_judge_calibrations__calibration_id__qualifications__qualification_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/reports/{report_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report */
+        get: operations["report_api_v1_judge_calibrations__calibration_id__reports__report_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions */
+        get: operations["versions_api_v1_judge_calibrations__calibration_id__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Version Get */
+        get: operations["version_get_api_v1_judge_calibrations__calibration_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jobs */
+        get: operations["jobs_api_v1_judge_calibrations__calibration_id__versions__version__jobs_get"];
+        put?: never;
+        /** Submit */
+        post: operations["submit_api_v1_judge_calibrations__calibration_id__versions__version__jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preflight */
+        post: operations["preflight_api_v1_judge_calibrations__calibration_id__versions__version__preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reviews */
+        get: operations["reviews_api_v1_judge_calibrations__calibration_id__versions__version__reviews_get"];
+        put?: never;
+        /** Review */
+        post: operations["review_api_v1_judge_calibrations__calibration_id__versions__version__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/judge-specs": {
         parameters: {
             query?: never;
@@ -2407,6 +2584,679 @@ export interface components {
             /** Scenario */
             scenario: string;
         };
+        /**
+         * BudgetPolicy
+         * @description 实验级预算（执行计划 T04）：超限整体拒绝。null 表示不设该维上限。
+         */
+        BudgetPolicy: {
+            /**
+             * Cost Known Required
+             * @default false
+             */
+            cost_known_required: boolean;
+            /** Max Cost Usd */
+            max_cost_usd?: number | null;
+            /** Max Total Calls */
+            max_total_calls: number;
+            /** Max Total Tokens */
+            max_total_tokens?: number | null;
+        };
+        /**
+         * CalibrationAllowance
+         * @description Exact sum of frozen child reservations; None cost always means unknown.
+         */
+        CalibrationAllowance: {
+            /** Max Calls */
+            max_calls: number;
+            /** Max Completion Tokens */
+            max_completion_tokens: number;
+            /** Max Cost Usd */
+            max_cost_usd: number | null;
+            /** Max Prompt Tokens */
+            max_prompt_tokens: number;
+        };
+        /**
+         * CalibrationCall
+         * @description 一次 Judge 调用（含重复与换序）及其费用；每次都必须有账本引用。
+         */
+        CalibrationCall: {
+            /** Call Id */
+            call_id: string;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Criteria */
+            criteria?: {
+                [key: string]: boolean;
+            };
+            /** Invocation Id */
+            invocation_id: string;
+            /** Judge Job Id */
+            judge_job_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "single" | "repeat" | "order_forward" | "order_reverse";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "succeeded" | "failed" | "indeterminate";
+            /** Presentation Order */
+            presentation_order?: string[];
+            /** Price Table Version */
+            price_table_version?: string | null;
+            /** Sample Id */
+            sample_id: string;
+            /** Status */
+            status?: ("ok" | "refused" | "malformed" | "missing_evidence" | "forged_evidence" | "missing_criterion") | null;
+            /** Winner Candidate Id */
+            winner_candidate_id?: string | null;
+        };
+        /**
+         * CalibrationCandidate
+         * @description Importable candidate data, intentionally without Run/Job/owner references.
+         */
+        CalibrationCandidate: {
+            /** Candidate Id */
+            candidate_id: string;
+            /** Content */
+            content: string;
+            /** Evidence Allowlist */
+            evidence_allowlist?: string[];
+        };
+        /** CalibrationCatalogEntry */
+        CalibrationCatalogEntry: {
+            /** Calibration Id */
+            calibration_id: string;
+            /** Versions */
+            versions: components["schemas"]["CalibrationRef"][];
+        };
+        /** CalibrationChildView */
+        CalibrationChildView: {
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+        };
+        /** CalibrationErrorDetail */
+        CalibrationErrorDetail: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** CalibrationErrorResponse */
+        CalibrationErrorResponse: {
+            error: components["schemas"]["CalibrationErrorDetail"];
+        };
+        /** CalibrationExecuteRequest */
+        CalibrationExecuteRequest: {
+            /** Content Sha256 */
+            content_sha256: string;
+            request: components["schemas"]["CalibrationRunRequest"];
+        };
+        /**
+         * CalibrationImportRequest
+         * @description Public write boundary only; stored/legacy CalibrationSet models stay unchanged.
+         */
+        CalibrationImportRequest: {
+            /** @description Public selectors are literal, nonblank Unicode path segments. '/' and '\', ASCII controls, percent-escape triplets (%HH), and exact '.' or '..' are unsupported. Values are never decoded, normalized, or rewritten. */
+            calibration: components["schemas"]["CalibrationSet"];
+            /** Pairs */
+            pairs?: {
+                [key: string]: components["schemas"]["CalibrationPair"];
+            };
+        };
+        /** CalibrationItems[CalibrationCatalogEntry] */
+        CalibrationItems_CalibrationCatalogEntry_: {
+            /** Items */
+            items: components["schemas"]["CalibrationCatalogEntry"][];
+            /** Total */
+            total: number;
+        };
+        /** CalibrationItems[CalibrationJobView] */
+        CalibrationItems_CalibrationJobView_: {
+            /** Items */
+            items: components["schemas"]["CalibrationJobView"][];
+            /** Total */
+            total: number;
+        };
+        /** CalibrationItems[CalibrationReportView] */
+        CalibrationItems_CalibrationReportView_: {
+            /** Items */
+            items: components["schemas"]["CalibrationReportView"][];
+            /** Total */
+            total: number;
+        };
+        /** CalibrationItems[CalibrationVersion] */
+        CalibrationItems_CalibrationVersion_: {
+            /** Items */
+            items: components["schemas"]["CalibrationVersion"][];
+            /** Total */
+            total: number;
+        };
+        /** CalibrationItems[HumanReviewRecord] */
+        CalibrationItems_HumanReviewRecord_: {
+            /** Items */
+            items: components["schemas"]["HumanReviewRecord"][];
+            /** Total */
+            total: number;
+        };
+        /** CalibrationJobView */
+        CalibrationJobView: {
+            allowance: components["schemas"]["CalibrationAllowance"] | null;
+            /** Child Job Ids */
+            child_job_ids: string[];
+            /** Children */
+            children: components["schemas"]["CalibrationChildView"][];
+            /** Execution Id */
+            execution_id: string;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256: string;
+            /**
+             * Operator Identity
+             * @default declared_unverified
+             * @constant
+             */
+            operator_identity: "declared_unverified";
+            /** Plan Sha256 */
+            plan_sha256: string;
+            /** Provider Snapshot Sha256 */
+            provider_snapshot_sha256: string;
+            /** Recorded At */
+            recorded_at: string;
+            version: components["schemas"]["CalibrationRef"];
+            /**
+             * Worker Command
+             * @default uv run python -m apps.worker.motte_worker --once
+             * @constant
+             */
+            worker_command: "uv run python -m apps.worker.motte_worker --once";
+        };
+        /** CalibrationPair */
+        CalibrationPair: {
+            /** Candidates */
+            candidates: [
+                components["schemas"]["CalibrationCandidate"],
+                components["schemas"]["CalibrationCandidate"]
+            ];
+        };
+        /**
+         * CalibrationPolicy
+         * @description 某个 rubric 用途固定的校准门槛（不在运行时按需放宽）。
+         */
+        CalibrationPolicy: {
+            /**
+             * Max Disagreement Rate
+             * @default 0.15
+             */
+            max_disagreement_rate: number;
+            /**
+             * Max Error Rate
+             * @default 0.15
+             */
+            max_error_rate: number;
+            /**
+             * Max Missing Evidence Rate
+             * @default 0.25
+             */
+            max_missing_evidence_rate: number;
+            /**
+             * Max Refusal Rate
+             * @default 0.15
+             */
+            max_refusal_rate: number;
+            /**
+             * Min Borderline
+             * @default 6
+             */
+            min_borderline: number;
+            /**
+             * Min Clear Fail
+             * @default 6
+             */
+            min_clear_fail: number;
+            /**
+             * Min Clear Pass
+             * @default 6
+             */
+            min_clear_pass: number;
+            /**
+             * Min Human Reviewed Samples
+             * @default 30
+             */
+            min_human_reviewed_samples: number;
+            /**
+             * Min Injection
+             * @default 6
+             */
+            min_injection: number;
+            /**
+             * Min Missing Evidence
+             * @default 6
+             */
+            min_missing_evidence: number;
+            /**
+             * Min Position Swap Consistency Rate
+             * @default 1
+             */
+            min_position_swap_consistency_rate: number;
+            /**
+             * Min Repeat Stability Rate
+             * @default 1
+             */
+            min_repeat_stability_rate: number;
+            /**
+             * Require Position Swap Consistency
+             * @default true
+             */
+            require_position_swap_consistency: boolean;
+            /**
+             * Require Repeat Stability
+             * @default true
+             */
+            require_repeat_stability: boolean;
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Version */
+            rubric_version: string;
+        };
+        /** CalibrationPreflightView */
+        CalibrationPreflightView: {
+            allowance: components["schemas"]["CalibrationAllowance"];
+            /** Authorisation */
+            authorisation: {
+                [key: string]: unknown;
+            };
+            /**
+             * Authorised
+             * @constant
+             */
+            authorised: true;
+            /**
+             * Budget Executable
+             * @constant
+             */
+            budget_executable: true;
+            /** Child Call Counts */
+            child_call_counts: number[];
+            /**
+             * Executed
+             * @constant
+             */
+            executed: false;
+            /** Execution Id */
+            execution_id: string;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256: string;
+            /** Max Calls */
+            max_calls: number;
+            /** Mode */
+            mode: string;
+            /** Plan Sha256 */
+            plan_sha256: string;
+            policy: components["schemas"]["CalibrationPolicy"];
+            /** Preflight Sha256 */
+            preflight_sha256: string;
+            /** Provider Snapshot Sha256 */
+            provider_snapshot_sha256: string;
+            /**
+             * Qualification Status
+             * @constant
+             */
+            qualification_status: "not_run";
+            /** Sample Count */
+            sample_count: number;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            version: components["schemas"]["CalibrationRef"];
+        };
+        /**
+         * CalibrationPublishRequest
+         * @description Optional empty body only; report and qualification contents are server-owned.
+         */
+        CalibrationPublishRequest: Record<string, never>;
+        /** CalibrationQualificationSource */
+        CalibrationQualificationSource: {
+            binding: components["schemas"]["QualificationBinding"];
+            /** Content Sha256 */
+            content_sha256: string;
+            qualification: components["schemas"]["JudgeQualification"];
+            /** Recorded At */
+            recorded_at: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** CalibrationRef */
+        CalibrationRef: {
+            /** Calibration Id */
+            calibration_id: string;
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Version */
+            version: string;
+        };
+        /** CalibrationReport */
+        CalibrationReport: {
+            /** Calibration Id */
+            calibration_id: string;
+            /** Calibration Sha256 */
+            calibration_sha256: string;
+            /** Calibration Version */
+            calibration_version: string;
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /** Calls */
+            calls?: components["schemas"]["CalibrationCall"][];
+            /** Candidate Only Count */
+            candidate_only_count: number;
+            /** Cost */
+            cost?: {
+                [key: string]: unknown;
+            };
+            /** Coverage */
+            coverage?: {
+                [key: string]: unknown;
+            };
+            /** Disagreement Rate */
+            disagreement_rate?: number | null;
+            /** Error Rate */
+            error_rate?: number | null;
+            /**
+             * Experimental
+             * @default true
+             */
+            experimental: boolean;
+            /**
+             * Gate Eligible
+             * @default false
+             */
+            gate_eligible: boolean;
+            /** Generated At */
+            generated_at?: string | null;
+            /** Human Reviewed Count */
+            human_reviewed_count: number;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256?: string | null;
+            /** Kind Counts */
+            kind_counts?: {
+                [key: string]: number;
+            };
+            /** Missing Evidence Rate */
+            missing_evidence_rate?: number | null;
+            /** Model */
+            model: string;
+            /** Not Run */
+            not_run?: string[];
+            /** Per Criterion */
+            per_criterion?: components["schemas"]["CriterionConfusion"][];
+            policy: components["schemas"]["CalibrationPolicy"];
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Position Swap */
+            position_swap?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Qualified
+             * @default false
+             */
+            qualified: boolean;
+            /** Reasons */
+            reasons?: string[];
+            /** Refusal Rate */
+            refusal_rate?: number | null;
+            /** Repeat Stability */
+            repeat_stability?: {
+                [key: string]: unknown;
+            };
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Version */
+            rubric_version: string;
+            /** Sample Count */
+            sample_count: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /** CalibrationReportRecord */
+        CalibrationReportRecord: {
+            /**
+             * Algorithm
+             * @default calibration-ledger@1
+             * @constant
+             */
+            algorithm: "calibration-ledger@1";
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Execution Id */
+            execution_id: string;
+            /** Ledger Sha256 */
+            ledger_sha256: string;
+            /** Pairwise Calls */
+            pairwise_calls?: components["schemas"]["PairwiseCalibrationCall"][];
+            /** Pairwise Confusion */
+            pairwise_confusion?: components["schemas"]["PairwiseCriterionConfusion"][];
+            /** Recorded At */
+            recorded_at: string;
+            report: components["schemas"]["CalibrationReport"];
+            /** Report Id */
+            report_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            source: components["schemas"]["CalibrationSourceBinding"];
+        };
+        /** CalibrationReportView */
+        CalibrationReportView: {
+            qualification: components["schemas"]["CalibrationQualificationSource"] | null;
+            report: components["schemas"]["CalibrationReportRecord"];
+        };
+        /** CalibrationReviewRequest */
+        CalibrationReviewRequest: {
+            /** Expected Parent Sha256 */
+            expected_parent_sha256: string;
+            /**
+             * New Version
+             * @description Public selectors are literal, nonblank Unicode path segments. '/' and '\', ASCII controls, percent-escape triplets (%HH), and exact '.' or '..' are unsupported. Values are never decoded, normalized, or rewritten.
+             */
+            new_version: string;
+            /** Reviews */
+            reviews: components["schemas"]["HumanReviewInput"][];
+        };
+        /**
+         * CalibrationRunRequest
+         * @description Public inputs only; the server owns observations, plans and authorization accounting.
+         */
+        CalibrationRunRequest: {
+            authorisation?: components["schemas"]["JudgeAuthorisation"] | null;
+            /** Expected Preflight Sha256 */
+            expected_preflight_sha256?: string | null;
+            /** Price Table Version */
+            price_table_version?: string | null;
+            /** Request Key */
+            request_key: string;
+            /** Spec Request */
+            spec_request: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * CalibrationSample
+         * @description 一条校准样本；human_reviewed 只可能由真人工复核产生。
+         */
+        CalibrationSample: {
+            /** Annotator */
+            annotator?: string | null;
+            /** Calibration Version */
+            calibration_version?: string | null;
+            /**
+             * Candidate Output
+             * @default
+             */
+            candidate_output: string;
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Expected Criteria */
+            expected_criteria?: {
+                [key: string]: boolean;
+            };
+            /** Expected Status */
+            expected_status?: ("scored" | "insufficient_evidence" | "evaluator_error") | null;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "clear_pass" | "clear_fail" | "borderline" | "missing_evidence" | "injection";
+            /**
+             * Labelling Notes
+             * @default
+             */
+            labelling_notes: string;
+            /** Model */
+            model: string;
+            /** Observation */
+            observation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Version */
+            rubric_version: string;
+            /** Sample Id */
+            sample_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "human" | "synthetic_candidate";
+            /**
+             * Status
+             * @default candidate
+             * @enum {string}
+             */
+            status: "candidate" | "human_reviewed" | "rejected";
+        };
+        /**
+         * CalibrationSet
+         * @description 一个 rubric/model/config 组合下的校准集（内容寻址、不可变）。
+         */
+        CalibrationSet: {
+            /** Calibration Id */
+            calibration_id: string;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256?: string | null;
+            /** Model */
+            model: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Version */
+            rubric_version: string;
+            /** Samples */
+            samples?: components["schemas"]["CalibrationSample"][];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            /** Version */
+            version: string;
+        };
+        /**
+         * CalibrationSourceBinding
+         * @description Source identity before report/qualification IDs exist; all components are required.
+         */
+        CalibrationSourceBinding: {
+            /** Calibration Content Sha256 */
+            calibration_content_sha256: string;
+            /** Calibration Id */
+            calibration_id: string;
+            /** Calibration Version */
+            calibration_version: string;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256: string;
+            /** Model */
+            model: string;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Provider Snapshot Sha256 */
+            provider_snapshot_sha256: string;
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Sha256 */
+            rubric_sha256: string;
+            /** Rubric Version */
+            rubric_version: string;
+        };
+        /** CalibrationVersion */
+        CalibrationVersion: {
+            calibration: components["schemas"]["CalibrationSet"];
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Expected Outcomes */
+            expected_outcomes?: {
+                [key: string]: components["schemas"]["ScoredCalibrationOutcome"] | components["schemas"]["NonScoredCalibrationOutcome"];
+            };
+            /** Pairs */
+            pairs?: {
+                [key: string]: components["schemas"]["CalibrationPair"];
+            };
+            /** Pairwise Gold */
+            pairwise_gold?: {
+                [key: string]: {
+                    [key: string]: components["schemas"]["PairwiseLabel"];
+                };
+            };
+            parent_ref?: components["schemas"]["CalibrationRef"] | null;
+            /** Review Ids */
+            review_ids?: string[];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+        };
         /** CancelRunRequest */
         CancelRunRequest: {
             /** Reason */
@@ -2457,6 +3307,40 @@ export interface components {
              */
             stop_run: boolean;
         };
+        /**
+         * CevalExperimentConfig
+         * @description 与 standalone C-Eval selection/profile builder 同口径的请求。
+         */
+        CevalExperimentConfig: {
+            /** Dataset Revision */
+            dataset_revision: string;
+            /** Execution Profile */
+            execution_profile: string;
+            /** Few Shot */
+            few_shot: number;
+            /**
+             * Few Shot Split
+             * @enum {string}
+             */
+            few_shot_split: "val" | "test" | "dev";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "ceval";
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "smoke" | "custom-subset" | "full";
+            /** Seed */
+            seed: number;
+            /**
+             * Split
+             * @enum {string}
+             */
+            split: "val" | "test" | "dev";
+        };
         /** CreateRunRequest */
         CreateRunRequest: {
             /** Case Ids */
@@ -2469,6 +3353,51 @@ export interface components {
             request_key?: string | null;
             /** Scenario Version */
             scenario_version: string;
+        };
+        /** CriterionConfusion */
+        CriterionConfusion: {
+            /**
+             * Compared
+             * @default 0
+             */
+            compared: number;
+            /** Criterion Id */
+            criterion_id: string;
+            /**
+             * Errors
+             * @default 0
+             */
+            errors: number;
+            /**
+             * False Fail
+             * @default 0
+             */
+            false_fail: number;
+            /**
+             * False Pass
+             * @default 0
+             */
+            false_pass: number;
+            /**
+             * Missing Evidence
+             * @default 0
+             */
+            missing_evidence: number;
+            /**
+             * Refusals
+             * @default 0
+             */
+            refusals: number;
+            /**
+             * True Fail
+             * @default 0
+             */
+            true_fail: number;
+            /**
+             * True Pass
+             * @default 0
+             */
+            true_pass: number;
         };
         /** DatasetProfileSummary */
         DatasetProfileSummary: {
@@ -2747,9 +3676,24 @@ export interface components {
             scorer_version: string;
         };
         /**
-         * EventsSnapshotResponse
-         * @description SSE 断线/缺口的持久查询（M7 协议 §2）。
+         * EvaluationRef
+         * @description 评分引用：Experiment 的 Run 评分固定用哪个评分协议。
          */
+        EvaluationRef: {
+            /**
+             * Scoring
+             * @default default
+             */
+            scoring: string;
+            /** Scoring Pass Hint */
+            scoring_pass_hint?: string | null;
+            /**
+             * Statistical Policy
+             * @default statistical_policy@1
+             */
+            statistical_policy: string;
+        };
+        /** EventsSnapshotResponse */
         EventsSnapshotResponse: {
             /** Events */
             events: {
@@ -2768,6 +3712,11 @@ export interface components {
             partial: boolean;
             /** Run Status */
             run_status: string;
+            /**
+             * Trimmed Through
+             * @default 0
+             */
+            trimmed_through: number;
         };
         /** ExecutionError */
         ExecutionError: {
@@ -2792,10 +3741,149 @@ export interface components {
             /** Type */
             type?: string | null;
         };
+        /**
+         * ExperimentExecutionBudget
+         * @description Builtin Target 请求预算；不接收客户端自报 enforcement/调用上界。
+         *
+         *     维度与 motte_agent.budget.ExecutionBudget 一致。token/cost 的 observed
+         *     额度不能表示强制上界，因此本首版配置不开放这两维。
+         */
+        ExperimentExecutionBudget: {
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
+            /** Max Steps */
+            max_steps: number;
+            /** Max Tool Calls */
+            max_tool_calls?: number | null;
+            /** Per Call Timeout Sec */
+            per_call_timeout_sec?: number | null;
+            /** Wall Time Sec */
+            wall_time_sec?: number | null;
+        };
+        /**
+         * ExperimentRequest
+         * @description Transport controls are excluded from Spec identity and preview binding.
+         */
+        ExperimentRequest: {
+            /** Preview Hash */
+            _preview_hash?: string | null;
+            budget_policy: components["schemas"]["BudgetPolicy"];
+            /** Controlled Conditions */
+            controlled_conditions?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by: string;
+            evaluation_ref?: components["schemas"]["EvaluationRef"];
+            /** Experiment Id */
+            experiment_id: string;
+            /** Factors */
+            factors?: {
+                [key: string]: string[];
+            };
+            /**
+             * Max Cells
+             * @default 200
+             */
+            max_cells: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Repeats
+             * @default 1
+             */
+            repeats: number;
+            /** Request Key */
+            request_key?: string | null;
+            /**
+             * Selected Case Keys
+             * @default []
+             */
+            selected_case_keys: string[];
+            stop_policy?: components["schemas"]["StopPolicy"];
+            /** Suite Config */
+            suite_config?: (components["schemas"]["CevalExperimentConfig"] | components["schemas"]["ScenarioExperimentConfig"] | components["schemas"]["SkillExperimentConfig"]) | null;
+            /** Task Ref */
+            task_ref: {
+                [key: string]: string;
+            };
+            /** Trials Per Run */
+            trials_per_run?: number | null;
+            /** Version */
+            version: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HumanReviewInput */
+        HumanReviewInput: {
+            /** Annotator */
+            annotator: string;
+            /** Expected Criteria */
+            expected_criteria?: {
+                [key: string]: boolean;
+            };
+            /** Expected Outcome */
+            expected_outcome?: (components["schemas"]["ScoredCalibrationOutcome"] | components["schemas"]["NonScoredCalibrationOutcome"]) | null;
+            /** Expected Status */
+            expected_status?: ("scored" | "insufficient_evidence" | "evaluator_error") | null;
+            /** Pairwise Gold */
+            pairwise_gold?: {
+                [key: string]: components["schemas"]["PairwiseLabel"];
+            };
+            /** Reason */
+            reason: string;
+            /** Reviewed At */
+            reviewed_at: string;
+            /** Reviewer */
+            reviewer: string;
+            /** Sample Id */
+            sample_id: string;
+        };
+        /** HumanReviewRecord */
+        HumanReviewRecord: {
+            /** After Sample Sha256 */
+            after_sample_sha256: string;
+            /** Before Sample Sha256 */
+            before_sample_sha256: string;
+            child_ref: components["schemas"]["CalibrationRef"];
+            parent_ref: components["schemas"]["CalibrationRef"];
+            /** Recorded At */
+            recorded_at: string;
+            review: components["schemas"]["HumanReviewInput"];
+            /** Review Id */
+            review_id: string;
+        };
+        /**
+         * JudgeAuthorisation
+         * @description 显式付费授权：用途必须是 judge；没有授权不产生任何调用。
+         */
+        JudgeAuthorisation: {
+            /** Actor */
+            actor: string;
+            /**
+             * Authorised
+             * @default false
+             */
+            authorised: boolean;
+            /** Authorised At */
+            authorised_at?: string | null;
+            /** Hard Cost Cap Usd */
+            hard_cost_cap_usd?: number | null;
+            /** Max Calls */
+            max_calls: number;
+            /** Max Total Tokens */
+            max_total_tokens?: number | null;
+            /**
+             * Purpose
+             * @default judge
+             * @constant
+             */
+            purpose: "judge";
         };
         /**
          * JudgeAuthorisationRequest
@@ -2918,6 +4006,8 @@ export interface components {
             owner: {
                 [key: string]: unknown;
             };
+            /** Pairwise Roles */
+            pairwise_roles?: components["schemas"]["PairwiseRoleBinding"][] | null;
             /** Preflight */
             preflight?: {
                 [key: string]: unknown;
@@ -2949,6 +4039,8 @@ export interface components {
             reused?: boolean | null;
             /** Revision */
             revision: number;
+            /** Roles Sha256 */
+            roles_sha256?: string | null;
             /** Run Id */
             run_id: string;
             /** Status */
@@ -3048,6 +4140,40 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * JudgeQualification
+         * @description 某个 judge 配置的校准资格；按 spec hash 精确匹配，不跨版本继承。
+         */
+        JudgeQualification: {
+            /** Calibration Id */
+            calibration_id: string;
+            /** Calibration Sha256 */
+            calibration_sha256: string;
+            /** Calibration Version */
+            calibration_version: string;
+            /** Evaluated At */
+            evaluated_at?: string | null;
+            /** Experimental */
+            experimental: boolean;
+            /** Gate Eligible */
+            gate_eligible: boolean;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256: string;
+            /** Model */
+            model: string;
+            /** Policy Sha256 */
+            policy_sha256?: string | null;
+            /** Qualification Id */
+            qualification_id: string;
+            /** Qualified */
+            qualified: boolean;
+            /** Reasons */
+            reasons?: string[];
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Version */
+            rubric_version: string;
+        };
+        /**
          * JudgeSpecRequest
          * @description Judge 配置请求；model 是**已发布的 ModelProfile id**，不是线路模型名。
          *
@@ -3119,6 +4245,92 @@ export interface components {
             /** Source Pass Id */
             source_pass_id?: string | null;
             spec: components["schemas"]["JudgeSpecRequest"];
+        };
+        /** NonScoredCalibrationOutcome */
+        NonScoredCalibrationOutcome: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "non_scored";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "missing_evidence" | "refused" | "malformed" | "forged_evidence" | "missing_criterion";
+        };
+        /**
+         * PairwiseCalibrationCall
+         * @description Stable candidate/tie labels, never encoded as Boolean pass/fail criteria.
+         */
+        PairwiseCalibrationCall: {
+            call: components["schemas"]["CalibrationCall"];
+            /** Preferences */
+            preferences?: {
+                [key: string]: components["schemas"]["PairwiseLabel"];
+            };
+            winner?: components["schemas"]["PairwiseLabel"] | null;
+        };
+        /** PairwiseConfusionCell */
+        PairwiseConfusionCell: {
+            /** Count */
+            count: number;
+            expected: components["schemas"]["PairwiseLabel"];
+            observed: components["schemas"]["PairwiseLabel"];
+        };
+        /** PairwiseCriterionConfusion */
+        PairwiseCriterionConfusion: {
+            /** Cells */
+            cells?: components["schemas"]["PairwiseConfusionCell"][];
+            /** Criterion Id */
+            criterion_id: string;
+            /**
+             * Errors
+             * @default 0
+             */
+            errors: number;
+            /**
+             * Missing Evidence
+             * @default 0
+             */
+            missing_evidence: number;
+            /**
+             * Refusals
+             * @default 0
+             */
+            refusals: number;
+        };
+        /** PairwiseLabel */
+        PairwiseLabel: {
+            /** Candidate Id */
+            candidate_id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "candidate" | "tie";
+        };
+        /**
+         * PairwiseRoleBinding
+         * @description Explicit stable roles; A/B presentation and lexical order choose neither.
+         */
+        PairwiseRoleBinding: {
+            /** Candidate Input Sha256 */
+            candidate_input_sha256: {
+                [key: string]: string;
+            };
+            /** Case Id */
+            case_id: string;
+            /** Challenger Attempt Id */
+            challenger_attempt_id: string;
+            /** Challenger Candidate Id */
+            challenger_candidate_id: string;
+            /** Pair Id */
+            pair_id: string;
+            /** Reference Attempt Id */
+            reference_attempt_id: string;
+            /** Reference Candidate Id */
+            reference_candidate_id: string;
         };
         /** QualificationBinding */
         QualificationBinding: {
@@ -3517,6 +4729,40 @@ export interface components {
             /** Terminal At */
             terminal_at?: string | null;
         };
+        /**
+         * ScenarioExperimentCase
+         * @description ScenarioCaseExecutor 当前消费的窄 Case 请求负载。
+         */
+        ScenarioExperimentCase: {
+            /** Business Id */
+            business_id?: string | null;
+            /** Case Id */
+            case_id: string;
+        };
+        /** ScenarioExperimentConfig */
+        ScenarioExperimentConfig: {
+            /**
+             * Agent Mode
+             * @enum {string}
+             */
+            agent_mode: "native-tool" | "legacy-json";
+            /** Cases */
+            cases: (string | components["schemas"]["ScenarioExperimentCase"])[];
+            execution_budget: components["schemas"]["ExperimentExecutionBudget"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "scenario";
+            /**
+             * Target
+             * @default builtin-agent
+             * @constant
+             */
+            target: "builtin-agent";
+            /** Workflow Ref */
+            workflow_ref: string;
+        };
         /** ScenarioTargetListResponse */
         ScenarioTargetListResponse: {
             /** Available */
@@ -3596,6 +4842,14 @@ export interface components {
             unit?: string | null;
             /** Value */
             value?: number | null;
+        };
+        /** ScoredCalibrationOutcome */
+        ScoredCalibrationOutcome: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "scored";
         };
         /** ScoringPass */
         ScoringPass: {
@@ -3677,6 +4931,29 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /** SkillExperimentConfig */
+        SkillExperimentConfig: {
+            /**
+             * Agent Mode
+             * @enum {string}
+             */
+            agent_mode: "native-tool" | "legacy-json";
+            /**
+             * Budget Policy
+             * @enum {string}
+             */
+            budget_policy: "same-total-budget" | "same-execution-budget";
+            /** Cases */
+            cases: (string | components["schemas"]["ScenarioExperimentCase"])[];
+            execution_budget: components["schemas"]["ExperimentExecutionBudget"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "skill";
+            /** Workflow Ref */
+            workflow_ref: string;
         };
         /**
          * SkillValidationResponse
@@ -3947,6 +5224,21 @@ export interface components {
             k: number;
         };
         /**
+         * StopPolicy
+         * @description 停止政策（协议 §1/执行计划 T04）：不允许"直到成功"。
+         */
+        StopPolicy: {
+            /** Max Failures */
+            max_failures?: number | null;
+            /**
+             * On First Failure
+             * @default false
+             */
+            on_first_failure: boolean;
+            /** Wall Clock Seconds */
+            wall_clock_seconds?: number | null;
+        };
+        /**
          * SubjectPairReference
          * @description Only persisted same-case attempt identities cross the public boundary.
          */
@@ -3957,6 +5249,8 @@ export interface components {
             candidate_b_attempt_id: string;
             /** Case Id */
             case_id: string;
+            /** Challenger Attempt Id */
+            challenger_attempt_id: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -5499,9 +6793,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["ExperimentRequest"];
             };
         };
         responses: {
@@ -5571,9 +6863,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["ExperimentRequest"];
             };
         };
         responses: {
@@ -6137,6 +7427,845 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    catalog_api_v1_judge_calibrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationItems_CalibrationCatalogEntry_"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    import_version_api_v1_judge_calibrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationVersion"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    job_api_v1_judge_calibrations__calibration_id__jobs__execution_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationJobView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    reports_api_v1_judge_calibrations__calibration_id__jobs__execution_id__reports_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationItems_CalibrationReportView_"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    publish_api_v1_judge_calibrations__calibration_id__jobs__execution_id__reports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CalibrationPublishRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationReportView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    qualification_api_v1_judge_calibrations__calibration_id__qualifications__qualification_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationQualificationSource"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    report_api_v1_judge_calibrations__calibration_id__reports__report_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationReportView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    versions_api_v1_judge_calibrations__calibration_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationItems_CalibrationVersion_"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    version_get_api_v1_judge_calibrations__calibration_id__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationVersion"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    jobs_api_v1_judge_calibrations__calibration_id__versions__version__jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationItems_CalibrationJobView_"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    submit_api_v1_judge_calibrations__calibration_id__versions__version__jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationJobView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    preflight_api_v1_judge_calibrations__calibration_id__versions__version__preflight_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationPreflightView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    reviews_api_v1_judge_calibrations__calibration_id__versions__version__reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationItems_HumanReviewRecord_"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+        };
+    };
+    review_api_v1_judge_calibrations__calibration_id__versions__version__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calibration_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CalibrationReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationVersion"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalibrationErrorResponse"];
+                };
             };
         };
     };

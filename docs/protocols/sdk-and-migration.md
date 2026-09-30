@@ -295,11 +295,25 @@ HTTP client 的依赖只有 `httpx`（新增 extras，见 §8）。执行类模�
 
 - 保留类：`pinned`（EvidencePin 引用/Baseline entry 引用/needs_review/import 审计
   引用→永不删）；`artifact`（TTL 天，默认 90）；`provider_payload`（原始请求/响应
-  payload，TTL 默认 30）；`trace`（普通事件，TTL 默认 180）。
+  payload，TTL 默认 30）；`trace` 使用独立显式配置，默认 disabled，
+  `retention_days=None`，不设默认天数。不可变 Trace 归档永久保留。
 - `motte gc plan`（默认 dry-run）输出分类清单+保留原因；`--apply` 才删；
   删除写 tombstone（DB 表 `motte_gc_tombstones`：artifact_id、sha256、bytes、
   reason、gc_run_id、deleted_at），保留审计可查。
 - GC apply 与采集/评分/备份互斥：必须持维护屏障执行。
+- Trace 行裁剪只通过 local-only `motte trace-retention plan [--config FILE] --output FILE`
+  与 `apply --config FILE --plan FILE --artifacts-root DIR --confirm`；未传配置的计划禁用，
+  无 scheduler/环境启用/HTTP mutation。apply 复验保存的精确计划而非重新计算后执行。
+  `motte_sdk.trace_retention` 原样导出存储层函数与模型，普通 `import motte_sdk` 不改变。
+- `events_window` 在单一一致快照读取事件与 receipt 高水位。游标早于高水位时，
+  `events/snapshot.partial=true`，SSE 先发 `motte-gap`，`next_seq=trimmed_through+1`，
+  即使返回事件为空也成立；无 receipt 的旧首条序号缺口仍保守报 partial。
+  SDK partial 为本次流的粘性事实，snapshot 补齐或终态对账不能重置它。
+  公共 Trace payload/导出不增加服务器时间字段。
+- 归档先持久化后原子 receipt+trim，未知旧时间保持未知，最高 seq 永不裁剪；
+  归档与其完整证据闭包进入 backup/GC/rollback 保护。没有归档到期或活动流恢复命令。
+  本轮 apply 限合成一次性数据库，Windows archive durability 尚未支持并明确拒绝。
+  操作与崩溃 owner 恢复说明见 [Trace 保留操作](../operations/trace-retention.md)。
 - 缺失证据后：rescore/compare 的既有 fail-closed 语义不变（不降级为成功）。
 
 
@@ -408,3 +422,81 @@ motte statistical-report export REPORT_ID --format json --server http://localhos
 HTTP 422/404/409/503 的细分与正文身份规则见 experiments-and-comparison.md §10.1。
 GET 沿用自动重试，POST 不重试；没有公共更新、删除、列表或任意正文导入。
 这些是离线软件契约，不代表真实模型、真实人审或 live 独立性验收完成。
+
+## M8 additive: persistent Judge calibration lifecycle
+
+The existing single-user deployment authorization, SDK retry policy and local/server
+CLI mode rules remain unchanged. Operator names and timestamps are declared provenance,
+not verified authentication claims. The following resources are rooted at
+`/api/v1/judge-calibrations`:
+
+| Method/path suffix | Request | Result |
+| --- | --- | --- |
+| POST root | `CalibrationImportRequest` (same import payload) | 201 immutable `CalibrationVersion` |
+| GET root | none | calibration IDs with exact version references |
+| GET `/{id}/versions` | none | version list |
+| GET `/{id}/versions/{version}` | none | exact version |
+| POST `/{id}/versions/{version}/reviews` | `CalibrationReviewRequest` | 201 new version |
+| GET same `/reviews` | none | outgoing review transitions from this parent version |
+| POST `/{id}/versions/{version}/preflight` | `CalibrationExecuteRequest` | zero-write/zero-call preflight |
+| POST `/{id}/versions/{version}/jobs` | same | 202 execution summary; existing Worker required |
+| GET same `/jobs` | none | executions for exactly this version |
+| GET `/{id}/jobs/{execution_id}` | none | execution and child status summary |
+| POST `/{id}/jobs/{execution_id}/reports` | no body or `{}` only | 201 stored report and optional qualification |
+| GET same `/reports` | none | already-published report envelopes |
+| GET `/{id}/reports/{report_id}` | none | stored report envelope |
+| GET `/{id}/qualifications/{qualification_id}` | none | stored qualification source |
+
+Lists return `{items,total}`. Every nested lookup verifies its path calibration owner.
+A review requires expected_parent_sha256, a new version name and complete typed review
+inputs. An execution envelope contains content_sha256 plus a CalibrationRunRequest
+under request; request_key is mandatory. Preflight consumes that key only as planning
+input, never a persisted reservation. Optional expected_preflight_sha256 detects drift.
+Exact submission replay returns the durable execution before mutable resource resolution.
+
+Public imports validate calibration_id and version; reviews validate new_version and the
+calibration owner before creating a new version. These are literal, nonblank Unicode path
+segments: slash, backslash, ASCII controls, percent-escape triplets (`%HH`), and exact `.`
+or `..` are unsupported. The boundary rejects them with CALIBRATION_CONTRACT_INVALID
+(422) before any durable write or model call, consistently for API, HTTP SDK and both
+CLI modes. Pass literal names, not pre-encoded URL segments; the SDK encodes selectors.
+Unicode, spaces, encoded query/fragment punctuation and non-escape percent signs retain
+their exact identity. No value or content hash is rewritten. The public request-only
+constraints leave stored/internal CalibrationImport, CalibrationSet and CalibrationVersion
+readable, including legacy names through local reads and catalogs. No alternate HTTP route
+is introduced for legacy unaddressable names; sample/candidate and other IDs are unchanged.
+
+Typed 404/409/422/503 errors use `{error:{code,message}}`. Stable codes include
+CALIBRATION_NOT_FOUND, CALIBRATION_CONFLICT, CALIBRATION_SOURCE_INVALID,
+CALIBRATION_CONTRACT_INVALID, JUDGE_NOT_AUTHORISED, JUDGE_BUDGET_NOT_EXECUTABLE and
+CALIBRATION_UNAVAILABLE. Unknown fields, imported reviewed/qualified facts and invalid
+numbers are rejected without writes/calls. Error rendering is scoped to these routes;
+existing deployment auth/maintenance behavior and unrelated FastAPI validation remain intact.
+
+MotteClient exposes import_judge_calibration, review_judge_calibration,
+preflight_judge_calibration, submit_judge_calibration, get_judge_calibration_job,
+publish_judge_calibration_report, get_judge_calibration_report, get_judge_qualification,
+and the corresponding catalog/version/review/job/report list methods. Requests accept
+mappings or local typed envelopes; returned lightweight views expose typed identities and
+retain full payloads in `.raw`. Local lifecycle models live in motte_sdk.calibration_transport;
+they are not imported by the installed HTTP client. SDK base dependencies remain contracts
+and httpx. GET retries retain the existing policy; POST never retries automatically, even
+after a lost response. Explicitly resend the identical submission key/body to recover.
+Report publication has content-addressed idempotency and accepts no caller report/qualification.
+
+`motte judge-calibration import|review|preflight|submit|get|report|qualification` has matching
+local/server behavior and typed JSON files via --file. --id/--version/--job/--report/
+--qualification select exact sources; report --publish is the only report write. No command
+executes a Provider. Local `motte judge` consumes the same pairwise_refs/qualification_id
+fields as HTTP; its private preview lookup distinction is not a public flag.
+
+This lifecycle supplies calibration qualification, not a pairwise quality metric or an
+operator's business threshold. Until Scope B Tasks 7–9 are integrated, pairwise quality
+Gates remain unavailable/fail-closed and Boolean accuracy stays None.
+
+Six-wheel remote consumers remain workspace-runtime independent: `motte compare --mode server`
+and `motte statistical-report get ID --mode server` dispatch through the HTTP client without
+importing provider/agent/benchmark runtime packages. Local pairwise reconstruction is loaded only
+when used; local statistical-report services are loaded after local/server routing. This adds no
+seventh delivery package or SDK base dependency. The clean-wheel regression exercises actual
+loopback HTTP commands with all runtime packages absent, rather than help/import-only checks.

@@ -130,7 +130,9 @@ def build_legacy_requested_manifest(
         )
     values = assignment.as_dict()
     suite = spec.task_ref["suite"]
-    manifest: dict[str, Any] = {"model": values["model_profile"]}
+    manifest: dict[str, Any] = {
+        "model": values["model_profile"], "provider_transport_policy": "bounded-http@1",
+    }
     if suite == "agent-tasks":
         manifest["agent"] = {"mode": spec.controlled_conditions.get("agent_mode") or "legacy-json"}
     if values.get("reasoning_level") is not None:
@@ -175,6 +177,9 @@ def _legacy_call_bound(spec: ExperimentSpec, manifest: dict[str, Any], cases: tu
 
     validate_legacy_execution_boundary(spec, manifest)
     provider = manifest.get("provider") or {}
+    if (manifest.get("provider_transport_policy") != "bounded-http@1"
+            or provider.get("kind") not in {"openai_compatible", "openai_responses", "anthropic_messages"}):
+        raise ExperimentError("PROVIDER_BOUND_UNSUPPORTED", "bounded built-in HTTP transport is required")
     # Managed standalone preparation explicitly pins its provider retry limit.
     retries = provider.get("max_retries") if isinstance(provider, dict) else None
     if type(retries) is not int or retries < 0:
@@ -302,6 +307,7 @@ def _workflow_requested_manifest(
         "model": assignment.as_dict()["model_profile"], "workflow": config.workflow_ref,
         "agent": "builtin-agent@1", "agent_config": {"mode": config.agent_mode, "budget": budget},
         "budget": deepcopy(budget), "cases": cases,
+        "provider_transport_policy": "bounded-http@1",
     }
     if budget.get("max_output_tokens") is not None:
         requested["parameters"] = {"max_output_tokens": budget["max_output_tokens"]}
@@ -319,6 +325,8 @@ def _workflow_call_bound(manifest: dict[str, Any], cases: tuple[str, ...]) -> Ca
     if (execution.get("backend_id"), execution.get("backend_version")) != ("scenario", "1"):
         raise ExperimentError("TARGET_UNSUPPORTED", "Workflow cells require scenario@1 execution")
     provider = manifest.get("provider") or {}
+    if manifest.get("provider_transport_policy") != "bounded-http@1":
+        raise ExperimentError("PROVIDER_BOUND_UNSUPPORTED", "bounded HTTP transport policy is required")
     # These built-in adapters perform one HTTPTransport request per complete;
     # custom/upstream retry behavior has no proof and is not inferred as zero.
     if provider.get("kind") not in {"openai_compatible", "openai_responses", "anthropic_messages"}:

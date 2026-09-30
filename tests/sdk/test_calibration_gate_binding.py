@@ -50,7 +50,7 @@ def save_attempts(store, *, run_id=None, case_id="case-1", count=2):
                                 changes={"result": {"frozen_observation": observation}})
         attempts.append(row["id"])
     return run_id, {"case_id": case_id, "candidate_a_attempt_id": attempts[0],
-                    "candidate_b_attempt_id": attempts[1]}
+                    "candidate_b_attempt_id": attempts[1], "challenger_attempt_id": attempts[0]}
 
 
 def subject_request(calibrated, *, qualification=True, run_id=None, refs=None, **changes):
@@ -426,15 +426,15 @@ def test_selected_source_rejects_record_identity_aliases(calibrated, monkeypatch
     assert not ComparisonService(store)._judge_gate_qualification(selected)["gate_eligible"]
 
 
-def test_distinct_planned_pairs_can_share_a_saved_case(calibrated):
+def test_new_subject_requires_one_pair_per_selected_case(calibrated):
     module = subject_module()
     store = calibrated[0][0].store
     run_id, first = save_attempts(store, count=3)
     second = {**first, "candidate_b_attempt_id": run_id + "-attempt-3"}
-    pairs = module.resolve_saved_pairwise_inputs(store, run_id, [first, second])
-    assert len(pairs) == 2 and pairs[0].pair_id != pairs[1].pair_id
-    request = subject_request(calibrated, run_id=run_id, refs=[first, second])
-    assert calibrated[0][1].preflight(request)["max_calls"] == 2
+    with pytest.raises(JudgeInputError, match="one pair per selected case"):
+        module.resolve_saved_pairwise_inputs(store, run_id, [first, second])
+    with pytest.raises(JudgeInputError, match="one pair per selected case"):
+        subject_request(calibrated, run_id=run_id, refs=[first, second])
     for duplicate in (first, {**first, "candidate_a_attempt_id": first["candidate_b_attempt_id"],
                               "candidate_b_attempt_id": first["candidate_a_attempt_id"]}):
         with pytest.raises(JudgeInputError):

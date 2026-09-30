@@ -360,8 +360,10 @@ def test_model_fields_match_the_approved_shared_interface():
         ),
         "TraceArchiveReceipt": (
             "archive_id plan_id prefix artifact_id sha256 bytes cutoff artifact_refs artifact_hashes "
-            "committed_at"
+            "committed_at reference_document"
         ),
+        "TracePassReference": "pass_id owning_run_id expected_run_id",
+        "TraceReferenceDocument": "schema_version run_ids event_seqs pass_references",
         "TraceEventWindow": "events trimmed_through",
         "TraceRetentionResult": "plan_id trimmed_events receipts",
     }

@@ -129,6 +129,7 @@ def test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning(tmp_path):
     assert any("orphan.log" in warning for warning in manifest["warnings"])
     assert manifest["counts"] == {
         "runs": len(store.runs.list()),
+        "trace_archive_receipts": 0,
         "scoring_passes": sum(
             len(store.scoring_passes.list_for_run(run["id"])) for run in store.runs.list()
         ),

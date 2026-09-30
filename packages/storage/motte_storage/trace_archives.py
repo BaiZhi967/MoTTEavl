@@ -105,6 +105,11 @@ def verify_trace_archive(data: bytes, receipt: TraceArchiveReceipt) -> None:
             raise ValueError("archive prefix does not match receipt")
         if body["artifact_refs"] != receipt.artifact_refs or body["artifact_hashes"] != receipt.artifact_hashes:
             raise ValueError("archive nested evidence does not match receipt")
+        if receipt.reference_document is not None:
+            from .trace_references import extract_reference_document
+            document = extract_reference_document((row['payload'], receipt.prefix.run_id) for row in body['events'])
+            if document != receipt.reference_document:
+                raise ValueError('archive reference document disagrees with canonical payloads')
         if any(StoredTraceEvent.model_validate(row).stored_at >= receipt.cutoff
                for row in body["events"]):
             raise ValueError("archive contains an event at or after the retention cutoff")
@@ -176,3 +181,84 @@ class MemoryTraceArchives(SQLiteTraceArchives):
                                        row.prefix.first_seq, row.prefix.last_seq, row.model_dump()))
                     for key, row in self._rows.items()]
             return sorted(rows, key=lambda row: (row.prefix.run_id, row.prefix.first_seq, row.archive_id))
+
+
+def checked_trace_receipts(store) -> list[TraceArchiveReceipt]:
+    """Require complete immutable reader coverage, including parentless receipts."""
+    reader = getattr(getattr(store, 'trace_archives', None), 'list', None)
+    if not callable(reader):
+        raise AttributeError('store.trace_archives.list is required for archive reference scanning')
+    observed = [TraceArchiveReceipt.model_validate(row) for row in reader()]
+    if getattr(store, 'dsn', None):
+        expected = PgTraceArchives(store.dsn).list()
+    elif getattr(store.runs, '_path', None):
+        expected = SQLiteTraceArchives(store.runs._path).list()
+    else:
+        repo = store.trace_archives
+        with repo._lock:
+            expected = [_receipt_from_row((key, row.plan_id, row.prefix.run_id, row.prefix.first_seq,
+                                          row.prefix.last_seq, row.model_dump())) for key, row in repo._rows.items()]
+        expected.sort(key=lambda row: (row.prefix.run_id, row.prefix.first_seq, row.archive_id))
+    if observed != expected:
+        raise TraceArchiveInvalid('incomplete or mismatched Trace receipt reader coverage')
+    return observed
+
+
+def trace_receipt_boundaries(store, receipts) -> dict[str, int]:
+    """Prove contiguous archived prefixes end strictly before retained live rows."""
+    boundaries, keep = {}, {}
+    for receipt in receipts:
+        prefix = receipt.prefix
+        if prefix.first_seq != boundaries.get(prefix.run_id, 0) + 1:
+            raise TraceArchiveInvalid('Trace receipt ranges overlap or leave a gap')
+        boundaries[prefix.run_id] = prefix.last_seq
+        keep[prefix.run_id] = max(keep.get(prefix.run_id, 0), prefix.keep_seq)
+    for run_id, last_seq in boundaries.items():
+        if store.runs.get(run_id) is None:
+            raise TraceArchiveInvalid('Trace receipt has no owning Run')
+        rows = store.events.stored_for_run(run_id)
+        if (not rows or rows[0].seq <= last_seq or rows[-1].seq < keep[run_id]
+                or any(row.seq <= last_seq for row in rows)):
+            raise TraceArchiveInvalid('Trace receipt overlaps live rows or exceeds retained bounds')
+    return boundaries
+
+
+def receipt_reference_record(store, receipt, *, trace_protection=False):
+    """Independent audit root; only Trace planning suppresses the own Run edge."""
+    from .trace_references import resolve_reference_document
+    document = receipt.reference_document
+    if document is None:
+        raise TraceArchiveInvalid('legacy receipt lacks archived reference document')
+    runs, events = resolve_reference_document(document, store.scoring_passes.get)
+    record = {
+        'archive_id': receipt.archive_id, 'run_id': receipt.prefix.run_id,
+        'artifact_id': receipt.artifact_id, 'sha256': receipt.sha256,
+        'artifacts': [{'artifact_id': key, 'sha256': digest} for key, digest in receipt.artifact_refs.items()]
+                     + [{'sha256': digest} for digest in receipt.artifact_hashes],
+        'referenced_run_ids': sorted(runs),
+        'event_refs': [{'kind': 'event', 'run_id': run_id, 'locator': str(seq)}
+                       for run_id, seqs in sorted(events.items()) for seq in sorted(seqs)],
+    }
+    if not trace_protection:
+        # Rollback keeps even an archived owning Pass. Trace protection already
+        # resolved these tokens with their original own-edge suppression above.
+        record['pass_refs'] = [{'source_pass_id': ref.pass_id} for ref in document.pass_references]
+    return record
+
+
+def verify_trace_archives(store, artifacts) -> None:
+    """Verify every complete receipt/file/reference closure and retained boundary."""
+    from .trace_references import resolve_reference_document
+    receipts = checked_trace_receipts(store)
+    trace_receipt_boundaries(store, receipts)
+    for receipt in receipts:
+        if receipt.reference_document is None:
+            raise TraceArchiveInvalid('legacy receipt lacks archived reference document')
+        data = artifacts.read_bytes(receipt.artifact_id)
+        verify_trace_archive(data, receipt)
+        body = _decode_trace_archive(data)
+        if any(row['payload'].get('run_id') != receipt.prefix.run_id
+               or type(row['payload'].get('seq')) is not int or row['payload']['seq'] != row['seq']
+               for row in body['events']):
+            raise TraceArchiveInvalid('archived event payload identity disagrees')
+        resolve_reference_document(receipt.reference_document, store.scoring_passes.get)

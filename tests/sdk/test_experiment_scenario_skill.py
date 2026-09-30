@@ -96,6 +96,7 @@ def requested_base(model, *, budget=None, mode="legacy-json"):
     return {
         "model": model, "workflow": "greeting@1", "agent": "builtin-agent@1",
         "agent_config": {"mode": mode, "budget": deepcopy(budget)},
+        "provider_transport_policy": "bounded-http@1",
         "budget": deepcopy(budget), "cases": {"case-2": {"business_id": "order-1"}, "case-1": {}},
     }
 

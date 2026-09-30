@@ -42,6 +42,7 @@ from motte_contracts.comparison import (
     CostSummary,
     DefaultBaselinePointer,
     ReportSnapshot,
+    PairwiseReportSnapshot,
     RunReportRef,
 )
 from motte_contracts.gates import GatePolicyVersion
@@ -49,12 +50,21 @@ from motte_contracts.metrics import METRIC_REGISTRY_VERSION, lookup_metric
 from motte_eval.comparison import ComparisonResult, _model_identity, compare_run_reports
 from motte_eval.coverage import coverage_summary
 from motte_eval.gates import (
+    GateInputError,
     _rule_direction_reason,
     evaluate_gate,
     evaluate_gate_policy,
     gate_exit_code,
+    references_pairwise_quality,
+    validate_pairwise_quality_policy,
 )
 from motte_eval.regression import regression_report
+
+def reconstruct_pairwise_quality(store, pass_id):
+    """Load workspace-only Judge reconstruction only for a local pairwise read."""
+    from .pairwise_quality import reconstruct_pairwise_quality as reconstruct
+
+    return reconstruct(store, pass_id)
 
 #: Terminal-Bench（Harbor）的 suite 身份：指标与覆盖按 **Trial 口径** 装配。
 TERMINAL_BENCH_SUITE = "terminal-bench-harbor"
@@ -659,6 +669,13 @@ class ComparisonService:
             self._score_rows(dict(scoring_pass)), ensure_ascii=False,
             sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
+        pairwise = _pairwise_origin(self.store, scoring_pass)
+        if pairwise:
+            quality = reconstruct_pairwise_quality(self.store, str(scoring_pass["id"]))
+            evidence["pairwise_quality"] = {
+                "roles_sha256": quality.roles_sha256, "plan_sha256": quality.plan_sha256,
+                "ledger_sha256": quality.ledger_sha256, "quality_sha256": quality.content_sha256,
+            }
         digest = hashlib.sha256(json.dumps(
             evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
@@ -668,7 +685,7 @@ class ComparisonService:
         return RunReportRef(
             run_id=run_id,
             scoring_pass_id=pass_id,
-            report_schema="report-v1",
+            report_schema="report-pairwise-v1" if pairwise else "report-v1",
             evidence_hash="sha256:" + digest,
         )
 
@@ -714,6 +731,7 @@ class ComparisonService:
                 result["metric_values"]["valid_trial_pass_rate"] = None
                 result["metric_value"] = None
                 result["cost"]["per_success_usd"] = None
+                self._pairwise_summary(result, str(record["id"]))
             return result
         selected_ids = list(run.get("case_ids") or [])
         selected = len(selected_ids)
@@ -764,7 +782,14 @@ class ComparisonService:
         if pairwise_origin:
             # Edited Boolean rows cannot supply a pairwise success denominator.
             result["cost"]["per_success_usd"] = None
+            self._pairwise_summary(result, str(record["id"]))
         return result
+
+    def _pairwise_summary(self, result: dict[str, Any], pass_id: str) -> None:
+        quality = reconstruct_pairwise_quality(self.store, pass_id)
+        result.update(pairwise_quality=quality.model_dump(mode="json"), scoring_pass_id=pass_id,
+                      report_schema="report-pairwise-v1", metric_registry_version="metric-registry@2")
+        result["metric_values"]["pairwise_challenger_score@1"] = quality.value
 
     # ------------------------------------------------------------------ 比较
 
@@ -796,6 +821,10 @@ class ComparisonService:
             policy=ComparisonPolicy(allowed_factors=tuple(allowed_factors)),
             baseline_cost=self._pass_cost_view(baseline_run_id, baseline_pass_id),
             candidate_cost=self._pass_cost_view(candidate_run_id, candidate_pass_id),
+            baseline_pairwise=(reconstruct_pairwise_quality(self.store, baseline_pass_id)
+                               if _pairwise_origin(self.store, self.store.scoring_passes.get(baseline_pass_id)) else None),
+            candidate_pairwise=(reconstruct_pairwise_quality(self.store, candidate_pass_id)
+                                if _pairwise_origin(self.store, self.store.scoring_passes.get(candidate_pass_id)) else None),
         )
 
     def _pass_cost_view(
@@ -994,6 +1023,9 @@ class ComparisonService:
             "reason": None,
             "statistics": None,
         }
+        if any(ref["report_schema"] == "report-pairwise-v1" for ref in refs.values()):
+            view["reason"] = "pairwise_statistical_inference_unsupported"
+            return view
         terminal_base = _is_terminal_bench_run(base_run.get("manifest") or {})
         terminal_candidate = _is_terminal_bench_run(candidate_run.get("manifest") or {})
         if terminal_base or terminal_candidate:
@@ -1120,6 +1152,13 @@ class ComparisonService:
         baseline_snapshot_id: str | None = None,
         require_terminal: bool = True,
     ) -> dict[str, Any]:
+        if references_pairwise_quality(policy):
+            try:
+                validate_pairwise_quality_policy(policy)
+                if baseline_run_id is not None or baseline_snapshot_id is not None:
+                    raise GateInputError("PAIRWISE_POLICY_UNSUPPORTED", "pairwise baseline comparison is unsupported")
+            except GateInputError as error:
+                raise ComparisonError(error.code, str(error)) from error
         run = self.store.runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
@@ -1312,12 +1351,17 @@ class ComparisonService:
                 )
                 for case_id, disposition in dispositions.items()
             ]
-        if _pairwise_origin(self.store, _resolve_pass(self.store, run_id, scoring_pass_id)):
+        pairwise_quality = None
+        if _pairwise_origin(self.store, record):
+            pairwise_quality = reconstruct_pairwise_quality(self.store, str(record["id"]))
+            metric_values["pairwise_challenger_score@1"] = pairwise_quality.value
             # Per-success cost also requires a trustworthy Boolean success count.
             for quality_metric in ("accuracy", "judged_accuracy", "valid_trial_pass_rate", "cost.per_success_usd"):
                 if quality_metric in metric_values:
                     metric_values[quality_metric] = None
-        snapshot = ReportSnapshot(
+        snapshot_type = PairwiseReportSnapshot if pairwise_quality is not None else ReportSnapshot
+        snapshot = snapshot_type(
+            **({"pairwise_quality": pairwise_quality} if pairwise_quality is not None else {}),
             snapshot_id="pending",
             ref=ref,
             created_at=created_at,
@@ -1326,7 +1370,7 @@ class ComparisonService:
             counts=counts,
             coverage=coverage,
             metric_values=metric_values,
-            metric_registry_version=METRIC_REGISTRY_VERSION,
+            metric_registry_version="metric-registry@2" if pairwise_quality is not None else METRIC_REGISTRY_VERSION,
             cost=cost,
             evidence_pins=(),
             case_dispositions=tuple(records),
@@ -1348,6 +1392,8 @@ class ComparisonService:
             raise KeyError(run_id)
         manifest = run.get("manifest") or {}
         record = _resolve_pass(self.store, run_id, scoring_pass_id)
+        if _pairwise_origin(self.store, record):
+            return {case_id: None for case_id in run.get("case_ids") or []}
         rows = self._score_rows(record)
         if _is_terminal_bench_run(manifest):
             return _trial_case_outcomes(rows)
@@ -1525,14 +1571,20 @@ class ComparisonService:
         published / deprecated（deprecated 显式求值仍允许，§9）。
         """
         gate_store = self._gate_store()
+        pairwise_policy = references_pairwise_quality(payload)
         try:
+            if pairwise_policy:
+                validate_pairwise_quality_policy(payload)
             model = GatePolicyVersion.model_validate(payload)
+        except GateInputError as error:
+            raise ComparisonError(error.code, str(error)) from error
         except ValidationError as error:
             raise ComparisonError("GATE_POLICY_INVALID", str(error)) from error
         for rule in model.rules:
             if not rule.metric_id:
                 continue
-            definition = lookup_metric(rule.metric_id)
+            definition = lookup_metric(rule.metric_id, registry_version=(
+                "metric-registry@2" if pairwise_policy else METRIC_REGISTRY_VERSION))
             if definition is None:
                 raise ComparisonError(
                     "GATE_METRIC_UNKNOWN",
@@ -1576,7 +1628,13 @@ class ComparisonService:
                 f"gate policy {policy_id}@{policy_version} not found",
             )
         try:
+            if references_pairwise_quality(stored_policy):
+                validate_pairwise_quality_policy(stored_policy)
+                if baseline_id is not None:
+                    raise GateInputError("PAIRWISE_POLICY_UNSUPPORTED", "pairwise baseline comparison is unsupported")
             policy = GatePolicyVersion.model_validate(stored_policy)
+        except GateInputError as error:
+            raise ComparisonError(error.code, str(error)) from error
         except ValidationError as error:
             raise ComparisonError(
                 "GATE_POLICY_INVALID",

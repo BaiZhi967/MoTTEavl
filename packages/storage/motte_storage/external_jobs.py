@@ -213,12 +213,13 @@ class MemoryExternalJobs:
 
 
 class SQLiteExternalJobs:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         self._path = path
-        with closing(_connect(path)) as connection:
-            # F-01：建缺失表并把旧库对齐到当前形状（主键不同则重建）。
-            # 旧形状的主键叫 id；job_id 是它的自然键改名，按列名映射搬运。
-            create_and_upgrade(connection, _SCHEMA_JOBS, {"external_jobs": {"job_id": "id"}})
+        if initialize:
+            with closing(_connect(path)) as connection:
+                # F-01：建缺失表并把旧库对齐到当前形状（主键不同则重建）。
+                # 旧形状的主键叫 id；job_id 是它的自然键改名，按列名映射搬运。
+                create_and_upgrade(connection, _SCHEMA_JOBS, {"external_jobs": {"job_id": "id"}})
 
     def begin_job(self, job: dict[str, Any]) -> dict[str, Any]:
         stored = _job_defaults(_validate_job(job))

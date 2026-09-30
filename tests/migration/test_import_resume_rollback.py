@@ -524,3 +524,33 @@ def test_report_reader_failure_aborts_rollback_without_mutation(tmp_path, export
     assert (artifacts / "imports/imp-failure/art-out").exists()
     assert platform_for(store).tombstones.list() == []
     assert maintenance_status(store)["active"] is False
+
+
+def test_trimmed_evidence_survives_import_rollback(tmp_path, export_builder, monkeypatch):
+    from datetime import timedelta
+    from motte_storage import trace_retention as retention
+    from motte_storage import trace_retention_models as models
+    from motte_storage.trace_archives import verify_trace_archives
+    from tests.storage.test_trace_retention_transactions import CONFIG, NOW
+    import hashlib
+
+    package = export_builder(tmp_path / 'pkg', import_id='imp-archived', with_in_flight=False,
+                             artifacts=[('named', b'named archived'), ('hashed', b'hash archived')])
+    store = SQLiteRunStore(tmp_path / 'runs.db')
+    root = tmp_path / 'artifacts'
+    apply_import(store, root, load_source_package(package), operator='fixture')
+    monkeypatch.setattr(models, 'utc_now', lambda: NOW - timedelta(days=20))
+    store.runs.create({'id': 'archive-source', 'status': 'completed'})
+    store.events.append({'run_id': 'archive-source', 'artifacts': [
+        {'artifact_id': 'imports/imp-archived/named', 'sha256': hashlib.sha256(b'named archived').hexdigest()},
+        {'sha256': hashlib.sha256(b'hash archived').hexdigest()}]})
+    store.events.append({'run_id': 'archive-source'})
+    monkeypatch.setattr(models, 'utc_now', lambda: NOW)
+    plan = retention.plan_trace_retention(store, config=CONFIG)
+    result = retention.apply_trace_retention(store, root, plan, config=CONFIG, confirm=True)
+    assert result.trimmed_events == 1
+    rolled = rollback_import(store, root, 'imp-archived', operator='fixture', confirm=True)
+    assert rolled['deleted_artifacts'] == []
+    assert (root / 'imports/imp-archived/named').read_bytes() == b'named archived'
+    assert (root / 'imports/imp-archived/hashed').read_bytes() == b'hash archived'
+    verify_trace_archives(store, ArtifactStore(root))

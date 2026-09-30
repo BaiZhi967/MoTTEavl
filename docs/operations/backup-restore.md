@@ -158,3 +158,17 @@ tests/integration/test_backup_restore_consistency.py tests/security/test_gc_rete
 的隔离恢复测试位于 `tests/integration/test_m8_pg_restore.py`；只有提供一次性
 loopback PG 和 pg_dump/pg_restore 实际通过后才能升级该项证据，缺依赖时仍为
 未运行，不能用 SQLite 或 mock 结果宣称 PG/Compose 生产恢复已经通过。
+
+## M8 Trace 归档与备份
+
+显式 Trace 保留见 [Trace 保留操作](trace-retention.md)：默认关闭，没有默认保留期，
+不由 GC 或备份自动触发。只在归档文件及其目录层级持久化后，原子发布收据并裁剪
+未受保护的终态旧前缀；服务器时间未知的旧行继续保留。本轮 apply 仅在合成测试库验证。
+
+备份 manifest counts 包括 `trace_archive_receipts`。一致备份与 staging 恢复必须
+验证归档字节、完整收据、序号范围/事件数量/摘要/服务器时间、引用闭包，以及与实时
+Trace 行的边界；缺失、篡改、重叠或越界均拒绝完整成功。归档本身与其嵌套工件、
+仅摘要引用都受 GC 和 import rollback 保护，孤立归档也不设 TTL。
+恢复保留 receipt 与剩余实时行，归档只作为证据复制，不重放到活动事件流。
+崩溃后先核对原进程已退出，再以原 maintenance owner 显式解除遗留屏障。
+Windows archive apply 仍是具名 unsupported/fail-closed 门槛；普通读取保持兼容。

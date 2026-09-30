@@ -329,10 +329,11 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
 
 
 class SQLiteTrials:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         self._path = path
-        with closing(_connect(path)) as connection, connection:
-            _ensure_schema(connection)
+        if initialize:
+            with closing(_connect(path)) as connection, connection:
+                _ensure_schema(connection)
 
     def _row(self, record: dict[str, Any]) -> dict[str, Any]:
         result = record.get("result")

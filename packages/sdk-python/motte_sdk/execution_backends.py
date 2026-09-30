@@ -344,7 +344,7 @@ def _provider_execution_manifest(
 ) -> dict[str, Any]:
     """Project only allowlisted request-building inputs across the adapter boundary."""
     projected: dict[str, Any] = {"cases": deepcopy(manifest.get("cases") or {})}
-    for key in ("tools", "parameters"):
+    for key in ("tools", "parameters", "provider_transport_policy"):
         if key in manifest:
             projected[key] = deepcopy(manifest[key])
     if provider_config.get("kind") == "replay" and "replay_fixture" in manifest:

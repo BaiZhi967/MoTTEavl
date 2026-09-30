@@ -32,6 +32,7 @@ from pydantic import Field, model_validator
 from motte_contracts.evaluation import MetricResult, MetricStatus
 from motte_contracts.identity import canonical_sha256
 from motte_contracts.messages import Contract
+from motte_contracts.pairwise_quality import PairwiseRoleBinding
 from motte_eval.judge import (
     JUDGE_PURPOSE,
     JudgeAuthorisation,
@@ -240,14 +241,17 @@ def resolve_saved_observations(
 class SubjectPairReference(Contract):
     """Only persisted same-case attempt identities cross the public boundary."""
 
-    case_id: str = Field(min_length=1)
-    candidate_a_attempt_id: str = Field(min_length=1)
-    candidate_b_attempt_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1, strict=True)
+    candidate_a_attempt_id: str = Field(min_length=1, strict=True)
+    candidate_b_attempt_id: str = Field(min_length=1, strict=True)
+    challenger_attempt_id: str = Field(min_length=1, strict=True)
 
     @model_validator(mode="after")
     def distinct_attempts(self):
         if self.candidate_a_attempt_id == self.candidate_b_attempt_id:
             raise ValueError("pairwise candidates require two distinct attempts")
+        if self.challenger_attempt_id not in {self.candidate_a_attempt_id, self.candidate_b_attempt_id}:
+            raise ValueError("challenger_attempt_id must identify exactly one saved candidate")
         return self
 
 
@@ -259,9 +263,9 @@ def resolve_saved_pairwise_inputs(store, run_id: str, refs: list[SubjectPairRefe
     pairs, seen = [], set()
     for value in refs:
         ref = SubjectPairReference.model_validate(value.model_dump() if hasattr(value, "model_dump") else value)
-        pair_key = (ref.case_id, *sorted((ref.candidate_a_attempt_id, ref.candidate_b_attempt_id)))
+        pair_key = ref.case_id
         if ref.case_id not in (run.get("case_ids") or []) or pair_key in seen:
-            raise JudgeInputError("pair references must be distinct and belong to the saved Run")
+            raise JudgeInputError("exactly one pair per selected case is required, belonging to the saved Run")
         seen.add(pair_key)
         sides = []
         for attempt_id in (ref.candidate_a_attempt_id, ref.candidate_b_attempt_id):
@@ -296,6 +300,25 @@ def resolve_saved_pairwise_inputs(store, run_id: str, refs: list[SubjectPairRefe
             ))
         pairs.append(build_pairwise_input(task_ref=ref.case_id, candidate_a=sides[0], candidate_b=sides[1]))
     return pairs
+
+
+def _subject_pair_roles(pairs, refs) -> tuple[PairwiseRoleBinding, ...]:
+    """The caller selects an attempt; the server freezes its verified candidate identity."""
+    by_case = {ref.case_id: ref for ref in refs}
+    roles = []
+    for pair in pairs:
+        ref = by_case[pair.task_ref]
+        challenger = "attempt:" + ref.challenger_attempt_id
+        reference_attempt = (ref.candidate_b_attempt_id if ref.challenger_attempt_id == ref.candidate_a_attempt_id
+                             else ref.candidate_a_attempt_id)
+        roles.append(PairwiseRoleBinding(
+            case_id=pair.task_ref, pair_id=pair.pair_id,
+            challenger_candidate_id=challenger, reference_candidate_id="attempt:" + reference_attempt,
+            challenger_attempt_id=ref.challenger_attempt_id, reference_attempt_id=reference_attempt,
+            candidate_input_sha256={side.candidate.candidate_id: canonical_sha256(side.model_dump(mode="json"))
+                                    for side in (pair.candidate_a, pair.candidate_b)},
+        ))
+    return tuple(sorted(roles, key=lambda role: (role.case_id, role.pair_id)))
 
 
 def verify_subject_qualification(store, binding, spec, snapshot) -> QualificationBinding:
@@ -476,6 +499,9 @@ def freeze_judge_provider_snapshot(
         for key in ("timeout", "max_retries", "backoff_initial_ms", "backoff_max_ms")
         if provider.get(key) is not None
     }
+    # The Judge plan reserves one billable send per call. Freeze the effective
+    # no-rebill policy rather than the general connection's retry preference.
+    transport.update(follow_redirects=False, max_retries=0)
     ceiling = provider.get("max_output_tokens")
     return JudgeProviderSnapshot.seal({
         "model_resource_id": model_resource_id,
@@ -528,7 +554,10 @@ class FrozenProviderFactory:
         from motte_provider.config import build_case_provider
 
         try:
-            built = build_case_provider(frozen.provider_config(), {})
+            # Queued historical snapshots are readable without rehashing, but
+            # execution must still honor the Judge's existing no-rebill promise.
+            config = {**frozen.provider_config(), "max_retries": 0}
+            built = build_case_provider(config, {}, transport_policy="bounded-http@1")
         except (KeyError, ValueError, TypeError) as error:
             raise JudgeProviderSnapshotError(
                 "JUDGE_PROVIDER_BUILD_FAILED", str(error)
@@ -590,6 +619,8 @@ class ScoringJobRequest(Contract):
     source_pass_id: str | None = None
     observations: dict[str, dict[str, Any]] = Field(default_factory=dict)
     pairwise_pairs: list[JudgePairwiseInput] = Field(default_factory=list)
+    # Absent only for historical records and non-subject/calibration requests.
+    pairwise_roles: tuple[PairwiseRoleBinding, ...] | None = Field(default=None, exclude_if=lambda value: value is None)
     calibration_job_id: str | None = None
     sample_ids: dict[str, str] = Field(default_factory=dict)
     calibration_plan: list[CalibrationPlanEntry] = Field(default_factory=list)
@@ -607,6 +638,8 @@ class ScoringJobRequest(Contract):
 
     @model_validator(mode="after")
     def shape(self) -> "ScoringJobRequest":
+        if self.pairwise_roles is not None and (self.mode != "pairwise" or self.calibration_job_id is not None):
+            raise ValueError("subject pairwise roles cannot be used by single/calibration owners")
         if self.calibration_plan:
             if self.calibration_job_id is None:
                 raise ValueError("calibration plans cannot be used by subject owners")
@@ -778,7 +811,8 @@ def build_judge_submission(
             return ScoringJobRequest(
                 request_key=request_key, judge_spec=existing["judge_spec"], mode=existing["mode"],
                 run_id=existing["run_id"], source_pass_id=existing.get("source_pass_id"),
-                pairwise_pairs=list(pairs_by_id.values()), authorisation=existing["authorisation"],
+                pairwise_pairs=list(pairs_by_id.values()), pairwise_roles=existing.get("pairwise_roles"),
+                authorisation=existing["authorisation"],
                 publish_policy=existing["publish_policy"], repeats=existing["repeats"],
                 presentation_orders=existing["presentation_orders"], price_table=existing["price_table"],
                 provider_snapshot=existing["provider_snapshot"],
@@ -837,6 +871,7 @@ def build_judge_submission(
         source_pass_id=source_pass_id,
         observations=observations,
         pairwise_pairs=pairs,
+        pairwise_roles=_subject_pair_roles(pairs, refs) if mode == "pairwise" else None,
         qualification_binding=binding,
         submission_input=submission_input,
         authorisation=auth,
@@ -897,12 +932,13 @@ class ScoringJobService:
         return [self.public_view(job) for job in self.jobs.list_for_run(run_id)]
 
     # ------------------------------------------------------------- 提交
-    def _compile(self, request: ScoringJobRequest) -> dict[str, Any]:
+    def _compile(self, request: ScoringJobRequest, *, replay_job=None) -> dict[str, Any]:
         """预检与提交共用的唯一编译路径：计划、预算、fingerprint 与冻结快照。
 
         预检不落库、不构造 Provider；提交只多一步持久化。两条路径消费同一份
         编译结果，因此不存在第二个调用数公式。
         """
+        roles = self._verify_subject_roles(request, replay_job)
         spec = request.judge_spec
         snapshot = request.provider_snapshot
         if request.qualification_binding is not None:
@@ -968,6 +1004,29 @@ class ScoringJobService:
             f"run:{owner['run_id']}" if owner["kind"] == "subject"
             else f"calibration:{owner['calibration_job_id']}"
         )
+        fingerprint = self._fingerprint(request, plans, roles)
+        return {
+            "spec": spec,
+            "pairwise_roles": roles,
+            "inputs": inputs,
+            "plans": plans,
+            "allowance": allowance,
+            "preflight": preflight,
+            "owner": owner,
+            "owner_ref": owner_ref,
+            "fingerprint": fingerprint,
+            "snapshot": (
+                snapshot.model_dump(mode="json") if snapshot is not None else None
+            ),
+        }
+
+    @staticmethod
+    def _fingerprint(request, plans, roles):
+        spec = request.judge_spec
+        snapshot = request.provider_snapshot
+        owner = request.owner
+        owner_ref = (f"run:{owner['run_id']}" if owner["kind"] == "subject"
+                     else f"calibration:{owner['calibration_job_id']}")
         fingerprint = judge_job_fingerprint(
             owner_ref=owner_ref,
             source_pass_id=request.source_pass_id,
@@ -997,21 +1056,11 @@ class ScoringJobService:
         if request.qualification_binding is not None:
             fingerprint = canonical_sha256({"job_fingerprint": fingerprint,
                 "qualification_binding": request.qualification_binding.model_dump(mode="json")})
+        if roles is not None:
+            fingerprint = canonical_sha256({"job_fingerprint": fingerprint, "roles_sha256": canonical_sha256(roles)})
         if request.submission_input is not None:
             fingerprint = canonical_sha256({"job_fingerprint": fingerprint, "submission_input": request.submission_input})
-        return {
-            "spec": spec,
-            "inputs": inputs,
-            "plans": plans,
-            "allowance": allowance,
-            "preflight": preflight,
-            "owner": owner,
-            "owner_ref": owner_ref,
-            "fingerprint": fingerprint,
-            "snapshot": (
-                snapshot.model_dump(mode="json") if snapshot is not None else None
-            ),
-        }
+        return fingerprint
 
     def preflight(self, request: ScoringJobRequest) -> dict[str, Any]:
         """零费用预检：不落作业、不构造 Provider、不调用模型。"""
@@ -1029,7 +1078,9 @@ class ScoringJobService:
         self, request: ScoringJobRequest, *, job_id: str, reserved_pass_id: str,
     ) -> dict[str, Any]:
         """Compile without writes or provider construction, using supplied stable IDs."""
-        compiled = self._compile(request)
+        return self._record_from_compiled(request, self._compile(request), job_id=job_id, reserved_pass_id=reserved_pass_id)
+
+    def _record_from_compiled(self, request, compiled, *, job_id, reserved_pass_id):
         spec = compiled["spec"]
         owner = compiled["owner"]
         owner_ref = compiled["owner_ref"]
@@ -1037,6 +1088,9 @@ class ScoringJobService:
         preflight = compiled["preflight"]
         record = {
             "schema_version": 1,
+            **({"pairwise_roles": deepcopy(compiled["pairwise_roles"]),
+                "roles_sha256": canonical_sha256(compiled["pairwise_roles"])}
+               if compiled["pairwise_roles"] is not None else {}),
             **({"qualification_binding": request.qualification_binding.model_dump(mode="json")}
                if request.qualification_binding is not None else {}),
             **({"submission_input": deepcopy(request.submission_input)} if request.submission_input is not None else {}),
@@ -1090,8 +1144,19 @@ class ScoringJobService:
         return record
 
     def submit(self, request: ScoringJobRequest) -> dict[str, Any]:
-        record = self.compile_record(
-            request, job_id=new_job_id(), reserved_pass_id=new_reserved_pass_id(),
+        existing = self.jobs.get_by_request_key(request.request_key) if request.mode == "pairwise" and request.owner["kind"] == "subject" else None
+        compiled = self._compile(request, replay_job=existing)
+        if existing is not None:
+            if existing["fingerprint"] != compiled["fingerprint"]:
+                raise ScoringJobConflict("fixed subject request fingerprint conflict")
+            # Exact replay reads the original Job even without an available Provider.
+            result = job_view(existing)
+            result["reused"] = True
+            result["preflight"] = deepcopy(existing.get("preflight") or compiled["preflight"].model_dump(mode="json"))
+            result["provider_snapshot"] = deepcopy(existing.get("provider_snapshot"))
+            return result
+        record = self._record_from_compiled(
+            request, compiled, job_id=new_job_id(), reserved_pass_id=new_reserved_pass_id(),
         )
         if self.provider_factory is None:
             raise JudgeError(
@@ -1157,6 +1222,9 @@ class ScoringJobService:
             raise ScoringJobError(
                 f"job must be claimed before execution, got {job['status']!r}"
             )
+        role_failure = self._subject_role_failure(job)
+        if role_failure is not None:
+            return role_failure
         current = job
         for index, plan in enumerate(job["plans"]):
             latest = self.jobs.get(job["job_id"])
@@ -1190,6 +1258,8 @@ class ScoringJobService:
                 "presentation_order": plan.get("presentation_order") or [],
                 "input_sha256": plan["input_sha256"],
                 "ordinal": index + 1,
+                **({"role_binding": deepcopy(plan["role_binding"]), "roles_sha256": plan["roles_sha256"]}
+                   if "role_binding" in plan else {}),
                 # dispatch 前原子预留额度：已发出未结算的调用占用这份额度。
                 "reservation": deepcopy(plan.get("reservation")),
             }
@@ -1246,15 +1316,27 @@ class ScoringJobService:
         touched = self.jobs.recover_interrupted()
         for job_id in touched:
             job = self.jobs.get(job_id)
-            if job is None or job.get("status") != "indeterminate":
+            if job is None:
                 continue
-            if job.get("cost_total_usd") is None:
-                continue
-            self.jobs.transition(
-                job_id, expected_revision=job["revision"],
-                expected_status="indeterminate", status="indeterminate",
-                allow_same_status=True, changes={"cost_total_usd": None},
-            )
+            changes = {}
+            if job.get("owner", {}).get("kind") == "subject" and job["mode"] == "pairwise" and job.get("pairwise_roles") is None:
+                fragments = self._legacy_subject_identity_invalid(job)
+                changes["role_recovery"] = {
+                    "code": "PAIRWISE_ROLES_INVALID" if fragments else "PAIRWISE_ROLES_REQUIRED",
+                    "message": ("Saved subject role/legacy identity is invalid."
+                                if fragments else "Historical subject Job requires explicit resubmission with roles; no new calls will be dispatched."),
+                }
+                if job["status"] == "queued":
+                    self.jobs.transition(job_id, expected_revision=job["revision"], expected_status="queued",
+                        status="failed", changes={**changes, "failure": changes["role_recovery"]})
+                    continue
+            if job.get("status") == "indeterminate":
+                changes["cost_total_usd"] = None
+                self.jobs.transition(
+                    job_id, expected_revision=job["revision"],
+                    expected_status="indeterminate", status="indeterminate",
+                    allow_same_status=True, changes=changes,
+                )
         return touched
 
     def retry_parse(self, job_id: str) -> dict[str, Any]:
@@ -1305,6 +1387,8 @@ class ScoringJobService:
             return self._prepare_calibration_inputs(request)
         self._verify_evidence_ownership(request)
         if request.mode == "pairwise":
+            roles = {role.pair_id: role.model_dump(mode="json") for role in request.pairwise_roles or ()}
+            roles_sha256 = canonical_sha256([roles[key] for key in sorted(roles, key=lambda key: (roles[key]["case_id"], key))])
             plans: list[dict[str, Any]] = []
             explicit = [list(order) for order in request.presentation_orders]
             index = 0
@@ -1334,6 +1418,7 @@ class ScoringJobService:
                             "case_id": reordered.task_ref,
                             "mode": "pairwise",
                             "pair_id": reordered.pair_id,
+                            **({"role_binding": deepcopy(roles[pair.pair_id]), "roles_sha256": roles_sha256} if roles else {}),
                             "repeat_index": repeat_index,
                             "candidate_ids": [
                                 reordered.candidate_a.candidate.candidate_id,
@@ -1403,6 +1488,159 @@ class ScoringJobService:
             )
             plans.append(plan)
         return inputs, plans
+
+    def _verify_subject_roles(self, request, replay_job=None):
+        if request.mode != "pairwise" or request.owner["kind"] != "subject":
+            return None
+        if request.pairwise_roles is None:
+            if replay_job is None:
+                raise JudgeInputError("new subject pairwise Jobs require explicit verified roles")
+            if replay_job.get("pairwise_roles") is not None:
+                raise ScoringJobConflict("fixed subject roles cannot be removed")
+            if self._legacy_subject_identity_invalid(replay_job):
+                raise JudgeInputError("saved subject role/legacy identity is invalid",
+                                      code="PAIRWISE_ROLES_INVALID")
+            return None
+        roles = tuple(PairwiseRoleBinding.model_validate(role) for role in request.pairwise_roles)
+        payload = [role.model_dump(mode="json") for role in sorted(roles, key=lambda role: (role.case_id, role.pair_id))]
+        by_pair = {role.pair_id: role for role in roles}
+        if (len(by_pair) != len(roles) or len({role.case_id for role in roles}) != len(roles)
+                or len(roles) != len(request.pairwise_pairs)
+                or len({pair.task_ref for pair in request.pairwise_pairs}) != len(roles)):
+            raise JudgeInputError("exactly one complete role binding per selected case/pair is required")
+        if replay_job is not None:
+            if replay_job.get("pairwise_roles") != payload or replay_job.get("roles_sha256") != canonical_sha256(payload):
+                raise ScoringJobConflict("fixed subject roles fingerprint conflict")
+            self._verify_frozen_job_roles(replay_job)
+        for value in request.pairwise_pairs:
+            pair = JudgePairwiseInput.model_validate(value.model_dump(mode="json"))
+            role = by_pair.get(pair.pair_id)
+            if role is None or role.case_id != pair.task_ref:
+                raise JudgeInputError("role binding differs from the fixed pair/case")
+            expected = {side.candidate.candidate_id: canonical_sha256(side.model_dump(mode="json"))
+                        for side in (pair.candidate_a, pair.candidate_b)}
+            if role.candidate_input_sha256 != expected:
+                raise JudgeInputError("role input digests differ from fixed candidate evidence")
+            ids = {role.challenger_candidate_id: role.challenger_attempt_id,
+                   role.reference_candidate_id: role.reference_attempt_id}
+            if any(candidate_id != "attempt:" + attempt_id for candidate_id, attempt_id in ids.items()):
+                raise JudgeInputError("role candidate identity must bind its saved attempt")
+            for side in (pair.candidate_a, pair.candidate_b):
+                if side.candidate.run_id != request.run_id or side.candidate.case_id != pair.task_ref:
+                    raise JudgeInputError("role candidate belongs to another Run/case")
+            if replay_job is None:
+                reference = SubjectPairReference(case_id=pair.task_ref,
+                    candidate_a_attempt_id=ids[pair.candidate_a.candidate.candidate_id],
+                    candidate_b_attempt_id=ids[pair.candidate_b.candidate.candidate_id],
+                    challenger_attempt_id=role.challenger_attempt_id)
+                saved = resolve_saved_pairwise_inputs(self.store, request.run_id, [reference])[0]
+                if (saved.pair_id != pair.pair_id or saved.candidate_a != pair.candidate_a
+                        or saved.candidate_b != pair.candidate_b):
+                    raise JudgeInputError("role input differs from the terminal saved attempt")
+        return payload
+
+    def _legacy_subject_identity_invalid(self, job):
+        """Legacy requires absent role keys and the exact old canonical identity.
+
+        Explicit null is a new-format marker. Verify only saved identity/ledger
+        metadata and the original formula; never re-resolve mutable evidence.
+        """
+        markers = {"pairwise_roles", "roles_sha256", "role_binding"}
+        metadata = [job, *(job.get("plans") or []), *(job.get("calls") or []),
+                    job.get("receipt") or {}, job.get("submission_input") or {}]
+        for invocation in self.store.invocations.list_for_job(job["job_id"]):
+            if not isinstance(invocation, dict):
+                return True
+            metadata.extend((invocation, invocation.get("request_summary") or {}))
+        if any(not isinstance(item, dict) or markers.intersection(item) for item in metadata):
+            return True
+        submission = job.get("submission_input") or {}
+        if any(not isinstance(reference, dict) or "challenger_attempt_id" in reference
+               for reference in submission.get("pairwise_refs") or []):
+            return True
+        try:
+            self._verify_frozen_subject_fingerprint(job, None)
+        except (ValueError, KeyError, TypeError, AttributeError, JudgeInputError):
+            return True
+        return False
+
+    def _subject_role_failure(self, job):
+        if job.get("owner", {}).get("kind") != "subject" or job["mode"] != "pairwise":
+            return None
+        failure = None
+        if job.get("pairwise_roles") is None:
+            try:
+                fragments = self._legacy_subject_identity_invalid(job)
+            except (ValueError, KeyError, TypeError, AttributeError) as error:
+                failure = {"code": "PAIRWISE_ROLES_INVALID", "message": str(error)}
+            else:
+                if fragments:
+                    failure = {"code": "PAIRWISE_ROLES_INVALID", "message": "Saved subject role/legacy identity is invalid."}
+                else:
+                    settled = {call["call_id"] for call in job.get("calls") or [] if call.get("status") == "settled"}
+                    if any(plan["call_id"] not in settled for plan in job["plans"]):
+                        failure = {"code": "PAIRWISE_ROLES_REQUIRED", "message": "Historical subject pairwise Job has no verified roles; explicitly resubmit with roles. No new calls issued."}
+        else:
+            try:
+                self._verify_frozen_job_roles(job)
+            except (ValueError, KeyError, TypeError, JudgeInputError) as error:
+                failure = {"code": "PAIRWISE_ROLES_INVALID", "message": str(error)}
+        if failure is None:
+            return None
+        return job_view(self.jobs.transition(job["job_id"], expected_revision=job["revision"],
+            expected_status=job["status"], status="failed", changes={"failure": failure}))
+
+    @staticmethod
+    def _verify_frozen_job_roles(job):
+        if (job["owner"].get("kind") != "subject" or job.get("owner_kind") != "subject"
+                or job.get("run_id") != job["owner"].get("run_id")
+                or job.get("owner_ref") != "run:" + job["owner"]["run_id"]):
+            raise JudgeInputError("frozen role Job ownership differs from the subject Run")
+        roles = [PairwiseRoleBinding.model_validate(raw).model_dump(mode="json") for raw in job["pairwise_roles"]]
+        for role in roles:
+            if (role["challenger_candidate_id"] != "attempt:" + role["challenger_attempt_id"]
+                    or role["reference_candidate_id"] != "attempt:" + role["reference_attempt_id"]):
+                raise JudgeInputError("frozen role candidate differs from its saved attempt")
+        if (not roles or len({role["case_id"] for role in roles}) != len(roles)
+                or len({role["pair_id"] for role in roles}) != len(roles)
+                or job.get("roles_sha256") != canonical_sha256(roles)):
+            raise JudgeInputError("frozen subject role identity is invalid")
+        by_pair = {role["pair_id"]: role for role in roles}
+        seen = set()
+        for plan in job["plans"]:
+            pair = JudgePairwiseInput.model_validate(plan["pair"])
+            role = by_pair.get(pair.pair_id)
+            if (role is None or role["case_id"] != plan["case_id"] or pair.task_ref != plan["case_id"]
+                    or plan.get("pair_id") != pair.pair_id or plan["input_sha256"] != pair.input_sha256
+                    or plan.get("presentation_order") != pair.presentation_order
+                    or plan.get("candidate_ids") != [pair.candidate_a.candidate.candidate_id, pair.candidate_b.candidate.candidate_id]
+                    or plan.get("role_binding") != role or plan.get("roles_sha256") != job["roles_sha256"]
+                    or role["candidate_input_sha256"] != {side.candidate.candidate_id: canonical_sha256(side.model_dump(mode="json"))
+                                                       for side in (pair.candidate_a, pair.candidate_b)}):
+                raise JudgeInputError("frozen call role binding differs from the subject plan")
+            for side in (pair.candidate_a, pair.candidate_b):
+                ref = side.candidate
+                if (ref.owner_kind != "subject" or ref.run_id != job["owner"]["run_id"]
+                        or ref.case_id != plan["case_id"]):
+                    raise JudgeInputError("frozen role candidate belongs to another Run/case")
+            seen.add(pair.pair_id)
+        if seen != set(by_pair):
+            raise JudgeInputError("frozen role has no planned call")
+        ScoringJobService._verify_frozen_subject_fingerprint(job, roles)
+
+    @staticmethod
+    def _verify_frozen_subject_fingerprint(job, roles):
+        pairs = {}
+        for plan in job["plans"]:
+            pairs.setdefault(plan["pair_id"], plan["pair"])
+        fixed = ScoringJobRequest(request_key=job["request_key"], judge_spec=job["judge_spec"],
+            mode="pairwise", run_id=job["owner"]["run_id"], source_pass_id=job.get("source_pass_id"),
+            pairwise_pairs=list(pairs.values()), pairwise_roles=roles,
+            publish_policy=job["publish_policy"], repeats=job["repeats"],
+            presentation_orders=job["presentation_orders"], provider_snapshot=job.get("provider_snapshot"),
+            qualification_binding=job.get("qualification_binding"), submission_input=job.get("submission_input"))
+        if ScoringJobService._fingerprint(fixed, job["plans"], roles) != job["fingerprint"]:
+            raise JudgeInputError("frozen role/plan identity differs from the subject Job fingerprint")
 
     # ------------------------------------------------------------- 内部：证据归属
     def _subject_run(self, request: ScoringJobRequest) -> dict[str, Any]:
@@ -1654,6 +1892,8 @@ class ScoringJobService:
                 "input_sha256": plan["input_sha256"],
                 "presentation_order": plan.get("presentation_order") or [],
                 "candidate_ids": plan.get("candidate_ids") or [],
+                **({"role_binding": deepcopy(plan["role_binding"]), "roles_sha256": plan["roles_sha256"]}
+                   if "role_binding" in plan else {}),
                 "repeat_index": plan.get("repeat_index", 0),
                 "output_tokens": plan.get("output_tokens"),
                 "reservation": deepcopy(plan.get("reservation")),
@@ -1695,7 +1935,14 @@ class ScoringJobService:
         cost = envelope.get("cost") or {}
         metering = envelope.get("metering") or {}
         content = envelope.get("content")
+        # Retain actual provider identity on both durable sides of settlement.
+        # The legacy model field names only the requested model.
+        identity = {key: deepcopy(envelope.get(key)) for key in (
+            "requested_model", "reported_model", "resolved_model_identity",
+            "identity_evidence", "identity_policy", "identity_policy_result", "policy_passed",
+        )}
         return {
+            **identity,
             "usage": deepcopy(envelope.get("usage") or {}),
             "cost_usd": cost.get("total"),
             "price_table_version": cost.get("price_table_version"),
@@ -1707,6 +1954,7 @@ class ScoringJobService:
                 (metering.get("attempts") or 1) > 1
             ),
             "raw_response": {
+                **deepcopy(identity),
                 "content": content if isinstance(content, str) else None,
                 "response_id": envelope.get("response_id"),
                 "provider": envelope.get("provider"),
@@ -1791,6 +2039,9 @@ class ScoringJobService:
     def _finalize(self, job: dict[str, Any]) -> dict[str, Any]:
         if (job.get("cancellation") or {}).get("requested") and job["status"] != "cancelled":
             return self._finalize_cancellation(job)
+        role_failure = self._subject_role_failure(job)
+        if role_failure is not None:
+            return role_failure
         spec = JudgeSpec.model_validate(job["judge_spec"])
         run_id = job["owner"]["run_id"] if job["owner"]["kind"] == "subject" else (
             job["owner_ref"]
@@ -1872,6 +2123,8 @@ class ScoringJobService:
         previous = self._previous_pass(job)
         record = {
             "id": job["reserved_pass_id"],
+            **({"pairwise_roles": deepcopy(job["pairwise_roles"]), "roles_sha256": job["roles_sha256"]}
+               if job.get("pairwise_roles") is not None else {}),
             **({"qualification_binding": deepcopy(job["qualification_binding"])}
                if job.get("qualification_binding") is not None else {}),
             "run_id": run_id,
@@ -1896,6 +2149,8 @@ class ScoringJobService:
                         "repeat_index": plan.get("repeat_index", 0),
                         "presentation_order": list(plan.get("presentation_order") or []),
                         "input_sha256": plan["input_sha256"],
+                        **({"role_binding": deepcopy(plan["role_binding"]), "roles_sha256": plan["roles_sha256"]}
+                           if "role_binding" in plan else {}),
                     }
                     for plan in job["plans"]
                 ],
@@ -1927,6 +2182,7 @@ class ScoringJobService:
             "owner": deepcopy(job["owner"]),
             "fingerprint": job["fingerprint"],
             "judge_spec_sha256": spec.spec_sha256,
+            **({"roles_sha256": job["roles_sha256"]} if job.get("pairwise_roles") is not None else {}),
             "rubric": spec.rubric_reference,
             "mode": job["mode"],
             "billed_calls": job.get("billed_calls") or 0,

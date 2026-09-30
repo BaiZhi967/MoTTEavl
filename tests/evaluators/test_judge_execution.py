@@ -1266,14 +1266,30 @@ def test_calibration_scoring_uses_the_owner_union_without_a_run(tmp_path):
     assert store.runs.get("calibration:cjob-1") is None
 
 
+def saved_service_pair(store, case_id="case-1"):
+    """New subject Jobs use exact terminal attempts, never invented candidate text."""
+    from motte_contracts.evaluation import observation_evidence_hash
+    from motte_sdk.scoring_jobs import SubjectPairReference, resolve_saved_pairwise_inputs, _subject_pair_roles
+    ids = []
+    for label, content, locator in (("a", "answer A", "10"), ("b", "answer B", "20")):
+        row = store.attempts.begin({"id": case_id + "-candidate-" + label, "run_id": "run-1", "case_id": case_id, "attempt_no": len(ids) + 1})
+        row = store.attempts.transition(row["id"], expected_revision=row["revision"], expected_status="prepared", status="dispatching")
+        raw = {"observation_id": "obs-" + row["id"], "run_id": "run-1", "case_id": case_id, "attempt_id": row["id"],
+               "final_output": content, "termination": {"reason": "final_answer"},
+               "event_refs": [{"kind": "event", "run_id": "run-1", "locator": locator}],
+               "artifact_refs": [], "coverage": {"complete": True}}
+        raw["evidence_hash"] = observation_evidence_hash(raw)
+        store.attempts.complete(row["id"], expected_revision=row["revision"], changes={"result": {"frozen_observation": raw}})
+        ids.append(row["id"])
+    ref = SubjectPairReference(case_id=case_id, candidate_a_attempt_id=ids[0], candidate_b_attempt_id=ids[1], challenger_attempt_id=ids[1])
+    pairs = resolve_saved_pairwise_inputs(store, "run-1", [ref])
+    return pairs[0], _subject_pair_roles(pairs, [ref])
+
+
 def test_pairwise_job_bills_both_orders_and_maps_to_stable_ids(tmp_path):
     store = make_service_store(tmp_path)
     make_completed_run(store)
-    pair = build_pairwise_input(
-        task_ref="case-1",
-        candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
+    pair, roles = saved_service_pair(store)
     forward_text = json.dumps({
         "winner": "A",
         "criteria": [
@@ -1300,7 +1316,8 @@ def test_pairwise_job_bills_both_orders_and_maps_to_stable_ids(tmp_path):
         "mode": "pairwise",
         "run_id": "run-1",
         "pairwise_pairs": [pair.model_dump(mode="json")],
-        "presentation_orders": [["cand-a", "cand-b"], ["cand-b", "cand-a"]],
+        "pairwise_roles": roles,
+        "presentation_orders": [pair.presentation_order, pair.swapped_order],
         "authorisation": authorisation(max_calls=2).model_dump(mode="json"),
     }))
     assert submitted["preflight"]["max_calls"] == 2
@@ -1398,7 +1415,7 @@ def pairwise_answer() -> str:
 
 def pairwise_request(
     request_key: str, pairs: list, orders: list, *,
-    auth: JudgeAuthorisation | None = None,
+    auth: JudgeAuthorisation | None = None, roles=None,
 ) -> ScoringJobRequest:
     return ScoringJobRequest.model_validate({
         "request_key": request_key,
@@ -1406,6 +1423,7 @@ def pairwise_request(
         "mode": "pairwise",
         "run_id": "run-1",
         "pairwise_pairs": [pair.model_dump(mode="json") for pair in pairs],
+        "pairwise_roles": roles,
         "presentation_orders": orders,
         "authorisation": (auth or authorisation(max_calls=4)).model_dump(mode="json"),
     })
@@ -1509,20 +1527,14 @@ def test_hard_cost_cap_requires_a_provable_output_ceiling(tmp_path):
 def test_pairwise_plan_uses_each_pairs_own_order_and_matches_preflight(tmp_path):
     store = make_service_store(tmp_path)
     make_completed_run(store, case_ids=["case-1", "case-2"])
-    first = build_pairwise_input(
-        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
-    second = build_pairwise_input(
-        task_ref="case-2", candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
+    first, first_roles = saved_service_pair(store, "case-1")
+    second, second_roles = saved_service_pair(store, "case-2")
     provider = ScriptedProvider([pairwise_answer()])
     service = judge_service(store, provider)
 
     submitted = service.submit(pairwise_request(
         "pair-own-order", [first, second], [],
-        auth=authorisation(max_calls=2),
+        auth=authorisation(max_calls=2), roles=first_roles + second_roles,
     ))
     # 两个 pair、各自一个顺序、一次重复 → 恰好两次调用，不能笛卡尔扩展成四次。
     assert submitted["preflight"]["max_calls"] == 2
@@ -1601,21 +1613,18 @@ def test_plan_identity_covers_order_repeat_input_and_budget(tmp_path):
     }
     assert len(digests) == 4
 
-    pair = build_pairwise_input(
-        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
+    pair, roles = saved_service_pair(store)
     forward = service.submit(pairwise_request(
-        "k-fwd", [pair], [["cand-a", "cand-b"]],
+        "k-fwd", [pair], [pair.presentation_order], roles=roles,
     ))
     reverse = service.submit(pairwise_request(
-        "k-rev", [pair], [["cand-b", "cand-a"]],
+        "k-rev", [pair], [pair.swapped_order], roles=roles,
     ))
     assert forward["fingerprint"] != reverse["fingerprint"]
     forward_job = service.jobs.get(forward["job_id"])
     reverse_job = service.jobs.get(reverse["job_id"])
-    assert forward_job["plans"][0]["presentation_order"] == ["cand-a", "cand-b"]
-    assert reverse_job["plans"][0]["presentation_order"] == ["cand-b", "cand-a"]
+    assert forward_job["plans"][0]["presentation_order"] == pair.presentation_order
+    assert reverse_job["plans"][0]["presentation_order"] == pair.swapped_order
     assert forward_job["plans"][0]["input_sha256"] != (
         reverse_job["plans"][0]["input_sha256"]
     )

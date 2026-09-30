@@ -8,15 +8,18 @@
 - stdout/stderr 有界消费；结果文件越界/超大/半写一律拒绝，不伪造记录。
 
 假 Runner 是 `motte_benchmark.fake_runner`（`-m` 调用），合成数据仅用于
-生命周期验证，不是官方 C-Eval 内容。测试内不直接 spawn 进程：无关进程
-用另一个 hang 模式 Job 扮演（不同 token / 不同 work root）。
+生命周期验证，不是官方 C-Eval 内容。生命周期测试里的无关进程
+用另一个 hang 模式 Job 扮演（不同 token / 不同 work root）；存活探针
+的回归测试单独启动并回收一个受控子进程。
 """
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
+import psutil
 import pytest
 
 from motte_benchmark.fake_runner import self_argv
@@ -76,11 +79,11 @@ def _pid_alive(pid):
         )
         return f'"{pid}"' in result.stdout
     try:
-        os.kill(pid, 0)
+        # kill(pid, 0) 也接受已退出但尚未被 init 回收的僵尸 PID。
+        return psutil.Process(pid).status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
+    except psutil.AccessDenied:
         return True
-    except PermissionError:
-        return True
-    except OSError:
+    except psutil.NoSuchProcess:
         return False
 
 
@@ -88,6 +91,37 @@ def _single_job_dir(work_root):
     job_dirs = [item for item in work_root.iterdir() if item.is_dir()]
     assert len(job_dirs) == 1
     return job_dirs[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not retain POSIX zombies")
+def test_pid_alive_distinguishes_running_process_from_unreaped_zombie():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert _pid_alive(os.getpid())
+        assert _pid_alive(child.pid)
+        child.kill()
+        observed = psutil.Process(child.pid)
+        deadline = time.monotonic() + 5
+        while observed.status() != psutil.STATUS_ZOMBIE and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # 不调用 poll/wait：保留僵尸，独立证明 PID 存在但子进程已经退出。
+        assert observed.status() == psutil.STATUS_ZOMBIE
+        os.kill(child.pid, 0)
+        assert not _pid_alive(child.pid)
+        assert _pid_alive(os.getpid())
+    finally:
+        child.kill()
+        child.wait(timeout=5)
+    assert not _pid_alive(child.pid)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX liveness uses process status")
+def test_pid_alive_treats_inaccessible_status_as_alive(monkeypatch):
+    def denied_status(process):
+        raise psutil.AccessDenied(process.pid)
+
+    monkeypatch.setattr(psutil.Process, "status", denied_status)
+    assert _pid_alive(os.getpid())
 
 
 def test_launch_once_and_pid_reuse(tmp_path):

@@ -136,10 +136,11 @@ class MemoryBenchmarkDatasets:
 
 
 class SQLiteBenchmarkDatasets:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         self._path = path
-        with closing(_connect(path)) as connection:
-            connection.executescript(_SCHEMA_DATASETS)
+        if initialize:
+            with closing(_connect(path)) as connection:
+                connection.executescript(_SCHEMA_DATASETS)
 
     def put(self, record: dict[str, Any]) -> dict[str, Any]:
         stored = _validate(record)

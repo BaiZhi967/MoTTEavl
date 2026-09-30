@@ -96,8 +96,8 @@ def test_receipt_and_trim_are_atomic_and_exact_reapply(seeded):
     assert replay.receipts == result.receipts and replay.trimmed_events == 0
     assert not maintenance_status(store)['active']
     assert store.events.append({'run_id': 'a'})['seq'] == 5
-    with pytest.raises(models.TraceRetentionPlanChanged, match='archived reference closure'):
-        retention.plan_trace_retention(store, config=CONFIG)
+    following = retention.plan_trace_retention(store, config=CONFIG)
+    assert [(row.run_id, row.first_seq, row.last_seq, row.keep_seq) for row in following.prefixes] == [('a', 4, 4, 5)]
 
 
 @pytest.mark.parametrize('change', ['confirm', 'disabled', 'config', 'hash', 'future',

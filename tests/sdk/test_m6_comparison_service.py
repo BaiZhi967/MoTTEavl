@@ -1000,3 +1000,27 @@ def test_deleted_evidence_lowers_new_eligibility_not_old_results() -> None:
     assert again["gate_result_id"] != first["gate_result_id"]
     # 已持久结论原样保留（bytes/hash 不漂移）。
     assert store.gate_store.get_result(first["gate_result_id"]) == stored_first
+
+
+def test_pairwise_report_is_typed_and_keeps_boolean_metrics_unavailable():
+    from motte_contracts.comparison import PairwiseReportSnapshot
+    from tests.sdk.test_pairwise_quality import completed_quality
+
+    store = InMemoryRunStore()
+    _, job, transport = completed_quality(store, ((1,), (.5,), (0,)))
+    service = ComparisonService(store)
+    selected = job["reserved_pass_id"]
+    snapshot = service.report_snapshot(job["run_id"], scoring_pass_id=selected)
+    assert isinstance(snapshot, PairwiseReportSnapshot)
+    assert snapshot.ref.report_schema == "report-pairwise-v1"
+    assert snapshot.metric_registry_version == "metric-registry@2"
+    assert snapshot.pairwise_quality.value == .5
+    assert snapshot.metric_values["pairwise_challenger_score@1"] == .5
+    assert snapshot.metric_values["accuracy"] is snapshot.metric_values["judged_accuracy"] is None
+    assert snapshot.counts["selected"] == 3 and snapshot.counts["scored"] == 0
+    assert snapshot.snapshot_id == snapshot.compute_snapshot_id()
+    summary = service.candidate_summary(job["run_id"], scoring_pass_id=selected)
+    assert summary["pairwise_quality"] == snapshot.pairwise_quality.model_dump(mode="json")
+    assert summary["metric_values"]["pairwise_challenger_score@1"] == .5
+    assert summary["metric_value"] is None and summary["metric_values"]["accuracy"] is None
+    assert len(transport.calls) == 3

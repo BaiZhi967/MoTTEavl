@@ -19,7 +19,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
@@ -40,6 +40,8 @@ from .client_errors import (
 )
 from .client_types import (
     Baseline,
+    CalibrationJob, CalibrationList, CalibrationPreflight, CalibrationReport,
+    CalibrationVersionView, JudgeQualificationView,
     Capabilities,
     Comparison,
     EventsSnapshot,
@@ -51,6 +53,11 @@ from .client_types import (
     ScoringPassList,
     is_terminal_status,
 )
+
+if TYPE_CHECKING:
+    from motte_eval.calibration_records import CalibrationImport
+    from .calibration_transport import CalibrationExecuteRequest, CalibrationReviewRequest
+
 
 _API_PREFIX = "/api/v1"
 _EXPECTED_API_VERSION = "v1"
@@ -425,6 +432,69 @@ class MotteClient:
     def health(self) -> dict[str, Any]:
         """探活（协议 §10：/health 免认证，可先于能力握手）。"""
         return self._request_json("GET", "/health", handshake=True)
+
+    @staticmethod
+    def _calibration_body(body) -> dict[str, Any]:
+        return body.model_dump(mode="json") if hasattr(body, "model_dump") else dict(body)
+
+    def _calibration_path(self, calibration_id: str, *parts: str) -> str:
+        return f"{_API_PREFIX}/judge-calibrations/" + "/".join(
+            self._segment(part) for part in (calibration_id, *parts))
+
+    def import_judge_calibration(
+        self, body: CalibrationImport | Mapping[str, Any],
+    ) -> CalibrationVersionView:
+        return CalibrationVersionView.from_payload(self._post(
+            f"{_API_PREFIX}/judge-calibrations", self._calibration_body(body)))
+
+    def list_judge_calibrations(self) -> CalibrationList:
+        return CalibrationList.from_payload(self._get(f"{_API_PREFIX}/judge-calibrations"))
+
+    def list_judge_calibration_versions(self, calibration_id: str) -> CalibrationList:
+        return CalibrationList.from_payload(self._get(self._calibration_path(calibration_id, "versions")))
+
+    def get_judge_calibration_version(self, calibration_id: str, version: str) -> CalibrationVersionView:
+        return CalibrationVersionView.from_payload(self._get(self._calibration_path(calibration_id, "versions", version)))
+
+    def review_judge_calibration(
+        self, calibration_id: str, version: str, body: CalibrationReviewRequest | Mapping[str, Any],
+    ) -> CalibrationVersionView:
+        return CalibrationVersionView.from_payload(self._post(
+            self._calibration_path(calibration_id, "versions", version, "reviews"), self._calibration_body(body)))
+
+    def list_judge_calibration_reviews(self, calibration_id: str, version: str) -> CalibrationList:
+        return CalibrationList.from_payload(self._get(self._calibration_path(calibration_id, "versions", version, "reviews")))
+
+    def preflight_judge_calibration(
+        self, calibration_id: str, version: str, body: CalibrationExecuteRequest | Mapping[str, Any],
+    ) -> CalibrationPreflight:
+        return CalibrationPreflight.from_payload(self._post(
+            self._calibration_path(calibration_id, "versions", version, "preflight"), self._calibration_body(body)))
+
+    def submit_judge_calibration(
+        self, calibration_id: str, version: str, body: CalibrationExecuteRequest | Mapping[str, Any],
+    ) -> CalibrationJob:
+        """Explicit request.request_key required; POST is never automatically retried."""
+        return CalibrationJob.from_payload(self._post(
+            self._calibration_path(calibration_id, "versions", version, "jobs"), self._calibration_body(body)))
+
+    def get_judge_calibration_job(self, calibration_id: str, execution_id: str) -> CalibrationJob:
+        return CalibrationJob.from_payload(self._get(self._calibration_path(calibration_id, "jobs", execution_id)))
+
+    def list_judge_calibration_jobs(self, calibration_id: str, version: str) -> CalibrationList:
+        return CalibrationList.from_payload(self._get(self._calibration_path(calibration_id, "versions", version, "jobs")))
+
+    def publish_judge_calibration_report(self, calibration_id: str, execution_id: str) -> CalibrationReport:
+        return CalibrationReport.from_payload(self._post(self._calibration_path(calibration_id, "jobs", execution_id, "reports")))
+
+    def list_judge_calibration_reports(self, calibration_id: str, execution_id: str) -> CalibrationList:
+        return CalibrationList.from_payload(self._get(self._calibration_path(calibration_id, "jobs", execution_id, "reports")))
+
+    def get_judge_calibration_report(self, calibration_id: str, report_id: str) -> CalibrationReport:
+        return CalibrationReport.from_payload(self._get(self._calibration_path(calibration_id, "reports", report_id)))
+
+    def get_judge_qualification(self, calibration_id: str, qualification_id: str) -> JudgeQualificationView:
+        return JudgeQualificationView.from_payload(self._get(self._calibration_path(calibration_id, "qualifications", qualification_id)))
 
     def create_run(
         self,
@@ -849,6 +919,7 @@ class MotteClient:
                     "code": getattr(error, "code", None),
                 }
             probe = self.run_events_snapshot(run_id, after=cursor)
+            state.partial = state.partial or probe.partial
             extra = [event.get("seq") for event in probe.events]
             if extra:
                 mismatch = True

@@ -260,13 +260,14 @@ class MemoryExperiments:
 
 
 class SQLiteExperiments:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         self._path = path
-        with closing(_connect(path)) as connection:
-            connection.execute(_SPEC_TABLE_SQL)
-            connection.execute(_CELL_TABLE_SQL)
-            connection.execute(_CELL_INDEX_SQL)
-            connection.commit()
+        if initialize:
+            with closing(_connect(path)) as connection:
+                connection.execute(_SPEC_TABLE_SQL)
+                connection.execute(_CELL_TABLE_SQL)
+                connection.execute(_CELL_INDEX_SQL)
+                connection.commit()
 
     def publish_spec_and_cells(self, payload, cell_payloads):
         """One transaction: a crash cannot expose a partially frozen matrix."""

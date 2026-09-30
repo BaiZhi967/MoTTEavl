@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from motte_cli import ops, remote, runops
+from motte_cli import judge_calibrations, ops, remote, runops
 
 
 def _runtime_catalog():
@@ -1181,6 +1181,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # M7 新增：run 生命周期子命令与运维命令（local/server 路由见各模块）。
     runops.add_run_lifecycle_parsers(sub)
     ops.add_ops_parsers(sub)
+    judge_calibrations.add_parsers(sub)
+    from motte_cli.trace_retention import add_trace_retention_parser
+    add_trace_retention_parser(sub)
     return parser
 
 
@@ -1994,6 +1997,7 @@ def _judge_command(args) -> int:
 
     预检与读取零模型调用；提交只落持久作业，执行永远在 Worker 的执行锁内。
     """
+    from pydantic import ValidationError
     from motte_eval.judge import JudgeBudgetError, JudgeError, JudgeInputError, JudgeNotAuthorised
     from motte_sdk.resolve import ManifestResolutionError
     from motte_sdk.scoring_jobs import (
@@ -2041,7 +2045,14 @@ def _judge_command(args) -> int:
                 repeats=int(document.get("repeats") or 1),
                 presentation_orders=document.get("presentation_orders"),
                 price_table_version=document.get("price_table_version"),
+                pairwise_refs=document.get("pairwise_refs"),
+                qualification_id=document.get("qualification_id"),
+                _lookup_existing=command != "preflight",
             )
+        except ValidationError:
+            return _error("JUDGE_CONTRACT_INVALID", "judge request does not satisfy its contract")
+        except ScoringJobConflict as error:
+            return _error("SCORING_JOB_CONFLICT", str(error))
         except ManifestResolutionError as error:
             return _error(error.code, str(error))
         except JudgeEvidenceError as error:
@@ -2261,9 +2272,6 @@ def _compare_command(args) -> int:
 
     比较本身成功时退出 0；not_comparable 是"结论"不是崩溃，按协议 §7 退出 5。
     """
-    from motte_sdk.comparisons import ComparisonError
-    from motte_sdk.export import comparison_to_json
-
     def emit(payload):
         from motte_sdk.export import statistics_to_junit
         output = statistics_to_junit(payload["statistics"]) if getattr(args, "format", "json") == "junit" else _m6_json(payload)
@@ -2301,6 +2309,9 @@ def _compare_command(args) -> int:
             emit(payload)
             return 5 if payload.get("level") == "not_comparable" else 0
         return outcome
+    from motte_sdk.comparisons import ComparisonError
+    from motte_sdk.export import comparison_to_json
+
     service = _comparison_service(args)
     try:
         result = service.compare(
@@ -2344,7 +2355,6 @@ def _statistical_report_command(args) -> int:
     from motte_contracts.statistical_reports import StatisticalReportPublishRequest
     from motte_sdk.comparisons import ComparisonError
     from motte_sdk.export import statistical_report_to_json, statistical_report_to_junit
-    from motte_sdk.statistical_reports import StatisticalReportService
     from motte_storage.operation_locks import MaintenanceConflict
     from motte_storage.statistical_reports import StatisticalReportConflict, StatisticalReportCorrupt
 
@@ -2376,6 +2386,8 @@ def _statistical_report_command(args) -> int:
                 return outcome
             payload = outcome.payload
         else:
+            from motte_sdk.statistical_reports import StatisticalReportService
+
             service = StatisticalReportService(_m6_store(args))
             if command == "publish":
                 payload = service.publish(**request.model_dump())
@@ -2832,6 +2844,9 @@ def main(argv=None):
     if args.command == "scenario":
         return _scenario_command(args)
 
+    if args.command == "judge-calibration":
+        return judge_calibrations.run(args)
+
     if args.command == "judge":
         return _judge_command(args)
 
@@ -2877,6 +2892,9 @@ def main(argv=None):
         return ops.restore_guard_command(args)
     if args.command == "maintenance":
         return ops.maintenance_command(args)
+    if args.command == "trace-retention":
+        from motte_cli.trace_retention import trace_retention_command
+        return trace_retention_command(args)
     if args.command == "gc":
         return ops.gc_command(args)
     if args.command == "import":

@@ -188,3 +188,64 @@ def test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact(
     assert restored.runs.get("m8-restore-queued")["status"] == "queued"
     with pytest.raises(RestoreIncomplete, match="not empty"):
         restore_postgres_staging(backup_dir, staging_dsn, tmp_path / "second-artifact-target")
+
+
+def test_pg_dump_restore_preserves_archived_trace_closure(disposable_pg_pair, tmp_path, monkeypatch):
+    from tests.storage.test_trace_archive_closure import seed
+    from motte_storage.trace_archives import verify_trace_archives
+    from motte_storage.trace_retention import collect_trace_protection
+    source_dsn, target_dsn = disposable_pg_pair
+    upgrade(source_dsn)
+    store = create_run_store(storage='postgres', dsn=source_dsn)
+    root = tmp_path / 'artifacts'
+    _, _, applied, named, hashed = seed(store, root, monkeypatch)
+    manifest = consistent_backup_postgres(source_dsn, tmp_path / 'backup', artifacts_root=root, store=store)
+    assert manifest['counts']['trace_archive_receipts'] == len(applied.receipts)
+    report = restore_postgres_staging(tmp_path / 'backup', target_dsn, tmp_path / 'restored')
+    target = create_run_store(storage='postgres', dsn=target_dsn)
+    assert target.trace_archives.list() == applied.receipts
+    assert [row['seq'] for row in target.events.list_for_run('a')] == [4]
+    verify_trace_archives(target, ArtifactStore(tmp_path / 'restored'))
+    protection = collect_trace_protection(target)
+    assert {'target', 'pass-target'} <= protection.run_ids
+    assert protection.event_seqs['event-target'] == {2}
+    assert (tmp_path / 'restored' / named.id).exists() and (tmp_path / 'restored' / hashed.id).exists()
+    assert report['restore_guard'] == 'active'
+
+
+@pytest.mark.parametrize('corruption', ['document', 'missing'])
+def test_pg_restore_rejects_bad_archives_with_restore_guard_active(
+    disposable_pg_pair, tmp_path, monkeypatch, corruption,
+):
+    import json
+    from tests.storage.test_trace_archive_closure import seed
+    from motte_storage import maintenance
+    from psycopg import connect
+    source_dsn, target_dsn = disposable_pg_pair
+    upgrade(source_dsn)
+    store = create_run_store(storage='postgres', dsn=source_dsn)
+    root = tmp_path / 'artifacts'
+    seed(store, root, monkeypatch)
+    consistent_backup_postgres(source_dsn, tmp_path / 'backup', artifacts_root=root, store=store)
+    original = maintenance._validate_restored_reference_closure
+    checked = []
+    def corrupted(staging, artifacts_root):
+        assert platform_for(staging).meta.get(maintenance.RESTORE_GUARD_KEY)
+        receipt = next(row for row in staging.trace_archives.list() if row.prefix.run_id == 'a')
+        if corruption == 'missing':
+            (artifacts_root / receipt.artifact_id).unlink()
+        else:
+            payload = receipt.model_dump(mode='json')
+            payload['reference_document']['run_ids'] = []
+            with connect(staging.dsn) as connection:
+                connection.execute('UPDATE trace_archive_receipts SET payload=%s WHERE archive_id=%s',
+                                   (json.dumps(payload), receipt.archive_id))
+        checked.append(True)
+        return original(staging, artifacts_root)
+    monkeypatch.setattr(maintenance, '_validate_restored_reference_closure', corrupted)
+    with pytest.raises(RestoreIncomplete):
+        restore_postgres_staging(tmp_path / 'backup', target_dsn, tmp_path / 'restored')
+    target = create_run_store(storage='postgres', dsn=target_dsn)
+    assert checked == [True] and platform_for(target).meta.get(maintenance.RESTORE_GUARD_KEY)
+    assert [row['seq'] for row in target.events.list_for_run('a')] == [4]
+    assert [row['seq'] for row in store.events.list_for_run('a')] == [4]

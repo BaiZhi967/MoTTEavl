@@ -79,6 +79,8 @@ def rollback_import(
         store, reason="import_rollback", artifacts_root=artifacts_root, allow_tombstone_writes=True,
     )
     try:
+        from motte_storage.trace_archives import verify_trace_archives
+        verify_trace_archives(store, artifact_store)
         # Exclude only owned Runs that this batch will actually deactivate. A
         # matching manifest alone cannot waive another resource's reference.
         own_runs = set()

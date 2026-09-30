@@ -228,6 +228,51 @@ class TraceRetentionPlan(_RetentionModel):
         return self
 
 
+class TracePassReference(_RetentionModel):
+    pass_id: NonEmptyStr
+    owning_run_id: NonEmptyStr | None = None
+    expected_run_id: NonEmptyStr | None = None
+
+
+class TraceReferenceDocument(_RetentionModel):
+    """Syntactic references copied from canonical evidence, not a trust assertion."""
+    schema_version: Literal[1]
+    run_ids: tuple[NonEmptyStr, ...] = Field(strict=False)
+    event_seqs: dict[NonEmptyStr, tuple[PositiveInt, ...]]
+    pass_references: tuple[TracePassReference, ...] = Field(strict=False)
+
+    @field_validator('schema_version', mode='before')
+    @classmethod
+    def strict_version(cls, value):
+        if type(value) is not int:
+            raise ValueError('reference schema_version must be integer 1')
+        return value
+
+    @field_validator('run_ids')
+    @classmethod
+    def ordered_runs(cls, value):
+        return tuple(sorted(set(value)))
+
+    @field_validator('event_seqs', mode='before')
+    @classmethod
+    def ordered_events(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError('reference event sequences must be a mapping')
+        result = {}
+        for key, seqs in sorted(value.items()):
+            if not isinstance(seqs, (list, tuple)) or any(type(seq) is not int or seq <= 0 for seq in seqs):
+                raise ValueError('reference event sequences must be positive strict integers')
+            result[key] = tuple(sorted(set(seqs)))
+        return result
+
+    @field_validator('pass_references')
+    @classmethod
+    def ordered_passes(cls, value):
+        keys = {(ref.pass_id, ref.owning_run_id or '', ref.expected_run_id or '') for ref in value}
+        return tuple(TracePassReference(pass_id=key[0], owning_run_id=key[1] or None,
+                                        expected_run_id=key[2] or None) for key in sorted(keys))
+
+
 class TraceArchiveReceipt(_RetentionModel):
     archive_id: NonEmptyStr
     plan_id: Sha256
@@ -239,6 +284,7 @@ class TraceArchiveReceipt(_RetentionModel):
     artifact_refs: dict[NonEmptyStr, Sha256 | None]
     artifact_hashes: list[Sha256]
     committed_at: UtcDateTime | None = None
+    reference_document: TraceReferenceDocument | None = None
 
     @field_validator("artifact_refs")
     @classmethod

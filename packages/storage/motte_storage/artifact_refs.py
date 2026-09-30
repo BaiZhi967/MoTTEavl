@@ -270,6 +270,7 @@ class _TraceCoverage:
 def _iter_artifact_records_with_owners(
     store: Any, *, exclude_run_ids: Iterable[str] = (), exclude_import_ids: Iterable[str] = (),
     read_only: bool = False, coverage: _TraceCoverage | None = None,
+    trace_protection: bool = False,
 ) -> Iterator[tuple[dict[str, Any], str | None, str | None]]:
     """Yield evidence payload plus its owning Run/import, keeping independent refs separate."""
     def observe(source, record, owner=None, parent=None):
@@ -432,6 +433,10 @@ def _iter_artifact_records_with_owners(
     for report in reports.list(limit=None):
         observe("statistical_reports", report)
         yield report, None, None
+    from .trace_archives import checked_trace_receipts, receipt_reference_record
+    for receipt in checked_trace_receipts(store):
+        observe('trace_archive_receipts', receipt.model_dump(mode='json'))
+        yield receipt_reference_record(store, receipt, trace_protection=trace_protection), receipt.prefix.run_id, None
     ledger = _read_only_import_ledger(store) if read_only else platform_for(store).imports
     for batch in ledger.list_imports():
         observe("motte_imports", batch)
@@ -485,11 +490,7 @@ def iter_trace_reference_records(store: Any) -> Iterator[tuple[dict[str, Any], s
     if any(not callable(getattr(ledger, name, None)) for name in ("list_imports", "mappings_for")):
         raise AttributeError("complete import ledger readers are required for Trace protection")
     coverage = _TraceCoverage()
-    # Task 5 must preserve archived cross-Run/Pass/event reference closure before
-    # planning later prefixes. Empty/truncated facades cannot hide physical rows.
-    if store.trace_archives.list():
-        raise ValueError('Trace receipts require verified archived reference closure')
-    for record, owner, _ in _iter_artifact_records_with_owners(store, read_only=True, coverage=coverage):
+    for record, owner, _ in _iter_artifact_records_with_owners(store, read_only=True, coverage=coverage, trace_protection=True):
         if not isinstance(record, dict):
             raise ValueError("reference repository returned a malformed record")
         yield record, owner

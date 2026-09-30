@@ -4,8 +4,16 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from motte_contracts.run import ReplayCase, Run, RunCommand
+from motte_contracts.experiment import ExperimentSpec
 from motte_eval.calibration_records import QualificationBinding
 from motte_sdk.scoring_jobs import SubjectPairReference
+# Public calibration models share the same local/HTTP boundary and error envelopes.
+from motte_sdk.calibration_transport import (  # noqa: F401
+    CalibrationCatalogEntry, CalibrationErrorResponse, CalibrationExecuteRequest, CalibrationImportRequest, CalibrationItems,
+    CalibrationJobView, CalibrationPreflightView, CalibrationPublishRequest,
+    CalibrationReportView, CalibrationReviewRequest,
+)
+from motte_contracts.pairwise_quality import PairwiseRoleBinding
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -15,6 +23,22 @@ class APIModel(BaseModel):
 
 class StrictAPIModel(APIModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ExperimentRequest(ExperimentSpec):
+    """Transport controls are excluded from Spec identity and preview binding."""
+    request_key: str | None = Field(default=None, min_length=1, exclude=True)
+    preview_hash: str | None = Field(default=None, alias="_preview_hash", min_length=1, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_request_aliases(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            legacy = value.pop("_request_key", None)
+            if legacy:
+                value["request_key"] = legacy
+        return value
 
 
 class CreateRunRequest(APIModel):
@@ -94,6 +118,7 @@ class CapabilitiesResponse(APIModel):
 
 
 class EventsSnapshotResponse(APIModel):
+    trimmed_through: int = Field(default=0, ge=0)
     """SSE 断线/缺口的持久查询（M7 协议 §2）。"""
 
     events: list[dict[str, Any]]
@@ -408,7 +433,7 @@ class JudgeSubmissionBase(APIModel):
     presentation_orders: list[list[str]] = Field(default_factory=list)
     price_table_version: str | None = None
     qualification_id: str | None = Field(default=None, min_length=1)
-    # Reuse the transport-independent strict reference contract, never input content.
+    # This authoritative contract requires an explicit challenger saved attempt.
     pairwise_refs: list[SubjectPairReference] = Field(default_factory=list)
 
 
@@ -479,6 +504,8 @@ class JudgeJobView(APIModel):
     preflight: dict[str, Any] | None = None
     provider_snapshot: dict[str, Any] | None = None
     qualification_binding: QualificationBinding | None = Field(default=None, exclude_if=lambda value: value is None)
+    pairwise_roles: tuple[PairwiseRoleBinding, ...] | None = Field(default=None, exclude_if=lambda value: value is None)
+    roles_sha256: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$", exclude_if=lambda value: value is None)
     receipt: dict[str, Any] | None = None
     failure: dict[str, Any] | None = None
     cancellation: dict[str, Any] | None = None

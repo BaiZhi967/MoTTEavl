@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from motte_contracts.evaluation import EvidenceRef
 from motte_contracts.identity import canonical_sha256
 
 from . import trace_retention_models as models
@@ -13,14 +12,7 @@ from .artifact_refs import collect_artifact_refs, iter_trace_reference_records
 from .maintenance import _store_identity
 
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "unsupported", "profile_stale"})
-_PASS_KEYS = frozenset({"scoring_pass_id", "source_pass_id", "previous_pass_id",
-                        "current_scoring_pass_id"})
-
-
-def _identity(value: Any, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"reference {name} must be a nonempty string")
-    return value
+from .trace_references import identity as _identity, extract_reference_document, resolve_reference_document
 
 
 def _protection(run_ids: set[str], event_seqs: dict[str, set[int]]) -> models.TraceProtection:
@@ -33,62 +25,7 @@ def collect_trace_protection(store: Any) -> models.TraceProtection:
     """Retain independent sources and explicit event evidence, excluding owning edges."""
     runs: set[str] = set()
     events: dict[str, set[int]] = {}
-    pass_owners: dict[str, str] = {}
     artifact_refs: dict[str, str | None] = {}
-
-    def pass_run(pass_id: Any) -> str:
-        pass_id = _identity(pass_id, "scoring_pass_id")
-        if pass_id not in pass_owners:
-            record = store.scoring_passes.get(pass_id)
-            if not isinstance(record, dict) or record.get("id") != pass_id:
-                raise ValueError("unresolved scoring Pass reference: " + pass_id)
-            pass_owners[pass_id] = _identity(record.get("run_id"), "Pass run_id")
-        return pass_owners[pass_id]
-
-    def walk(value: Any, owner: str | None, *, top: bool = False, ownership: bool = False) -> None:
-        if isinstance(value, (list, tuple)):
-            for child in value:
-                walk(child, owner)
-            return
-        if not isinstance(value, dict):
-            return
-        kind = value.get("kind")
-        evidence = (kind == "event" or ("locator" in value
-                    and (kind in {"artifact", "invocation"} or "run_id" in value)))
-        if evidence:
-            ref = EvidenceRef.model_validate(value)
-            if ref.kind == "event":
-                events.setdefault(ref.run_id, set()).add(int(ref.locator))
-            else:
-                runs.add(ref.run_id)
-            return
-        if value.get("scoring_pass_id") is not None and value.get("run_id") is not None:
-            if pass_run(value["scoring_pass_id"]) != _identity(value["run_id"], "run_id"):
-                raise ValueError("coupled Run/Pass reference identity disagrees")
-        target_type = value.get("target_type")
-        if target_type == "run":
-            runs.add(_identity(value.get("target_id"), "target_id"))
-        elif target_type == "scoring_pass":
-            runs.add(pass_run(value.get("target_id")))
-        for key, child in value.items():
-            if not isinstance(key, str):
-                raise ValueError("reference record requires string keys")
-            if (key == "run_id" or key.endswith("_run_id")) and child is not None:
-                target = _identity(child, key)
-                if not (key == "run_id" and (top or ownership) and target == owner):
-                    runs.add(target)
-            elif (key == "run_ids" or key.endswith("_run_ids")) and child is not None:
-                if not isinstance(child, list):
-                    raise ValueError("reference Run ids must be a list")
-                runs.update(_identity(item, key) for item in child)
-            elif key in _PASS_KEYS and child is not None:
-                target = pass_run(child)
-                if not (top and key in {"scoring_pass_id", "current_scoring_pass_id"}
-                        and target == owner):
-                    runs.add(target)
-            else:
-                walk(child, owner, ownership=top and key == "owner")
-
     # Status/provenance protection is independent of timestamp eligibility.
     for run in store.runs.list():
         if not isinstance(run, dict):
@@ -101,9 +38,13 @@ def collect_trace_protection(store: Any) -> models.TraceProtection:
             isinstance(manifest, dict) and manifest.get("import_source") is not None
         ):
             runs.add(run_id)
-    for record, owner in iter_trace_reference_records(store):
-        collect_artifact_refs(record, artifact_refs)
-        walk(record, owner, top=True)
+    def records():
+        for record, owner in iter_trace_reference_records(store):
+            collect_artifact_refs(record, artifact_refs)
+            yield record, owner
+    document = extract_reference_document(records())
+    referenced_runs, events = resolve_reference_document(document, store.scoring_passes.get)
+    runs.update(referenced_runs)
     return _protection(runs, events)
 
 
@@ -139,12 +80,11 @@ def _plan_at_cutoff(store: Any, *, config: models.TraceRetentionConfig,
     if not config.enabled:
         raise models.TraceRetentionDisabled("Trace retention is disabled")
     cutoff = models._utc_datetime(cutoff)
-    receipts = getattr(store, 'trace_archives', None)
-    if receipts is None or not callable(getattr(receipts, 'list', None)):
-        raise AttributeError('store.trace_archives.list is required for Trace protection')
-    if receipts.list():
-        raise models.TraceRetentionPlanChanged(
-            'subsequent retention requires verified archived reference closure (Task 5)')
+    from .trace_archives import checked_trace_receipts, trace_receipt_boundaries
+    receipts = checked_trace_receipts(store)
+    boundaries = trace_receipt_boundaries(store, receipts)
+    if any(receipt.reference_document is None for receipt in receipts):
+        raise models.TraceRetentionPlanChanged('legacy receipt lacks archived reference document')
     protection = collect_trace_protection(store)
     prefixes = []
     seen = set()
@@ -166,7 +106,7 @@ def _plan_at_cutoff(store: Any, *, config: models.TraceRetentionConfig,
         if len(rows) < 2:
             continue
         selected = []
-        expected = 1
+        expected = boundaries.get(run_id, 0) + 1
         for row in rows[:-1]:
             if (row.seq != expected or row.stored_at is None or row.stored_at >= cutoff
                     or row.seq in protection.event_seqs.get(run_id, ())):
@@ -234,10 +174,12 @@ def apply_trace_retention(store: Any, artifacts_root: str | Path, plan: models.T
         maintenance._require_trace_retention_owner(store, owner)
         with trace_archive_write_capability(store, artifacts_root=artifacts_root, maintenance_owner=owner):
             artifacts = ArtifactStore(artifacts_root)
-            existing = store.trace_archives.list()
+            from .trace_archives import checked_trace_receipts, verify_trace_archives
+            existing = checked_trace_receipts(store)
             replay = _replay_receipts(store, artifacts, plan, existing)
             if replay is not None:
                 return replay
+            verify_trace_archives(store, artifacts)
             if _plan_at_cutoff(store, config=config, cutoff=plan.cutoff) != plan:
                 raise models.TraceRetentionPlanChanged('retention plan inputs changed')
             receipts = []
@@ -251,7 +193,8 @@ def apply_trace_retention(store: Any, artifacts_root: str | Path, plan: models.T
                     archive_id='trace-archive-' + hashlib.sha256(data).hexdigest(),
                     plan_id=plan.plan_id, prefix=prefix, artifact_id=artifact.id,
                     sha256=artifact.sha256, bytes=len(data), cutoff=plan.cutoff,
-                    artifact_refs=body['artifact_refs'], artifact_hashes=body['artifact_hashes'])
+                    artifact_refs=body['artifact_refs'], artifact_hashes=body['artifact_hashes'],
+                    reference_document=extract_reference_document((row.payload, prefix.run_id) for row in rows))
                 verify_trace_archive(artifacts.read_bytes(receipt.artifact_id), receipt)
                 receipts.append(receipt)
             return maintenance.commit_trace_retention(store, owner=owner, plan=plan, receipts=receipts)

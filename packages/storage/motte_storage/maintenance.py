@@ -533,6 +533,12 @@ def _backup_references(
 
 def _validate_restored_reference_closure(store: Any, artifacts_root: Path) -> None:
     """Verify frozen evidence assertions independently of the file inventory."""
+    from .artifacts import ArtifactStore
+    from .trace_archives import verify_trace_archives
+    try:
+        verify_trace_archives(store, ArtifactStore(artifacts_root))
+    except (ValueError, OSError) as error:
+        raise RestoreIncomplete('restored Trace archives are invalid: ' + str(error)) from error
     referenced, missing = _backup_references(store, artifacts_root)
     for artifact_id, expected in sorted(referenced.items()):
         try:
@@ -550,6 +556,7 @@ def _validate_restored_reference_closure(store: Any, artifacts_root: Path) -> No
 
 
 def _store_counts(store: Any) -> dict[str, int]:
+    from .trace_archives import checked_trace_receipts
     runs = store.runs.list()
     scoring_passes = (
         sum(len(store.scoring_passes.list_for_run(run.get("id"))) for run in runs)
@@ -568,6 +575,7 @@ def _store_counts(store: Any) -> dict[str, int]:
     )
     return {
         "runs": len(runs),
+        "trace_archive_receipts": len(checked_trace_receipts(store)),
         "scoring_passes": scoring_passes,
         "baselines": baselines,
         "gate_results": gate_results,
@@ -661,6 +669,19 @@ def _write_manifest_v2(
 # ------------------------------------------------------------ 一致备份
 
 
+def _verify_backup_trace_archives(store, artifacts_root):
+    from .artifacts import ArtifactStore
+    from .trace_archives import checked_trace_receipts, verify_trace_archives
+    if not checked_trace_receipts(store):
+        return
+    if artifacts_root is None:
+        raise BackupIncomplete('Trace archive receipts require an explicit artifact root')
+    try:
+        verify_trace_archives(store, ArtifactStore(artifacts_root))
+    except (ValueError, OSError) as error:
+        raise BackupIncomplete('Trace archive evidence is invalid: ' + str(error)) from error
+
+
 def consistent_backup(
     store: Any, target_dir: str | Path, *, artifacts_root: str | Path | None = None,
     reason: str = "backup",
@@ -683,6 +704,7 @@ def consistent_backup(
     snapshot = target / f"runs-{stamp}.db"
     begin = begin_maintenance(store, reason=reason, artifacts_root=artifacts_root)
     try:
+        _verify_backup_trace_archives(store, artifacts_root)
         _snapshot_sqlite(Path(db_path), snapshot)
         # Read references and counts from the immutable DB snapshot, not the live
         # store.  This prevents an in-flight worker from producing a mixed
@@ -767,6 +789,7 @@ def consistent_backup_postgres(
     dump_path = target / f"runs-{stamp}.dump"
     begin = begin_maintenance(store, reason=reason, artifacts_root=artifacts_root)
     try:
+        _verify_backup_trace_archives(store, artifacts_root)
         completed = subprocess.run(
             ["pg_dump", "--format=custom", "--file", str(dump_path), dsn],
             capture_output=True,
@@ -964,8 +987,13 @@ def _restore_staging_checked(
     from .run_store import SQLiteRunStore
 
     staging_store = SQLiteRunStore(db_file)
+    platform_for(staging_store).meta.set(RESTORE_GUARD_KEY, manifest_path.name)
     expected_counts = dict(manifest.get("counts") or {})
     actual_counts = _store_counts(staging_store)
+    if (actual_counts['trace_archive_receipts'] or 'trace_archive_receipts' in expected_counts) and (
+            type(expected_counts.get('trace_archive_receipts')) is not int
+            or expected_counts['trace_archive_receipts'] < 0):
+        raise RestoreIncomplete('archive receipt count missing or invalid in backup manifest')
     for key, expected in expected_counts.items():
         if actual_counts.get(key) != expected:
             raise RestoreIncomplete(
@@ -1123,6 +1151,10 @@ def restore_postgres_staging(
         meta.delete(key)
     expected_counts = dict(expected_counts)
     actual_counts = _store_counts(store)
+    if (actual_counts['trace_archive_receipts'] or 'trace_archive_receipts' in expected_counts) and (
+            type(expected_counts.get('trace_archive_receipts')) is not int
+            or expected_counts['trace_archive_receipts'] < 0):
+        raise RestoreIncomplete('archive receipt count missing or invalid in backup manifest')
     for key, expected in expected_counts.items():
         if actual_counts.get(key) != expected:
             raise RestoreIncomplete(
@@ -1372,12 +1404,15 @@ def commit_trace_retention(store: Any, *, owner: str, plan: TraceRetentionPlan,
         receipts = [models.TraceArchiveReceipt.model_validate(row) for row in receipts]
         if ([row.prefix for row in receipts] != plan.prefixes or
                 any(row.plan_id != plan.plan_id or row.cutoff != plan.cutoff or row.committed_at is not None
+                    or row.reference_document is None
                     or row.archive_id != 'trace-archive-' + row.sha256.removeprefix('sha256:')
                     for row in receipts)):
             raise models.TraceArchiveInvalid('pending receipts must match the complete exact plan')
         if _plan_at_cutoff(store, config=plan.config, cutoff=plan.cutoff) != plan:
             raise models.TraceRetentionPlanChanged('retention plan inputs changed before commit')
         artifacts = ArtifactStore(held[4])
+        from .trace_archives import verify_trace_archives
+        verify_trace_archives(store, artifacts)
         # Reverify durability in this entry point too; calling the fixed commit
         # directly with guessed receipts cannot bypass archive fsync/verification.
         from .operation_locks import _TRACE_ARCHIVE_CAPABILITIES
@@ -1412,8 +1447,12 @@ def commit_trace_retention(store: Any, *, owner: str, plan: TraceRetentionPlan,
                     or values.get(MAINTENANCE_ALLOW_TOMBSTONES) != 'false'):
                 raise MaintenanceConflict('Trace commit maintenance metadata disagrees')
             existing = _receipts_on_connection(connection)
-            if existing:
-                raise models.TraceRetentionPlanChanged('existing Trace receipts require verified replay')
+            from .trace_archives import trace_receipt_boundaries
+            boundaries = trace_receipt_boundaries(store, existing)
+            if any(row.plan_id == plan.plan_id for row in existing):
+                raise models.TraceRetentionPlanChanged('existing same-plan Trace receipts require verified replay')
+            if any(row.prefix.first_seq != boundaries.get(row.prefix.run_id, 0) + 1 for row in receipts):
+                raise models.TraceRetentionPlanChanged('new receipt does not extend the exact archived prefix')
             # Read exact rows on the lock-owning connection before any DDL/DML.
             for receipt in receipts:
                 prefix = receipt.prefix

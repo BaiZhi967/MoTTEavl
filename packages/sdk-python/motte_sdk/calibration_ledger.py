@@ -200,6 +200,39 @@ def _call_evidence(compiler, expected_job, plan, call, invocation, *, ordinal):
             or result.get("provider") != raw.get("provider")
             or result.get("model") != expected_job["judge_spec"]["model"]):
         reasons.append("raw response identity is missing or inconsistent")
+    # report_only permits execution, never qualification. Recompute identity
+    # solely from persisted response evidence and the immutable versioned map.
+    from motte_provider.identity import assess_identity, validate_identity_config
+
+    snapshot = expected_job["provider_snapshot"]
+    transport = snapshot.get("transport") or {}
+    if (transport.get("follow_redirects") is not False
+            or type(transport.get("max_retries")) is not int
+            or transport["max_retries"] != 0):
+        # Historical attempts=1 cannot prove that urllib sent only one POST.
+        # Preserve old records, but never upgrade absent/coerced proof.
+        reasons.append("frozen transport does not prove one HTTP send per Judge call")
+    try:
+        policy, aliases, version = validate_identity_config(
+            snapshot.get("identity_policy") or "report_only",
+            snapshot.get("identity_aliases"), snapshot.get("identity_alias_version"),
+        )
+        resolved, decision, evidence, allowed = assess_identity(
+            expected_job["judge_spec"]["model"], raw.get("reported_model"),
+            policy=policy, aliases=aliases, alias_version=version,
+        )
+        identity = {
+            "requested_model": expected_job["judge_spec"]["model"],
+            "reported_model": raw.get("reported_model"),
+            "resolved_model_identity": resolved, "identity_evidence": evidence,
+            "identity_policy": policy, "identity_policy_result": decision, "policy_passed": allowed,
+        }
+        if (decision not in {"exact_match", "alias_match"}
+                or any(raw.get(key) != value or result.get(key) != value
+                       for key, value in identity.items())):
+            reasons.append("actual response model identity is missing, mismatched or inconsistent")
+    except (ValueError, TypeError):
+        reasons.append("frozen model identity policy or alias mapping is invalid")
     if result.get("attempts") != 1 or result.get("unsafe_retry_observed") is not False:
         reasons.append("response does not prove exactly one provider attempt")
     usage = result.get("usage") or {}

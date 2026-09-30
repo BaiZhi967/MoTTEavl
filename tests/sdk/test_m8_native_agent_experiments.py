@@ -69,6 +69,7 @@ def test_agent_mode_matches_standalone_frozen_configuration(mode):
         run = store.runs.get(cell["run_id"])
         requested = {
             "model": run["requested_manifest"]["model"],
+            "provider_transport_policy": "bounded-http@1",
             "agent": {"mode": mode or "legacy-json"},
             "parameters": {"max_output_tokens": 512},
             "case_selection": {"mode": "ids", "case_ids": ["task-2", "task-1"]},

@@ -294,6 +294,21 @@ class _PgTraceEvents:
                 rows = cursor.fetchall()
         return [deepcopy(row[0]) for row in rows]
 
+    def read_window(self, run_id: str, after: int) -> trace_metadata.TraceEventWindow:
+        # READ COMMITTED is sufficient because both inputs belong to one statement.
+        with _connect(self._dsn) as connection:
+            rows = connection.execute(
+                "SELECT e.payload, r.trimmed_through FROM "
+                "(SELECT COALESCE(MAX(last_seq), 0) AS trimmed_through "
+                "FROM trace_archive_receipts WHERE run_id = %s) r "
+                "LEFT JOIN trace_events e ON e.run_id = %s AND e.seq > %s ORDER BY e.seq",
+                (run_id, run_id, after),
+            ).fetchall()
+        return trace_metadata.TraceEventWindow(
+            events=[payload for payload, _ in rows if payload is not None],
+            trimmed_through=rows[0][1],
+        )
+
     def list_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:

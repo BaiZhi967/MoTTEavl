@@ -8,9 +8,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import Field, StrictBool, field_validator, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictBool,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .errors import ExecutionError
 from .evidence import Score, ScoringPass
@@ -96,6 +103,7 @@ class ResolvedManifest(Contract):
     replay_fixture: dict[str, ReplayCase] | None = None
     agent: str | None = None
     agent_config: dict[str, Any] | None = None
+    provider_transport_policy: Literal["bounded-http@1"] | None = None
     skills: list[str] = Field(default_factory=list)
     harness: str | None = None
     sandbox: dict[str, Any] | None = None
@@ -114,6 +122,15 @@ class ResolvedManifest(Contract):
     runtime_snapshot: dict[str, Any] | None = None
     # tool_control.enforcement=not-enforced 的 runtime 需要显式确认才允许运行
     runtime_accept_unenforced_tools: bool = False
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_transport_identity(
+        self, handler: SerializerFunctionWrapHandler,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if self.provider_transport_policy is None:
+            payload.pop("provider_transport_policy", None)
+        return payload
 
 
 class CaseRun(Contract):
