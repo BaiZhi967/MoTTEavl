@@ -196,7 +196,8 @@ def _install_write_barrier(connection, placeholder) -> None:
     owner release. Tombstones are frozen unless an audit-writing maintenance
     operation explicitly opts in; their data affects reference scanning. Triggers
     stay installed but inert when maintenance is inactive, including after a
-    staging restore. Schema changes during maintenance are not supported.
+    staging restore. Migration 0015 removes its PostgreSQL guards before dropping
+    motte_meta on downgrade. Schema changes during maintenance are not supported.
     """
     if connection is None:
         return
