@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Sequence
 
 from motte_contracts.experiment import (
-    ExperimentSpec, FactorAssignment, ScenarioExperimentConfig, SkillExperimentConfig,
+    CevalExperimentConfig, ExperimentSpec, FactorAssignment, ScenarioExperimentConfig, SkillExperimentConfig,
 )
 from motte_contracts.hashing import canonical_hash
 
@@ -102,6 +102,14 @@ def validate_suite_assembly_ready(spec: ExperimentSpec, *, resources: Any) -> No
     config = spec.suite_config
     # Static support only: recovery/retry must not consult current resources.
     if config is None or isinstance(config, (ScenarioExperimentConfig, SkillExperimentConfig)):
+        return
+    if isinstance(config, CevalExperimentConfig):
+        from motte_benchmark.opencompass.execution import freeze_execution_profile
+
+        try:
+            freeze_execution_profile(config.execution_profile)
+        except ValueError as error:
+            raise ExperimentError("EXPERIMENT_BUDGET_UNPROVABLE", str(error)) from error
         return
     raise ExperimentError(
         "SUITE_ASSEMBLER_UNIMPLEMENTED",
@@ -427,6 +435,8 @@ def validate_frozen_workflow_cell(
     """
     from .experiments import ExperimentError
 
+    if isinstance(spec.suite_config, CevalExperimentConfig):
+        return validate_frozen_ceval_cell(spec, assignment, frozen)
     if not isinstance(spec.suite_config, (ScenarioExperimentConfig, SkillExperimentConfig)):
         return
     if not isinstance(frozen, dict):
@@ -474,6 +484,8 @@ def assemble_experiment_cell(
     validate_suite_assembly_ready(spec, resources=resources)
     if resources is None:
         raise ExperimentError("RESOURCE_UNRESOLVED", "experiment resources are unavailable")
+    if isinstance(spec.suite_config, CevalExperimentConfig):
+        return assemble_ceval_cell(spec, assignment, resources=resources, store=store)
     if isinstance(spec.suite_config, ScenarioExperimentConfig):
         return assemble_scenario_cell(spec, assignment, resources=resources, store=store)
     if isinstance(spec.suite_config, SkillExperimentConfig):
@@ -504,3 +516,95 @@ def assemble_experiment_cell(
         resource_hashes=_resource_hashes(manifest),
         call_bound=_legacy_call_bound(spec, manifest, ordered_cases),
     )
+
+
+def _ceval_request(spec: ExperimentSpec, assignment: FactorAssignment) -> dict[str, Any]:
+    from .experiments import ExperimentError
+
+    _validate_assignment(spec, assignment)
+    config = spec.suite_config
+    if spec.task_ref.get("scenario_version") != "ceval-external@1":
+        raise ExperimentError("SUITE_MISMATCH", "C-Eval requires ceval-external@1")
+    return {"model": assignment.as_dict()["model_profile"],
+            **config.model_dump(mode="json", exclude={"kind"}),
+            "case_ids": list(spec.selected_case_keys) or None}
+
+
+def _ceval_call_bound(manifest: dict[str, Any], cases: tuple[str, ...]) -> CallBound:
+    from motte_benchmark.opencompass.execution import validate_execution_config
+
+    external = manifest["external_benchmark"]
+    config = external["runner_config"]
+    profile = validate_execution_config(config)
+    if (tuple(case["case_id"] for case in config["cases"]) != cases
+            or external["adapter_id"] != "ceval-opencompass"
+            or external["adapter_version"] != "1"
+            or external["parser_version"] != "ceval-opencompass-parser@2"
+            or external.get("retry_policy") != profile["retry"]
+            or external.get("environment_digest") != canonical_hash(profile)
+            or external.get("profile", {}).get("environment_digest") != canonical_hash(profile)
+            or manifest.get("execution") != {"backend_id": "external-benchmark", "backend_version": "1"}):
+        raise ValueError("EXECUTION_PROFILE_INVALID: frozen C-Eval identity differs")
+    return CallBound(len(cases) * (1 + profile["retry"]["provider_transport"]),
+                     profile["profile_id"], dict(profile["retry"]))
+
+
+def assemble_ceval_cell(
+    spec: ExperimentSpec, assignment: FactorAssignment, *, resources: Any, store: Any,
+) -> AssembledExperimentCell:
+    """Reuse the standalone frozen builder; never send its reserved fields to prepare_run."""
+    from .benchmark_catalog import (
+        dataset_from_payload, prepare_external_run_inputs, validate_external_run_request,
+    )
+    from .experiments import ExperimentError
+
+    requested = _ceval_request(spec, assignment)
+    record = store.benchmark_datasets.get("ceval", requested["dataset_revision"])
+    if record is None:
+        raise ExperimentError("DATASET_UNPREPARED", "fixed C-Eval revision is missing")
+    dataset = dataset_from_payload(record)
+    if dataset.benchmark_id != "ceval" or dataset.dataset_revision != requested["dataset_revision"]:
+        raise ExperimentError("DATASET_REVISION_MISMATCH", "stored dataset identity differs")
+    model = resources.models.get(requested["model"])
+    common = {key: requested[key] for key in ("scope", "split", "few_shot", "few_shot_split", "case_ids")}
+    reasons = validate_external_run_request(dataset, benchmark_id="ceval", model_record=model, **common)
+    if reasons:
+        raise ExperimentError("RUN_REQUEST_INVALID", "; ".join(reasons))
+    try:
+        inputs = prepare_external_run_inputs(
+            dataset, benchmark_id="ceval", model_id=requested["model"], model_record=model,
+            seed=requested["seed"], execution_profile=requested["execution_profile"], **common,
+        )
+        manifest = inputs["manifest"]
+        cases = tuple(inputs["case_ids"])
+        bound = _ceval_call_bound(manifest, cases)
+    except ValueError as error:
+        raise ExperimentError("EXPERIMENT_BUDGET_UNPROVABLE", str(error)) from error
+    return AssembledExperimentCell(inputs["scenario_version"], deepcopy(requested), deepcopy(manifest),
+                                   cases, {"resolved_manifest": canonical_hash(manifest)}, bound)
+
+
+def validate_frozen_ceval_cell(spec, assignment, frozen):
+    """Only frozen Cell inputs; no mutable dataset/model/provider repository reads."""
+    from .experiments import ExperimentError
+
+    if not isinstance(frozen, dict):
+        raise ExperimentError("FROZEN_INPUT_REQUIRED", "C-Eval requires frozen prepared_run")
+    try:
+        expected = _ceval_request(spec, assignment)
+        manifest = frozen["manifest"]
+        config = manifest["external_benchmark"]["runner_config"]
+        cases = tuple(frozen["case_ids"])
+        bound = _ceval_call_bound(manifest, cases)
+        if (frozen["requested_manifest"] != expected
+                or manifest["model"] != expected["model"]
+                or frozen["scenario_version"] != spec.task_ref["scenario_version"]
+                or any(config.get(key) != expected[key] for key in ("dataset_revision", "scope", "split", "seed"))
+                or config["few_shot"] != {"count": expected["few_shot"], "source_split": expected["few_shot_split"]}
+                or config["execution_profile"]["profile_id"] != expected["execution_profile"]
+                or (expected["case_ids"] is not None and list(cases) != expected["case_ids"])
+                or frozen["resource_hashes"] != {"resolved_manifest": canonical_hash(manifest)}
+                or frozen["call_bound"] != asdict(bound)):
+            raise ValueError("frozen C-Eval conditions differ from typed Cell")
+    except (KeyError, TypeError, ValueError) as error:
+        raise ExperimentError("FROZEN_INPUT_INVALID", str(error)) from error

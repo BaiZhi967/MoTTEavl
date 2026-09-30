@@ -43,7 +43,9 @@ def _production_inputs(few_shot):
                                      "max_output_tokens": 17}},
         few_shot=few_shot, case_ids=["logic-3", "logic-1"],
         credentials={"api_key": {"ref": "env:MOTTE_R4_TEST_KEY"},
-                     "base_url": {"ref": "env:MOTTE_R4_TEST_URL"}},
+                     "base_url": {"ref": "env:MOTTE_R4_TEST_URL"},
+                     "offline_hub": {"ref": "env:HF_HUB_OFFLINE"},
+                     "offline_datasets": {"ref": "env:HF_DATASETS_OFFLINE"}},
     )
 
 

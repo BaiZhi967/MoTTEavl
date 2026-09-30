@@ -9,7 +9,17 @@ if [ ! -x "$RUNNER_DIR/bin/python" ]; then
     uv venv --python 3.10.20 "$RUNNER_DIR"
 fi
 "$RUNNER_DIR/bin/python" -c 'import sys; assert sys.version_info[:2] == (3, 10)'
-uv pip sync --python "$RUNNER_DIR/bin/python" "$SCRIPT_DIR/opencompass-0.4.2-py310.lock"
+# Preserve the original macOS-verified lock. Linux needs Torch's declared
+# platform transitives; every original package version is held unchanged.
+LOCK="$SCRIPT_DIR/opencompass-0.4.2-py310.lock"
+if [ "$(uname -s)" = "Linux" ]; then
+    if [ "$(uname -m)" != "x86_64" ]; then
+        echo "unverified OpenCompass runner platform: Linux $(uname -m)" >&2
+        exit 2
+    fi
+    LOCK="$SCRIPT_DIR/opencompass-0.4.2-linux-x86_64-py310.lock"
+fi
+uv pip sync --python "$RUNNER_DIR/bin/python" "$LOCK"
 # The API distribution requires Python >=3.12. Only the three standalone bridge
 # modules run on 3.10; do not install the API/SDK or bypass its Python constraint.
 "$RUNNER_DIR/bin/python" - "$REPO_ROOT" <<'PY'
@@ -22,7 +32,8 @@ source = Path(sys.argv[1]) / 'packages/benchmark-runtime/motte_benchmark'
 target = Path(sysconfig.get_path('purelib')) / 'motte_benchmark'
 (target / 'opencompass').mkdir(parents=True, exist_ok=True)
 for name in ('__init__.py', 'opencompass/__init__.py', 'opencompass/entry.py',
-             'opencompass/upstream.py'):
+             'opencompass/upstream.py', 'opencompass/config.py',
+             'opencompass/execution.py', 'opencompass/bounded-profile.json'):
     shutil.copy2(source / name, target / name)
 PY
 cp "$SCRIPT_DIR/opencompass-entry" "$RUNNER_DIR/bin/opencompass-entry"

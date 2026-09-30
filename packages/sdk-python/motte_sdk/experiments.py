@@ -525,7 +525,7 @@ class ExperimentService:
         from motte_contracts.hashing import canonical_hash
         from .experiment_assemblers import validate_frozen_workflow_cell
 
-        if spec.suite_config is None or spec.suite_config.kind not in {"scenario", "skill"}:
+        if spec.suite_config is None or spec.suite_config.kind not in {"scenario", "skill", "ceval"}:
             return
         cells = self.store.experiments.list_cells(spec.experiment_id, spec.version)
         expected = {}

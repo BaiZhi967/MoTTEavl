@@ -131,12 +131,12 @@ def test_missing_published_skill_reports_the_resource_error_before_unimplemented
 
 
 @pytest.mark.parametrize("kind", ["ceval"])
-def test_unimplemented_typed_suites_fail_closed_before_persistence(kind):
+def test_unproved_ceval_profiles_fail_closed_before_persistence(kind):
     store, _resources, service = environment()
     for operation in (service.preview, service.create):
         with pytest.raises(ExperimentError) as error:
             operation(suite_spec(kind))
-        assert error.value.code == "SUITE_ASSEMBLER_UNIMPLEMENTED"
+        assert error.value.code == "EXPERIMENT_BUDGET_UNPROVABLE"
     assert_empty(store)
 
 
@@ -230,5 +230,5 @@ def test_stored_frozen_cell_cannot_bypass_typed_suite_guard(operation, kind):
         else:
             service.retry_cell(cell["cell_id"], reason="test fail-closed replay")
     assert error.value.code == ("FROZEN_INPUT_INVALID" if kind == "scenario"
-                                else "SUITE_ASSEMBLER_UNIMPLEMENTED")
+                                else "EXPERIMENT_BUDGET_UNPROVABLE")
     assert len(store.runs.list()) == initial_count

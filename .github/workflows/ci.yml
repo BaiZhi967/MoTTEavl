@@ -80,3 +80,22 @@ jobs:
           cd "$WORK_DIR"
           "$VENV_DIR/bin/python" -c "import motte_sdk; from motte_sdk import MotteClient; print(motte_sdk.__file__)"
           "$VENV_DIR/bin/python" -m motte_cli --help
+
+  windows-artifacts:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      MOTTE_REQUIRE_WINDOWS_ARTIFACT_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Native NTFS artifact safety and ordinary compatibility
+        run: >-
+          uv run pytest -q -rA
+          tests/storage/test_artifacts.py
+          tests/storage/test_windows_artifact_io.py

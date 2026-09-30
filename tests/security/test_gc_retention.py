@@ -175,7 +175,7 @@ def test_gc_apply_skips_newly_referenced_files(tmp_path):
     assert result["skipped"][0]["reason"] == "protected_after_recheck"
 
 
-def test_gc_apply_holds_maintenance_barrier(tmp_path):
+def test_gc_apply_holds_maintenance_barrier(tmp_path, monkeypatch):
     """GC apply 执行期间 API 写入被 503 拒绝（与采集/评分互斥，A14 同源屏障）。"""
     store = _make_store_with_evidence(tmp_path)
     root = tmp_path / "artifacts"
@@ -186,17 +186,17 @@ def test_gc_apply_holds_maintenance_barrier(tmp_path):
 
     observed = {}
 
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
 
-    def spy_unlink(self, *args, **kwargs):
+    def spy_unlink(path, *args, **kwargs):
+        assert kwargs.get("dir_fd") is not None
         observed["maintenance_during_delete"] = platform_for(store).meta.get("maintenance")
-        return original_unlink(self, *args, **kwargs)
+        return original_unlink(path, *args, **kwargs)
 
-    Path.unlink = spy_unlink
-    try:
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "unlink", spy_unlink)
+        patch.setattr(os, "supports_dir_fd", {*os.supports_dir_fd, spy_unlink})
         result = apply_gc(store, root, plan, confirm=True)
-    finally:
-        Path.unlink = original_unlink
     assert result["deleted"] == 1
     assert observed["maintenance_during_delete"] == "active"
     assert client.post(
@@ -447,15 +447,17 @@ def test_gc_crash_after_unlink_retains_durable_intent_and_replay_is_unconfirmed(
     root = tmp_path / "artifacts"
     artifact = _old_artifact(root, "crash.bin", b"planned deletion")
     plan = plan_gc(store, root)
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
 
     def crash_after_unlink(path, *args, **kwargs):
+        assert kwargs.get("dir_fd") is not None
         result = original_unlink(path, *args, **kwargs)
-        if path == root / artifact.id:
+        if Path(path).name == artifact.id:
             raise _CrashAfterUnlink()
         return result
 
-    monkeypatch.setattr(Path, "unlink", crash_after_unlink)
+    monkeypatch.setattr(os, "unlink", crash_after_unlink)
+    monkeypatch.setattr(os, "supports_dir_fd", {*os.supports_dir_fd, crash_after_unlink})
     with pytest.raises(_CrashAfterUnlink):
         apply_gc(store, root, plan, confirm=True)
     assert not (root / artifact.id).exists()
@@ -479,14 +481,16 @@ def test_gc_failed_unlink_records_failed_attempt_without_claiming_deletion(tmp_p
     root = tmp_path / "artifacts"
     artifact = _old_artifact(root, "failed.bin", b"retained deletion candidate")
     plan = plan_gc(store, root)
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
 
     def failed_unlink(path, *args, **kwargs):
-        if path == root / artifact.id:
+        assert kwargs.get("dir_fd") is not None
+        if Path(path).name == artifact.id:
             raise PermissionError("simulated unlink failure")
         return original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "unlink", failed_unlink)
+    monkeypatch.setattr(os, "unlink", failed_unlink)
+    monkeypatch.setattr(os, "supports_dir_fd", {*os.supports_dir_fd, failed_unlink})
     with pytest.raises(PermissionError, match="simulated unlink failure"):
         apply_gc(store, root, plan, confirm=True)
 
@@ -567,3 +571,150 @@ def test_gc_protects_report_sentinel_beyond_default_list_limit(tmp_path):
     assert result["deleted"] == 1
     assert (root / artifact_id).read_bytes() == b"sentinel evidence"
     assert not (root / "orphan.bin").exists()
+
+
+@pytest.mark.parametrize("artifact_id", [
+    "trace-archives/sha256/" + "a" * 64 + ".json",
+    "trace-archives/crash-orphan.part", "trace-archives/other/nested.bin",
+])
+def test_orphan_archive_has_no_ttl(tmp_path, artifact_id):
+    store = SQLiteRunStore(tmp_path / "archive-gc.db")
+    root = tmp_path / "artifacts"
+    path = root / artifact_id
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"crash orphan with no receipt")
+    old = (datetime.now(UTC) - timedelta(days=1000)).timestamp()
+    os.utime(path, (old, old))
+
+    plan = plan_gc(store, root, artifact_ttl_days=1, import_audit_protected=False)
+
+    assert artifact_id not in {row["artifact_id"] for row in plan.deletable}
+    assert next(row for row in plan.protected if row["artifact_id"] == artifact_id)[
+        "reason"
+    ] == "trace_archive"
+    assert apply_gc(store, root, plan, confirm=True)["deleted"] == 0
+    assert path.read_bytes() == b"crash orphan with no receipt"
+    assert platform_for(store).tombstones.list() == []
+
+
+@pytest.mark.parametrize("alias", ["trace-archives/orphan.bin", "./trace-archives/orphan.bin",
+                                    "alias/orphan.bin"])
+def test_gc_apply_rejects_injected_reserved_archive_candidates(tmp_path, alias):
+    import hashlib
+    from motte_storage.gc import GCPlan
+
+    store = SQLiteRunStore(tmp_path / "archive-gc.db")
+    root = tmp_path / "artifacts"
+    path = root / "trace-archives/orphan.bin"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"orphan")
+    (root / "alias").symlink_to(path.parent, target_is_directory=True)
+    plan = GCPlan(gc_run_id="tampered", deletable=[{
+        "artifact_id": alias, "bytes": 6, "sha256": hashlib.sha256(b"orphan").hexdigest(),
+    }])
+
+    result = apply_gc(store, root, plan, confirm=True)
+
+    assert result["deleted"] == 0
+    assert result["skipped"][0]["reason"] == "trace_archive"
+    assert path.read_bytes() == b"orphan"
+    assert platform_for(store).tombstones.list() == []
+
+
+def test_gc_mutation_boundary_cannot_follow_replaced_parent(tmp_path, monkeypatch):
+    import hashlib
+    from motte_storage.gc import GCPlan
+
+    store = SQLiteRunStore(tmp_path / "race.db")
+    root = tmp_path / "artifacts"
+    archive = root / "trace-archives/sha256/orphan.json"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"immutable evidence")
+    ordinary = root / "ordinary"
+    ordinary.mkdir()
+    target = ordinary / archive.name
+    data = b"ordinary evidence"
+    target.write_bytes(data)
+    plan = GCPlan(gc_run_id="race", deletable=[{
+        "artifact_id": "ordinary/orphan.json", "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }])
+    original_path_unlink, original_unlink = Path.unlink, os.unlink
+    attacked = False
+
+    def swap():
+        nonlocal attacked
+        if not attacked:
+            attacked = True
+            ordinary.rename(root / "detached-ordinary")
+            ordinary.symlink_to(archive.parent, target_is_directory=True)
+
+    def path_unlink(path, *args, **kwargs):
+        if path == target:
+            swap()
+        return original_path_unlink(path, *args, **kwargs)
+
+    def unlink(path, *args, **kwargs):
+        if Path(path).name == target.name:
+            swap()
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", path_unlink)
+    monkeypatch.setattr(os, "unlink", unlink)
+    monkeypatch.setattr(os, "supports_dir_fd", {*os.supports_dir_fd, unlink})
+    try:
+        apply_gc(store, root, plan, confirm=True)
+    except (ValueError, OSError):
+        pass
+    assert attacked
+    assert archive.read_bytes() == b"immutable evidence"
+    assert all(row.get("deletion_status") != "deleted"
+               for row in platform_for(store).tombstones.list())
+
+
+@pytest.mark.parametrize("missing", ["nofollow", "dir_fd", "native_unavailable"])
+def test_gc_fails_closed_without_safe_mutation_primitives(tmp_path, monkeypatch, missing):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "candidate.bin", b"preserved deletion candidate")
+    plan = plan_gc(store, root)
+    if missing == "nofollow":
+        monkeypatch.delattr(os, "O_NOFOLLOW")
+    elif missing == "dir_fd":
+        monkeypatch.setattr(os, "supports_dir_fd", set())
+    else:
+        from types import SimpleNamespace
+        import motte_storage.artifacts as artifact_module
+        simulated_os = SimpleNamespace(**vars(os))
+        simulated_os.name = "nt"
+        monkeypatch.setattr(artifact_module, "os", simulated_os)
+        import motte_storage._windows_artifact_io as native
+        def unavailable():
+            raise artifact_module.ArtifactMutationUnsupported(
+                "safe artifact mutation primitives are unsupported")
+        monkeypatch.setattr(native, "_api", unavailable)
+    with pytest.raises(ValueError, match="safe artifact mutation primitives are unsupported"):
+        apply_gc(store, root, plan, confirm=True)
+    assert (root / artifact.id).read_bytes() == b"preserved deletion candidate"
+    assert platform_for(store).tombstones.list() == []
+    assert platform_for(store).meta.get("maintenance") is None
+
+
+def test_gc_does_not_follow_new_leaf_alias_to_path_only_referenced_file(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    data = b"identical bytes are not permission to delete another path"
+    protected = _old_artifact(root, "protected.bin", data)
+    candidate = _old_artifact(root, "candidate.bin", data)
+    _store_reference(store, "case", "run-review", {"raw_ref": protected.id})
+    plan = plan_gc(store, root)
+    assert candidate.id in {row["artifact_id"] for row in plan.deletable}
+    assert protected.id in {row["artifact_id"] for row in plan.protected}
+    (root / candidate.id).unlink()
+    (root / candidate.id).symlink_to(root / protected.id)
+
+    result = apply_gc(store, root, plan, confirm=True)
+
+    assert result["deleted"] == 0
+    assert (root / protected.id).read_bytes() == data
+    assert platform_for(store).tombstones.list() == []

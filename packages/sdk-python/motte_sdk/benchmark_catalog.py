@@ -818,6 +818,7 @@ def prepare_external_run_inputs(
     case_ids: list[str] | None = None,
     runner_connected: bool = True,
     resources: Any = None,
+    execution_profile: str | None = None,
 ) -> dict[str, Any]:
     """构造外部 Run 的完整冻结输入（API 与 CLI 共用，review R01/R02）。
 
@@ -852,6 +853,14 @@ def prepare_external_run_inputs(
     if reasons:
         raise ValueError("RUN_REQUEST_INVALID: " + "; ".join(reasons))
 
+    environment_digest = external_environment_digest(benchmark_id)
+    if execution_profile is not None:
+        from motte_benchmark.opencompass.execution import freeze_execution_profile
+        from motte_contracts.hashing import canonical_hash
+
+        environment_digest = canonical_hash(freeze_execution_profile(execution_profile))
+        if credentials is None:
+            credentials = {"api_key": {"ref": "env:OPENAI_API_KEY"}}
     profile = descriptor.profile_builder(
         dataset_revision=dataset.dataset_revision,
         subjects=sorted({str(row.get("subject")) for row in dataset.rows}),
@@ -860,7 +869,7 @@ def prepare_external_run_inputs(
         few_shot_split=few_shot_split,
         seed=seed,
         runner_version=external_runner_version(),
-        environment_digest=external_environment_digest(benchmark_id),
+        environment_digest=environment_digest,
     )
     eval_rows = resolve_selection(dataset, scope=scope, split=split, case_ids=case_ids)
     if not eval_rows:
@@ -878,9 +887,15 @@ def prepare_external_run_inputs(
             scope=scope,
             credentials=credentials,
             retry_policy=retry_policy,
+            execution_profile=execution_profile,
         )
     except OpenCompassConfigError as error:
         raise ValueError(f"RUN_REQUEST_INVALID:{error}") from error
+
+    if execution_profile is not None:
+        from motte_benchmark.opencompass.execution import validate_execution_config
+
+        validate_execution_config(runner_config)
 
     case_expectations = {
         str(row.get("id")): (row.get("answer") if row.get("answer") else None)
@@ -915,6 +930,9 @@ def prepare_external_run_inputs(
             "runner_config": runner_config,
         },
     }
+    if execution_profile is not None:
+        manifest["external_benchmark"]["retry_policy"] = dict(runner_config["retry"])
+
     from .benchmark_plugins import prepare_with_plugin
 
     scenario = {

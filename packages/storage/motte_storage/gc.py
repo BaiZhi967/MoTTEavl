@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,9 +25,11 @@ from uuid import uuid4
 from .artifact_refs import (
     collect_artifact_refs, iter_artifact_records, referenced_artifact_hashes, resolve_artifact_refs,
 )
+from .artifacts import ArtifactMutationUnsupported, ArtifactStore
 from .deletion_audit import audit_missing_artifact, delete_with_audit
 from .maintenance import begin_maintenance, end_maintenance
 from .platform import platform_for
+from .trace_archives import is_trace_archive_id
 
 PINNED_RUN_STATUSES = ("needs_review",)
 IMPORTED_PREFIX = "imports/"
@@ -124,6 +127,10 @@ def plan_gc(
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
         }
+        if is_trace_archive_id(rel):
+            entry["reason"] = "trace_archive"
+            plan.protected.append(entry)
+            continue
         if rel in referenced or entry["sha256"] in referenced_hashes:
             entry["reason"] = "referenced"
             plan.protected.append(entry)
@@ -171,8 +178,12 @@ def apply_gc(
         referenced = resolve_artifact_refs(
             referenced_artifact_hashes(store, hashes=referenced_hashes), root,
         )
+        artifacts = ArtifactStore(root) if root.is_dir() else None
         for entry in plan.deletable:
             rel = entry["artifact_id"]
+            if is_trace_archive_id(rel):
+                skipped.append({**entry, "reason": "trace_archive"})
+                continue
             if rel in referenced or entry["sha256"] in referenced_hashes:
                 skipped.append({**entry, "reason": "protected_after_recheck"})
                 continue
@@ -183,22 +194,37 @@ def apply_gc(
             except (ValueError, OSError):
                 skipped.append({**entry, "reason": "path_escape_blocked"})
                 continue
+            if is_trace_archive_id(resolved.relative_to(root).as_posix()):
+                skipped.append({**entry, "reason": "trace_archive"})
+                continue
             audit_entry = {**entry, "gc_run_id": plan.gc_run_id}
-            if not target.is_file():
-                reason = audit_missing_artifact(platform_stores.tombstones, audit_entry)
-                skipped.append({**entry, "reason": reason})
-                continue
-            current_bytes = target.read_bytes()
-            current_sha256 = hashlib.sha256(current_bytes).hexdigest()
-            if current_sha256 in referenced_hashes:
-                skipped.append({**entry, "reason": "protected_after_recheck"})
-                continue
-            if current_sha256 != entry["sha256"] or len(current_bytes) != entry["bytes"]:
-                skipped.append({**entry, "reason": "changed_since_plan"})
-                continue
-            deleted.append(delete_with_audit(
-                platform_stores.tombstones, audit_entry, delete=target.unlink, exists=target.exists,
-            ))
+            with ExitStack() as target_handles:
+                try:
+                    if artifacts is None:
+                        raise FileNotFoundError("artifact root is absent")
+                    target = target_handles.enter_context(
+                        artifacts._pinned_mutation_target(rel, resolve_aliases=False, read=True)
+                    )
+                except FileNotFoundError:
+                    reason = audit_missing_artifact(platform_stores.tombstones, audit_entry)
+                    skipped.append({**entry, "reason": reason})
+                    continue
+                except ArtifactMutationUnsupported:
+                    raise  # Unsupported is an operation blocker, not a path-escape skip.
+                except (OSError, ValueError):
+                    skipped.append({**entry, "reason": "path_escape_blocked"})
+                    continue
+                current_bytes = target.read_bytes()
+                current_sha256 = hashlib.sha256(current_bytes).hexdigest()
+                if current_sha256 in referenced_hashes:
+                    skipped.append({**entry, "reason": "protected_after_recheck"})
+                    continue
+                if current_sha256 != entry["sha256"] or len(current_bytes) != entry["bytes"]:
+                    skipped.append({**entry, "reason": "changed_since_plan"})
+                    continue
+                deleted.append(delete_with_audit(
+                    platform_stores.tombstones, audit_entry, delete=target.unlink, exists=target.exists,
+                ))
     finally:
         end_maintenance(store, owner=lease["owner"])
     return {
