@@ -1,0 +1,212 @@
+{
+  "scope": "Bounded synthetic coding feature witnesses, not full benchmark or production qualification",
+  "model": "space-bunny-free",
+  "endpoint": "https://opencode.ai/zen/go/v1/chat/completions",
+  "official_source": "https://opencode.ai/docs/go/",
+  "source_code_final_sha": "a2a035b2aad2994d49e1ddf584b755134d474035",
+  "features": {
+    "nonstream": {
+      "status": "passed",
+      "batch": "core",
+      "http_send_attempts": 1
+    },
+    "stream_text": {
+      "status": "passed",
+      "batch": "final",
+      "http_send_attempts": 1
+    },
+    "stream_tools": {
+      "status": "passed",
+      "batch": "final",
+      "http_send_attempts": 2
+    },
+    "stream_cancel": {
+      "status": "passed",
+      "batch": "core",
+      "http_send_attempts": 1
+    },
+    "multi_turn_tools": {
+      "status": "passed",
+      "batch": "core",
+      "http_send_attempts": 6
+    },
+    "legacy_json": {
+      "status": "passed",
+      "batch": "core",
+      "http_send_attempts": 3
+    },
+    "api_model_test": {
+      "status": "passed",
+      "batch": "integration",
+      "http_send_attempts": 1
+    },
+    "queued_direct": {
+      "status": "passed",
+      "batch": "integration",
+      "http_send_attempts": 1
+    },
+    "native_agent_queue": {
+      "status": "passed",
+      "batch": "integration",
+      "http_send_attempts": 4
+    },
+    "scenario_multiturn": {
+      "status": "passed",
+      "batch": "integration",
+      "http_send_attempts": 2
+    },
+    "judge_single": {
+      "status": "passed",
+      "batch": "integration",
+      "http_send_attempts": 1
+    },
+    "judge_pairwise": {
+      "status": "failed",
+      "batch": "diagnostic",
+      "http_send_attempts": 1,
+      "error_code": "judge_worker_not_completed"
+    },
+    "judge_calibration": {
+      "status": "failed",
+      "batch": "diagnostic",
+      "http_send_attempts": 2,
+      "error_code": "judge_output_not_scored"
+    },
+    "direct_v2": {
+      "status": "passed",
+      "batch": "final",
+      "http_send_attempts": 1
+    },
+    "experiment_cell": {
+      "status": "passed",
+      "batch": "final",
+      "http_send_attempts": 1
+    },
+    "skill_ablation": {
+      "status": "passed",
+      "batch": "final",
+      "http_send_attempts": 3
+    }
+  },
+  "latest_passed_features": 14,
+  "latest_failed_features": 2,
+  "prior_authorized_send_attempts": 36,
+  "expanded_authorized_send_attempts": 39,
+  "total_authorized_send_attempts": 75,
+  "separate_synthetic_key_incident_attempts": 3,
+  "all_attempts_including_incident_conservative": 78,
+  "expanded_unknown_network_outcomes": 1,
+  "expanded_reported_usage_call_count": 37,
+  "expanded_reported_usage_totals": {
+    "prompt_tokens": 19491,
+    "completion_tokens": 6956,
+    "total_tokens": 26447
+  },
+  "usage_limitations": "Prior 36-call summary omitted token usage; cancelled stream and unknown network attempt have no final usage; totals are reported subset only",
+  "historical_failures_preserved": [
+    "Old 3-step coding budget termination",
+    "Pairwise and candidate calibration failed at 512 output limit",
+    "One pairwise call timed out at20s; durable state indeterminate, never replayed",
+    "Fresh60s/1024 diagnostic still hit output length; pairwise indeterminate, calibration parse failure"
+  ],
+  "batches": [
+    {
+      "name": "core",
+      "file": "core.json",
+      "sha256": "3da56b6aef3afd34fc144fc0c16e1b199aec40c58fd6e93895f2acfd2d45647d",
+      "source_sha": "77f3f082d063ce20e71b693574d9ab171682cf58",
+      "http_send_attempts": 14,
+      "status": "passed"
+    },
+    {
+      "name": "integration",
+      "file": "integration.json",
+      "sha256": "0d2acd7b1c4c5cef19087203c50d498835b3f91500c230777be780d614cb70f9",
+      "source_sha": "467b5e04a52d0ce9f7c86eed9330c8a0d88eac59",
+      "http_send_attempts": 12,
+      "status": "incomplete_or_failed"
+    },
+    {
+      "name": "final",
+      "file": "final.json",
+      "sha256": "4b0d15d973a6bdc89d41ef59409b23c35a10216d8bad551f698589d506159320",
+      "source_sha": "adfd94d1ab0e6a3e3b18a243580cdcbc3cc29878",
+      "http_send_attempts": 10,
+      "status": "incomplete_or_failed"
+    },
+    {
+      "name": "diagnostic",
+      "file": "diagnostic.json",
+      "sha256": "15d913d86cc16720caea4900599a0a28179ccc5ad517dd490a4449d2ce943284",
+      "source_sha": "a2a035b2aad2994d49e1ddf584b755134d474035",
+      "http_send_attempts": 3,
+      "status": "incomplete_or_failed"
+    }
+  ],
+  "blocked_or_not_applicable": [
+    {
+      "feature": "Calibration qualification",
+      "status": "blocked",
+      "reason": "No genuine human-reviewed calibration set; candidate-only smoke is never qualification"
+    },
+    {
+      "feature": "Pi external runtime on Go",
+      "status": "blocked",
+      "reason": "Independent SDK route lacks verified per-conversation Go headers and bounded output/send routing; scripted SDK tests are not live-provider coverage"
+    },
+    {
+      "feature": "Codex/Claude external runtime on this Go model",
+      "status": "blocked",
+      "reason": "Exact Chat Completions endpoint/model/header/budget routing not verified in current adapters; Codex binary presence alone is insufficient"
+    },
+    {
+      "feature": "Harbor/Terminal-Bench external jobs",
+      "status": "blocked",
+      "reason": "No verified Docker/Harbor execution path and bounded exact Go routing in this selected environment"
+    },
+    {
+      "feature": "Anthropic/Responses wire protocols",
+      "status": "not_applicable",
+      "reason": "Selected model documented only for OpenAI-compatible Chat Completions; offline regression only for other protocols"
+    },
+    {
+      "feature": "Vision/audio/video/PDF model workflows",
+      "status": "unsupported_or_unverified",
+      "reason": "No end-to-end capability established for this selected text-model route"
+    },
+    {
+      "feature": "C-Eval/CMMLU/GSM8K/MMLU/TruthfulQA and generic full datasets",
+      "status": "not_applicable",
+      "reason": "Do not send generic noncoding benchmarks to coding-agent-only Go; source adapters/aggregation tested offline"
+    },
+    {
+      "feature": "Live rate limiting, transport retries and uncertain-job recovery",
+      "status": "not_induced",
+      "reason": "No deliberate abuse/error amplification; retries remained0. Offline tests plus real timeout ledger verify fail-closed behavior; unknown job never resent"
+    },
+    {
+      "feature": "Remote Celery/broker deployment",
+      "status": "not_exercised",
+      "reason": "Live witness covers durable ordinary Worker; separate external broker deployment not verified"
+    }
+  ],
+  "limitations": [
+    "Client stream close does not establish server-side generation cancellation",
+    "Skill n=1 checks wiring only; no model-quality or statistical superiority claim",
+    "Some real workloads need more structured-output budget than this bounded1024-token test; no unlimited retry was attempted"
+  ],
+  "offline_verification": {
+    "provider_and_feature_tests": {
+      "passed": 341,
+      "warnings": 2
+    },
+    "judge_execution_and_calibration_tests": {
+      "passed": 118,
+      "skipped": 1
+    },
+    "ruff": "passed",
+    "compileall": "passed",
+    "full_suite_rerun": false,
+    "independent_review": "code and evidence reviews cleared; final numerical receipt audit matched"
+  }
+}

@@ -136,6 +136,12 @@ class AnthropicMessagesProvider(BaseHTTPProvider):
     def _normalize_stream_event(self, data: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
         return self.normalize_stream_event(data, state)
 
+    def _reported_stream_model(self, data: dict[str, Any]) -> Any:
+        message = data.get("message")
+        if data.get("type") == "message_start" and isinstance(message, dict):
+            return message.get("model")
+        return None
+
     @staticmethod
     def _merge_stream_usage(usage: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """按事件累积计量：input（message_start）+ output（message_delta）。"""

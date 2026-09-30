@@ -1,0 +1,356 @@
+{
+  "live": true,
+  "model": "space-bunny-free",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "feature_limits": {
+    "stream_text": 1,
+    "stream_tools": 2,
+    "direct_v2": 1,
+    "experiment_cell": 1,
+    "skill_ablation": 6,
+    "judge_pairwise": 2,
+    "judge_calibration": 2
+  },
+  "max_http_requests": 15,
+  "concurrency": 1,
+  "retries": 0,
+  "output_token_limits": {
+    "stream_text": 512,
+    "stream_tools": 512,
+    "direct_v2": 512,
+    "experiment_cell": 512,
+    "skill_ablation": 512,
+    "judge_pairwise": 1024,
+    "judge_calibration": 1024
+  },
+  "socket_timeout_sec": 20,
+  "feature_timeout_sec": {
+    "stream_text": 20,
+    "stream_tools": 40,
+    "direct_v2": 20,
+    "experiment_cell": 20,
+    "skill_ablation": 120,
+    "judge_pairwise": 40,
+    "judge_calibration": 40
+  },
+  "prior_http_requests": 62,
+  "features": [
+    {
+      "name": "stream_text",
+      "status": "passed",
+      "evidence": {
+        "text_deltas": 2,
+        "single_terminal": true,
+        "usage": {
+          "prompt_tokens": 174,
+          "completion_tokens": 56,
+          "total_tokens": 230
+        }
+      },
+      "http_requests": 1
+    },
+    {
+      "name": "stream_tools",
+      "status": "passed",
+      "evidence": {
+        "tool_delta_events": 1,
+        "tool_result_history_accepted": true,
+        "session_stable": true,
+        "terminal_count": 1
+      },
+      "http_requests": 2
+    },
+    {
+      "name": "direct_v2",
+      "status": "passed",
+      "evidence": {
+        "ok": true,
+        "run_id": "run-c30503cbe46249608025391c2821c7af",
+        "contract_version": 2,
+        "profile": "smoke",
+        "publication_verified": true,
+        "sdk_api_report_equal": true,
+        "historical_report_immutable": true,
+        "rescore_new_pass": true,
+        "score_count": 1,
+        "wait_terminal": "completed",
+        "sse_reconciled": true,
+        "sse_event_count": 12,
+        "cli_report_equal": true
+      },
+      "http_requests": 1
+    },
+    {
+      "name": "experiment_cell",
+      "status": "passed",
+      "evidence": {
+        "ok": true,
+        "experiment_id": "integration-one-cell",
+        "cell_count": 1,
+        "completed_cells": 1,
+        "idempotent_allocation": true,
+        "report_count": 1
+      },
+      "http_requests": 1
+    },
+    {
+      "name": "skill_ablation",
+      "status": "passed",
+      "evidence": {
+        "ok": true,
+        "experiment_id": "integration-three-arm",
+        "cell_count": 3,
+        "completed_cells": 3,
+        "idempotent_allocation": true,
+        "report_count": 3,
+        "wire_injection_verified": true,
+        "wire_skill_evidence": [
+          {
+            "arm": "no-skill",
+            "matches_expected_arm": true,
+            "v1_present": false,
+            "v2_present": false,
+            "system_sha256": "df822f79574c824d3a8e134e2875b8f9ea21af8c7e7dd7c48f326297b2f239b3"
+          },
+          {
+            "arm": "skill-v1",
+            "matches_expected_arm": true,
+            "v1_present": true,
+            "v2_present": false,
+            "system_sha256": "8e53d39a2bb8debc5c4d5c3a8f72d8dfc246a518a378d6fae23ad5ff12045013"
+          },
+          {
+            "arm": "skill-v2",
+            "matches_expected_arm": true,
+            "v1_present": false,
+            "v2_present": true,
+            "system_sha256": "65e8541a9453078af60c467f5d29d62040c4d0598bf68477457a7b54550fea01"
+          }
+        ],
+        "arms": [
+          "no-skill",
+          "skill-v1",
+          "skill-v2"
+        ],
+        "skill_snapshot_count": 2,
+        "skill_content_hashes": [
+          "sha256:4c987cd36d218cd4883081269c9173bef152a3c00ab94d70fa313e5f8aaab0da",
+          "sha256:a4146ba6b487a2c0e414d4dbe9ad6428ec93fd22532ed50019908e11546f6905"
+        ],
+        "quality_comparison": "smoke-only-n1",
+        "arm_sessions_distinct": true
+      },
+      "http_requests": 3
+    },
+    {
+      "name": "judge_pairwise",
+      "status": "failed",
+      "error_type": "JudgeWitnessFailure",
+      "error_class": "judge_worker_not_completed",
+      "error_code": "judge_worker_not_completed",
+      "diagnostics": {
+        "planned_calls": 2,
+        "billed_calls": 1,
+        "returned_calls": 1,
+        "settled_calls": 2,
+        "parse_failure_count": 0,
+        "completion_tokens": 734,
+        "calls_at_output_cap": 0,
+        "job_status_code": 7
+      },
+      "http_requests": 2
+    }
+  ],
+  "requests": [
+    {
+      "feature": "stream_text",
+      "ordinal": 1,
+      "sent_at": "2026-09-30T20:07:34.090531+00:00",
+      "stream": true,
+      "max_tokens": 512,
+      "session_sha256": "93e82a66b543e790852735a41f507954f193ac1438be4c8c8755188d9a99d611",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 174,
+        "completion_tokens": 56,
+        "total_tokens": 230
+      }
+    },
+    {
+      "feature": "stream_tools",
+      "ordinal": 2,
+      "sent_at": "2026-09-30T20:07:37.853358+00:00",
+      "stream": true,
+      "max_tokens": 512,
+      "session_sha256": "7790e5c2cca832b28df0e280c05fc7a60abf3e0c80926322f3bffbe72caa1f24",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 420,
+        "completion_tokens": 39,
+        "total_tokens": 459
+      }
+    },
+    {
+      "feature": "stream_tools",
+      "ordinal": 3,
+      "sent_at": "2026-09-30T20:07:39.591988+00:00",
+      "stream": true,
+      "max_tokens": 512,
+      "session_sha256": "7790e5c2cca832b28df0e280c05fc7a60abf3e0c80926322f3bffbe72caa1f24",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 486,
+        "completion_tokens": 16,
+        "total_tokens": 502
+      }
+    },
+    {
+      "feature": "direct_v2",
+      "ordinal": 4,
+      "sent_at": "2026-09-30T20:07:42.322822+00:00",
+      "stream": false,
+      "max_tokens": 512,
+      "session_sha256": "a9af73ab231e37a2d9d21349143fff66ed84d8c3c375886338b2d937ea024ce8",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 185,
+        "completion_tokens": 5,
+        "total_tokens": 190
+      }
+    },
+    {
+      "feature": "experiment_cell",
+      "ordinal": 5,
+      "sent_at": "2026-09-30T20:07:44.271902+00:00",
+      "stream": false,
+      "max_tokens": 512,
+      "session_sha256": "7583001a0d9047290fda958d2fcdbb392b8c4192ec0f502b16844e04556b3315",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 185,
+        "completion_tokens": 5,
+        "total_tokens": 190
+      }
+    },
+    {
+      "feature": "skill_ablation",
+      "ordinal": 6,
+      "sent_at": "2026-09-30T20:07:46.533886+00:00",
+      "stream": false,
+      "max_tokens": 512,
+      "session_sha256": "84ce5086111c4d99e1634a9d5838556aac77bec0b0d96686fb2ac441d4431a7a",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 221,
+        "completion_tokens": 5,
+        "total_tokens": 226
+      }
+    },
+    {
+      "feature": "skill_ablation",
+      "ordinal": 7,
+      "sent_at": "2026-09-30T20:07:48.296314+00:00",
+      "stream": false,
+      "max_tokens": 512,
+      "session_sha256": "7d8912b57f0a53eb6f594ff0653464afe61a88d3163a839f3f14be76896881db",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 267,
+        "completion_tokens": 5,
+        "total_tokens": 272
+      }
+    },
+    {
+      "feature": "skill_ablation",
+      "ordinal": 8,
+      "sent_at": "2026-09-30T20:07:50.061158+00:00",
+      "stream": false,
+      "max_tokens": 512,
+      "session_sha256": "797d0495a77b449724d2fb37aca3c428fcf77c311482f6b0932e5a7f2c35f756",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 267,
+        "completion_tokens": 5,
+        "total_tokens": 272
+      }
+    },
+    {
+      "feature": "judge_pairwise",
+      "ordinal": 9,
+      "sent_at": "2026-09-30T20:07:52.090368+00:00",
+      "stream": false,
+      "max_tokens": 1024,
+      "session_sha256": "1e83d672dec29374e25efb071a00f9f3547f3565ec55b6be6024a22e2c7647da",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 825,
+        "completion_tokens": 734,
+        "total_tokens": 1559
+      }
+    },
+    {
+      "feature": "judge_pairwise",
+      "ordinal": 10,
+      "sent_at": "2026-09-30T20:08:04.324172+00:00",
+      "stream": false,
+      "max_tokens": 1024,
+      "session_sha256": "f25613e90c09a05d0abe0a332818fb04f4268cb9ed5b2f1129adf19666e504cf",
+      "user_agent_valid": true,
+      "closed": false,
+      "active": false,
+      "network_error": true
+    }
+  ],
+  "source_sha": "adfd94d1ab0e6a3e3b18a243580cdcbc3cc29878",
+  "started_at": "2026-09-30T20:07:34.087072+00:00",
+  "http_requests": 10,
+  "cumulative_http_requests": 72,
+  "stopped_after_safety_error": true,
+  "finished_at": "2026-09-30T20:08:24.360249+00:00",
+  "status": "incomplete_or_failed"
+}

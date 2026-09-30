@@ -1,0 +1,15 @@
+{
+  "classification": "offline-test network isolation failure",
+  "saved_user_credentials_read": false,
+  "credential_type": "literal synthetic fake-key only",
+  "endpoint": "https://opencode.ai/zen/go/v1/chat/completions",
+  "conservative_outbound_attempt_count": 3,
+  "confirmed_http_401_count": 1,
+  "outcome_unverified_failed_attempt_count": 2,
+  "successful_model_generations_claimed": 0,
+  "retries": 0,
+  "window_utc": "2026-09-30T19:44:13Z/2026-09-30T19:45:50Z",
+  "cause": "Initial offline fixture intercepted _safe_urlopen but missed _bounded_urlopen",
+  "remediation": "Both openers mocked; socket connect/connect_ex/create_connection and urllib OpenerDirector.open forbidden in offline fixture; six hermetic tests passed with zero escape attempts",
+  "ledger_policy": "Count separately from 36 prior authorized real-provider requests; never count as feature passes"
+}

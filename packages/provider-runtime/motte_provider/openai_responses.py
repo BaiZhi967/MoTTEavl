@@ -45,6 +45,10 @@ class OpenAIResponsesProvider(BaseHTTPProvider):
         "response.content_part.done",
     })
 
+    def _reported_stream_model(self, data: dict[str, Any]) -> Any:
+        response = data.get("response")
+        return response.get("model") if isinstance(response, dict) else None
+
     def normalize_stream_event(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         """Responses API 流事件 → 归一化；未知事件类型 fail closed。"""
         from .errors import ProviderHTTPError

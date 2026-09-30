@@ -1,0 +1,127 @@
+{
+  "live": true,
+  "model": "space-bunny-free",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "feature_limits": {
+    "judge_pairwise": 2,
+    "judge_calibration": 2
+  },
+  "max_http_requests": 4,
+  "concurrency": 1,
+  "retries": 0,
+  "output_token_limits": {
+    "judge_pairwise": 1024,
+    "judge_calibration": 1024
+  },
+  "socket_timeout_sec": {
+    "judge_pairwise": 60,
+    "judge_calibration": 60
+  },
+  "feature_timeout_sec": {
+    "judge_pairwise": 120,
+    "judge_calibration": 120
+  },
+  "prior_http_requests": 72,
+  "features": [
+    {
+      "name": "judge_pairwise",
+      "status": "failed",
+      "error_type": "JudgeWitnessFailure",
+      "error_class": "judge_worker_not_completed",
+      "error_code": "judge_worker_not_completed",
+      "diagnostics": {
+        "planned_calls": 2,
+        "billed_calls": 0,
+        "settled_calls": 1,
+        "parse_failure_count": 0,
+        "calls_at_output_cap": 0,
+        "job_status_code": 7
+      },
+      "http_requests": 1
+    },
+    {
+      "name": "judge_calibration",
+      "status": "failed",
+      "error_type": "JudgeWitnessFailure",
+      "error_class": "judge_output_not_scored",
+      "error_code": "judge_output_not_scored",
+      "diagnostics": {
+        "planned_calls": 2,
+        "billed_calls": 2,
+        "returned_calls": 2,
+        "settled_calls": 2,
+        "parse_failure_count": 1,
+        "non_scored_count": 3,
+        "completion_tokens": 1423,
+        "calls_at_output_cap": 1,
+        "job_status_code": 4
+      },
+      "http_requests": 2
+    }
+  ],
+  "requests": [
+    {
+      "feature": "judge_pairwise",
+      "ordinal": 1,
+      "sent_at": "2026-09-30T20:14:01.374932+00:00",
+      "stream": false,
+      "max_tokens": 1024,
+      "session_sha256": "7f24b233cd9b5abdf2ffdce61633ca1c9ce36faf445271a89da7cc91c865a1c7",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "length",
+      "usage": {
+        "prompt_tokens": 825,
+        "completion_tokens": 1024,
+        "total_tokens": 1849
+      }
+    },
+    {
+      "feature": "judge_calibration",
+      "ordinal": 2,
+      "sent_at": "2026-09-30T20:14:27.356693+00:00",
+      "stream": false,
+      "max_tokens": 1024,
+      "session_sha256": "2aa9efef8672ef163efd2fbb74d536b4688e31df61617dcee1f79ed6429bd0cd",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 903,
+        "completion_tokens": 399,
+        "total_tokens": 1302
+      }
+    },
+    {
+      "feature": "judge_calibration",
+      "ordinal": 3,
+      "sent_at": "2026-09-30T20:14:32.377628+00:00",
+      "stream": false,
+      "max_tokens": 1024,
+      "session_sha256": "90ac633377af09383bb393c278dbde194da75390c201b310df48c588eea71678",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "length",
+      "usage": {
+        "prompt_tokens": 903,
+        "completion_tokens": 1024,
+        "total_tokens": 1927
+      }
+    }
+  ],
+  "source_sha": "a2a035b2aad2994d49e1ddf584b755134d474035",
+  "started_at": "2026-09-30T20:14:01.007768+00:00",
+  "http_requests": 3,
+  "cumulative_http_requests": 75,
+  "finished_at": "2026-09-30T20:14:43.126330+00:00",
+  "status": "incomplete_or_failed"
+}

@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any, Callable, Literal
+from uuid import uuid4
 
 from pydantic import Field, model_validator
 
@@ -923,6 +924,9 @@ def build_judge_request(
         "max_output_tokens": max_output_tokens,
         "seed": spec.parameters.get("seed"),
         "metadata": {
+            # Each grading call is an independent conversation. Transport retries
+            # reuse this request and ID; frozen spec/input fingerprints stay unchanged.
+            "session_id": uuid4().hex,
             "purpose": JUDGE_PURPOSE,
             "judge_profile_id": spec.judge_profile_id,
             "spec_sha256": spec.spec_sha256,
