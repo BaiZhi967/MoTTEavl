@@ -608,6 +608,18 @@ class PgInvocations:
     def list_for_case(self, run_id: str, case_id: str) -> list[dict[str, Any]]:
         return [item for item in self.list_for_run(run_id) if item["case_id"] == case_id]
 
+    def list_for_job(self, job_id: str) -> list[dict[str, Any]]:
+        """Read calibration-owned calls without requiring a fabricated Run."""
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM agent_invocations "
+                    "WHERE payload->>'job_id' = %s ORDER BY position",
+                    (job_id,),
+                )
+                rows = cursor.fetchall()
+        return [deepcopy(row[0]) for row in rows]
+
     def list_unsettled(self, run_id: str) -> list[dict[str, Any]]:
         return [item for item in self.list_for_run(run_id)
                 if item["status"] in {"prepared", "dispatching"}]

@@ -30,6 +30,7 @@ import subprocess
 import time
 from contextlib import ExitStack, closing, contextmanager
 from threading import RLock, get_ident
+from tempfile import TemporaryDirectory
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
@@ -503,7 +504,7 @@ def _backup_references(
     store: Any, artifacts_root: str | Path | None,
 ) -> tuple[dict[str, str | None], list[str]]:
     """Resolve legacy digest-only refs without treating hashes as file paths."""
-    from .artifact_refs import referenced_artifact_hashes
+    from .artifact_refs import collect_artifact_refs, referenced_artifact_hashes
 
     hashes: set[str] = set()
     refs = referenced_artifact_hashes(store, hashes=hashes)
@@ -520,9 +521,29 @@ def _backup_references(
                 continue
             digest = _sha256_file(source)
             if digest in unresolved:
-                refs[identifier] = digest
+                # Discovery may fill an unspecified hash, never overwrite an
+                # independently asserted immutable path/hash pair.
+                collect_artifact_refs({"artifact_id": identifier, "sha256": digest}, refs)
         unresolved -= {digest.removeprefix("sha256:") for digest in refs.values() if digest}
     return refs, ["sha256:" + digest for digest in sorted(unresolved)]
+
+
+def _validate_restored_reference_closure(store: Any, artifacts_root: Path) -> None:
+    """Verify frozen evidence assertions independently of the file inventory."""
+    referenced, missing = _backup_references(store, artifacts_root)
+    for artifact_id, expected in sorted(referenced.items()):
+        try:
+            restored_file = _artifact_path(artifacts_root, artifact_id)
+        except ValueError as error:
+            raise RestoreIncomplete(str(error)) from error
+        if not restored_file.is_file():
+            missing.append(artifact_id)
+        elif expected is not None and _sha256_file(restored_file) != expected.removeprefix("sha256:"):
+            raise RestoreIncomplete(f"referenced artifact hash mismatch: {artifact_id}")
+    if missing:
+        raise RestoreIncomplete(
+            "referenced artifacts missing from staging restore", details={"missing": missing},
+        )
 
 
 def _store_counts(store: Any) -> dict[str, int]:
@@ -547,6 +568,8 @@ def _store_counts(store: Any) -> dict[str, int]:
         "scoring_passes": scoring_passes,
         "baselines": baselines,
         "gate_results": gate_results,
+        "statistical_reports": len(store.statistical_reports.list(limit=None)),
+        "calibration_records": len(list(store.calibrations.iter_records())),
     }
 
 
@@ -827,6 +850,33 @@ def restore_staging(
     expected_manifest_sha256: str | None = None,
     confirm_overwrite: bool = False,
 ) -> dict[str, Any]:
+    """Validate a guarded candidate before replacing any requested staging target."""
+    staging = Path(staging_dir)
+    if staging.exists() and any(staging.iterdir()) and not confirm_overwrite:
+        raise FileExistsError(
+            f"staging directory exists and is not empty: {staging} "
+            "(pass confirm_overwrite=True to replace it)"
+        )
+    staging.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".motte-restore-", dir=staging.parent) as temporary:
+        candidate = Path(temporary) / "candidate"
+        restored = _restore_staging_checked(
+            backup_dir, candidate, expected_manifest_sha256=expected_manifest_sha256,
+        )
+        if staging.exists():
+            shutil.rmtree(staging)
+        candidate.rename(staging)
+        restored["database"] = str(staging / "runs.db")
+        return restored
+
+
+def _restore_staging_checked(
+    backup_dir: str | Path,
+    staging_dir: str | Path,
+    *,
+    expected_manifest_sha256: str | None = None,
+    confirm_overwrite: bool = False,
+) -> dict[str, Any]:
     """恢复到全新 staging 目录（协议 §9.2），全程不触碰线上库。
 
     校验链：manifest 自身哈希（+ 可选的外部期望哈希）→ DB 快照哈希 → SQLite
@@ -919,19 +969,7 @@ def restore_staging(
                 f"restored count mismatch for {key}",
                 details={"expected": expected, "actual": actual_counts.get(key)},
             )
-    referenced, missing_refs = _backup_references(staging_store, artifacts_root)
-    for artifact_id in sorted(referenced):
-        try:
-            restored_file = _artifact_path(artifacts_root, artifact_id)
-        except ValueError as error:
-            raise RestoreIncomplete(str(error)) from error
-        if not restored_file.is_file():
-            missing_refs.append(artifact_id)
-    if missing_refs:
-        raise RestoreIncomplete(
-            "referenced artifacts missing from staging restore",
-            details={"missing": missing_refs},
-        )
+    _validate_restored_reference_closure(staging_store, artifacts_root)
 
     # 恢复守卫：Worker 的 _platform_block_reason 读到该键即拒绝领取，
     # 需 clear_restore_guard(confirm=True) 显式解除。
@@ -1104,13 +1142,7 @@ def restore_postgres_staging(
         shutil.copyfile(source, destination)
         if _sha256_file(destination) != expected_hash:
             raise RestoreIncomplete(f"artifact hash mismatch after copy: {artifact_id}")
-    referenced, missing_hashes = _backup_references(store, target_root)
-    missing_refs = sorted(set(referenced) - {item[0] for item in backed_files}) + missing_hashes
-    if missing_refs:
-        raise RestoreIncomplete(
-            "referenced artifacts missing from staging restore",
-            details={"missing": missing_refs},
-        )
+    _validate_restored_reference_closure(store, target_root)
     unresolved = [
         {"id": run.get("id"), "status": run.get("status")}
         for run in store.runs.list() if run.get("status") in UNRESOLVED_RUN_STATUSES
@@ -1222,29 +1254,47 @@ def restore_sqlite(
             "restore_sqlite would overwrite an existing target; pass "
             "confirm_overwrite=True (protocol 9.2: confirm and back up first)"
         )
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(snapshot, db_path)
-    try:
-        # v2 一致快照冻结了备份窗口的维护标志；恢复后的库不应停留在维护模式
-        # （v1 快照没有平台表，跳过即可）。
-        from .run_store import SQLiteRunStore
+    with ExitStack() as staging:
+        artifact_source = None
+        if manifest.get("manifest_version") == MANIFEST_VERSION:
+            if manifest.get("status") != "complete":
+                raise RestoreIncomplete("cannot restore an incomplete backup")
+            checked_root = Path(staging.enter_context(TemporaryDirectory(prefix="motte-restore-")))
+            checked = restore_staging(
+                backup_dir, checked_root,
+                expected_manifest_sha256=manifest.get("manifest_sha256"),
+            )
+            snapshot = Path(checked["database"])
+            artifact_source = checked_root / "artifacts"
+            if checked["artifacts"]["files_restored"] and artifacts_target is None:
+                raise RestoreIncomplete("referenced artifacts require an artifacts_root restore target")
+        elif artifacts_section:
+            artifact_source = backup_dir / (
+                artifacts_section.get("snapshot") or artifacts_section.get("dir")
+            )
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(snapshot, db_path)
+        if manifest.get("manifest_version") != MANIFEST_VERSION:
+            try:
+                # Legacy v1 snapshots predate the complete staging contract.
+                from .run_store import SQLiteRunStore
 
-        meta = platform_for(SQLiteRunStore(db_path)).meta
-        meta.delete(MAINTENANCE_FLAG)
-        meta.delete(MAINTENANCE_STARTED_AT)
-    except Exception:  # noqa: BLE001 - 旧备份无平台表
-        pass
-    restored: dict[str, Any] = {"database": str(db_path), "backup": manifests[-1].name}
-    if artifacts_target is not None:
-        # v1 manifest 记 "snapshot"，v2 记 "dir"；两者都是完整 artifact 树
-        source = backup_dir / (
-            artifacts_section.get("snapshot") or artifacts_section.get("dir")
-        )
-        if artifacts_target.exists():
-            shutil.rmtree(artifacts_target)
-        shutil.copytree(source, artifacts_target)
-        restored["artifacts"] = str(artifacts_target)
-    return restored
+                meta = platform_for(SQLiteRunStore(db_path)).meta
+                meta.delete(MAINTENANCE_FLAG)
+                meta.delete(MAINTENANCE_STARTED_AT)
+            except Exception:  # noqa: BLE001 - old backups may lack platform tables
+                pass
+        restored: dict[str, Any] = {"database": str(db_path), "backup": manifests[-1].name}
+        if artifacts_target is not None:
+            if artifacts_target.exists():
+                shutil.rmtree(artifacts_target)
+            if (manifest.get("manifest_version") == MANIFEST_VERSION
+                    and artifact_source is not None and not artifact_source.exists()):
+                artifacts_target.mkdir(parents=True)
+            else:
+                shutil.copytree(artifact_source, artifacts_target)
+            restored["artifacts"] = str(artifacts_target)
+        return restored
 
 
 def cleanup_artifacts(

@@ -153,6 +153,27 @@ def validate_scoring_job(record: dict[str, Any]) -> dict[str, Any]:
     return stored
 
 
+def insert_scoring_job_in_transaction(connection, record, *, placeholder="?"):
+    """Insert a fresh child under its caller's group transaction; never commit here."""
+    stored = validate_scoring_job(record)
+    names = ("job_id", "request_key", "fingerprint", "owner_kind", "owner_ref", "run_id",
+             "status", "revision", "reserved_pass_id")
+    for name in ("job_id", "request_key"):
+        if connection.execute("SELECT 1 FROM scoring_jobs WHERE " + name + " = " + placeholder,
+                              (stored[name],)).fetchone() is not None:
+            raise ScoringJobConflict("child scoring job already exists: " + stored[name])
+    payload = json.dumps(stored, sort_keys=True)
+    if placeholder == "%s":
+        from psycopg.types.json import Json
+        payload = Json(stored)
+    connection.execute(
+        "INSERT INTO scoring_jobs(" + ", ".join((*names, "payload")) + ") VALUES ("
+        + ", ".join([placeholder] * 10) + ")",
+        (*[stored[name] for name in names], payload),
+    )
+    return stored
+
+
 def _next_revision(record: dict[str, Any], expected_revision: int) -> dict[str, Any]:
     updated = deepcopy(record)
     updated["revision"] = expected_revision + 1
@@ -1825,6 +1846,9 @@ def _now() -> str:
 
 def scoring_jobs_for(store: Any) -> Any:
     """把 durable job 组件挂到既有 RunStore（SQLite / memory / PostgreSQL）。"""
+    existing = getattr(store, "scoring_jobs", None)
+    if existing is not None:
+        return existing
     dsn = getattr(store, "dsn", None)
     if dsn:
         return PostgresScoringJobs(dsn)
@@ -1835,7 +1859,8 @@ def scoring_jobs_for(store: Any) -> Any:
         hasattr(store, name)
         for name in ("runs", "events", "scoring_passes", "score_sets", "invocations")
     ):
-        return MemoryScoringJobs(store)
+        store.scoring_jobs = MemoryScoringJobs(store)
+        return store.scoring_jobs
     raise ScoringJobError(
         "unsupported storage backend for scoring jobs; expected SQLite, memory or PostgreSQL"
     )

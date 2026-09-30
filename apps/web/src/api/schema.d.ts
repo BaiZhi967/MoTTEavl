@@ -2197,6 +2197,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/statistical-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Statistical Report
+         * @description Explicitly capture and publish a content-addressed, immutable statistical report.
+         */
+        post: operations["publish_statistical_report_api_v1_statistical_reports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/statistical-reports/{report_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Statistical Report
+         * @description Read/export the stored envelope; no calculation or live evidence lookup.
+         */
+        get: operations["get_statistical_report_api_v1_statistical_reports__report_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows": {
         parameters: {
             query?: never;
@@ -3822,6 +3862,35 @@ export interface components {
             /** Artifacts */
             artifacts: components["schemas"]["SourceArtifact"][];
             revision: components["schemas"]["SourceRevision"];
+        };
+        /** StatisticalReport */
+        StatisticalReport: {
+            /** Body */
+            body: {
+                [key: string]: unknown;
+            };
+            /** Published At */
+            published_at: string;
+            /** Report Id */
+            report_id: string;
+        };
+        /** StatisticalReportPublishRequest */
+        StatisticalReportPublishRequest: {
+            /** Allowed Factors */
+            allowed_factors?: string[];
+            /** Baseline Pass Id */
+            baseline_pass_id?: string | null;
+            /** Baseline Run Id */
+            baseline_run_id: string;
+            /** Candidate Pass Id */
+            candidate_pass_id?: string | null;
+            /** Candidate Run Id */
+            candidate_run_id: string;
+            /**
+             * K
+             * @default 1
+             */
+            k: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -8147,6 +8216,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_statistical_report_api_v1_statistical_reports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StatisticalReportPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatisticalReport"];
+                };
+            };
+            /** @description Run or scoring Pass not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Immutable conflict or corrupt report */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Invalid request, comparison policy, or Pass ownership */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"] | {
+                        error: {
+                            code: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Publication blocked by maintenance */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    get_statistical_report_api_v1_statistical_reports__report_id__get: {
+        parameters: {
+            query?: {
+                format?: "json" | "junit";
+            };
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatisticalReport"];
+                    "application/xml": string;
+                };
+            };
+            /** @description Statistical report not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                        };
+                    };
+                };
+            };
+            /** @description Corrupt statistical report */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            code: string;
+                            message: string;
+                        };
+                    };
                 };
             };
             /** @description Validation Error */

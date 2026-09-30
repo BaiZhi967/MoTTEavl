@@ -464,3 +464,63 @@ def test_rollback_never_deletes_foreign_target_through_import_namespace_symlink(
     assert {"object": artifact_id, "reason": "foreign_object"} in result["blocked"]
     assert result["deleted_artifacts"] == []
     assert platform_for(store).tombstones.list() == []
+
+
+def test_report_pins_survive_owned_import_exclusion(tmp_path, export_builder):
+    from motte_storage import artifact_refs
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "reports.db")
+    artifacts = tmp_path / "artifacts"
+    runs, passes = [], []
+    for name in ("baseline", "candidate", "control"):
+        source = export_builder(
+            tmp_path / name, import_id=f"imp-{name}", run_id=f"run-{name}",
+            source_system=f"legacy-{name}",
+            summary_id=f"sum-{name}", baseline_id=f"bl-{name}", with_in_flight=False,
+            with_scores=True, artifacts=[(f"art-{name}", name.encode())],
+        )
+        apply_import(store, artifacts, load_source_package(source), operator="test")
+        runs.append(f"imp-run-{name}")
+        passes.append(store.scoring_passes.list_for_run(runs[-1])[0]["id"])
+    report = put_report(store, runs=runs[:2], passes=passes[:2])
+    options = {"exclude_run_ids": runs, "exclude_import_ids": {
+        "imp-baseline", "imp-candidate", "imp-control"}}
+    assert set(runs[:2]) <= artifact_refs.referenced_run_ids(store, **options)
+    assert set(passes[:2]) <= artifact_refs.referenced_pass_ids(store, **options)
+    for name, run_id in zip(("baseline", "candidate"), runs[:2], strict=True):
+        before = store.runs.get(run_id)
+        result = rollback_import(store, artifacts, f"imp-{name}", operator="test", confirm=True)
+        artifact_id = f"imports/imp-{name}/art-{name}"
+        assert {"object": run_id, "reason": "run_in_use"} in result["blocked"]
+        assert {"object": artifact_id, "reason": "artifact_in_use"} in result["blocked"]
+        assert result["deleted_artifacts"] == result["deactivated_runs"] == []
+        assert store.runs.get(run_id) == before
+        assert (artifacts / artifact_id).read_bytes() == name.encode()
+    control = rollback_import(store, artifacts, "imp-control", operator="test", confirm=True)
+    assert control["deactivated_runs"] == [runs[2]]
+    assert control["deleted_artifacts"] == ["imports/imp-control/art-control"]
+    assert not (artifacts / "imports/imp-control/art-control").exists()
+    assert store.statistical_reports.get(report["report_id"]) == report
+
+
+@pytest.mark.parametrize("failure", ["integrity", "list", "get", "conflict"])
+def test_report_reader_failure_aborts_rollback_without_mutation(tmp_path, export_builder, monkeypatch, failure):
+    from tests.storage.test_statistical_report_references import put_report, damage_report_reader
+    from motte_storage.maintenance import maintenance_status
+
+    store = SQLiteRunStore(tmp_path / "report-failure.db")
+    source = export_builder(tmp_path / "source", import_id="imp-failure", with_in_flight=False)
+    artifacts = tmp_path / "artifacts"
+    apply_import(store, artifacts, load_source_package(source), operator="test")
+    put_report(store, runs=(RUN_ID, "other-run"))
+    ledger = platform_for(store).imports
+    before = store.runs.get(RUN_ID), ledger.get_import("imp-failure"), ledger.mappings_for("imp-failure")
+    error = damage_report_reader(store, monkeypatch, failure)
+    with pytest.raises(error):
+        rollback_import(store, artifacts, "imp-failure", operator="test", confirm=True)
+    assert (store.runs.get(RUN_ID), ledger.get_import("imp-failure"),
+            ledger.mappings_for("imp-failure")) == before
+    assert (artifacts / "imports/imp-failure/art-out").exists()
+    assert platform_for(store).tombstones.list() == []
+    assert maintenance_status(store)["active"] is False

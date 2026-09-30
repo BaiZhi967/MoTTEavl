@@ -1067,6 +1067,29 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     remote.add_mode_arguments(compare)
 
+    statistical_report = sub.add_parser(
+        "statistical-report", help="显式发布 / 读取 / 导出不可变统计报告（零模型调用）",
+    )
+    report_sub = statistical_report.add_subparsers(dest="report_command", required=True)
+    report_publish = report_sub.add_parser("publish", help="计算一次并发布固定 Pass 统计报告")
+    report_publish.add_argument("--baseline", required=True)
+    report_publish.add_argument("--candidate", required=True)
+    report_publish.add_argument("--factors", default="model")
+    report_publish.add_argument("--baseline-pass")
+    report_publish.add_argument("--candidate-pass")
+    # Parse inside the handler so invalid values use the usual JSON error exit.
+    report_publish.add_argument("--k", default="1")
+    report_get = report_sub.add_parser("get", help="读取已发布正文，不重新计算")
+    report_get.add_argument("report_id")
+    report_export = report_sub.add_parser("export", help="导出已发布正文，不重新计算")
+    report_export.add_argument("report_id")
+    report_export.add_argument("--format", default="json")
+    report_export.add_argument("--output")
+    for report_parser in (report_publish, report_get, report_export):
+        report_parser.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+        report_parser.add_argument("--server", metavar="URL", help="远端 API 地址（server 模式）")
+        remote.add_mode_arguments(report_parser)
+
     baseline = sub.add_parser(
         "baseline", help="M6 BaselineSnapshot：创建 / 列表 / 默认指针（指针是 CAS 操作）",
     )
@@ -2316,6 +2339,87 @@ def _compare_command(args) -> int:
     return 5 if result.level.value == "not_comparable" else 0
 
 
+def _statistical_report_command(args) -> int:
+    """Explicit publication; local and remote reads share pure stored exporters."""
+    from motte_contracts.statistical_reports import StatisticalReportPublishRequest
+    from motte_sdk.comparisons import ComparisonError
+    from motte_sdk.export import statistical_report_to_json, statistical_report_to_junit
+    from motte_sdk.statistical_reports import StatisticalReportService
+    from motte_storage.operation_locks import MaintenanceConflict
+    from motte_storage.statistical_reports import StatisticalReportConflict, StatisticalReportCorrupt
+
+    if args.server:
+        if args.cli_mode == "local" or (args.api_url and args.api_url != args.server):
+            return _error("MODE_MISMATCH", "--server conflicts with --mode local or --api-url")
+        args.cli_mode, args.api_url = "server", args.server
+    try:
+        command = args.report_command
+        if command == "publish":
+            request = StatisticalReportPublishRequest(
+                baseline_run_id=args.baseline, candidate_run_id=args.candidate,
+                allowed_factors=[factor.strip() for factor in args.factors.split(",")],
+                baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+                k=int(args.k),
+            )
+        if command == "export" and args.format not in {"json", "junit"}:
+            raise ValueError("format must be json or junit")
+        if remote.is_server(args):
+            def invoke(client):
+                if command == "publish":
+                    return client.publish_statistical_report(**request.model_dump())
+                if command == "export":
+                    return client.export_statistical_report(args.report_id, args.format)
+                return client.get_statistical_report(args.report_id)
+
+            outcome = remote.call_remote(args, invoke, default_code="STATISTICAL_REPORT_NOT_FOUND")
+            if not isinstance(outcome, remote.RemoteOk):
+                return outcome
+            payload = outcome.payload
+        else:
+            service = StatisticalReportService(_m6_store(args))
+            if command == "publish":
+                payload = service.publish(**request.model_dump())
+            else:
+                report = service.get(args.report_id)
+                payload = (statistical_report_to_junit(report)
+                           if command == "export" and args.format == "junit"
+                           else statistical_report_to_json(report))
+        output = (payload if isinstance(payload, str) else json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False,
+        )) + "\n"
+        if command == "export" and args.output:
+            target = Path(args.output)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Render/validate completely before opening any file, then replace
+            # atomically so failures also leave an existing export untouched.
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(output.encode("utf-8"))
+                os.replace(temporary, target)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        print(output, end="")
+        return 0
+    except StatisticalReportCorrupt as error:
+        return _error("STATISTICAL_REPORT_CORRUPT", str(error))
+    except StatisticalReportConflict as error:
+        return _error("STATISTICAL_REPORT_CONFLICT", str(error))
+    except MaintenanceConflict as error:
+        return _error("MAINTENANCE_MODE", str(error))
+    except KeyError as error:
+        return _error("RUN_NOT_FOUND" if args.report_command == "publish"
+                      else "STATISTICAL_REPORT_NOT_FOUND", str(error))
+    except ComparisonError as error:
+        return _error(error.code, str(error))
+    except ValueError as error:
+        return _error("POLICY_INVALID", str(error))
+    except OSError as error:
+        return _error("EXPORT_FAILED", str(error))
+
+
 def _baseline_command(args) -> int:
     """baseline create/list/select/default：快照不可变，默认值是指针 CAS 操作。"""
     from motte_storage.baseline_store import BaselineConflict
@@ -2733,6 +2837,8 @@ def main(argv=None):
 
     if args.command == "experiment":
         return _experiment_command(args)
+    if args.command == "statistical-report":
+        return _statistical_report_command(args)
     if args.command == "compare":
         return _compare_command(args)
     if args.command == "baseline":

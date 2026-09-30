@@ -223,6 +223,8 @@ def review_sample(
     expected_status: str | None = None,
 ) -> CalibrationSample:
     """记录一次真实人工复核（这是唯一能产生 human_reviewed 的入口）。"""
+    if sample.source != "human":
+        raise HumanReviewRequired("synthetic candidates cannot be reviewed as human")
     if not annotator or not reviewer or not reviewed_at:
         raise HumanReviewRequired(
             "human review requires a named annotator, reviewer and timestamp"
@@ -231,7 +233,6 @@ def review_sample(
         raise HumanReviewRequired("human review requires at least one labelled criterion")
     payload = sample.model_dump(mode="json")
     payload.update({
-        "source": "human",
         "status": "human_reviewed",
         "annotator": annotator,
         "reviewed_by": reviewer,

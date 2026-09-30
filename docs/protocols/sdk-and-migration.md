@@ -337,3 +337,44 @@ A01–A21 的行为反例见执行计划 §5；本协议对应实现要点：
 A02/A03（§1.3/1.4）、A04（§3）、A05（§2）、A06/A07（§4）、A08（§5.2）、A09（§5.4）、
 A10（§5.3）、A11（§5.2）、A12/A13（§5.4）、A14–A16（§9）、A17（§10）、A18（§9.3）、
 A19（§11 升级演练）、A20（§11 矩阵）、A21（§11 切换）。
+
+
+## M8 扩展：不可变统计报告（2026-09-30）
+
+现有 `compare_statistics` / `motte compare --statistics` 保持只读，不自动持久发布。
+显式 SDK 方法均复用既有能力握手、错误分类、路径转义与 HTTP 重试矩阵：
+
+```python
+report = client.publish_statistical_report(
+    "baseline-run", "candidate-run", allowed_factors=("model",),
+    baseline_pass_id="baseline-pass", candidate_pass_id="candidate-pass", k=1,
+)
+report = client.get_statistical_report(report["report_id"])
+json_envelope = client.export_statistical_report(report["report_id"], format="json")
+junit_xml = client.export_statistical_report(report["report_id"], format="junit")
+```
+
+publish/get 返回 dict；export 返回 dict（json）或 str（junit），其他格式抛 ValueError。
+SDK export 先 GET 存储 envelope，再用纯 `statistical_report_to_json` /
+`statistical_report_to_junit` 校验与渲染，无 evaluator、current 或计量读取。
+POST 响应丢失时不自动重试；调用方可显式重送相同固定 Pass/输入请求，服务端按
+规范正文 ID 返回第一次的 envelope / UTC 时间。省略 Pass 会重新解析 current，
+已选 Pass 下 subject 计量改变也可生成新 ID，因此不可将只重送 Run ID 当作同输入保证。
+
+```sh
+motte statistical-report publish --baseline B --candidate C --factors model --baseline-pass P --candidate-pass Q --k 1 --db ./var/runs.db
+motte statistical-report get REPORT_ID --db ./var/runs.db
+motte statistical-report export REPORT_ID --format junit --output report.xml --db ./var/runs.db
+motte statistical-report publish --baseline B --candidate C --server http://localhost:8000
+motte statistical-report export REPORT_ID --format json --server http://localhost:8000
+```
+
+每个子命令均支持既有 `--mode server --api-url URL`、token 与环境变量；
+`--server URL` 是此命令的简写，不能与 `--db`、`--mode local` 或不同 `--api-url` 混用。
+发布默认 factor/model、k/1 与 compare 一致。get/export 只读已经发布的正文；
+不存在报告或无效请求走现有 stderr JSON `_error` / exit 2。有效报告即使区间不适用
+仍 exit 0，JUnit skipped。stdout 与 `--output` 为同一 UTF-8 内容（含尾随换行）；
+完全验证和渲染后原子替换文件，失败不生成半份导出或覆盖已有导出。
+HTTP 422/404/409/503 的细分与正文身份规则见 experiments-and-comparison.md §10.1。
+GET 沿用自动重试，POST 不重试；没有公共更新、删除、列表或任意正文导入。
+这些是离线软件契约，不代表真实模型、真实人审或 live 独立性验收完成。

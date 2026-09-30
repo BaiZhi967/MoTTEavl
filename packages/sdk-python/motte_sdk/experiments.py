@@ -16,6 +16,7 @@ Experiment 只做三件事（协议 docs/protocols/experiments-and-comparison.md
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import UTC, datetime
 from itertools import product
 from threading import RLock
@@ -204,6 +205,15 @@ def _validate_controlled_conditions(spec: ExperimentSpec) -> None:
 
 def _validate_supported_suite(spec: ExperimentSpec) -> None:
     suite = spec.task_ref.get("suite")
+    if spec.suite_config is not None:
+        supported = ({"model_profile", "skill_version"} if spec.suite_config.kind == "skill"
+                     else {"model_profile"})
+        unconsumed = sorted(set(spec.factors) - supported)
+        if unconsumed:
+            raise ExperimentError("FACTOR_UNSUPPORTED", "suite cannot consume: " + ",".join(unconsumed))
+        if "model_profile" not in spec.factors:
+            raise ExperimentError("FACTOR_REQUIRED", "model_profile is required for this suite")
+        return
     if suite not in SUPPORTED_SUITES:
         raise ExperimentError(
             "SUITE_UNSUPPORTED",
@@ -278,9 +288,14 @@ class ExperimentService:
 
     def _compile(self, spec: ExperimentSpec, *, include_prepared: bool = False) -> dict[str, Any]:
         """Read-only preflight shared by preview, create and pending allocation."""
-        from motte_sdk.resolve import ManifestResolutionError, prepare_run
+        from .experiment_assemblers import (
+            assemble_experiment_cell, prepare_skill_groups, skill_group_key,
+            validate_suite_assembly_ready,
+        )
+        from motte_contracts.experiment import SkillExperimentConfig
 
         _validate_supported_suite(spec)
+        validate_suite_assembly_ready(spec, resources=self.resources)
         expanded = _expand_matrix(spec)
         cells = [
             {
@@ -300,45 +315,24 @@ class ExperimentService:
         case_counts: set[int] = set()
         if self.resources is None:
             raise ExperimentError("RESOURCE_UNRESOLVED", "experiment resources are unavailable")
-        _validate_task_resource(spec, self.resources)
-        if spec.task_ref["suite"] == "gsm8k":
-            from motte_contracts.gsm8k import PRESET
-
-            cap = spec.controlled_conditions.get("max_output_tokens")
-            fixed_cap = PRESET["max_output_tokens"]
-            if cap is not None and cap != fixed_cap:
-                raise ExperimentError(
-                    "CONTROLLED_CONDITION_UNSUPPORTED",
-                    f"gsm8k fixes max_output_tokens at {fixed_cap}; received {cap}",
-                )
+        skill_groups = prepare_skill_groups(
+            spec, [assignment for assignment, _ in expanded], resources=self.resources,
+            store=self.store,
+        ) if isinstance(spec.suite_config, SkillExperimentConfig) else {}
         for (assignment, _repeat_index), cell in zip(expanded, cells, strict=True):
-            try:
-                resolved_manifest, case_ids = prepare_run(
-                    spec.task_ref["scenario_version"], self._build_manifest(spec, {
-                        "factor_assignment": assignment.model_dump(mode="json"),
-                    }),
-                    [], self.resources,
-                )
-            except ManifestResolutionError as error:
-                raise ExperimentError(error.code, str(error)) from error
+            assembled = assemble_experiment_cell(
+                spec, assignment, resources=self.resources, store=self.store,
+                skill_group=skill_groups.get(skill_group_key(assignment)),
+            )
             prepared_runs[cell["cell_id"]] = {
-                "manifest": resolved_manifest, "case_ids": case_ids,
-                "requested_manifest": self._build_manifest(spec, {
-                    "factor_assignment": assignment.model_dump(mode="json"),
-                }),
+                "manifest": assembled.manifest, "case_ids": list(assembled.case_ids),
+                "requested_manifest": assembled.requested_manifest,
+                **({"scenario_version": assembled.scenario_version,
+                    "resource_hashes": assembled.resource_hashes,
+                    "call_bound": asdict(assembled.call_bound)} if spec.suite_config else {}),
             }
-            case_counts.add(len(case_ids))
-            provider = resolved_manifest.get("provider") or {}
-            retries = provider.get("max_retries", 0) if isinstance(provider, dict) else 0
-            if type(retries) is not int or retries < 0:
-                raise ExperimentError("BUDGET_UNRESOLVED", "provider retry limit is unknown")
-            model_steps = 1
-            if spec.task_ref["suite"] == "agent-tasks":
-                agent_budget = (resolved_manifest.get("agent_config") or {}).get("budget") or {}
-                model_steps = agent_budget.get("max_steps")
-                if type(model_steps) is not int or model_steps < 1:
-                    raise ExperimentError("BUDGET_UNRESOLVED", "agent model step limit is unknown")
-            max_potential_calls += len(case_ids) * model_steps * (1 + retries)
+            case_counts.add(len(assembled.case_ids))
+            max_potential_calls += assembled.call_bound.max_calls
         case_count = next(iter(case_counts)) if len(case_counts) == 1 else None
         violations = _violations(spec, max_potential_calls)
         from motte_contracts.hashing import canonical_hash
@@ -479,6 +473,8 @@ class ExperimentService:
             return self._allocate_locked(experiment_id, version)
 
     def _allocate_locked(self, experiment_id: str, version: str) -> dict[str, Any]:
+        from .experiment_assemblers import validate_suite_assembly_ready
+
         stored = self.store.experiments.get_spec(experiment_id, version)
         if stored is None:
             raise ExperimentError(
@@ -487,9 +483,13 @@ class ExperimentService:
             )
         spec = ExperimentSpec.model_validate(stored)
         _validate_supported_suite(spec)
+        validate_suite_assembly_ready(spec, resources=self.resources)
+        self._validate_frozen_workflow_matrix(spec)
         if any(cell.get("allocation_status") in ("pending", "allocating")
                and not cell.get("prepared_run") for cell in
                self.store.experiments.list_cells(experiment_id, version)):
+            if spec.suite_config is not None:
+                raise ExperimentError("FROZEN_INPUT_REQUIRED", "typed cells require frozen prepared_run")
             violations = self._compile(spec)["violations"]
             if violations:
                 raise ExperimentError(
@@ -519,6 +519,47 @@ class ExperimentService:
                 for cell in self.store.experiments.list_cells(experiment_id, version)
             ],
         }
+
+    def _validate_frozen_workflow_matrix(self, spec: ExperimentSpec) -> None:
+        """Re-establish the saved preview and initial Run binding without resolution."""
+        from motte_contracts.hashing import canonical_hash
+        from .experiment_assemblers import validate_frozen_workflow_cell
+
+        if spec.suite_config is None or spec.suite_config.kind not in {"scenario", "skill"}:
+            return
+        cells = self.store.experiments.list_cells(spec.experiment_id, spec.version)
+        expected = {}
+        for assignment, repeat in _expand_matrix(spec):
+            cell = self._cell_payload(spec, assignment, repeat)
+            expected[cell["cell_id"]] = cell
+        if len(cells) != len(expected) or {cell["cell_id"] for cell in cells} != set(expected):
+            raise ExperimentError("FROZEN_INPUT_INVALID", "frozen matrix identity is incomplete")
+        for cell in cells:
+            if any(cell.get(key) != expected[cell["cell_id"]][key] for key in (
+                "experiment_id", "experiment_version", "factor_assignment", "repeat_index",
+                "resolved_spec_hash",
+            )):
+                raise ExperimentError("FROZEN_INPUT_INVALID", "saved Cell identity has changed")
+            validate_frozen_workflow_cell(
+                spec, FactorAssignment.model_validate(cell["factor_assignment"]),
+                cell.get("prepared_run"),
+            )
+        actual_preview = canonical_hash({
+            "spec": spec.model_dump(mode="json"),
+            "prepared_runs": {cell["cell_id"]: cell["prepared_run"] for cell in cells},
+        })
+        if any(cell.get("preview_hash") != actual_preview for cell in cells):
+            raise ExperimentError("FROZEN_INPUT_INVALID", "prepared inputs differ from the saved preview")
+        for cell in cells:
+            run_id = deterministic_run_id(cell["cell_id"])
+            if cell.get("run_id") not in (None, run_id):
+                raise ExperimentError("FROZEN_INPUT_INVALID", "Cell no longer owns its initial Run")
+            original = self.store.runs.get(run_id)
+            if original is not None and any(
+                original.get(key) != cell["prepared_run"][key]
+                for key in ("scenario_version", "manifest", "case_ids", "requested_manifest")
+            ):
+                raise ExperimentError("FROZEN_INPUT_INVALID", "initial Run differs from its frozen Cell")
 
     def _preflight_receipt(self, experiment_id: str, version: str) -> dict[str, Any]:
         cells = self.store.experiments.list_cells(experiment_id, version)
@@ -627,40 +668,12 @@ class ExperimentService:
         cell: dict[str, Any],
     ) -> dict[str, Any]:
         """Suite-specific manifest assembly, followed by the shared prepare_run chain."""
-        _validate_supported_suite(spec)
+        from .experiment_assemblers import build_legacy_requested_manifest
+
         assignment = FactorAssignment.model_validate(
             cell["factor_assignment"],
-        ).as_dict()
-        suite = spec.task_ref["suite"]
-        if suite == "direct-llm":
-            manifest: dict[str, Any] = {"model": assignment["model_profile"]}
-        elif suite == "gsm8k":
-            # GSM8K's standalone route accepts the same model/reasoning selectors
-            # but its own plugin freezes dataset, prompt, scorer and case selection.
-            manifest = {"model": assignment["model_profile"]}
-        elif suite == "agent-tasks":
-            # Reuse the standalone plugin to freeze this bounded mode's prompt,
-            # tools and budget and reject incompatible models before allocation.
-            manifest = {"model": assignment["model_profile"],
-                        "agent": {"mode": spec.controlled_conditions.get("agent_mode")
-                                  or "legacy-json"}}
-        else:
-            raise ExperimentError("SUITE_UNSUPPORTED", str(suite))
-        if assignment.get("reasoning_level") is not None:
-            manifest["reasoning_level"] = assignment["reasoning_level"]
-        for key, value in spec.controlled_conditions.items():
-            if value is None:
-                continue
-            if key == "max_output_tokens":
-                merged = dict(manifest.get("parameters") or {})
-                merged["max_output_tokens"] = value
-                manifest["parameters"] = merged
-        if spec.selected_case_keys:
-            manifest["case_selection"] = {
-                "mode": "ids",
-                "case_ids": list(spec.selected_case_keys),
-            }
-        return manifest
+        )
+        return build_legacy_requested_manifest(spec, assignment)
 
     @staticmethod
     def _cell_payload(
@@ -810,6 +823,10 @@ class ExperimentService:
                 f"cell {cell_id} has no initial run to supersede",
             )
         _validate_supported_suite(spec)
+        from .experiment_assemblers import validate_suite_assembly_ready
+
+        validate_suite_assembly_ready(spec, resources=self.resources)
+        self._validate_frozen_workflow_matrix(spec)
         original = self.store.runs.get(original_run_id)
         if original is None:
             raise ExperimentError("RUN_NOT_FOUND", f"initial run {original_run_id!r} not found")

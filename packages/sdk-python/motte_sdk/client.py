@@ -564,6 +564,37 @@ class MotteClient:
             params={"baseline": baseline_run_id, "candidate": candidate_run_id, **params},
         )
 
+    def publish_statistical_report(
+        self, baseline_run_id: str, candidate_run_id: str, *,
+        allowed_factors: tuple[str, ...] | list[str] = ("model",),
+        baseline_pass_id: str | None = None,
+        candidate_pass_id: str | None = None,
+        k: int = 1,
+    ) -> dict[str, Any]:
+        """Publish once; explicit fixed-input replay is safe, POST is never retried."""
+        return self._post(f"{_API_PREFIX}/statistical-reports", {
+            "baseline_run_id": baseline_run_id, "candidate_run_id": candidate_run_id,
+            "allowed_factors": list(allowed_factors), "baseline_pass_id": baseline_pass_id,
+            "candidate_pass_id": candidate_pass_id, "k": k,
+        })
+
+    def get_statistical_report(self, report_id: str) -> dict[str, Any]:
+        """Read the stored publication, independent of current Passes or policy."""
+        return self._get(f"{_API_PREFIX}/statistical-reports/{self._segment(report_id)}")
+
+    def export_statistical_report(
+        self, report_id: str, format: str = "json",
+    ) -> dict[str, Any] | str:
+        """Export the stored envelope; never invoke comparison or evaluation."""
+        from .export import statistical_report_to_json, statistical_report_to_junit
+
+        if format not in {"json", "junit"}:
+            raise ValueError("format must be json or junit")
+        report = self.get_statistical_report(report_id)
+        if format == "junit":
+            return statistical_report_to_junit(report)
+        return statistical_report_to_json(report)
+
     def classify_regression(
         self,
         baseline_run_id: str,

@@ -179,3 +179,19 @@ def test_resource_store_opens_the_same_legacy_database(tmp_path):
         assert connection.execute("SELECT count(*) FROM score_sets").fetchone()[0] == 1
     finally:
         connection.close()
+
+
+def test_pre_0016_database_upgrades_twice_without_changing_existing_rows(tmp_path):
+    """New statistical tables must exist before any repository call or maintenance."""
+    path = legacy_database(tmp_path / "pre-0016.db")
+    first = create_run_store(path)
+    assert columns(path, "statistical_reports") == ["report_id", "body", "published_at"]
+    assert first.statistical_reports.list() == []
+    before = rows(path, "SELECT payload FROM scoring_passes")
+    assert before == [("{}",)]
+    second = create_run_store(path)
+    assert second.statistical_reports.list() == []
+    assert rows(path, "SELECT payload FROM scoring_passes") == before
+    assert rows(path, "SELECT payload FROM score_sets") == [('{"passed": true}',)]
+    assert rows(path, "SELECT payload FROM trials") == [('{"plan": 1}',)]
+    assert rows(path, "SELECT payload FROM external_jobs") == [('{"job": 1}',)]

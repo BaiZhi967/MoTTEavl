@@ -89,7 +89,11 @@ def collect_artifact_refs(
             if item.get("target_type") == "artifact":
                 record(item.get("target_id"), item.get("artifact_sha256"))
             for key, child in item.items():
-                if key in _ARTIFACT_STRING_KEYS and isinstance(child, str):
+                if key == "evidence_allowlist" and isinstance(child, list):
+                    for token in child:
+                        if isinstance(token, str) and token.startswith("artifact:"):
+                            record(token.removeprefix("artifact:"))
+                elif key in _ARTIFACT_STRING_KEYS and isinstance(child, str):
                     record(child, digest)
                 elif "artifact" in key.lower() and isinstance(child, (list, dict)):
                     walk(child, artifact_context=True)
@@ -180,11 +184,44 @@ def _iter_artifact_records_with_owners(
     if jobs is not None and hasattr(jobs, "list_by_status"):
         invocations = getattr(store, "invocations", None)
         for job in jobs.list_by_status():
-            run_id = job.get("run_id")
+            calibration_owned = job.get("owner_kind") == "calibration"
+            run_id = None if calibration_owned else job.get("run_id")
             yield job, run_id, None
-            if invocations is not None and hasattr(invocations, "list_for_job"):
+            if calibration_owned:
+                # No actual Run can recover these edges. Every required facade
+                # must be readable even for a currently unpublished child.
+                readers = {}
+                for name, method in (("invocations", "list_for_job"),
+                                     ("scoring_passes", "get"),
+                                     ("score_sets", "list_for_pass")):
+                    reader = getattr(getattr(store, name, None), method, None)
+                    if not callable(reader):
+                        raise AttributeError(f"store.{name}.{method} is required for calibration evidence scanning")
+                    readers[name] = reader
+                for invocation in readers["invocations"](job.get("job_id", "")):
+                    yield invocation, None, None
+                pass_id = job.get("reserved_pass_id")
+                if not isinstance(pass_id, str) or not pass_id:
+                    raise ValueError("calibration child requires a durable reserved Pass identity")
+                scoring_pass = readers["scoring_passes"](pass_id)
+                if scoring_pass is not None:
+                    if scoring_pass.get("id") != pass_id:
+                        raise ValueError("calibration child Pass identity disagrees with its durable edge")
+                    yield scoring_pass, None, None
+                # Retain independently stored scores even if the Pass is absent
+                # or damaged; a missing facade must never look like zero scores.
+                for score in readers["score_sets"](pass_id):
+                    yield score, None, None
+            elif invocations is not None and callable(getattr(invocations, "list_for_job", None)):
                 for invocation in invocations.list_for_job(job.get("job_id", "")):
                     yield invocation, run_id, None
+
+    # Lifecycle sources are independent pins, never owned by a rollback Run.
+    calibrations = getattr(store, "calibrations", None)
+    if calibrations is None or not callable(getattr(calibrations, "iter_records", None)):
+        raise AttributeError("store.calibrations.iter_records is required for reference scanning")
+    for record in calibrations.iter_records():
+        yield record, None, None
 
     experiments = getattr(store, "experiments", None)
     if experiments is not None and hasattr(experiments, "list_specs"):
@@ -200,6 +237,13 @@ def _iter_artifact_records_with_owners(
     if gate_store is not None and hasattr(gate_store, "list_results"):
         for gate in gate_store.list_results(limit=_ALL_LIMIT):
             yield gate, None, None
+    reports = getattr(store, "statistical_reports", None)
+    if reports is None or not hasattr(reports, "list"):
+        raise AttributeError("store.statistical_reports.list is required for evidence reference scanning")
+    # Publications own their frozen evidence independently of the referenced
+    # Runs/imports. Never inherit an exclusion or a finite UI/listing limit.
+    for report in reports.list(limit=None):
+        yield report, None, None
     ledger = platform_for(store).imports
     for batch in ledger.list_imports():
         import_id = batch.get("import_id", "")
@@ -230,6 +274,18 @@ def referenced_run_ids(
         if run_id is not None:
             found.add(run_id)
         collect_referenced_run_ids(record, found)
+    return found
+
+
+def referenced_pass_ids(
+    store: Any, *, exclude_run_ids: Iterable[str] = (), exclude_import_ids: Iterable[str] = (),
+) -> set[str]:
+    """Collect fixed Pass edges from the same complete, ownership-aware traversal."""
+    found: set[str] = set()
+    for record in iter_artifact_records(
+        store, exclude_run_ids=exclude_run_ids, exclude_import_ids=exclude_import_ids,
+    ):
+        collect_referenced_pass_ids(record, found)
     return found
 
 
@@ -324,3 +380,17 @@ def collect_referenced_run_ids(value: Any, found: set[str]) -> None:
     elif isinstance(value, list):
         for child in value:
             collect_referenced_run_ids(child, found)
+
+
+def collect_referenced_pass_ids(value: Any, found: set[str]) -> None:
+    """Find selected, source, previous and mapped scoring Pass references."""
+    if isinstance(value, dict):
+        if value.get("target_type") == "scoring_pass" and isinstance(value.get("target_id"), str):
+            found.add(value["target_id"])
+        for key, child in value.items():
+            if key in {"scoring_pass_id", "source_pass_id", "previous_pass_id"} and isinstance(child, str):
+                found.add(child)
+            collect_referenced_pass_ids(child, found)
+    elif isinstance(value, list):
+        for child in value:
+            collect_referenced_pass_ids(child, found)

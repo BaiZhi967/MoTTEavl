@@ -16,8 +16,8 @@ hash 规则。实现与其冲突时，以本文为准并修复实现；修订本
 > Provider retry 上界，不能沿用单次调用预算。Direct/GSM8K 比较页从固定 ReportSnapshot 和 ComparisonService
 > 读取质量与可比性；成本按币种分列，部分未知保留 unknown 数。此范围说明
 > 不改变下文目标协议；C-Eval、Scenario/Skill、Harbor 的实验装配仍未实现。
-> 固定 Pass 的 Task 内 Trial pass@k 已接入比较/JSON 导出消费者，独立持久发布的
-> 统计报告及 live 独立性仍未验收。证据见
+> 固定 Pass 的 Task 内 Trial pass@k 已接入比较/JSON 导出消费者；显式不可变
+> 统计报告发布与读取/导出见 §10，live 独立性仍未验收。证据见
 > `docs/verification/M8.md`。
 
 M6 是**结果治理层**：只消费已持久化的 Run / Trial / Observation / ScoreSet /
@@ -205,11 +205,43 @@ Terminal-Bench 的 Trial 由本消费者按冻结 TrialPlan 在 Task 内聚合�
 transport/operator retry 不增加 n；缺失、无效、重复上游 Trial 或 k 超出计划数
 返回具名不适用。完整 Task 的 pass@k 才进入 Task 配对 bootstrap；结果带固定
 RunReportRef、政策 hash、单位、seed、次数、k 与每 Task 资格。CLI JSON 文件是
-固定输入的可导出比较结果，另行持久发布的统计报告仍未实现，不能把当前切片写成
-完整 T06 或 live 统计验收。
+固定输入的可导出比较结果；显式持久发布另用下述 statistical-reports 接口，
+动态比较不自动发布。离线软件路径不代表完整 T06 或 live 统计验收。
 一次比较/统计读取在入口固定两个 ScoringPass ID，后续资格、引用、成本和 Trial
 聚合只用这些 ID；HTTP 比较响应返回实际固定引用，Web 统计请求复用该引用。
 若比较响应缺引用，Web 显示统计不可用，不再重新解析可漂移的 current 指针。
+
+
+### 10.1 不可变 StatisticalReport 显式发布（2026-09-30）
+
+`POST /api/v1/statistical-reports` 仅接受 `baseline_run_id`、`candidate_run_id`、
+`allowed_factors`（默认 `["model"]`，排序去重）、可选 `baseline_pass_id` /
+`candidate_pass_id`（缺省在发布时固定 current），以及严格正整数 `k`（默认 1）。
+空白 ID / factor、未知因子、Boolean / 字符串 / 小数 k 与额外字段均拒绝；
+客户端不能提供 body、result、policy、report_id 或 published_at，也没有任意正文导入。
+服务器在维护互斥窗口内调用现有固定 Pass 计算一次，不执行模型、Judge、Runner 或 Job。
+政策保持 `statistical_policy@1`、seed `20260921`、iterations `2000`、confidence
+`0.95`、implementation `motte_eval.statistics@1`，此接口不提供政策覆盖。
+
+返回 envelope 恰为 `{report_id, published_at, body}`，body 恰为
+`{schema_version: 1, policy, result}`。result 完整保留 `inputs` / `input_digest`、
+固定 refs、Trial 资格、subject 描述量、缺失计数、unit/k、算法版本与结果。
+`report_id = "stat-report-" + canonical_hash(body).removeprefix("sha256:")`；
+strict finite JSON 验证后保存 canonical TEXT，避免数据库数值归一化改变身份。
+发布时间由首次成功插入产生（UTC RFC3339），与 ID 一起位于哈希正文之外。
+同正文重放返回原始时间与 envelope；首次与重放均 HTTP 200，异正文同 ID 冲突。
+
+`GET /api/v1/statistical-reports/{report_id}?format=json|junit` 只读已存正文，
+先校验身份、policy 与 input digest 绑定，不解析 current、不读取实时计量、不重算。
+JSON 返回完整 envelope；JUnit 复用统计导出器的适用性语义，system-out 保存
+同一完整 envelope，原有 properties 加上 report_id、schema_version、published_at。
+不可用区间仍 skipped，绝不产生质量 Gate 断言；安装政策变化不改写历史导出。
+没有公共 list / PUT / PATCH / DELETE 接口。
+
+错误：请求/格式/Pass 归属错误 422；Run、Pass（含缺失 current）或报告不存在 404；
+不可变冲突 409 (`STATISTICAL_REPORT_CONFLICT`)；存储损坏 409
+(`STATISTICAL_REPORT_CORRUPT`)；维护阻止发布 503 (`MAINTENANCE_MODE`)，读取仍可用。
+报告及其 Run / Pass / Artifact 证据进入统一保护闭包与备份恢复校验；不提供删除接口。
 
 ## 11. 退出与回退
 
@@ -259,7 +291,7 @@ current、计量存储或执行模型调用的前提下导出；若底层计量�
 记录固定引用、input_digest、政策、k、缺失数、单位、seed 与迭代次数，并在
 system-out 保留完整同一 JSON。唯一 testcase 表达配对区间的适用资格，
 `applicable=false` 映射 skipped，绝不伪装成质量通过；它不是质量 Gate 或排名。
-这些自包含导出不等于独立 append-only 统计报告的持久发布，后者仍待实现。
+动态结果的自包含导出本身不写入报告；要保存长期可复现的正文，必须显式发布。
 
 ## Cell 显式重试的冻结输入（2026-09-30）
 

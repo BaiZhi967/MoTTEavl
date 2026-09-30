@@ -479,6 +479,15 @@ class JudgeProviderPolicy(Contract):
         return self
 
 
+class CalibrationPlanEntry(Contract):
+    """Internal server-owned call intent, never a public submission field."""
+
+    sample_id: str = Field(min_length=1)
+    call_kind: Literal["single", "repeat", "order_forward", "order_reverse"]
+    repeat_index: int = Field(default=0, ge=0, strict=True)
+    candidate_order: list[str] = Field(default_factory=list)
+
+
 class ScoringJobRequest(Contract):
     """一次 Judge 评分请求；request_key 与内容 fingerprint 分离。"""
 
@@ -491,6 +500,7 @@ class ScoringJobRequest(Contract):
     pairwise_pairs: list[JudgePairwiseInput] = Field(default_factory=list)
     calibration_job_id: str | None = None
     sample_ids: dict[str, str] = Field(default_factory=dict)
+    calibration_plan: list[CalibrationPlanEntry] = Field(default_factory=list)
     authorisation: JudgeAuthorisation | None = None
     publish_policy: Literal["all_scored", "allow_non_scored"] = "all_scored"
     repeats: int = Field(default=1, ge=1)
@@ -503,6 +513,14 @@ class ScoringJobRequest(Contract):
 
     @model_validator(mode="after")
     def shape(self) -> "ScoringJobRequest":
+        if self.calibration_plan:
+            if self.calibration_job_id is None:
+                raise ValueError("calibration plans cannot be used by subject owners")
+            if self.repeats != 1 or self.presentation_orders:
+                raise ValueError("calibration plan is already expanded; no caller repeats/orders")
+            sample_ids = set(self.sample_ids.values())
+            if any(entry.sample_id not in sample_ids for entry in self.calibration_plan):
+                raise ValueError("calibration plan sample is not owned by this job")
         if self.mode != self.judge_spec.mode:
             raise ValueError("request mode must match the frozen judge spec mode")
         if self.calibration_job_id is None and not self.run_id:
@@ -846,20 +864,16 @@ class ScoringJobService:
         )
         return report
 
-    def submit(self, request: ScoringJobRequest) -> dict[str, Any]:
+    def compile_record(
+        self, request: ScoringJobRequest, *, job_id: str, reserved_pass_id: str,
+    ) -> dict[str, Any]:
+        """Compile without writes or provider construction, using supplied stable IDs."""
         compiled = self._compile(request)
-        if self.provider_factory is None:
-            raise JudgeError(
-                "no judge provider factory is configured; submitting would create an "
-                "unexecutable job"
-            )
         spec = compiled["spec"]
         owner = compiled["owner"]
         owner_ref = compiled["owner_ref"]
         plans = compiled["plans"]
         preflight = compiled["preflight"]
-        job_id = new_job_id()
-        reserved_pass_id = new_reserved_pass_id()
         record = {
             "schema_version": 1,
             "job_id": job_id,
@@ -909,11 +923,22 @@ class ScoringJobService:
             "created_at": self._clock(),
             "purpose": JUDGE_PURPOSE,
         }
+        return record
+
+    def submit(self, request: ScoringJobRequest) -> dict[str, Any]:
+        record = self.compile_record(
+            request, job_id=new_job_id(), reserved_pass_id=new_reserved_pass_id(),
+        )
+        if self.provider_factory is None:
+            raise JudgeError(
+                "no judge provider factory is configured; submitting would create an "
+                "unexecutable job"
+            )
         outcome = self.jobs.submit(record)
         result = job_view(outcome["job"])
         result["reused"] = not outcome["created"]
-        result["preflight"] = deepcopy(preflight.model_dump(mode="json"))
-        result["provider_snapshot"] = deepcopy(compiled["snapshot"])
+        result["preflight"] = deepcopy(record["preflight"])
+        result["provider_snapshot"] = deepcopy(record["provider_snapshot"])
         return result
 
     def public_view(self, job: dict[str, Any]) -> dict[str, Any]:
@@ -1112,6 +1137,8 @@ class ScoringJobService:
         - repeats 每个重复都是一次独立调用：有自己的 call_id、repeat_index 与
           账本条目，因此也有自己的 ScoreSet 行（trial_id = call_id）。
         """
+        if request.calibration_plan:
+            return self._prepare_calibration_inputs(request)
         self._verify_evidence_ownership(request)
         if request.mode == "pairwise":
             plans: list[dict[str, Any]] = []
@@ -1177,6 +1204,40 @@ class ScoringJobService:
                     "observation_id": bundle.observation_id,
                     "input_sha256": bundle.input_sha256,
                 })
+        return inputs, plans
+
+    def _prepare_calibration_inputs(
+        self, request: ScoringJobRequest,
+    ) -> tuple[dict[str, JudgeInputBundle], list[dict[str, Any]]]:
+        # Compile each base input once, then expand only the server-frozen intents.
+        inputs, base_plans = self._prepare_inputs(request.model_copy(update={"calibration_plan": []}))
+        base_by_sample = {request.sample_ids[plan["case_id"]]: plan for plan in base_plans}
+        if len(base_by_sample) != len(base_plans):
+            raise JudgeInputError("calibration base inputs must have unique sample ownership")
+        plans = []
+        for index, entry in enumerate(request.calibration_plan):
+            if entry.sample_id not in base_by_sample:
+                raise JudgeInputError("calibration plan sample has no frozen input")
+            plan = deepcopy(base_by_sample[entry.sample_id])
+            if request.mode == "pairwise":
+                pair = JudgePairwiseInput.model_validate(plan["pair"])
+                if sorted(entry.candidate_order) != sorted(pair.presentation_order):
+                    raise JudgeInputError("calibration order must permute the same pair")
+                payload = pair.model_dump(mode="json", exclude={"input_sha256"})
+                payload["presentation_order"] = list(entry.candidate_order)
+                payload["input_sha256"] = canonical_sha256(payload)
+                pair = JudgePairwiseInput.model_validate(payload)
+                plan.update(pair=pair.model_dump(mode="json"), input_sha256=pair.input_sha256,
+                            presentation_order=list(pair.presentation_order))
+            elif entry.candidate_order or entry.call_kind.startswith("order_"):
+                raise JudgeInputError("single calibration calls cannot carry pairwise order")
+            plan.update(
+                call_id="calcall-" + canonical_sha256({
+                    "request_key": request.request_key, "ordinal": index + 1,
+                })[7:], sample_id=entry.sample_id, call_kind=entry.call_kind,
+                repeat_index=entry.repeat_index,
+            )
+            plans.append(plan)
         return inputs, plans
 
     # ------------------------------------------------------------- 内部：证据归属
@@ -1248,6 +1309,13 @@ class ScoringJobService:
         self, request: ScoringJobRequest, pair: JudgePairwiseInput,
     ) -> None:
         if request.owner["kind"] == "calibration":
+            sample_id = request.sample_ids.get(pair.task_ref)
+            for side in (pair.candidate_a, pair.candidate_b):
+                ref = side.candidate
+                if (ref.owner_kind != "calibration" or not sample_id
+                        or ref.calibration_job_id != request.calibration_job_id
+                        or ref.sample_id != sample_id):
+                    raise JudgeInputError("calibration candidate belongs to another owner/sample")
             return
         run = self._subject_run(request)
         self._verify_case(run, pair.task_ref, what="pairwise task_ref")

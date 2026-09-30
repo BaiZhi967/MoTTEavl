@@ -234,6 +234,32 @@ def statistics_to_junit(view: Mapping[str, Any]) -> str:
     return ET.tostring(suite, encoding="unicode")
 
 
+def statistical_report_to_json(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and detach the complete publication without consulting live state."""
+    from motte_contracts.statistical_reports import validate_statistical_report
+
+    return validate_statistical_report(dict(report))
+
+
+def statistical_report_to_junit(report: Mapping[str, Any]) -> str:
+    """Preserve statistical applicability and embed the complete stored envelope."""
+    payload = statistical_report_to_json(report)
+    suite = ET.fromstring(statistics_to_junit(payload["body"]["result"]))
+    properties = suite.find("properties")
+    assert properties is not None
+    for name, value in {
+        "report_id": payload["report_id"],
+        "schema_version": payload["body"]["schema_version"],
+        "published_at": payload["published_at"],
+    }.items():
+        ET.SubElement(properties, "property", {"name": name, "value": str(value)})
+    system_out = suite.find("system-out")
+    assert system_out is not None
+    system_out.text = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    ET.indent(suite, space="  ")
+    return ET.tostring(suite, encoding="unicode")
+
+
 def _stable_json_line(payload: Mapping[str, Any]) -> str:
     """确定性的 JSON 文本（排序键、UTF-8、尾随换行），供 sha256 稳定。"""
     return json.dumps(

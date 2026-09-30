@@ -36,6 +36,7 @@ from motte_eval.calibration import (
     repeat_plan,
     require_human_reviewed,
     review_sample,
+    sample_content_sha256,
 )
 from motte_eval.judge import (
     JudgeSpec,
@@ -95,14 +96,24 @@ def criteria_json(passed: dict[str, bool], *, evidence: list[str] | None = None)
     ]})
 
 
+def human_input_fixture(sample_id, kind, output, **kwargs):
+    """Explicitly declared human-input software fixture, not actual human acceptance."""
+    payload = {"sample_id": sample_id, "kind": kind, "candidate_output": output,
+               "source": "human", **kwargs}
+    draft = CalibrationSample.model_construct(**payload, content_sha256="sha256:" + "0" * 64)
+    return CalibrationSample.model_validate({
+        **draft.model_dump(mode="json"), "content_sha256": sample_content_sha256(draft),
+    })
+
+
 def human_samples(count_per_kind: int = 6) -> list[CalibrationSample]:
     samples: list[CalibrationSample] = []
     for kind in KINDS:
         for index in range(count_per_kind):
-            sample = candidate_sample(
+            sample = human_input_fixture(
                 f"{kind}-{index}", kind, f"output {kind} {index}",
                 rubric_id=RUBRIC_ID, rubric_version=RUBRIC_VERSION, model="judge-model",
-                labelling_notes="synthetic candidate for protocol verification",
+                labelling_notes="software-only human-input fixture; not real human review",
             )
             samples.append(review_sample(
                 sample, annotator="annotator-a", reviewer="reviewer-b",
@@ -208,7 +219,7 @@ def test_synthetic_candidates_never_count_as_human_reviewed():
 
 
 def test_review_sample_requires_a_named_human_act():
-    sample = candidate_sample(
+    sample = human_input_fixture(
         "cand-2", "clear_fail", "wrong",
         rubric_id=RUBRIC_ID, rubric_version=RUBRIC_VERSION, model="judge-model",
     )
@@ -939,10 +950,10 @@ def coverage_calibration(spec: JudgeSpec, *, kinds: dict[str, int]):
     samples: list[CalibrationSample] = []
     for kind, count in kinds.items():
         for index in range(count):
-            sample = candidate_sample(
+            sample = human_input_fixture(
                 f"{kind}-{index}", kind, f"output {kind} {index}",
                 rubric_id=RUBRIC_ID, rubric_version=RUBRIC_VERSION, model="judge-model",
-                labelling_notes="synthetic candidate for protocol verification",
+                labelling_notes="software-only human-input fixture; not real human review",
             )
             samples.append(review_sample(
                 sample, annotator="annotator-a", reviewer="reviewer-b",
@@ -1161,3 +1172,16 @@ def test_qualification_is_read_through_the_real_published_pass(tmp_path):
     )
     assert other["gate_eligible"] is False and other["experimental"] is True
     assert submitted["request_key"] == "qual-1"
+
+
+def test_review_sample_never_promotes_a_synthetic_candidate():
+    sample = candidate_sample(
+        "synthetic-source-guard", "clear_pass", "software-generated candidate",
+        rubric_id=RUBRIC_ID, rubric_version=RUBRIC_VERSION, model="judge-model",
+    )
+    with pytest.raises(HumanReviewRequired, match="synthetic"):
+        review_sample(
+            sample, annotator="fixture-annotator", reviewer="fixture-reviewer",
+            expected_criteria={name: True for name in CRITERIA},
+            reviewed_at="2026-09-30T00:00:00+00:00",
+        )

@@ -5,15 +5,18 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from motte_contracts.compat import adapt_legacy_run, adapt_legacy_trace_event
 from motte_contracts.events import TraceEvent
 from motte_contracts.identity import canonical_sha256
 from motte_contracts.report import RunReport
 from motte_contracts.run import Run, RunCommand
+from motte_contracts.statistical_reports import StatisticalReport, StatisticalReportPublishRequest
 from motte_sdk.execution_backends import legacy_execution
 from motte_sdk.reporting import build_public_run_report, build_run_report as _build_report
 from motte_sdk.resolve import (
@@ -3797,6 +3800,120 @@ def create_app(
         service.store,
         baselines=getattr(service.store, "baselines", None),
     )
+
+    from motte_sdk.statistical_reports import StatisticalReportService
+    from motte_storage.operation_locks import MaintenanceConflict
+    from motte_storage.statistical_reports import StatisticalReportConflict, StatisticalReportCorrupt
+
+    application.state.statistical_reports = statistical_reports_service = StatisticalReportService(
+        service.store,
+    )
+
+    @application.exception_handler(RequestValidationError)
+    async def statistical_report_request_validation(request: Request, error: RequestValidationError):
+        if (request.method != "POST" or getattr(request.scope.get("route"), "path", None)
+                != "/api/v1/statistical-reports"):
+            return await request_validation_exception_handler(request, error)
+        # Rejected JSON numbers may overflow to infinity. Do not echo arbitrary
+        # input/ctx into a strict JSON error response; retain the usual detail
+        # shape and leave every other route's validation handler unchanged.
+        return JSONResponse(status_code=422, content={"detail": [
+            {key: item[key] for key in ("loc", "msg", "type")} for item in error.errors()
+        ]})
+
+    statistical_error_schema = {
+        "type": "object", "required": ["error"], "additionalProperties": False,
+        "properties": {"error": {
+            "type": "object", "required": ["code", "message"], "additionalProperties": False,
+            "properties": {"code": {"type": "string"}, "message": {"type": "string"}},
+        }},
+    }
+    statistical_error_content = {"application/json": {"schema": statistical_error_schema}}
+
+    @application.post(
+        "/api/v1/statistical-reports", response_model=StatisticalReport,
+        responses={
+            404: {"description": "Run or scoring Pass not found", "content": statistical_error_content},
+            409: {"description": "Immutable conflict or corrupt report", "content": statistical_error_content},
+            422: {
+                "description": "Invalid request, comparison policy, or Pass ownership",
+                "content": {"application/json": {"schema": {"anyOf": [
+                    {"$ref": "#/components/schemas/HTTPValidationError"}, statistical_error_schema,
+                ]}}},
+            },
+            503: {"description": "Publication blocked by maintenance", "content": statistical_error_content},
+        },
+    )
+    def publish_statistical_report(body: StatisticalReportPublishRequest):
+        """Explicitly capture and publish a content-addressed, immutable statistical report."""
+        try:
+            return statistical_reports_service.publish(**body.model_dump())
+        except StatisticalReportCorrupt as error:
+            return JSONResponse(status_code=409, content={"error": {
+                "code": "STATISTICAL_REPORT_CORRUPT", "message": str(error),
+            }})
+        except StatisticalReportConflict as error:
+            return JSONResponse(status_code=409, content={"error": {
+                "code": "STATISTICAL_REPORT_CONFLICT", "message": str(error),
+            }})
+        except MaintenanceConflict as error:
+            return JSONResponse(status_code=503, content={"error": {
+                "code": "MAINTENANCE_MODE", "message": str(error),
+            }})
+        except KeyError as error:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "RUN_NOT_FOUND", "message": str(error),
+            }})
+        except ComparisonError as error:
+            # Comparison's legacy resolver uses the same code for an absent
+            # Pass and a Pass belonging to another Run. Keep that API unchanged,
+            # while this publication boundary distinguishes 404 from bad ownership.
+            status = 422
+            if error.code == "NO_SCORING_EVIDENCE":
+                status = 404
+            elif error.code == "SCORING_PASS_NOT_FOUND":
+                foreign = any(
+                    record is not None and record.get("run_id") != run_id
+                    for run_id, pass_id in (
+                        (body.baseline_run_id, body.baseline_pass_id),
+                        (body.candidate_run_id, body.candidate_pass_id),
+                    ) if pass_id is not None
+                    for record in (service.store.scoring_passes.get(pass_id),)
+                )
+                status = 422 if foreign else 404
+            return JSONResponse(status_code=status, content={"error": {
+                "code": error.code, "message": str(error),
+            }})
+        except ValueError as error:
+            return JSONResponse(status_code=422, content={"error": {
+                "code": "POLICY_INVALID", "message": str(error),
+            }})
+
+    @application.get(
+        "/api/v1/statistical-reports/{report_id}", response_model=StatisticalReport,
+        responses={
+            200: {"content": {"application/xml": {"schema": {"type": "string"}}}},
+            404: {"description": "Statistical report not found", "content": statistical_error_content},
+            409: {"description": "Corrupt statistical report", "content": statistical_error_content},
+        },
+    )
+    def get_statistical_report(report_id: str, format: Literal["json", "junit"] = "json"):
+        """Read/export the stored envelope; no calculation or live evidence lookup."""
+        from motte_sdk.export import statistical_report_to_json, statistical_report_to_junit
+
+        try:
+            report = statistical_reports_service.get(report_id)
+            if format == "junit":
+                return Response(statistical_report_to_junit(report), media_type="application/xml")
+            return statistical_report_to_json(report)
+        except KeyError as error:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "STATISTICAL_REPORT_NOT_FOUND", "message": str(error),
+            }})
+        except StatisticalReportCorrupt as error:
+            return JSONResponse(status_code=409, content={"error": {
+                "code": "STATISTICAL_REPORT_CORRUPT", "message": str(error),
+            }})
 
     @application.get("/api/v1/comparisons/statistics")
     def comparison_statistics(

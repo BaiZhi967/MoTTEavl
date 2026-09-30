@@ -25,6 +25,28 @@ make install        # uv sync + pnpm install --frozen-lockfile
 | `make check` | lint + test + web build + compose config (same gates as CI) |
 | `make dev` | Supervised API startup, then Web after API health is ready (Ctrl-C stops both) |
 
+## Immutable statistical reports
+
+`compare --statistics` remains a read-only dynamic view. Explicit publication captures one
+fixed-Pass result, its policy and measured inputs, and stores a content-addressed envelope:
+
+```sh
+motte statistical-report publish --baseline B --candidate C --baseline-pass P --candidate-pass Q --db ./var/runs.db
+motte statistical-report get REPORT_ID --db ./var/runs.db
+motte statistical-report export REPORT_ID --format junit --output report.xml --db ./var/runs.db
+# Remote mode: replace --db with --server http://localhost:8000
+```
+
+Use `MotteClient.publish_statistical_report`, `get_statistical_report`, or
+`export_statistical_report`, or POST `/api/v1/statistical-reports` and GET
+`/api/v1/statistical-reports/{report_id}?format=json|junit`. Reads and exports use stored
+content without recalculation; JSON and JUnit embed the same envelope. Identical content
+replays retain the first server timestamp. No public update/delete/import route or model
+calls are involved. Inapplicable results stay visible (JUnit skipped, successful CLI exit).
+See [publication semantics](docs/protocols/experiments-and-comparison.md#101-不可变-statisticalreport-显式发布2026-09-30)
+and [SDK/CLI contracts](docs/protocols/sdk-and-migration.md#m8-扩展不可变统计报告2026-09-30).
+Offline tests do not establish live-model or independent-Trial acceptance.
+
 ## Running locally
 
 - **API**: `uv run uvicorn apps.api.app.main:app --reload --port 8000` (or just `make dev`). Reads `MOTTE_DB_PATH` (default `./var/runs.db`, SQLite).

@@ -486,3 +486,48 @@ def test_import_motte_sdk_is_zero_side_effect(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"ok": True}
     assert not (tmp_path / "var").exists()
+
+
+# ------------------------------------------------ immutable statistical reports
+
+def test_statistical_publication_response_loss_and_stored_exports(monkeypatch):
+    import xml.etree.ElementTree as ET
+    from motte_sdk.comparisons import ComparisonService
+    from tests.sdk.test_statistical_reports import _seed
+    from tests.sdk.test_m6_comparison_service import append_pass
+
+    store = _seed(InMemoryRunStore())
+    app = create_app(store=store)
+    asgi = SyncASGITransport(app)
+    path = "/api/v1/statistical-reports"
+    flaky = FlakyTransport(asgi, method="POST", path_prefix=path)
+    counting = CountingTransport(flaky)
+    client = _client(counting, retries=3, backoff_base=0)
+    options = {"baseline_pass_id": "old-base", "candidate_pass_id": "old-candidate"}
+    try:
+        with pytest.raises(ReadTimeout):
+            client.publish_statistical_report("base", "candidate", **options)
+        assert counting.count("POST", path) == 1
+        first = store.statistical_reports.list()[0]
+        assert client.publish_statistical_report("base", "candidate", **options) == first
+        assert counting.count("POST", path) == 2
+        assert len(store.statistical_reports.list()) == 1
+        append_pass(store, "base", "new-base", [])
+        store.case_runs._rows[("base", "a")][1]["result"]["cost"]["total"] = 900
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("SDK get/export must never calculate")
+
+        monkeypatch.setattr(ComparisonService, "paired_statistics", forbidden)
+        assert client.get_statistical_report(first["report_id"]) == first
+        assert client.export_statistical_report(first["report_id"]) == first
+        assert json.loads(ET.fromstring(client.export_statistical_report(first["report_id"], "junit")).findtext("system-out")) == first
+        before = len(counting.calls)
+        with pytest.raises(ValueError, match="format"):
+            client.export_statistical_report(first["report_id"], "csv")
+        assert len(counting.calls) == before
+        with pytest.raises(NotFoundError):
+            client.get_statistical_report("missing")
+    finally:
+        client.close()
+        asgi.close()

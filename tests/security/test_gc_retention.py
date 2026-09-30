@@ -525,3 +525,45 @@ def test_gc_protects_lexical_and_in_root_symlink_reference_aliases(tmp_path, ali
     assert artifact.id in {row["artifact_id"] for row in plan.protected}
     assert apply_gc(store, root, plan, confirm=True)["deleted"] == 0
     assert (root / artifact.id).exists()
+
+
+@pytest.mark.parametrize("failure", ["integrity", "list", "get", "conflict"])
+def test_report_reader_failure_aborts_gc_before_any_deletion(tmp_path, monkeypatch, failure):
+    from tests.storage.test_statistical_report_references import put_report, damage_report_reader
+    from motte_storage.maintenance import maintenance_status
+
+    store = SQLiteRunStore(tmp_path / "report-failure.db")
+    root = tmp_path / "artifacts"
+    _old_artifact(root, "a-first-orphan.bin", b"must survive")
+    evidence = _old_artifact(root, "report-evidence.bin", b"also survives")
+    plan = plan_gc(store, root, artifact_ttl_days=1)
+    put_report(store, evidence={"artifact_id": evidence.id, "sha256": evidence.sha256})
+    error = damage_report_reader(store, monkeypatch, failure)
+    with pytest.raises(error):
+        apply_gc(store, root, plan, confirm=True)
+    with pytest.raises(error):
+        plan_gc(store, root)
+    assert (root / "a-first-orphan.bin").read_bytes() == b"must survive"
+    assert (root / evidence.id).read_bytes() == b"also survives"
+    assert platform_for(store).tombstones.list() == []
+    assert maintenance_status(store)["active"] is False
+
+
+def test_gc_protects_report_sentinel_beyond_default_list_limit(tmp_path):
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "many-reports.db")
+    reports = [put_report(store, evidence={"artifact_id": f"report-{index}.bin"})
+               for index in range(106)]
+    sentinel = sorted(reports, key=lambda report: report["report_id"])[-1]
+    artifact_id = sentinel["body"]["result"]["diagnostic"]["artifact_id"]
+    assert sentinel not in store.statistical_reports.list(limit=100)
+    root = tmp_path / "artifacts"
+    _old_artifact(root, artifact_id, b"sentinel evidence")
+    _old_artifact(root, "orphan.bin", b"unprotected control")
+    plan = plan_gc(store, root, artifact_ttl_days=1)
+    assert {item["artifact_id"] for item in plan.protected} == {artifact_id}
+    result = apply_gc(store, root, plan, confirm=True)
+    assert result["deleted"] == 1
+    assert (root / artifact_id).read_bytes() == b"sentinel evidence"
+    assert not (root / "orphan.bin").exists()

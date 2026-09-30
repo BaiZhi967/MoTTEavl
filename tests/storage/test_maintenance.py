@@ -525,3 +525,64 @@ def test_legacy_cleanup_apply_preserves_old_referenced_evidence(tmp_path, in_mai
     finally:
         if lease:
             end_maintenance(store, owner=lease["owner"])
+
+
+def test_maintenance_blocks_report_repository_and_raw_sql_but_allows_get(tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from motte_contracts.hashing import canonical_json
+    from motte_contracts.statistical_reports import statistical_report_id
+    from tests.storage.test_statistical_report_references import put_report, report_body
+
+    db = tmp_path / "reports.db"
+    store = SQLiteRunStore(db)
+    existing = put_report(store)
+    body = report_body(evidence={"artifact_id": "late.bin"})
+    report_id = statistical_report_id(body)
+    lease = begin_maintenance(store)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            store.statistical_reports.put(report_id, body)
+        with closing(sqlite3.connect(db)) as connection, connection:
+            with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+                connection.execute("INSERT INTO statistical_reports VALUES (?, ?, ?)",
+                                   (report_id, canonical_json(body), "2026-09-30T00:00:00Z"))
+        assert store.statistical_reports.get(existing["report_id"]) == existing
+        assert store.statistical_reports.get(report_id) is None
+        assert store.statistical_reports.list() == [existing]
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+
+
+def test_pg_maintenance_blocks_report_repository_and_raw_sql_but_allows_get(isolated_pg_database):
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+    from motte_contracts.hashing import canonical_json
+    from motte_contracts.statistical_reports import statistical_report_id
+    from motte_storage.postgres import create_postgres_run_store
+    from motte_storage.statistical_reports import PgStatisticalReports
+    from tests.storage.test_statistical_reports_pg import _upgrade
+    from tests.storage.test_statistical_report_references import put_report, report_body
+
+    dsn = isolated_pg_database
+    _upgrade(dsn)
+    store = create_postgres_run_store(dsn)
+    existing = put_report(store)
+    body = report_body(evidence={"artifact_id": "late.bin"})
+    report_id = statistical_report_id(body)
+    # Independent real connections time out while maintenance's SHARE lock is held.
+    bounded = make_conninfo(dsn, options="-c lock_timeout=300ms")
+    repository = PgStatisticalReports(bounded)
+    lease = begin_maintenance(store)
+    try:
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            repository.put(report_id, body)
+        with psycopg.connect(bounded) as connection:
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                connection.execute("INSERT INTO statistical_reports VALUES (%s, %s, %s)",
+                                   (report_id, canonical_json(body), "2026-09-30T00:00:00Z"))
+        assert repository.get(existing["report_id"]) == existing
+        assert repository.get(report_id) is None
+        assert repository.list() == [existing]
+    finally:
+        end_maintenance(store, owner=lease["owner"])

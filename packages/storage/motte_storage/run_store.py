@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event, validate_scores
 from .platform import PLATFORM_SCHEMA
+from .calibrations import _SCHEMA as CALIBRATION_SCHEMA
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -139,13 +140,18 @@ CREATE TABLE IF NOT EXISTS default_baselines (
   position INTEGER NOT NULL DEFAULT 0,
   payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS statistical_reports (
+  report_id TEXT PRIMARY KEY,
+  body TEXT NOT NULL,
+  published_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS default_baseline_history (
   scope TEXT NOT NULL,
   position INTEGER NOT NULL,
   payload TEXT NOT NULL,
   PRIMARY KEY (scope, position)
 );
-""" + PLATFORM_SCHEMA
+""" + PLATFORM_SCHEMA + CALIBRATION_SCHEMA
 
 # Worker 崩溃后卡住的中间态；重启时回收回 queued。
 INTERRUPTED_STATES = ("preparing", "running", "collecting", "scoring")
@@ -638,8 +644,15 @@ class RunStore:
     experiments: Any = None
     gate_store: Any = None
     baseline_store: Any = None
+    statistical_reports: Any = None
+    calibrations: Any = None
+    scoring_jobs: Any = None
 
     def __post_init__(self) -> None:
+        if self.calibrations is not None:
+            from .scoring_jobs import scoring_jobs_for
+            scoring_jobs_for(self)
+            self.calibrations._bind(self)
         if self.commands is not None:
             from .runtime_sessions import attach_interactive_repositories
             attach_interactive_repositories(self)
@@ -665,6 +678,8 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
     from .gate_store import SQLiteGateStore
     from .invocations import SQLiteInvocations
     from .trials import SQLiteTrials
+    from .statistical_reports import SQLiteStatisticalReports
+    from .calibrations import SQLiteCalibrations
 
     return RunStore(
         runs=_SQLiteRuns(path),
@@ -683,6 +698,8 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         experiments=SQLiteExperiments(path),
         gate_store=SQLiteGateStore(path),
         baseline_store=SQLiteBaselineStore(path),
+        statistical_reports=SQLiteStatisticalReports(path),
+        calibrations=SQLiteCalibrations(path),
     )
 
 
@@ -703,6 +720,8 @@ def InMemoryRunStore() -> RunStore:
     from .gate_store import MemoryGateStore
     from .invocations import MemoryInvocations
     from .trials import MemoryTrials
+    from .statistical_reports import MemoryStatisticalReports
+    from .calibrations import MemoryCalibrations
 
     return RunStore(
         runs=runs,
@@ -721,4 +740,6 @@ def InMemoryRunStore() -> RunStore:
         experiments=MemoryExperiments(lock),
         gate_store=MemoryGateStore(lock),
         baseline_store=MemoryBaselineStore(lock),
+        statistical_reports=MemoryStatisticalReports(lock),
+        calibrations=MemoryCalibrations(lock),
     )

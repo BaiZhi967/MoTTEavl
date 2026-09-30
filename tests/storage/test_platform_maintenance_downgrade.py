@@ -22,6 +22,18 @@ from sqlalchemy import create_engine, inspect, text
 from motte_storage.migrations import MIGRATIONS_DIR
 
 
+PLATFORM_REVISION = "0015_m7_platform_tables"
+
+
+def _upgrade_platform(dsn):
+    """This suite exercises 0015 itself even after later revisions exist."""
+    from alembic import command
+    from motte_storage.migrations import alembic_config, current
+
+    command.upgrade(alembic_config(dsn), PLATFORM_REVISION)
+    return current(dsn)
+
+
 def _migration():
     path = MIGRATIONS_DIR / "versions" / "0015_m7_platform_tables.py"
     spec = importlib.util.spec_from_file_location(path.stem, path)
@@ -156,8 +168,8 @@ def test_postgres_maintenance_downgrade_cleans_owned_guards_and_reinstalls(isola
     from motte_storage.migrations import current, downgrade, revision_ids, upgrade
 
     dsn = isolated_pg_database
-    head = revision_ids()[-1]
-    upgrade(dsn)
+    head = PLATFORM_REVISION
+    _upgrade_platform(dsn)
     _install_then_release(dsn)
     with psycopg.connect(dsn) as connection:
         assert connection.execute(
@@ -186,7 +198,7 @@ def test_postgres_maintenance_downgrade_cleans_owned_guards_and_reinstalls(isola
             "SELECT count(*) FROM pg_trigger WHERE tgname = 'keep_unrelated_guard'"
         ).fetchone()[0] == 1
         connection.execute("UPDATE runs SET revision = revision WHERE false")
-    assert upgrade(dsn) == head
+    assert _upgrade_platform(dsn) == head
     _install_then_release(dsn)
     with psycopg.connect(dsn) as connection:
         assert connection.execute(
@@ -194,8 +206,8 @@ def test_postgres_maintenance_downgrade_cleans_owned_guards_and_reinstalls(isola
             "AND tgname = 'motte_maintenance_write'"
         ).fetchone()[0] == 1
     # Exercise every remaining Alembic version mutation with no dangling guard.
-    assert downgrade(dsn, steps=len(revision_ids())) is None
-    assert upgrade(dsn) == head
+    assert downgrade(dsn, steps=revision_ids().index(PLATFORM_REVISION) + 1) is None
+    assert _upgrade_platform(dsn) == head
 
 
 def test_postgres_abandoned_maintenance_blocks_downgrade_and_writes(isolated_pg_database):
@@ -204,8 +216,8 @@ def test_postgres_abandoned_maintenance_blocks_downgrade_and_writes(isolated_pg_
     from motte_storage.migrations import current, downgrade, revision_ids, upgrade
 
     dsn = isolated_pg_database
-    head = revision_ids()[-1]
-    upgrade(dsn)
+    head = PLATFORM_REVISION
+    _upgrade_platform(dsn)
     _install_then_release(dsn)
     # Match crash recovery state: persisted active flag, no live process locks.
     with psycopg.connect(dsn) as connection:
@@ -229,7 +241,7 @@ def test_postgres_downgrade_preserves_unexpected_guard_dependency(isolated_pg_da
     from motte_storage.migrations import current, downgrade, revision_ids, upgrade
 
     dsn = isolated_pg_database
-    upgrade(dsn)
+    _upgrade_platform(dsn)
     _install_then_release(dsn)
     with psycopg.connect(dsn) as connection:
         connection.execute(
@@ -239,7 +251,7 @@ def test_postgres_downgrade_preserves_unexpected_guard_dependency(isolated_pg_da
     with pytest.raises(InternalError) as failure:
         downgrade(dsn)
     assert isinstance(failure.value.orig, psycopg.errors.DependentObjectsStillExist)
-    assert current(dsn) == revision_ids()[-1]
+    assert current(dsn) == PLATFORM_REVISION
     with psycopg.connect(dsn) as connection:
         assert connection.execute("SELECT to_regclass('public.motte_meta')").fetchone()[0]
         assert connection.execute(
@@ -283,7 +295,7 @@ def test_postgres_downgrade_observes_inflight_audit_commit(isolated_pg_database,
     from motte_storage.migrations import current, downgrade, revision_ids, upgrade
 
     dsn = isolated_pg_database
-    upgrade(dsn)
+    _upgrade_platform(dsn)
     _install_then_release(dsn)
     with ThreadPoolExecutor(max_workers=1) as executor:
         with psycopg.connect(dsn) as writer:
@@ -296,7 +308,7 @@ def test_postgres_downgrade_observes_inflight_audit_commit(isolated_pg_database,
                     future.result(timeout=10)
             finally:
                 writer.rollback()
-    assert current(dsn) == revision_ids()[-1]
+    assert current(dsn) == PLATFORM_REVISION
     with psycopg.connect(dsn) as connection:
         assert connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 1
 
@@ -308,7 +320,7 @@ def test_postgres_audit_insert_cannot_commit_after_downgrade_counts(isolated_pg_
     from motte_storage.migrations import _psycopg_url, upgrade
 
     dsn = isolated_pg_database
-    upgrade(dsn)
+    _upgrade_platform(dsn)
     _install_then_release(dsn)
     module = _migration()
     original_blockers = module.downgrade_blockers
@@ -347,7 +359,7 @@ def test_postgres_active_downgrade_refuses_before_queued_audit_writer(isolated_p
     from motte_storage.migrations import _psycopg_url, upgrade
 
     dsn = isolated_pg_database
-    upgrade(dsn)
+    _upgrade_platform(dsn)
     store = _install_then_release(dsn)
     engine = create_engine(_psycopg_url(dsn), connect_args={"options": "-c lock_timeout=1000"})
     pids = Queue()
@@ -389,7 +401,7 @@ def test_postgres_nondefault_isolation_preserves_metadata(isolated_pg_database, 
     from motte_storage.migrations import _psycopg_url, upgrade
 
     dsn = isolated_pg_database
-    upgrade(dsn)
+    _upgrade_platform(dsn)
     engine = create_engine(_psycopg_url(dsn), isolation_level=isolation)
     try:
         with engine.begin() as connection:

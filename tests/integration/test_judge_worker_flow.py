@@ -707,3 +707,133 @@ def test_runs_are_not_starved_by_continuously_submitted_judge_jobs(
         worker.claim_and_execute()
     assert store.runs.get(created["id"])["status"] == "completed"
     assert len(store.scoring_passes.list_for_run("run-1")) >= 1
+
+
+# ====================================================== Calibration-owned Worker jobs
+
+def calibration_worker_environment(tmp_path, *, count=1):
+    """Scripted software-only calibration path, with no real human acceptance claim."""
+    from tests.sdk.test_judge_calibrations import calibration_environment
+    lifecycle, scoring, resources, provider, factory, version, request = calibration_environment(
+        tmp_path, count=count,
+    )
+    provider.responses = [json.dumps({
+        "winner": "tie",
+        "criteria": [{"criterion_id": key, "preference": "tie", "reason": "software fixture",
+                      "evidence": ["event:10", "event:20"]}
+                     for key in version.spec.criteria],
+    })]
+    execution = lifecycle.submit(version.reference, request)
+    worker = WorkerLoop(RunService(lifecycle.store), scoring_jobs=scoring,
+                        reporter=WorkerReporter(io.StringIO()))
+    return lifecycle, scoring, resources, provider, version, request, execution, worker
+
+
+def test_worker_uses_frozen_pair_order(tmp_path):
+    lifecycle, scoring, resources, provider, version, request, execution, worker = (
+        calibration_worker_environment(tmp_path, count=30)
+    )
+    # Mutable resources disappear/change after submit; the Worker only sees snapshots.
+    resources.providers.put({**resources.providers.get("judge-conn"),
+                             "base_url": REPLACED_BASE_URL, "generation": 2})
+    finished = [worker.claim_and_execute() for _ in execution.child_job_ids]
+    assert [item["status"] for item in finished] == ["completed"] * 4
+    assert len(provider.calls) == 120
+    plans = {plan["call_id"]: plan for plan in execution.plan}
+    invocations = [item for child in execution.child_job_ids
+                   for item in lifecycle.store.invocations.list_for_job(child)]
+    assert len(invocations) == 120
+    assert len({item["id"] for item in invocations}) == 120
+    for child in execution.child_job_ids:
+        job = scoring.jobs.get(child)
+        for call in job["calls"]:
+            plan = plans[call["call_id"]]
+            assert call["input_sha256"] == plan["input_sha256"]
+            assert call["presentation_order"] == plan["presentation_order"]
+        assert job["receipt"]["owner"]["calibration_job_id"] == execution.execution_id
+        assert job["provider_snapshot"]["endpoint"] == ORIGINAL_BASE_URL
+    # Inspect the actual dispatched prompt, not only metadata or a stub's return value.
+    for index, sent in enumerate(provider.calls):
+        prompt = sent.messages[0].content
+        if index % 4 == 3:
+            assert prompt.index('"candidate_output": "Reference fixture') < prompt.index(
+                '"candidate_output": "Challenger fixture')
+        else:
+            assert prompt.index('"candidate_output": "Challenger fixture') < prompt.index(
+                '"candidate_output": "Reference fixture')
+        assert sent.model == "scripted-model"
+        assert sent.max_output_tokens == 100
+    assert lifecycle.store.runs.list() == []
+    assert lifecycle.submit(version.reference, request) == execution
+    assert worker.claim_and_execute() is None
+    assert len(provider.calls) == 120
+
+
+def test_calibration_prepared_recovery_and_completed_receipt_never_rebill(tmp_path):
+    lifecycle, scoring, _, provider, version, request, execution, worker = calibration_worker_environment(tmp_path)
+    job_id = execution.child_job_ids[0]
+    assert scoring.jobs.claim(job_id)["status"] == "prepared"
+    worker.recover_interrupted()
+    assert scoring.jobs.get(job_id)["status"] == "queued"
+    assert provider.calls == []
+    assert lifecycle.submit(version.reference, request) == execution
+    done = worker.claim_and_execute()
+    assert done["status"] == "completed"
+    assert len(provider.calls) == 4
+    replay = scoring.run_claimed(scoring.jobs.get(job_id))
+    assert replay["publish_outcome"] == "already_completed"
+    assert replay["receipt"] == done["receipt"]
+    assert lifecycle.get_execution(execution.execution_id) == execution
+    assert lifecycle.list_executions("software-calibration") == [execution]
+    assert len(provider.calls) == 4
+
+
+def test_calibration_dispatched_crash_is_indeterminate_without_resend(tmp_path):
+    lifecycle, scoring, _, provider, version, request, execution, worker = calibration_worker_environment(tmp_path)
+    provider.fail_with = KeyboardInterrupt()
+    try:
+        worker.claim_and_execute()
+    except KeyboardInterrupt:
+        pass
+    job_id = execution.child_job_ids[0]
+    assert scoring.jobs.get(job_id)["status"] == "dispatching"
+    assert len(provider.calls) == 1
+    worker.recover_interrupted()
+    assert scoring.jobs.get(job_id)["status"] == "indeterminate"
+    assert scoring.jobs.get(job_id)["cost_total_usd"] is None
+    assert lifecycle.submit(version.reference, request) == execution
+    assert worker.claim_and_execute() is None
+    assert len(provider.calls) == 1
+    assert lifecycle.store.scoring_passes.list_for_run(f"calibration:{execution.execution_id}") == []
+
+
+def test_calibration_settled_crash_reparses_stored_responses_without_resend(tmp_path, monkeypatch):
+    lifecycle, scoring, _, provider, version, request, execution, worker = calibration_worker_environment(tmp_path)
+    real_publish = scoring.jobs.publish
+    def crash_publish(*args, **kwargs):
+        raise RuntimeError("scripted calibration publish crash")
+    monkeypatch.setattr(scoring.jobs, "publish", crash_publish)
+    assert worker.claim_and_execute() is None
+    assert "scripted calibration publish crash" in worker.reporter.stream.getvalue()
+    job_id = execution.child_job_ids[0]
+    assert scoring.jobs.get(job_id)["status"] == "settled"
+    assert len(provider.calls) == 4
+    monkeypatch.setattr(scoring.jobs, "publish", real_publish)
+    assert lifecycle.submit(version.reference, request) == execution
+    done = worker.claim_and_execute()
+    assert done["status"] == "completed"
+    assert len(provider.calls) == 4
+    assert len(lifecycle.store.scoring_passes.list_for_run(f"calibration:{execution.execution_id}")) == 1
+    assert worker.claim_and_execute() is None
+    assert len(provider.calls) == 4
+
+
+def test_calibration_cancelled_child_survives_group_replay_and_recovery(tmp_path):
+    lifecycle, scoring, _, provider, version, request, execution, worker = calibration_worker_environment(tmp_path)
+    child = execution.child_job_ids[0]
+    assert scoring.cancel(child, actor="software-fixture", reason="scripted cancellation")["outcome"] == "cancelled"
+    assert lifecycle.submit(version.reference, request) == execution
+    worker.recover_interrupted()
+    assert worker.claim_and_execute() is None
+    assert scoring.jobs.get(child)["status"] == "cancelled"
+    assert provider.calls == []
