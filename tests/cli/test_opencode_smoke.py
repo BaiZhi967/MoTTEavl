@@ -21,7 +21,8 @@ def test_default_command_is_dry_and_never_resolves_credentials(monkeypatch, caps
     plan = json.loads(capsys.readouterr().out)
     assert plan["model"] == "space-bunny-free"
     assert len(plan["cases"]) == 3
-    assert plan["max_http_requests"] <= 10
+    assert plan["max_http_requests"] == 20
+    assert plan["max_steps_per_case"] == 6
     assert plan["max_retries"] == 0
     assert plan["paid_fallback"] is False
 
@@ -83,18 +84,18 @@ def test_failure_stops_without_retry_or_fallback(status):
     assert "test-secret" not in json.dumps(report)
 
 
-def test_send_budget_counts_actual_attempts_and_blocks_eleventh():
+def test_send_budget_counts_actual_attempts_and_blocks_twenty_first():
     mod = smoke()
     from urllib.request import Request
     seen = []
     sender = mod.BoundedSender(opener=lambda req, **kw: seen.append(req))
     req = Request(mod.GO_BASE_URL + "/chat/completions", method="POST", data=json.dumps({
         "model": "space-bunny-free", "max_tokens": 512}).encode())
-    for _ in range(10):
+    for _ in range(20):
         sender(req, timeout=20)
     with pytest.raises(ValueError, match="request budget"):
         sender(req, timeout=20)
-    assert len(seen) == sender.requests == 10
+    assert len(seen) == sender.requests == 20
 
 
 @pytest.mark.parametrize("payload,url", [
@@ -210,3 +211,46 @@ def test_corrupt_profile_error_cannot_echo_credentials(monkeypatch, capsys):
     monkeypatch.setattr(credentials, "resolve_api_key", fail)
     assert mod.main(["--live", "--confirm-free", "--credentials", "opencode-go"]) == 2
     assert "private-key-value" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("steps", [0, 7, -1, True, 1.5])
+def test_step_budget_rejects_unsafe_values_before_any_send(steps):
+    mod = smoke()
+    with pytest.raises(ValueError, match="max_steps"):
+        mod.run_quick_smoke(api_key="fake", max_steps=steps,
+                            opener=lambda *a, **k: pytest.fail("unsafe budget sent"))
+
+
+def test_cli_accepts_lower_step_budget_for_dry_plan(capsys):
+    mod = smoke()
+    assert mod.main(["--max-steps", "4"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["max_steps_per_case"] == 4
+    assert plan["max_http_requests"] == 20
+
+
+def test_natural_post_write_self_check_can_finish_without_prompt_suppression():
+    mod = smoke()
+    captured = []
+    def opener(req, **kwargs):
+        body = json.loads(req.data)
+        captured.append(body)
+        case = mod.CASES[(len(captured) - 1) // 4]
+        stage = (len(captured) - 1) % 4
+        if stage in (0, 2):
+            call = {"name": "read_file", "arguments": json.dumps({"path": "solution.py"})}
+        elif stage == 1:
+            call = {"name": "write_file", "arguments": json.dumps({
+                "path": "solution.py", "content": case["expected"]})}
+        else:
+            call = None
+        message = {"content": "Verified and fixed"} if call is None else {"tool_calls": [
+            {"id": f"call-{stage}", "type": "function", "function": call}]}
+        return FakeResponse({"model": "space-bunny-free", "choices": [{"message": message,
+            "finish_reason": "stop" if call is None else "tool_calls"}]})
+    report = mod.run_quick_smoke(api_key="fake", opener=opener)
+    assert report["status"] == "passed"
+    assert report["http_requests"] == 12
+    assert all(case["steps"] == 4 for case in report["cases"])
+    assert all(case["tools"] == ["read_file", "write_file", "read_file"]
+               for case in report["cases"])

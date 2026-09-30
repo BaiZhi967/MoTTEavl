@@ -1,36 +1,40 @@
-# MoTTEavl 支持矩阵（M8 修复候选）
+# MoTTEavl 支持矩阵（M8 当前软件证据）
 
-> M8 候选增量以 `docs/verification/M8.md` 为准。下表原 M7 收据只证明其各自
-> 记录的 SHA/环境，不自动证明 M8 候选；M8 的 `stable_supported` 与
-> `cutover_ready` 均未达到。
+当前结论只取自 [M8唯一索引](../verification/m8-evidence-index.json) 与其绑定的
+[软件执行收据](../verification/m8-software-execution-2026-09-30.json)，
+[修复报告](../verification/M8-repair-2026-09-30.md)说明G01–G12及原T/A验收范围。
+下文M7与2026-09-23记录均为历史，不能替代当前候选。
 
-> 历史术语保留用于追溯：tested 是限定环境的已执行证据；supported 是另需验收的支持承诺；
-> experimental 表示实验性实现；blocked 是环境/授权缺失；not_run 是未执行。
-> 它们不是同一维度的线性排名；skip 不计入 supported。
-> 每行必须给出证据（测试 node / 命令记录 / 验证账本链接）；没有证据的行保持
-> not_run，不因代码存在或 CI 总体通过而升级。
+实现状态和证据层是两个轴。tested只说明指定源码/参数/环境实际执行；supported是另需满足的支持承诺；
+experimental、blocked、not_run各有自身含义，不按线性等级排名。skip不计入通过或支持。
+137个原目标未被改写，当前窄软件映射不授予整体验收；`stable_supported=false`、`cutover_ready=false`。
 
 ## 当前候选唯一结论
 
-以 `docs/verification/m8-repair-receipt.json` 的源码提交、命令结果与限制为当前收据，
-`docs/verification/M8-repair-2026-09-30.md` 解释具体修复边界。
-实现状态与证据层分开记录，不使用 tested/supported 的线性排名。
-源码候选 `ffdcbbb` 本地 Python 3219 passed / 88 skipped，Web 304 passed；
-`make check` 停在缺 Docker 的 Compose config。历史主干 CI 仍不能代替本分支远端 CI。
-`stable_supported=false`、`cutover_ready=false` 保持不变，未授权缩减原 M8 门槛。
+本地47dec4f（tree167a52409c05959a1028e407abe255a90121e615）make check退出0：
+Python5972 passed /60 skipped /1 live deselected，Web304 passed；PG16.15实际选中节点已运行。
+远端同tree源码ae69的[CI run36746343605](https://github.com/BaiZhi967/MoTTEavl/actions/runs/36746343605)
+截至17:35 UTC该已观测代码候选五项CI全部success：Windows83、Compose实际演练/清理且零Provider、
+packaging、Web304与Python。CI Python5948 passed /84 skipped /1 live deselected /3 warnings（2668.22s），
+额外PG分配/恢复2项及Trace事务114项通过，重叠计数不累加。本地与CI结果分别绑定环境；
+后续文档HEAD的CI仍需单独核验，本次成功不自动继承。
 
-| 范围 | 实现状态 | 本轮证据边界 |
+| 范围 | 当前实现 | 已有软件证据及未验收边界 |
 |---|---|---|
-| CLI 固定 Pass、历史缺币种成本 | 已修复 | 本轮离线 SQLite/HTTP 回归；不构成新 live |
-| preview 绑定、整批冻结、恢复 | 已修复 | SQLite/Memory；PG 实现尚待本候选真实 PG 节点 |
-| native-tool Agent 实验 | 受限已实现 | scripted Provider + 真实 Dispatcher，不是外部 Runtime/live |
-| GC/rollback/backup 引用与维护互斥 | 已修复候选 | 临时 SQLite/文件/跨进程负例；PG/Windows 必须另验 |
-| 统计分布和比较 JUnit | 受限已实现 | subject Case/Task 描述统计；独立持久发布仍缺 |
-| Judge 正式 Gate 资格 | 拒绝未校准已实现 | 不假造资格；公开校准/人审/pairwise/持久资格仍缺 |
-| Trace DB 行 retention | 未实现 | 设计与保留策略待确认，无实际裁剪 |
-| C-Eval、Harbor、Scenario/Skill 实验装配与真验收 | 部分/未实现 | 不因 native Agent 或合成测试而扩大支持 |
-| Compose、PG 在途快照、Windows 支持 | 缺本轮环境验证 | 本环境无 Docker/PG；Linux测试不能替代 Windows |
-| 官方数据、付费 L1–L5、私有旧导出、RC/cutover | 未闭合 | 无新增费用/私有源/生产/发布授权 |
+| 固定Pass比较 / 未知成本 | 受限实现已修复 | local/server CLI及SDK/API冻结引用；无币种保持unknown；真实UI未复验 |
+| preview / 批量冻结 / 幂等恢复 | 受限实现已修复 | Memory/SQLite与PG参数组通过；无hash仅create_revalidated |
+| StatisticalReport | 已实施独立不可变发布 | Memory/SQLite/PG与SDK/API/CLI、JSON/JUnit、GC/backup保护；不证明样本充足或live Trial独立 |
+| Judge公共校准 / pairwise Gate | 受限持久实现 | 实际模型身份、冻结alias、no-rebill、角色及完整指标、两套显式Gate的软件路径；真人与真实Judge准确性未验收 |
+| Trace retention / 历史读取 | 已实施，默认关闭 | 持久归档先于receipt+trim；SQLite/PG选中路径与历史partial/gap；Memory不apply，Windows Trace apply不支持 |
+| Direct/GSM/native Agent/Scenario/Skill | 受限实验装配已实施 | 冻结输入、真实Dispatcher/Worker配脚本模型；Skill仅builtin context，native/executable Experiment拒绝 |
+| C-Eval固定OC0.4.2 | 受限Experiment已实施 | 真实安装Runner与localhost HTTP；官方数据和真实模型成绩未验收 |
+| Harbor / opaque外部Runtime Experiment | fail-closed | 未证明完整发送上界的profile拒绝；没有通用Harbor assembler或真实Agent支持结论 |
+| GC / rollback / backup | 引用与屏障修复已实施 | 真实PG并发/在途快照/恢复与SQLite反例通过；真实私有导出和生产恢复未验收 |
+| Windows普通工件 / 已有receipt归档保护 | 已实施，聚焦CI通过 | 83 passed、0 skipped；晚到无receipt归档别名限制保留；不代表完整Windows/Trace apply支持 |
+| Compose | CI隔离软件演练通过 | 实际build/up、迁移/health/Worker、重启持久性、镜像hash、cleanup；零Provider；不等于生产验证 |
+| 发布依赖 / six wheels | 当前主工作区审计及安装通过 | urllib3 2.8.0，其余100锁定包未改；183源码条目一致，隔离Python -I真实HTTP CLI通过；严格TS另有49条相同既有诊断 |
+| 浏览器G04/T11/A18 | not_reverified | 当前build与HTTP10资产一致；浏览器/预览阻断，无UI、窄屏、>500事件或鉴权过期证据 |
+| 真实支持组合 / 私有迁移 / 三个替代场景 / RC与cutover | 未闭合 | 新付费、人审、私有来源、完整平台、正式发布与生产授权及验收仍需补齐 |
 
 ## 历史 M7 记录（以下不是当前候选结论）
 
@@ -88,10 +92,9 @@
 
 ## 6. 阶段结论规则
 
-只有上表所有声明 supported/tested 的行都有真实证据时，才可输出 `stable_supported`；
-任一 not_run/blocked 存在时如实标注 `offline_verified` + `external_pending`。
+以上是M7时点的证据账本，不产生当前发布结论。tested表示限定执行事实，supported还需对应支持承诺及原验收门槛；二者不是线性等级，不能由测试数量相互转换。
 
-## 7. M8 候选增量（2026-09-23）
+## 7. 历史 M8 候选增量（2026-09-23，非当前结论）
 
 | 能力 / 环境 | 本候选状态 | 证据或缺口 |
 |---|---|---|
@@ -104,9 +107,9 @@
 | 配置网关的 DeepSeek 单轮 Provider | live_scoped | 用户授权下 6 次真实 HTTP 尝试、0 重试；5 个隔离合成 Run 完成，显式 CNY 回执的双 Run 比较质量/成本合格。网关上游模型版本和实际账单未独立核验；见 M8 付费收据 |
 | 其他真实 Harness/Judge 与生产切换 | external_pending | C-Eval/Harbor/native Agent/Scenario/Skill/Judge 尚无本轮 live 收据；真实标签、环境和单独执行边界仍缺，未发布或切换 |
 
-## 8. 类型化实验的执行上界与外部拒绝边界（2026-09-30）
+## 8. 当前受限实验范围附注（2026-09-30）
 
-本节只更新 Suite Task 1–4 的装配/预算边界，不升级整个 M8 的发布状态。
+本节与当前索引的 suite_assemblers 范围一致，不升级整个 M8 的发布状态。
 “代码拒绝”“离线证明”“真实 Runner + 合成服务”“真实模型/官方数据验收”分列；
 前一层不能代替后一层。以下所有 Task 4 新测试都没有执行模型、CLI Agent 或容器。
 
@@ -114,7 +117,7 @@
 |---|---|---|---|
 | native `builtin-agent@1`，legacy-json / native-tool | 保留既有原生路径；Case × 累积 model steps × 显式 Provider attempts | `test_m8_native_agent_experiments.py`；`test_m8_experiment_retry.py` 的真实 Worker + scripted Provider | 本轮没有新增真实模型证据；外部 Runtime 不借用此公式 |
 | typed Scenario / Skill，固定 Workflow + builtin Target | 受限准入，复用 standalone builder 和冻结 Cell | `test_experiment_scenario_skill.py`；不允许 Runtime 因素或未证明 Target | scripted Provider/Job 生命周期不是 CLI Agent 验收 |
-| `motte-ceval-oc042-bounded@1`，Linux x86_64 / Python 3.10.20 / 147-pin lock | 准入，固定单模型/worker/partition/batch，N × 2 客户端 sends / Run | `test_experiment_ceval.py` 的精确 revision、冻结重放、错误计数、无隐藏 retry/redirect、身份漂移拒绝 | Task 3 (`f4deeca`) 实际固定 OpenCompass CLI + localhost 合成服务通过成功及失败边界；[执行条件](../operations/ceval.md#6-实验矩阵的固定发送上界m8-task-3)。无官方数据/真实模型成绩 |
+| `motte-ceval-oc042-bounded@1`，Linux x86_64 / Python 3.10.20 / 147-pin lock | 准入，固定单模型/worker/partition/batch，N × 2 客户端 sends / Run | `test_experiment_ceval.py` 的精确 revision、冻结重放、错误计数、无隐藏 retry/redirect、身份漂移拒绝 | 当前47dec4f执行收据中的固定 OpenCompass0.4.2 CLI + localhost合成服务通过选中节点；f4deeca仅为历史实现来源；[执行条件](../operations/ceval.md#6-实验矩阵的固定发送上界m8-task-3)。无官方数据/真实模型成绩 |
 | 旧 C-Eval / CMMLU standalone OpenCompass profile | 不能获得 Experiment 硬预算；旧 standalone 合约保留 | 旧 profile/未知 profile 在 preview/create/retry 拒绝；无 profile 的 proxy/redirect 兼容性已回归 | Task 3 的旧 standalone 合成 runner 测试只证明兼容；旧上游错误循环没有调用上界 |
 | Harbor 0.23.0 + Claude Code | 拒绝：`SUITE_UNSUPPORTED`；伪装为 native 的冻结输入为 `EXPERIMENT_BUDGET_UNPROVABLE` | `test_experiment_external_budget_guards.py`：max_turns、max_budget_usd、零 runner retry 都不构成 transport 证明 | 本轮真实 Harbor/Claude Agent 验收 `not_run`；CLI 内重试、fallback/helper 请求仍未被平台计数 |
 | Harbor Task × Trial / oracle | 拒绝，Trial 计划或 oracle 标签不等于模型 sends | 同上，Task=1、Trial=1 及 oracle 均拒绝；standalone fixture 的 Trial refreeze 保留 | oracle fixture 只证明确定性脚本/导入路径；任意任务脚本不能宣称零模型调用，更不是实际 Agent 支持 |

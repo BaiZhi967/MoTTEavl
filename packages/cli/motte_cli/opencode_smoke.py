@@ -35,16 +35,24 @@ CASES = (
      "instruction": "Fix default(value) to return 10 if value is None else value.",
      "expected": "def default(value):\n    return 10 if value is None else value\n"},
 )
-MAX_REQUESTS = 10
+MAX_REQUESTS = 20
+MAX_STEPS = 6
 MAX_OUTPUT_TOKENS = 512
 TOTAL_TIMEOUT = 180.0
 CALL_TIMEOUT = 20.0
 
 
-def smoke_plan() -> dict:
+def validate_max_steps(max_steps: int) -> int:
+    if type(max_steps) is not int or not 1 <= max_steps <= MAX_STEPS:
+        raise ValueError(f"max_steps must be an integer between 1 and {MAX_STEPS}")
+    return max_steps
+
+
+def smoke_plan(max_steps: int = MAX_STEPS) -> dict:
+    validate_max_steps(max_steps)
     return {"status": "dry_run", "model": SPACE_BUNNY_MODEL, "base_url": GO_BASE_URL,
             "cases": [case["id"] for case in CASES], "max_http_requests": MAX_REQUESTS,
-            "max_retries": 0, "max_steps_per_case": 3, "max_output_tokens": MAX_OUTPUT_TOKENS,
+            "max_retries": 0, "max_steps_per_case": max_steps, "max_output_tokens": MAX_OUTPUT_TOKENS,
             "per_call_timeout_sec": CALL_TIMEOUT, "total_timeout_sec": TOTAL_TIMEOUT,
             "concurrency": 1, "paid_fallback": False, "follow_redirects": False,
             "free_status": "limited time; operator must verify before live execution"}
@@ -86,7 +94,10 @@ def _same_code(actual: str, expected: str) -> bool:
         return False
 
 
-def run_quick_smoke(*, api_key: str, opener: Callable | None = None) -> dict:
+def run_quick_smoke(
+    *, api_key: str, opener: Callable | None = None, max_steps: int = MAX_STEPS,
+) -> dict:
+    validate_max_steps(max_steps)
     if not api_key or not api_key.strip():
         raise ValueError("OPENCODE_GO_API_KEY is required")
     sender = BoundedSender(opener=opener)
@@ -116,7 +127,7 @@ def run_quick_smoke(*, api_key: str, opener: Callable | None = None) -> dict:
         runtime = BuiltinReActRuntime(
             provider.complete, {"read_file": read_file, "write_file": write_file},
             model=SPACE_BUNNY_MODEL, mode="native-tool",
-            budget=ExecutionBudget(max_steps=3, max_tool_calls=3,
+            budget=ExecutionBudget(max_steps=max_steps, max_tool_calls=max_steps,
                                    per_call_timeout_sec=CALL_TIMEOUT,
                                    max_output_tokens=MAX_OUTPUT_TOKENS),
         )
@@ -143,7 +154,7 @@ def run_quick_smoke(*, api_key: str, opener: Callable | None = None) -> dict:
             runtime.close()
         if not results[-1]["passed"]:
             break  # fail closed, including timeout: no subsequent concurrent/background sends
-    return {**smoke_plan(), "status": "passed" if len(results) == 3 and all(
+    return {**smoke_plan(max_steps), "status": "passed" if len(results) == 3 and all(
             case["passed"] for case in results) else "failed",
             "cases": results, "http_requests": sender.requests,
             "execution_mode": "live" if opener is None else "mock"}
@@ -155,9 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm-free", action="store_true",
                         help="I verified Space Bunny Free is still free in my OpenCode console")
     parser.add_argument("--credentials", help="explicit saved credential profile; no env fallback")
+    parser.add_argument("--max-steps", type=int, choices=range(1, MAX_STEPS + 1),
+                        default=MAX_STEPS, help="per-case step cap (default 6; maximum 6)")
     args = parser.parse_args(argv)
     if not args.live:
-        print(json.dumps(smoke_plan(), ensure_ascii=False, indent=2))
+        print(json.dumps(smoke_plan(args.max_steps), ensure_ascii=False, indent=2))
         return 0
     if not args.confirm_free:
         print("Check current free availability, then add --confirm-free. No requests sent.",
@@ -179,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
               "Configure it yourself securely; do not paste a key into chat. No requests sent.",
               file=sys.stderr)
         return 2
-    report = run_quick_smoke(api_key=api_key)
+    report = run_quick_smoke(api_key=api_key, max_steps=args.max_steps)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] == "passed" else 1
 
