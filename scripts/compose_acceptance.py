@@ -369,6 +369,14 @@ class Acceptance:
         if result.stdout.strip() != "synthetic-artifact-ok":
             raise RuntimeError("shared artifact persistence failed")
 
+    def require_worker_running(self) -> None:
+        """Verify process state only; the Worker intentionally has no HTTP probe."""
+        rows = self.parse_ps(self.compose("ps", "--all", "--format", "json", "worker").stdout)
+        self.receipt["worker_container"] = rows
+        if (len(rows) != 1 or rows[0].get("Service") != "worker"
+                or rows[0].get("State") != "running" or rows[0].get("ExitCode") != 0):
+            raise RuntimeError(f"worker is not running with a clean exit state: {rows}")
+
     def exercise(self) -> None:
         body = synthetic_request(self.project)
         created = self.api.request("/api/v1/runs", body, status=202)
@@ -378,11 +386,12 @@ class Acceptance:
         self.receipt["run_id"] = self.run_id
         self.receipt["checks"].append("api-created-queued-replay")
         self.artifact("api", write=True)
-        # Respect the image and Compose health checks, including inherited checks.
-        self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never",
-                     "--wait", "--wait-timeout", "150", "worker")
+        # Compose 2.38.2 --wait rejects an explicitly disabled image healthcheck.
+        # Check the Worker's process state and actual work instead of HTTP health.
+        self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never", "worker")
         deadline = time.monotonic() + 90
         while True:
+            self.require_worker_running()
             run = self.api.request(f"/api/v1/runs/{self.run_id}")
             if run["status"] == "completed":
                 break
@@ -416,7 +425,9 @@ class Acceptance:
         self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never",
                      "--wait", "--wait-timeout", "150", "postgres")
         self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate",
-                     "--wait", "--wait-timeout", "150", "api", "worker")
+                     "--wait", "--wait-timeout", "150", "api")
+        self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", "worker")
+        self.require_worker_running()
         self.api = self.connect_api()
         if self.api.request("/health") != {"status": "ok"}:
             raise RuntimeError("API failed health after restart")

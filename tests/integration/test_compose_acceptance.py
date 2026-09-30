@@ -164,6 +164,101 @@ def test_report_requires_exact_pass_mixed_outcomes_and_no_provider_cost():
             mod.validate_report({**report, field: value}, "run-a", "pass-a")
 
 
+def worker_lifecycle_probe(tmp_path, *, rows=None, emulate_wait_failure=True):
+    """Script only external command/HTTP boundaries; run the real controller stages."""
+    from types import SimpleNamespace
+    mod = controller()
+    probe = mod.Acceptance(ROOT, tmp_path / "receipt", project=PROJECT)
+    report = {"run_id": "run-a", "status": "completed", "scoring_pass_id": "pass-a",
+              "summary": {"cases": 2, "scored": 2, "passed": 1, "failed": 1},
+              "cost": {"total": None}, "scores": [
+                  {"case_id": "accept-pass", "passed": True},
+                  {"case_id": "accept-fail", "passed": False}]}
+    calls, artifacts = [], []
+    rows = [{"Service": "worker", "State": "running", "ExitCode": 0}] if rows is None else rows
+    def compose(*args, **kwargs):
+        calls.append(args)
+        if emulate_wait_failure and "up" in args and "--wait" in args and "worker" in args:
+            raise RuntimeError("container worker has no healthcheck configured")
+        output = json.dumps(rows) if args == ("ps", "--all", "--format", "json", "worker") else ""
+        return subprocess.CompletedProcess(args, 0, output, "")
+    def request(path, body=None, **kwargs):
+        if path == "/api/v1/runs" and body is not None:
+            return {"id": "run-a", "status": "queued"}
+        if path == "/api/v1/runs/run-a":
+            return {"status": "completed", "current_scoring_pass_id": "pass-a",
+                    "manifest": {"execution": {"backend_id": "replay"}}}
+        if path == "/api/v1/runs/run-a/report?scoring_pass_id=pass-a":
+            return deepcopy(report)
+        if path == "/api/v1/runs/run-a/scoring-passes":
+            return {"total": 1, "items": [{"id": "pass-a"}]}
+        if path == "/health":
+            return {"status": "ok"}
+        pytest.fail(f"unexpected request: {path}")
+    probe.compose = compose
+    probe.api = SimpleNamespace(request=request)
+    probe.connect_api = lambda: probe.api
+    probe.artifact = lambda service, write=False: artifacts.append((service, write))
+    probe.sql = lambda _: json.dumps({"runs": 1, "passes": 1})
+    probe.run_id, probe.pass_id, probe.report = "run-a", "pass-a", report
+    return probe, calls, artifacts
+
+
+@pytest.mark.parametrize("stage", ["exercise", "restart"])
+def test_non_http_worker_never_uses_compose_health_wait(tmp_path, stage):
+    probe, calls, artifacts = worker_lifecycle_probe(tmp_path)
+    getattr(probe, stage)()
+    worker_up = [call for call in calls if call[0] == "up" and "worker" in call]
+    assert len(worker_up) == 1 and "--wait" not in worker_up[0]
+    assert ("ps", "--all", "--format", "json", "worker") in calls
+    assert ("worker", False) in artifacts and ("api", stage == "exercise") in artifacts
+    if stage == "restart":
+        assert "--force-recreate" in worker_up[0]
+        assert any(call[0] == "up" and "api" in call and "--wait" in call for call in calls)
+        assert any(call[0] == "up" and "postgres" in call and "--wait" in call for call in calls)
+        assert "postgres-restart-container-recreate-fixed-pass-persistence" in probe.receipt["checks"]
+    else:
+        assert "worker-completed-fixed-pass-and-shared-artifact" in probe.receipt["checks"]
+        assert (probe.output / "fixed-pass-report.json").is_file()
+
+
+@pytest.mark.parametrize("stage", ["exercise", "restart"])
+@pytest.mark.parametrize("rows", [[], [{"Service": "worker", "State": "exited", "ExitCode": 0}],
+    [{"Service": "worker", "State": "exited", "ExitCode": 1}],
+    [{"Service": "worker", "State": "restarting", "ExitCode": 0}],
+    [{"Service": "worker", "State": "running"}],
+    [{"Service": "worker", "State": "running", "ExitCode": 0}] * 2])
+def test_worker_process_state_cannot_be_replaced_by_a_completed_report(tmp_path, stage, rows):
+    probe, _, artifacts = worker_lifecycle_probe(tmp_path, rows=rows, emulate_wait_failure=False)
+    with pytest.raises(RuntimeError, match="worker.*running"):
+        getattr(probe, stage)()
+    assert ("worker", False) not in artifacts
+    assert not any("persistence" in check or "worker-completed" in check for check in probe.receipt["checks"])
+
+
+def test_worker_exit_during_queued_replay_is_detected_before_completion(tmp_path, monkeypatch):
+    probe, _, artifacts = worker_lifecycle_probe(tmp_path)
+    compose, request = probe.compose, probe.api.request
+    states = iter(["running", "exited"])
+    statuses = iter(["queued", "completed"])
+    def changing_compose(*args, **kwargs):
+        result = compose(*args, **kwargs)
+        if args == ("ps", "--all", "--format", "json", "worker"):
+            result.stdout = json.dumps([{"Service": "worker", "State": next(states), "ExitCode": 0}])
+        return result
+    def changing_request(path, *args, **kwargs):
+        result = request(path, *args, **kwargs)
+        if path == "/api/v1/runs/run-a":
+            result["status"] = next(statuses)
+        return result
+    probe.compose, probe.api.request = changing_compose, changing_request
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match="worker.*running"):
+        probe.exercise()
+    assert ("worker", False) not in artifacts
+    assert next(statuses) == "completed"  # A stale completed report cannot mask process exit.
+
+
 @pytest.mark.parametrize("failure_stage", ["build", "startup", "health", "exercise", "restart"])
 def test_failure_always_collects_logs_and_removes_only_owned_resources(tmp_path, failure_stage):
     mod = controller()
