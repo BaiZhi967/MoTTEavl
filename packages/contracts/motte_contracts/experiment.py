@@ -7,6 +7,8 @@ repeat_index 的稳定 hash。experiment repeat 产生独立 Cell/Run；Harbor T
 """
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import Field, field_validator, model_validator
 
 from .hashing import canonical_hash
@@ -213,6 +215,10 @@ class ExperimentCell(Contract):
     #: 显式 retry 产生的 superseding 子 Run 记录（原 initial Run 不消失）。
     superseding_run_ids: tuple[str, ...] = ()
     failure_reason: str | None = None
+    #: 创建预检冻结的可执行输入；旧 Cell 为 None，恢复时显式重预检。
+    prepared_run: dict[str, Any] | None = None
+    preview_hash: str | None = None
+    preflight_mode: str | None = None
 
     @field_validator("allocation_status")
     @classmethod

@@ -380,7 +380,7 @@ export function ExperimentsPage() {
     setCreateError("");
     setCreateNotice("");
     try {
-      const outcome = await createExperiment(parsed.value);
+      const outcome = await createExperiment(parsed.value, undefined, preview?.preview_hash);
       upsert(outcome);
       setCreateNotice(
         `创建已受理（202）：${outcome.created === false ? "复用既有 spec" : "发布新 spec"}，`

@@ -167,6 +167,17 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _statistics_input_value(value: Any) -> Any:
+    """Freeze raw metering inputs as strict JSON, retaining non-finite identity."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return {"nonfinite": str(value)}
+    if isinstance(value, dict):
+        return {key: _statistics_input_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_statistics_input_value(item) for item in value]
+    return value
+
+
 def _count(value: Any) -> int:
     try:
         return int(value)
@@ -830,6 +841,70 @@ class ComparisonService:
         )
         return summary, summary.total_usd() if summary.known else None
 
+    def _subject_statistics(
+        self, run: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """One subject measurement per selected Case/Task, never Judge or retries.
+
+        Case metering is not covered by RunReportRef. Return a detached copy of
+        the actual inputs alongside descriptors so callers can bind its digest.
+        Missing Task-level measurements are not reconstructed from Trial scores.
+        """
+        from motte_eval.statistics import latency_summary, summary_statistics
+
+        case_store = getattr(self.store, "case_runs", None)
+        cases = (case_store.list_for_run(run["id"])
+                 if case_store is not None and hasattr(case_store, "list_for_run") else [])
+        by_case = {row["case_id"]: row for row in cases}
+        inputs: list[dict[str, Any]] = []
+        costs: dict[str, list[float | None]] = {}
+        latencies: list[float | None] = []
+        unknown_cost = unknown_currency = 0
+        selected = list(run.get("case_ids") or [])
+        unit = "task" if _is_terminal_bench_run(run.get("manifest") or {}) else "case"
+        for case_id in selected:
+            result = by_case.get(case_id, {}).get("result")
+            result = result if isinstance(result, dict) else {}
+            cost = result.get("cost")
+            metering = result.get("metering")
+            metering = metering if isinstance(metering, dict) else {}
+            inputs.append(_statistics_input_value({
+                "case_id": case_id, "cost": cost,
+                "metering": {"latency_ms": metering.get("latency_ms")},
+            }))
+            block = cost if isinstance(cost, dict) else {}
+            amount = _number(block.get("total"))
+            if (amount is not None and amount < 0) or block.get("scope", "subject") != "subject":
+                amount = None
+            currency = block.get("currency")
+            if not isinstance(currency, str) or not currency.strip():
+                unknown_currency += 1
+                unknown_cost += 1
+            else:
+                costs.setdefault(currency, []).append(amount)
+                unknown_cost += amount is None
+            latency = _number(metering.get("latency_ms"))
+            latencies.append(latency if latency is not None and latency >= 0 else None)
+        return inputs, {
+            "n_selected": len(selected),
+            "cost": {
+                "scope": "subject", "unit": unit,
+                "source": "result.cost",
+                "known_cost_count": len(selected) - unknown_cost,
+                "unknown_cost_count": unknown_cost,
+                "unknown_currency_count": unknown_currency,
+                "by_currency": {
+                    currency: summary_statistics(values)
+                    for currency, values in sorted(costs.items())
+                },
+            },
+            "latency_ms": {
+                "scope": "subject", "unit": unit,
+                "source": "result.metering.latency_ms",
+                **latency_summary(latencies),
+            },
+        }
+
     def paired_statistics(
         self, baseline_run_id: str, candidate_run_id: str, *,
         allowed_factors: list[str] | tuple[str, ...],
@@ -848,6 +923,7 @@ class ComparisonService:
         from motte_eval.statistics import (
             STATISTICAL_POLICY_V1, paired_difference, statistical_policy_hash,
         )
+        from motte_contracts.hashing import canonical_hash
 
         comparison = self.compare(
             baseline_run_id, candidate_run_id, allowed_factors=allowed_factors,
@@ -862,8 +938,24 @@ class ComparisonService:
         base_run = self.store.runs.get(baseline_run_id)
         candidate_run = self.store.runs.get(candidate_run_id)
         selected = list(base_run.get("case_ids") or [])
+        base_inputs, base_descriptive = self._subject_statistics(base_run)
+        candidate_inputs, candidate_descriptive = self._subject_statistics(candidate_run)
+        inputs = {
+            "refs": refs,
+            "allowed_factors": sorted(set(allowed_factors)),
+            "k": k,
+            "subject_case_metrics": {
+                "baseline": base_inputs, "candidate": candidate_inputs,
+            },
+        }
         view: dict[str, Any] = {
             "refs": refs,
+            "inputs": inputs,
+            "input_digest": canonical_hash(inputs),
+            "k": k,
+            "descriptive": {
+                "baseline": base_descriptive, "candidate": candidate_descriptive,
+            },
             "unit": "task(case)",
             "method": "paired_task_cluster_bootstrap",
             "policy_ref": STATISTICAL_POLICY_V1["policy_id"],
@@ -952,6 +1044,38 @@ class ComparisonService:
 
     # ------------------------------------------------------------------ 门禁
 
+    def _judge_gate_qualification(self, scoring_pass_id: str) -> dict[str, Any]:
+        """Resolve the selected Pass lineage; client flags cannot grant qualification.
+
+        Persistent, policy-bound calibration publication is not wired yet. Judge
+        and Judge-derived manual revisions therefore remain explicitly ineligible.
+        """
+        seen: set[str] = set()
+        current = scoring_pass_id
+        expected_run_id = None
+        while current and current not in seen and len(seen) < 100:
+            seen.add(current)
+            record = self.store.scoring_passes.get(current)
+            if record is None:
+                return {"required": True, "gate_eligible": False,
+                        "reason": "selected scoring lineage is incomplete", "pass_id": scoring_pass_id}
+            if expected_run_id is None:
+                expected_run_id = record.get("run_id")
+            elif record.get("run_id") != expected_run_id:
+                return {"required": True, "gate_eligible": False,
+                        "reason": "manual scoring lineage crosses Run ownership", "pass_id": scoring_pass_id}
+            if record.get("source") == "judge" or record.get("judge"):
+                return {"required": True, "gate_eligible": False,
+                        "reason": "no authoritative persistent calibration qualification for selected Judge Pass",
+                        "pass_id": scoring_pass_id, "judge_pass_id": current}
+            if record.get("source") != "manual_revision":
+                return {"required": False, "gate_eligible": True}
+            revision = record.get("manual_revision")
+            revision = revision if isinstance(revision, dict) else {}
+            current = str(revision.get("source_pass_id") or record.get("previous_pass_id") or "")
+        return {"required": True, "gate_eligible": False,
+                "reason": "manual scoring lineage is missing or cyclic", "pass_id": scoring_pass_id}
+
     def evaluate_gate(
         self,
         run_id: str,
@@ -972,7 +1096,9 @@ class ComparisonService:
                 f"run {run_id} is {run.get('status')!r}; gates evaluate fixed, "
                 "terminal reports only",
             )
+        scoring_pass_id = str(_resolve_pass(self.store, run_id, scoring_pass_id)["id"])
         candidate = self.candidate_summary(run_id, scoring_pass_id=scoring_pass_id)
+        candidate["judge_qualification"] = self._judge_gate_qualification(scoring_pass_id)
         candidate_ref = self.report_ref(run_id, scoring_pass_id=scoring_pass_id)
         comparison_view: dict[str, Any] | None = None
         baseline_view: dict[str, Any] | None = None
@@ -1030,8 +1156,12 @@ class ComparisonService:
             }
             baseline_view = {
                 "run_id": baseline_run_id,
-                "scoring_pass_id": _current_pass_id(self.store, baseline_run_id),
+                "scoring_pass_id": result.baseline_ref.scoring_pass_id,
             }
+        if baseline_view and baseline_view.get("scoring_pass_id"):
+            baseline_qualification = self._judge_gate_qualification(baseline_view["scoring_pass_id"])
+            if baseline_qualification["required"]:
+                candidate["baseline_judge_qualification"] = baseline_qualification
         conclusion = evaluate_gate(policy, candidate, comparison=comparison_view)
         conclusion["report_refs"] = {
             "candidate": {
@@ -1428,6 +1558,7 @@ class ComparisonService:
                 f"run {run_id} is {run.get('status')!r}; gates evaluate fixed, "
                 "terminal reports only",
             )
+        scoring_pass_id = str(_resolve_pass(self.store, run_id, scoring_pass_id)["id"])
         candidate_ref = self.report_ref(run_id, scoring_pass_id=scoring_pass_id)
         candidate_snapshot = self.report_snapshot(
             run_id, scoring_pass_id=scoring_pass_id,
@@ -1497,6 +1628,11 @@ class ComparisonService:
                 # 实际模型身份按套件冻结口径投影（请求值不替代回报值）；
                 # 副作用/安全标记在固定报告里不可观测 → None（证据不足，
                 # fail-closed），绝不当成"无违规"。
+                "judge_qualification": {
+                    "candidate": self._judge_gate_qualification(scoring_pass_id),
+                    "baseline": self._judge_gate_qualification(baseline_ref.scoring_pass_id)
+                    if baseline_ref is not None else None,
+                },
                 "model_identity": _model_identity(dict(manifest)),
                 "side_effect_violations": None,
                 "safety_markers": None,

@@ -330,3 +330,122 @@ def test_consistent_backup_postgres_manifest(tmp_path):
     assert dump.is_file() and dump.stat().st_size > 0
     assert maintenance._sha256_file(dump) == manifest["database"]["sha256"]
     assert maintenance_status(store)["active"] is False
+
+
+def test_backup_does_not_release_a_new_operation_in_finally(tmp_path, monkeypatch):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    original_end = maintenance.end_maintenance
+    next_lease = {}
+
+    def end_and_start_next(store, *, owner):
+        result = original_end(store, owner=owner)
+        if not next_lease:
+            next_lease.update(maintenance.begin_maintenance(store, reason="gc"))
+        return result
+
+    monkeypatch.setattr(maintenance, "end_maintenance", end_and_start_next)
+    try:
+        manifest = consistent_backup(store, tmp_path / "backups")
+        assert manifest["status"] == "complete"
+        assert maintenance_status(store)["active"] is True
+    finally:
+        if next_lease:
+            original_end(store, owner=next_lease["owner"])
+
+
+def test_backup_resolves_digest_only_evidence_and_restores_it(tmp_path):
+    store, root, run_id = _store_with_referenced_artifacts(tmp_path)
+    artifact = ArtifactStore(root).put_bytes("legacy/digest-only.bin", b"digest-only-evidence")
+    store.case_runs.upsert({
+        "run_id": run_id, "case_id": "digest-only",
+        "artifacts": [{"sha256": artifact.sha256}],
+    })
+    backups = tmp_path / "backups"
+    manifest = consistent_backup(store, backups, artifacts_root=root)
+    assert artifact.id in {entry["path"] for entry in manifest["artifacts"]["files"]}
+    restore_staging(backups, tmp_path / "staging")
+    assert (tmp_path / "staging" / "artifacts" / artifact.id).read_bytes() == b"digest-only-evidence"
+
+
+def test_backup_missing_digest_only_evidence_is_incomplete(tmp_path):
+    store, root, run_id = _store_with_referenced_artifacts(tmp_path)
+    store.case_runs.upsert({
+        "run_id": run_id, "case_id": "missing-digest", "artifacts": [{"sha256": "0" * 64}],
+    })
+    with pytest.raises(BackupIncomplete) as error:
+        consistent_backup(store, tmp_path / "backups", artifacts_root=root)
+    assert "sha256:" + "0" * 64 in error.value.missing
+    assert error.value.manifest["status"] == "incomplete"
+
+
+def test_backup_with_references_requires_artifact_root(tmp_path):
+    store, _root, _run_id = _store_with_referenced_artifacts(tmp_path)
+    with pytest.raises(BackupIncomplete) as error:
+        consistent_backup(store, tmp_path / "backups")
+    assert "nested/dir/report.json" in error.value.missing
+    assert error.value.manifest["status"] == "incomplete"
+
+
+def test_postgres_backup_rejects_unrelated_barrier_store(tmp_path, monkeypatch):
+    store = SQLiteRunStore(tmp_path / "unrelated.db")
+    monkeypatch.setattr(maintenance.shutil, "which", lambda name: "/unused/pg_dump")
+
+    def forbid_dump(*args, **kwargs):
+        raise AssertionError("dump must not run with an unrelated store barrier")
+
+    monkeypatch.setattr(maintenance.subprocess, "run", forbid_dump)
+    with pytest.raises(BackupUnsupported, match="same PostgreSQL"):
+        consistent_backup_postgres("postgresql://localhost/source", tmp_path / "backups", store=store)
+    assert maintenance_status(store)["active"] is False
+
+
+def test_backup_rejects_conflicting_hashes_bound_to_the_same_path(tmp_path):
+    store, root, run_id = _store_with_referenced_artifacts(tmp_path)
+    artifacts = ArtifactStore(root)
+    current = artifacts.put_bytes("shared.bin", b"new-content")
+    legacy = artifacts.put_bytes("legacy-copy.bin", b"old-content")
+    store.case_runs.upsert({
+        "run_id": run_id, "case_id": "conflicting-bound-hashes",
+        "artifact_refs": [{"id": current.id, "sha256": current.sha256},
+                          {"id": current.id, "sha256": legacy.sha256}],
+    })
+    with pytest.raises(ValueError, match="conflicting"):
+        consistent_backup(store, tmp_path / "backups", artifacts_root=root)
+    assert maintenance_status(store)["active"] is False
+    assert not list((tmp_path / "backups").glob("manifest-*.json"))
+
+
+def test_reference_hash_conflict_normalizes_prefix_without_losing_path_binding():
+    from motte_storage.artifact_refs import ArtifactReferenceConflict, collect_artifact_refs
+
+    refs, hashes = {}, set()
+    collect_artifact_refs({"artifacts": [{"id": "shared.bin", "sha256": "a" * 64},
+                                        {"id": "shared.bin", "sha256": "sha256:" + "a" * 64}]},
+                          refs, hashes=hashes)
+    assert refs == {"shared.bin": "a" * 64}
+    assert hashes == {"a" * 64}
+    with pytest.raises(ArtifactReferenceConflict) as error:
+        collect_artifact_refs({"artifact_id": "shared.bin", "sha256": "b" * 64}, refs, hashes=hashes)
+    assert error.value.artifact_id == "shared.bin"
+    assert error.value.hashes == {"a" * 64, "b" * 64}
+    assert hashes == {"a" * 64}
+
+
+def test_backup_blocks_live_tombstone_append_after_database_snapshot(tmp_path, monkeypatch):
+    import sqlite3
+
+    store, root, _run_id = _store_with_referenced_artifacts(tmp_path)
+    tombstones = platform_for(store).tombstones
+    original_snapshot = maintenance._snapshot_sqlite
+
+    def snapshot_then_contend(source, destination):
+        original_snapshot(source, destination)
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            tombstones.append([{"gc_run_id": "late", "artifact_id": "nested/dir/report.json",
+                                "status": "deleted", "reason": "import_rollback"}])
+
+    monkeypatch.setattr(maintenance, "_snapshot_sqlite", snapshot_then_contend)
+    manifest = consistent_backup(store, tmp_path / "backups", artifacts_root=root, reason="gc")
+    assert manifest["status"] == "complete"
+    assert len(manifest["artifacts"]["files"]) == 2
+    assert tombstones.list() == []

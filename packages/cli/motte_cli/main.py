@@ -1001,11 +1001,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cleanup = sub.add_parser(
         "cleanup-artifacts",
-        help="按 TTL 清理 artifact（默认 dry-run；legacy 简单清理，M7 起优先使用 motte gc）",
+        help="旧版 TTL 只读诊断（删除入口已停用；请使用引用保护的 motte gc plan/apply）",
     )
     cleanup.add_argument("--older-than-days", type=float, required=True)
     cleanup.add_argument("--artifacts-root", default=None, help="artifact 根目录，默认 ARTIFACT_ROOT")
-    cleanup.add_argument("--apply", action="store_true", help="真正删除（缺省仅报告）")
+    cleanup.add_argument("--apply", action="store_true", help="已弃用且拒绝执行；请使用 motte gc apply")
     remote.add_mode_arguments(cleanup)
 
     experiment = sub.add_parser(
@@ -1058,6 +1058,8 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate-pass", dest="candidate_pass",
                          help="固定候选 scoring pass id（缺省 current）")
     compare.add_argument("--json", dest="json_out", help="把比较 JSON 写入文件")
+    compare.add_argument("--format", choices=("json", "junit"), default="json")
+    compare.add_argument("--output", help="把指定格式的比较/统计结果写入文件")
     compare.add_argument("--statistics", action="store_true",
                          help="附带固定 Case/Task 配对统计与资格（只读）")
     compare.add_argument("--k", type=int, default=1,
@@ -2239,6 +2241,17 @@ def _compare_command(args) -> int:
     from motte_sdk.comparisons import ComparisonError
     from motte_sdk.export import comparison_to_json
 
+    def emit(payload):
+        from motte_sdk.export import statistics_to_junit
+        output = statistics_to_junit(payload["statistics"]) if getattr(args, "format", "json") == "junit" else _m6_json(payload)
+        if args.json_out:
+            _write_text(args.json_out, _m6_json(payload))
+        if getattr(args, "output", None):
+            _write_text(args.output, output)
+        print(output)
+
+    if getattr(args, "format", "json") == "junit" and not args.statistics:
+        return _error("POLICY_INVALID", "junit comparison export requires --statistics")
     if args.statistics and args.k < 1:
         return _error("POLICY_INVALID", "k must be a positive integer")
     factors = [item.strip() for item in (args.factors or "model").split(",") if item.strip()]
@@ -2262,9 +2275,7 @@ def _compare_command(args) -> int:
         outcome = remote.call_remote(args, invoke, default_code="RUN_NOT_FOUND")
         if isinstance(outcome, remote.RemoteOk):
             payload = outcome.payload
-            if args.json_out:
-                _write_text(args.json_out, _m6_json(payload))
-            print(_m6_json(payload))
+            emit(payload)
             return 5 if payload.get("level") == "not_comparable" else 0
         return outcome
     service = _comparison_service(args)
@@ -2301,9 +2312,7 @@ def _compare_command(args) -> int:
             candidate_pass_id=result.candidate_ref.scoring_pass_id,
             k=args.k,
         )
-    if args.json_out:
-        _write_text(args.json_out, _m6_json(payload))
-    print(_m6_json(payload))
+    emit(payload)
     return 5 if result.level.value == "not_comparable" else 0
 
 
@@ -3034,17 +3043,22 @@ def main(argv=None):
         return 0
 
     if args.command == "cleanup-artifacts":
-        # local-only（涉及宿主文件；协议 §3）；M7 起优先使用 motte gc。
+        # local-only diagnostics; unbound legacy deletion is deliberately disabled.
         blocked = remote.local_only_error(args, "cleanup-artifacts")
         if blocked is not None:
             return blocked
-        from motte_storage.maintenance import cleanup_artifacts
+        from motte_storage.maintenance import BackupUnsupported, cleanup_artifacts
 
         artifacts_root = getattr(args, "artifacts_root", None) or os.environ.get("ARTIFACT_ROOT")
         if not artifacts_root:
             print("cleanup-artifacts 需要 --artifacts-root 或 ARTIFACT_ROOT", file=sys.stderr)
             return 2
-        report = cleanup_artifacts(artifacts_root, older_than_days=args.older_than_days, dry_run=not args.apply)
+        try:
+            report = cleanup_artifacts(
+                artifacts_root, older_than_days=args.older_than_days, dry_run=not args.apply,
+            )
+        except BackupUnsupported as error:
+            return remote.cli_error("CLEANUP_UNSUPPORTED", str(error))
         print(json.dumps(report, ensure_ascii=False))
         return 0
 

@@ -5151,6 +5151,7 @@ export interface operations {
                 baseline_pass?: string | null;
                 candidate_pass?: string | null;
                 k?: number;
+                format?: string;
             };
             header?: never;
             path?: never;

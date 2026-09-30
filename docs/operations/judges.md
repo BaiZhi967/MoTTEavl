@@ -196,3 +196,24 @@ price_table_version / price_table_sha256 / price_table / transport / frozen_at
 - pairwise 的公共提交、校准作业的公共提交、校准报告 API 均未接线（库内路径可用）。
 - 真实付费调用未发生（本环境无授权）；真实至少 30 条人工复核校准资料仍缺；
   真实 PostgreSQL 未验证。
+## M8 Gate 资格安全边界（2026-09-30）
+
+公共 Lite 与版本化 Gate 均由服务端解析**所选固定 Pass** 的 Judge 身份及人工修订来源链，
+不信任请求中的 `judge_qualified` 或政策自报 `experimental_evidence=false`。
+当前尚无已接通的持久校准发布/资格仓储，所以 Judge 与其人工修订来源链只能作为诊断证据：
+Lite 保留 Case 覆盖与指标并追加失败的 `judge_qualification` 规则；版本化 Gate 返回
+`insufficient_evidence` / exit 5（包括 diagnostic 政策，不将诊断误标通过）。
+独立 Baseline 所选 Judge Pass 同样受此资格前置约束。缺失/循环修订来源链也 fail-closed。
+
+版本化引擎升为 `gate-engine@2`，资格投影纳入 evaluation input hash，避免旧引擎已缓存的
+通过结论与新拒绝结论共用同一个结果身份；旧记录不改写。
+此补丁关闭“未校准也能正式放行”的路径，不代表真人校准、pairwise 换序、公开提交/报告及
+持久资格闭环已完成。原校准阈值不变，不产生模型调用，不伪造合格登记。
+
+### 库内换序证据校验补强（2026-09-30）
+
+校准报告的换序一致率只接受同一对稳定候选身份、真正相反展示顺序、两次成功且输出有效的
+独立调用。重复方向、孤立方向、复用 invocation 或 job/call 账本引用、候选集合变化、
+候选对之外的 winner 均保留为无效测量，不再被覆盖或从分母中丢掉。
+原固定合格阈值与有效调用的结果不变；费用仍逐调用统计。
+这只修复库内统计校验，不证明外部提交的账本真实，也不新增公开校准提交、持久资格或真人复核。

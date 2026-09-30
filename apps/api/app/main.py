@@ -3806,14 +3806,22 @@ def create_app(
         baseline_pass: str | None = None,
         candidate_pass: str | None = None,
         k: int = 1,
+        format: str = "json",
     ):
         """Fixed-pass paired Case/Task statistics; no Provider, Judge or writes."""
         try:
-            return comparisons_service.paired_statistics(
+            if format not in {"json", "junit"}:
+                raise ValueError("format must be json or junit")
+            from motte_sdk.export import statistics_to_json, statistics_to_junit
+
+            result = comparisons_service.paired_statistics(
                 baseline, candidate, allowed_factors=factors.split(","),
                 baseline_pass_id=baseline_pass, candidate_pass_id=candidate_pass,
                 k=k,
             )
+            if format == "junit":
+                return Response(statistics_to_junit(result), media_type="application/xml")
+            return statistics_to_json(result)
         except KeyError as error:
             return JSONResponse(
                 status_code=404,
@@ -3920,7 +3928,7 @@ def create_app(
             conclusion["coverage_summary"] = comparisons_service.candidate_summary(
                 run_id,
                 scoring_pass_id=(
-                    scoring_pass_id if isinstance(scoring_pass_id, str) else None
+                    conclusion["report_refs"]["candidate"]["scoring_pass_id"]
                 ),
             )
         except ComparisonError:
@@ -4154,10 +4162,13 @@ def create_app(
     @application.post("/api/v1/experiments")
     def create_experiment(body: dict):
         request_key = body.pop("_request_key", None) or body.pop("request_key", None)
+        preview_hash = body.pop("_preview_hash", None)
         try:
-            outcome = experiments_service.create(body, request_key=request_key)
+            outcome = experiments_service.create(
+                body, request_key=request_key, expected_preview_hash=preview_hash,
+            )
         except ExperimentError as error:
-            status = 409 if error.code == "REQUEST_KEY_CONFLICT" else 422
+            status = 409 if error.code in {"REQUEST_KEY_CONFLICT", "PREVIEW_STALE"} else 422
             return _error_json(status, error.code, str(error))
         except Exception as error:
             code = getattr(error, "code", None)
@@ -4203,6 +4214,11 @@ def create_app(
             )
         except KeyError:
             return _error_json(404, "CELL_NOT_FOUND", f"cell {cell_id} not found")
+        except ExperimentError as error:
+            status = 404 if error.code in {
+                "CELL_NOT_FOUND", "EXPERIMENT_NOT_FOUND", "RUN_NOT_FOUND",
+            } else 422
+            return _error_json(status, error.code, str(error))
 
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 

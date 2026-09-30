@@ -60,11 +60,53 @@ def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
 
+def _validate_publication(spec_payload, cell_payloads):
+    spec = _validate_spec(spec_payload)
+    cells = [_validate_cell(cell) for cell in cell_payloads]
+    ids = [cell["cell_id"] for cell in cells]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate cell identities")
+    for cell in cells:
+        if (cell["experiment_id"], cell["experiment_version"]) != (
+            spec["experiment_id"], spec["version"]
+        ):
+            raise ValueError("cell belongs to a different experiment")
+    return spec, cells
+
+
+def _check_existing_publication(existing_spec, existing_cells, spec, cells):
+    if existing_spec != spec:
+        raise ValueError("experiment specs are immutable")
+    if {cell["cell_id"] for cell in existing_cells} != {cell["cell_id"] for cell in cells}:
+        raise ValueError("incomplete experiment matrix requires explicit repair")
+    by_id = {cell["cell_id"]: cell for cell in existing_cells}
+    for cell in cells:
+        existing = by_id[cell["cell_id"]]
+        for key in ("experiment_id", "experiment_version", "factor_assignment", "repeat_index",
+                    "resolved_spec_hash", "prepared_run", "preview_hash", "preflight_mode"):
+            if existing.get(key) != cell.get(key):
+                raise ValueError("cell content conflict: " + cell["cell_id"])
+
+
 class MemoryExperiments:
     def __init__(self, lock: RLock | None = None) -> None:
         self._lock = lock or RLock()
         self._specs: dict[tuple[str, str], dict[str, Any]] = {}
         self._cells: dict[str, dict[str, Any]] = {}
+
+    def publish_spec_and_cells(self, payload, cell_payloads):
+        """Publish the complete frozen matrix atomically; never replace progress."""
+        spec, cells = _validate_publication(payload, cell_payloads)
+        key = (spec["experiment_id"], spec["version"])
+        with self._lock:
+            if key in self._specs:
+                _check_existing_publication(self._specs[key], self.list_cells(*key), spec, cells)
+                return deepcopy(self._specs[key])
+            if any(cell["cell_id"] in self._cells for cell in cells):
+                raise ValueError("cell content conflict")
+            self._specs[key] = deepcopy(spec)
+            self._cells.update({cell["cell_id"]: deepcopy(cell) for cell in cells})
+        return deepcopy(spec)
 
     def put_spec(self, payload: dict[str, Any]) -> dict[str, Any]:
         spec = _validate_spec(payload)
@@ -225,6 +267,27 @@ class SQLiteExperiments:
             connection.execute(_CELL_TABLE_SQL)
             connection.execute(_CELL_INDEX_SQL)
             connection.commit()
+
+    def publish_spec_and_cells(self, payload, cell_payloads):
+        """One transaction: a crash cannot expose a partially frozen matrix."""
+        spec, cells = _validate_publication(payload, cell_payloads)
+        key = (spec["experiment_id"], spec["version"])
+        with closing(_connect(self._path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(_SELECT_SPEC, key).fetchone()
+            if row is not None:
+                rows = connection.execute(_SELECT_CELLS_VERSIONED, key).fetchall()
+                _check_existing_publication(json.loads(row[0]),
+                                            [json.loads(r[0]) for r in rows], spec, cells)
+                connection.rollback()
+                return deepcopy(spec)
+            connection.execute(_INSERT_SPEC, (*key, _dumps(spec)))
+            for cell in cells:
+                connection.execute(_INSERT_CELL, (
+                    cell["cell_id"], *key, cell["allocation_status"], _dumps(cell),
+                ))
+            connection.commit()
+        return deepcopy(spec)
 
     def put_spec(self, payload: dict[str, Any]) -> dict[str, Any]:
         spec = _validate_spec(payload)

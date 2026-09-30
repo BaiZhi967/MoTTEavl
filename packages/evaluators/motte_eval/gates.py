@@ -150,6 +150,11 @@ def evaluate_gate(
             ),
         })
 
+    for key in ("judge_qualification", "baseline_judge_qualification"):
+        qualification = candidate.get(key)
+        if isinstance(qualification, dict) and qualification.get("required"):
+            rules.append({"id": key, "passed": qualification.get("gate_eligible") is True,
+                          "reason": qualification.get("reason") or "Judge qualification unknown"})
     passed = all(rule["passed"] for rule in rules)
     conclusion = {
         "schema": GATE_SCHEMA_VERSION,
@@ -583,6 +588,17 @@ def evaluate_gate_policy(
 
         finish(rule, "not_applicable", f"rule kind {rule.kind!r} not wired")
 
+    qualifications = evidence.get("judge_qualification") or {}
+    for role, qualification in qualifications.items():
+        if isinstance(qualification, Mapping) and qualification.get("required") \
+                and qualification.get("gate_eligible") is not True:
+            rule_results.append(RuleResult(
+                rule_id="judge_qualification" if role == "candidate" else "baseline_judge_qualification",
+                kind="judge_qualification", status="insufficient", severity="block",
+                decision=GateDecision.INSUFFICIENT_EVIDENCE,
+                reason=str(qualification.get("reason") or "Judge qualification unknown"),
+            ))
+
     # 聚合决策（协议 §6 优先级）：warn 规则不贡献决策。
     contributions = [
         result.decision for result in rule_results
@@ -606,6 +622,7 @@ def evaluate_gate_policy(
         "candidates": [candidate_ref.model_dump()],
         "baseline": baseline_ref.model_dump() if baseline_ref is not None else None,
         "statistical_policy": statistical_policy_ref,
+        "judge_qualification": qualifications,
     })
     result_semantics_hash = canonical_hash({
         "engine": GATE_ENGINE_VERSION,

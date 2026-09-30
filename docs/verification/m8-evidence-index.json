@@ -1,5 +1,299 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "validation_scope": "source references only; execution status requires receipt",
+  "repair_receipt": {
+    "schema_version": 1,
+    "source_commit": "50b806d9ce10233f0a40cf7b5202ef46c672f3f2",
+    "baseline_commit": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+    "source_branch": "fix/m8-closure-20260930",
+    "environment": {
+      "os": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "python": "3.12.14",
+      "node": "v24.19.0",
+      "pnpm": "9.15.0",
+      "postgres": "not available",
+      "docker": "not available"
+    },
+    "scope": "offline and isolated synthetic repairs; draft PR publication authorized; no paid calls, private exports, production or merge",
+    "started_at_utc": "2026-09-30T02:28:29Z",
+    "python": {
+      "tests": 3336,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 88,
+      "passed": 3248,
+      "live_deselected": 1,
+      "junit_sha256": "82f842021eb778ddf05883208b8423a9b56b001dd93410eb4e1a6c75f13be1cc",
+      "skip_reasons": {
+        "Windows drive-letter compose syntax": 1,
+        "set MOTTE_PG_DSN to run the PostgreSQL manual-revision CAS test": 1,
+        "Windows Job ownership": 2,
+        "set MOTTE_PG_DSN to run PostgreSQL integration tests": 40,
+        "real Harbor runner required (MOTTE_HARBOR_RUNNER_PYTHON)": 7,
+        "real Docker CLI required": 2,
+        "real Docker daemon required": 3,
+        "pg_dump and pg_restore required for PostgreSQL recovery exercise": 1,
+        "set MOTTE_OC042_PYTHON to the isolated fixed runner": 3,
+        "set MOTTE_SANDBOX_LIVE=1 and provide a reachable Docker daemon": 4,
+        "Windows junction coverage": 1,
+        "set MOTTE_R4_PG_DSN for isolated PostgreSQL concurrency coverage": 9,
+        "PostgreSQL integration DSN unavailable; no PG concurrency claim": 5,
+        "real PostgreSQL required": 1,
+        "set MOTTE_PG_DSN to run the PostgreSQL scoring-job transaction test": 1,
+        "set MOTTE_PG_DSN to run the PostgreSQL scoring-job race test": 1,
+        "set MOTTE_PG_DSN to run the PostgreSQL recovery race test": 1,
+        "real PostgreSQL required (MOTTE_PG_DSN)": 5
+      }
+    },
+    "make_check": {
+      "exit_code": 2,
+      "blocked_at": "docker compose config: executable unavailable",
+      "log_sha256": "36dd7b5a9e09393678db3c1a43f670946df9d5b507fe7beff1b959f9ee87b111"
+    },
+    "wheels": {
+      "exit_code": 0,
+      "clean_venv_smoke_exit_code": 0,
+      "files": [
+        {
+          "name": "motte_cli-0.1.0-py3-none-any.whl",
+          "sha256": "35b92942f35711fe57fc427a3d0170d30768776ea32bc14f5b61849297cbbc62"
+        },
+        {
+          "name": "motte_contracts-0.1.0-py3-none-any.whl",
+          "sha256": "a7704f8b02b1ff62320649232ce20200f93bdf62f6eb2385e9d5278ce1664c75"
+        },
+        {
+          "name": "motte_eval-0.1.0-py3-none-any.whl",
+          "sha256": "35965123a0be66b21b91ea79b142ad9931c3198b37ac74d4cbd963d7aa31e208"
+        },
+        {
+          "name": "motte_sdk-0.1.0-py3-none-any.whl",
+          "sha256": "9369ba72d9f117448177361a57e69cd3619e65cfa4df29bc6a17b01bdb518e42"
+        },
+        {
+          "name": "motte_storage-0.1.0-py3-none-any.whl",
+          "sha256": "75b9ae4deb091540c7162a902b86c90ee71dadf13664e653dcb35a1a9a1c6cb6"
+        },
+        {
+          "name": "motte_trace-0.1.0-py3-none-any.whl",
+          "sha256": "cb15eb9dc83493ae8b708675c2767bef6f49101557e3394026ade46df3b34f66"
+        }
+      ]
+    },
+    "additional_tsc": {
+      "baseline_sha": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+      "baseline_errors": 49,
+      "candidate_errors": 49,
+      "diagnostic_messages_equal": true,
+      "scope": "tsc --noEmit additional check, not in Makefile CI; same dependency install",
+      "status": "historical comparison from initial receipt; not rerun in resumed batch; Web source unchanged"
+    },
+    "stable_supported": false,
+    "cutover_ready": false,
+    "remaining_code": [
+      "C-Eval/Harbor/Scenario-Skill external suite assemblers",
+      "public persistent Judge calibration and exact policy-bound qualification",
+      "append-only independent StatisticalReport publication",
+      "Trace DB retention with archive/seq/snapshot contracts",
+      "additional strict TypeScript check: 49 identical baseline/current diagnostics; not part of existing make check"
+    ],
+    "remaining_environment": [
+      "PostgreSQL candidate concurrency/backup snapshot/restore integration",
+      "Docker Compose build/up and image hash",
+      "Windows lock/symlink capability and full regression",
+      "current build browser/visual receipts"
+    ],
+    "remaining_authorization": [
+      "new bounded paid L1-L5/Judge call card",
+      "real human-reviewed calibration sources",
+      "private legacy export source/scope",
+      "original replacement scenarios with true backends",
+      "merge, release and production cutover"
+    ],
+    "review": {
+      "comparison_preview": "no remaining P1/P2",
+      "judge_native": "no remaining high-priority issue",
+      "statistics_exports": "no P1/P2",
+      "storage_safety": "no remaining P1/P2; real PG/Windows not exercised",
+      "resumed_repairs": "no remaining P1/P2 at50b806d; independent113passed/1PGskip, finalAPI17passed"
+    },
+    "checks": {
+      "ruff": {
+        "result": "passed",
+        "command": "uv run ruff check ."
+      },
+      "contracts_mypy": {
+        "result": "passed",
+        "source_files": 33,
+        "command": "uv run mypy packages/contracts"
+      },
+      "compileall": {
+        "result": "passed",
+        "command": "uv run python -m compileall -q packages apps"
+      },
+      "web_build": {
+        "result": "passed",
+        "command": "pnpm --dir apps/web build"
+      },
+      "web_tests": {
+        "result": "passed",
+        "files": 22,
+        "tests": 304,
+        "command": "pnpm -r test"
+      },
+      "pi_bridge_selftest": {
+        "result": "passed",
+        "scope": "real SDK, scripted model, file written; zero paid calls"
+      },
+      "compose_config": {
+        "result": "blocked",
+        "reason": "docker executable absent",
+        "command": "docker compose -f infra/docker-compose.yml config -q"
+      },
+      "openapi_check": {
+        "result": "passed",
+        "command": "uv run python scripts/check_openapi.py",
+        "log_sha256": "f9e7ff23a9eb021b121a47b0156e523837131c58abb6ad8069b50fdf155c4902"
+      },
+      "python_dependency_audit": {
+        "result": "passed",
+        "command": "uv run pip-audit --skip-editable",
+        "scope": "no known vulnerabilities in audited noneditable dependencies",
+        "log_sha256": "ff0bc4a073f1ae336cb4dbb61ac31f360c1a5ae57b9b35563ab53b579f7efba7"
+      },
+      "web_dependency_audit": {
+        "result": "passed",
+        "command": "pnpm --dir apps/web audit --audit-level high",
+        "log_sha256": "15950a68a7ed99c59779717acefdceb3f69cfd31bde67d2c954f2a3cea4d7955"
+      },
+      "wheel_clean_install": {
+        "result": "passed",
+        "scope": "new external venv, no PYTHONPATH; install six wheels; SDK import and CLI help",
+        "log_sha256": "e191ad69a22114fc54bb666a151a35b6cc8355958720862e88630754f7d9e499"
+      }
+    },
+    "verified_source_trees": {
+      "packages": "23296e583eb0fe9ae3c74186f86456da0e39fc6a",
+      "apps": "e901e683500157e15b5b733ef1dbffdb8232c9ee",
+      "tests": "29fd5348a1f9cc5974cd30362608d9f3d39aa21e",
+      "scripts": "9ca5d1629abeb8d7a8b20e9f78710893f737ff33",
+      "bridges": "aab9b82c42ee10355f80c0ba5d5cb07e904a0897",
+      "api": "d05bdb2806fdcb52ba91f6cd1e458a0195afb18f"
+    },
+    "web_assets": [
+      {
+        "path": "apps/web/dist/assets/DirectLlmOperate-DIG6N7nl.js",
+        "sha256": "b3961a1fab91149b15f1402fcd896741b737acb9a764a933d82c460591261818"
+      },
+      {
+        "path": "apps/web/dist/assets/JudgesPage-3IDxovAf.js",
+        "sha256": "7eea5cc06bd4b8fefe3e0df06ae81d8ed1bcd35fec8ba800890c4ce141973040"
+      },
+      {
+        "path": "apps/web/dist/assets/ResourcesPage-CNXF-Chi.js",
+        "sha256": "f68e4d3700cdec6d829ec9cf705e2be6c61bb1c1c9e3a572c752eaf094b84f8b"
+      },
+      {
+        "path": "apps/web/dist/assets/ScenarioPages-DDuI5TKe.js",
+        "sha256": "ac1cf26367e2f4423bdb0d89e8d3a0f4f2b2663cebf314ebee9096315b5a2914"
+      },
+      {
+        "path": "apps/web/dist/assets/SkillPages-HqVgGnQl.js",
+        "sha256": "256cbc7aa9ef06d6b5adf6f56c9d04c303cd780957fa25c05309f060654cad8e"
+      },
+      {
+        "path": "apps/web/dist/assets/TerminalBenchPages-tWX5DOPd.js",
+        "sha256": "3b7e01657bfcf2b829596c1012a50e8c4e9b99d36eae8674b0f85ad3361b6678"
+      },
+      {
+        "path": "apps/web/dist/assets/barlow-semi-condensed-500-latin-G0uxJNrM.woff2",
+        "sha256": "0d7513795eaf8fdab7f340144841bd2d9fac7d9303c03aa6b525a2c908e9b371"
+      },
+      {
+        "path": "apps/web/dist/assets/barlow-semi-condensed-600-latin-BkLiAYu4.woff2",
+        "sha256": "f158417e9207b5362f9b71a2fe779ce5bb836ad972f38445c3163af39d2c998d"
+      },
+      {
+        "path": "apps/web/dist/assets/barlow-semi-condensed-700-latin-BpqDG8I9.woff2",
+        "sha256": "fb958c8c20a05552ac8a85d925d96028d52565792650e941a5fe96b6997aa5cb"
+      },
+      {
+        "path": "apps/web/dist/assets/index-BOLzHQ6G.js",
+        "sha256": "0a7de909c18f7d886581d581004a75784e836cd8bc203cf26dc256623b9028aa"
+      },
+      {
+        "path": "apps/web/dist/assets/index-BzqyGsQW.css",
+        "sha256": "2f12514b4a7c9a418c1e827e3045c5841d82ed86908cd3cddb84f858b07d22be"
+      },
+      {
+        "path": "apps/web/dist/assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2",
+        "sha256": "14425ba9c695763c1547f48a206b7aa60350a33ae23de09f0407877f3fcd89eb"
+      },
+      {
+        "path": "apps/web/dist/assets/jetbrains-mono-latin-500-normal-BWZEU5yA.woff2",
+        "sha256": "cb182feeed4d798ff6961d3c79f7026279448fca0676438aaecb21f3fc39553a"
+      },
+      {
+        "path": "apps/web/dist/assets/jetbrains-mono-latin-600-normal-C8RAYTDA.woff2",
+        "sha256": "400c6bfda18d5d14acad1c15d6dcb9f8e13c015e7286317e0b9a482539bef147"
+      },
+      {
+        "path": "apps/web/dist/assets/jetbrains-mono-latin-700-normal-BYuf6tUa.woff2",
+        "sha256": "d0d4e818808f2a0ba39b2b09d1989366f63494e295f003c7ef436697378507e8"
+      },
+      {
+        "path": "apps/web/dist/assets/jsonValues-CxpwwIqg.js",
+        "sha256": "308c6cf0a0b024098a2213fccdf7f38db30b22235a6eca0bf63f1d8b2f4430ca"
+      },
+      {
+        "path": "apps/web/dist/assets/rolldown-runtime-CbXtAM7H.js",
+        "sha256": "bbf7c5086ae414dc3f33777e3eebf16ea8631325b8bb4690d25091c03567f31a"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-DgN2ufTs.js",
+        "sha256": "94c3d8ce4a95d326add774c1a7e27c2c7b45cbd2002d55e657dc253ac66adbf5"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-icons-DhaHBq-B.js",
+        "sha256": "4f68e13c9e2b26d868d7a008e712c95058890df0053c926399bb2313e60b5d73"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-radix-CO1tAGYS.js",
+        "sha256": "b1e542db85f0128d442f5992b5dcb494c94c5ac2d75b52863be3dc395f097f03"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-react-PU5TT05C.js",
+        "sha256": "b65efc5316d6de277d01c6bf61b6af57a2fb61318e38ea317346f39cde5b329a"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-router-Dr301lO5.js",
+        "sha256": "dada2c15f89335a10ab4eb95079857e93c73eb61c0d1e33f79b05de91f7bd155"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-semi-C37W-MdM.js",
+        "sha256": "4632ed4f20464a8d16e83a31d7f8034ccc7693a572699a1cd6d90ad8b0d0eeae"
+      },
+      {
+        "path": "apps/web/dist/assets/vendor-semi-DCkYSUZS.css",
+        "sha256": "8c6efca9b86b52f2cbcf9b2a3484f2581d675aa98b09b780d872fef878564c68"
+      }
+    ],
+    "main_verified_at_finish": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+    "previous_receipt": "docs/verification/m8-repair-initial-receipt.json",
+    "design_status": "written persistent-capability design approved; detailed implementation plans awaiting review; no new subsystem code in this receipt",
+    "resumed_checks": {
+      "openapi": "passed standalone",
+      "ruff": "passed",
+      "contracts_mypy": "33 sources passed",
+      "compileall": "passed",
+      "web": "22files304tests and build passed",
+      "pi_bridge": "real SDK scripted model selftest passed",
+      "pip_audit": "no known vulnerabilities; official network approval retry passed",
+      "pnpm_audit": "no known vulnerabilities; official network approval retry passed",
+      "wheel_smoke": "six local wheels installed in fresh isolated venv, import/CLI outside checkout with PYTHONPATH unset passed",
+      "interrupted_tests": "superseded pre-review and worker runs, no full-suite claims"
+    }
+  },
   "assessment": "docs/review/2026-09-22-m1-m7-assessment/MoTTEavl_M1-M7_Assessment_2026-09-22.md",
   "goals": [
     {
@@ -18,6 +312,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -44,6 +342,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -70,6 +372,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -96,6 +402,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -122,6 +432,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -148,6 +462,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -174,6 +492,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -200,6 +522,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -226,6 +552,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -252,6 +582,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -278,6 +612,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -304,6 +642,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -330,6 +672,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -356,6 +702,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -382,6 +732,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -408,6 +762,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -435,6 +793,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -461,6 +823,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -487,6 +853,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -513,6 +883,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -539,6 +913,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -565,6 +943,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -591,6 +973,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -617,6 +1003,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -643,6 +1033,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -669,6 +1063,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -695,6 +1093,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -721,6 +1123,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -747,6 +1153,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -773,6 +1183,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -799,6 +1213,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -825,6 +1243,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -851,6 +1273,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -877,6 +1303,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -903,6 +1333,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -929,6 +1363,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -955,6 +1393,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -981,6 +1423,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1007,6 +1453,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "packages/contracts/motte_contracts/trial.py": "source_file",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials": "python_node",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows": "python_node"
+        },
         "implementation_status": "partial_m8; fixed-pass statistical consumer excludes unplanned retry rows; full Trial lifecycle remains historical evidence",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -1039,6 +1494,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1065,6 +1524,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1091,6 +1554,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1117,6 +1584,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1143,6 +1614,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1169,6 +1644,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1195,6 +1674,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1221,6 +1704,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1247,6 +1734,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1273,6 +1764,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1299,6 +1794,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "packages/evaluators/motte_eval/statistics.py": "source_file",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials": "python_node",
+          "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k": "python_node"
+        },
         "implementation_status": "partial_m8; fixed-pass Task/Trial denominator and k consumer verified offline; live Profile coverage pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -1331,6 +1835,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1357,6 +1865,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1383,6 +1895,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1409,6 +1925,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1435,6 +1955,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1461,6 +1985,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1487,6 +2015,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1513,6 +2045,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1539,6 +2075,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1565,6 +2105,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1591,6 +2135,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1617,6 +2165,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1643,6 +2195,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1669,6 +2225,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1695,6 +2255,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1721,6 +2285,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1747,6 +2315,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1773,6 +2345,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1799,6 +2375,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1825,6 +2405,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1851,6 +2435,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1877,6 +2465,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1903,6 +2495,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1929,6 +2525,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1955,6 +2555,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -1981,6 +2585,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2007,6 +2615,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2033,6 +2645,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2059,6 +2675,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2085,6 +2705,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2111,6 +2735,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2137,6 +2765,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2163,6 +2795,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2189,6 +2825,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2215,6 +2855,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2241,6 +2885,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2267,6 +2915,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2293,6 +2945,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2319,6 +2975,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2345,6 +3005,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2371,6 +3035,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2397,6 +3065,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2424,6 +3096,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2453,6 +3129,17 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/experiments.py": "source_file",
+          "packages/sdk-python/motte_sdk/resolve.py": "source_file",
+          "tests/api/test_m8_experiment_contract.py::test_a03_ten_cases_two_cells_cap_five_has_zero_executable_side_effects": "python_node",
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation": "python_node",
+          "tests/sdk/test_m6_experiments.py::test_unassembled_suite_preview_and_create_fail_closed": "python_node",
+          "tests/sdk/test_m6_experiments.py::test_agent_runtime_factor_cannot_silently_use_legacy_json": "python_node"
+        },
         "implementation_status": "partial_m8; paid single-Case Direct and synthetic GSM8K Experiment creation/execution observed; full suite matrix pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
@@ -2489,6 +3176,18 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/experiments.py": "source_file",
+          "packages/sdk-python/motte_sdk/execution_lock.py": "source_file",
+          "packages/storage/motte_storage/platform.py": "source_file",
+          "tests/api/test_m8_experiment_contract.py::test_a05_request_key_conflict_is_http_409_after_app_rebuild": "python_node",
+          "tests/sdk/test_m6_experiments.py::test_active_sqlite_allocation_is_not_reset_by_second_service": "python_node",
+          "tests/sdk/test_m6_experiments.py::test_resource_ceiling_drift_after_preview_rejects_before_persistence": "python_node",
+          "tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell": "python_node"
+        },
         "implementation_status": "partial_m8; task-owned PostgreSQL process race and SQLite drift/recovery verified; broader resource races pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
@@ -2527,6 +3226,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/experiments.py": "source_file",
+          "packages/sdk-python/motte_sdk/dispatcher.py": "source_file",
+          "apps/worker/motte_worker/runtime.py": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_experiment_to_gate_full_slice": "python_node"
+        },
         "implementation_status": "partial_m8; paid single-Case Direct and synthetic GSM8K Dispatcher/Worker path observed; other suites pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
@@ -2559,6 +3267,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2592,6 +3309,17 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "packages/provider-runtime/motte_provider/pricing.py": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label",
+          "tests/provider/test_openai_compatible.py::test_cost_keeps_explicit_price_table_currency_in_provider_evidence": "python_node"
+        },
         "implementation_status": "partial_m8; explicit-CNY fixed-pass Direct cost comparison observed live; broader eligibility matrix pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2625,6 +3353,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2651,6 +3383,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2683,6 +3424,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2715,6 +3465,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2747,6 +3506,23 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/evaluators/motte_eval/statistics.py": "source_file",
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/api/app/main.py": "source_file",
+          "packages/cli/motte_cli/main.py": "source_file",
+          "apps/web/src/pages/m6/ComparePage.tsx": "source_file",
+          "tests/sdk/test_m6_comparison_service.py::test_paired_statistics_uses_fixed_pass_and_keeps_missing_visible": "python_node",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_pin_current_once_when_pass_changes_mid_read": "python_node",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_pins_pass_and_records_method": "python_node",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification": "python_node",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_rejects_invalid_k_as_request_error": "python_node",
+          "apps/web/tests/M6.test.tsx::ComparePage": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass Case and Trial statistics consumed by SDK/HTTP/CLI JSON/Web; persisted published report pending",
         "consumer_paths": [
           "packages/evaluators/motte_eval/statistics.py",
@@ -2787,6 +3563,23 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/evaluators/motte_eval/statistics.py": "source_file",
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/api/app/main.py": "source_file",
+          "packages/cli/motte_cli/main.py": "source_file",
+          "apps/web/src/pages/m6/ComparePage.tsx": "source_file",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_aggregate_only_fixed_planned_valid_trials": "python_node",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_missing_trial_and_retry_rows": "python_node",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_reject_reused_upstream_trial_identity": "python_node",
+          "tests/sdk/test_m6_comparison_service.py::test_terminal_statistics_pin_current_once_when_pass_changes_mid_read": "python_node",
+          "tests/integration/test_experiment_gate_slice.py::test_terminal_trial_statistics_http_uses_fixed_pass_and_k": "python_node",
+          "tests/cli/test_m6_cli.py::test_compare_statistics_cli_exports_terminal_trial_qualification": "python_node",
+          "apps/web/tests/M6.test.tsx::ComparePage": "source_label"
+        },
         "implementation_status": "partial_m8; planned valid Trial pass@k and retry distinction have fixed-pass consumers; live independence not verified",
         "consumer_paths": [
           "packages/evaluators/motte_eval/statistics.py",
@@ -2827,6 +3620,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -2858,6 +3660,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2884,6 +3690,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2910,6 +3720,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2936,6 +3750,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2962,6 +3780,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -2990,6 +3812,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/experiments.py": "source_file",
+          "packages/sdk-python/motte_sdk/resolve.py": "source_file",
+          "tests/sdk/test_m6_experiments.py::test_gsm8k_experiment_matches_standalone_preparation": "python_node",
+          "tests/sdk/test_m6_experiments.py::test_agent_tasks_experiment_matches_standalone_and_counts_steps": "python_node"
+        },
         "implementation_status": "partial_m8; Direct/GSM8K/Agent controlled factors verified, runtime/Judge factor coverage pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/experiments.py",
@@ -3022,6 +3853,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -3053,6 +3893,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3079,6 +3923,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/comparisons.py": "source_file",
+          "apps/web/src/evalTypes/suiteComparison.ts": "source_file",
+          "tests/integration/test_experiment_gate_slice.py::test_comparison_http_uses_fixed_pass_and_detects_case_and_scorer_changes": "python_node",
+          "apps/web/tests/evalTypes.test.tsx::DirectLlmCompare": "source_label"
+        },
         "implementation_status": "partial_m8; fixed-pass suite pages verified offline",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/comparisons.py",
@@ -3112,6 +3965,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3139,6 +3996,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3166,6 +4027,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3193,6 +4058,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3220,6 +4089,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3247,6 +4120,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3274,6 +4151,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3302,6 +4183,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3329,6 +4214,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3357,6 +4246,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/migration/plan.py": "source_file",
+          "packages/sdk-python/motte_sdk/migration/apply.py": "source_file",
+          "tests/migration/test_import_plan.py::test_plan_is_a_pure_dry_run": "python_node",
+          "tests/migration/test_legacy_import.py::test_second_apply_of_same_source_is_all_reused": "python_node"
+        },
         "implementation_status": "partial_m8; synthetic dry-run/apply idempotency verified; authorized private export pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/migration/plan.py",
@@ -3391,6 +4289,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3419,6 +4321,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3447,6 +4353,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3476,6 +4386,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/sdk-python/motte_sdk/migration/apply.py": "source_file",
+          "packages/sdk-python/motte_sdk/migration/rollback.py": "source_file",
+          "tests/migration/test_import_resume_rollback.py::test_crash_mid_apply_resumes_without_duplicates": "python_node",
+          "tests/migration/test_import_resume_rollback.py::test_rollback_deletes_only_own_unreferenced_objects": "python_node"
+        },
         "implementation_status": "partial_m8; synthetic interruption/rollback verified; private export and PG restore pending",
         "consumer_paths": [
           "packages/sdk-python/motte_sdk/migration/apply.py",
@@ -3510,6 +4429,19 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/storage/motte_storage/maintenance.py": "source_file",
+          "tests/storage/conftest.py": "source_file",
+          "tests/integration/test_backup_restore_consistency.py::test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning": "python_node",
+          "tests/integration/test_backup_restore_consistency.py::test_staging_restore_verifies_and_guards_worker_claims": "python_node",
+          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_restore_rejects_corrupt_dump_before_target_write": "python_node",
+          "tests/integration/test_backup_restore_consistency.py::test_postgres_staging_report_database_identity_excludes_credentials": "python_node",
+          "tests/storage/test_trials_downgrade_guard.py::test_disposable_pg_cluster_rejects_effective_remote_host": "python_node",
+          "tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact": "python_node"
+        },
         "implementation_status": "partial_m8; SQLite recovery and guarded task-owned PostgreSQL staging restore verified; Compose and production recovery pending",
         "consumer_paths": [
           "packages/storage/motte_storage/maintenance.py",
@@ -3548,6 +4480,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "packages/storage/motte_storage/maintenance.py": "source_file",
+          "packages/storage/motte_storage/migrations.py": "source_file",
+          "tests/integration/test_release_smoke.py::test_release_upgrade_old_shape_database_gets_platform_tables": "python_node",
+          "tests/integration/test_release_smoke.py::test_release_recovery_path_from_backup": "python_node"
+        },
         "implementation_status": "partial_m8; synthetic old-shape SQLite upgrade/recovery verified; supported PG upgrade/rollback pending",
         "consumer_paths": [
           "packages/storage/motte_storage/maintenance.py",
@@ -3581,6 +4522,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3609,6 +4554,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3636,6 +4585,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3663,6 +4616,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3690,6 +4647,15 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {
+          "tests/integration/test_cutover_readiness.py": "source_file",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_1_model_evaluation_two_runs": "python_node",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_2_agent_benchmark_offline_evidence": "python_node",
+          "tests/integration/test_cutover_readiness.py::test_cutover_scenario_3_business_regression_offline_evidence": "python_node"
+        },
         "implementation_status": "partial_m8; three synthetic scenarios checked, real replacement acceptance and cutover pending",
         "consumer_paths": [
           "tests/integration/test_cutover_readiness.py"
@@ -3723,6 +4689,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],
@@ -3750,6 +4720,10 @@
       ],
       "current": {
         "baseline_sha": "0ad766fd8020e852b61b88ef82e92d010c553584",
+        "implementation_commit": null,
+        "execution_sha": null,
+        "result": "not_recorded",
+        "reference_validation": {},
         "implementation_status": "not_reverified",
         "consumer_paths": [],
         "test_nodes": [],

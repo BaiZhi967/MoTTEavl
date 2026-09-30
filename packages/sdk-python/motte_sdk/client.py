@@ -505,11 +505,14 @@ class MotteClient:
         return self._post(f"{_API_PREFIX}/experiments/preview", dict(spec))
 
     def experiment_create(
-        self, spec: Mapping[str, Any], *, request_key: str | None = None
+        self, spec: Mapping[str, Any], *, request_key: str | None = None,
+        preview_hash: str | None = None,
     ) -> dict[str, Any]:
         body = dict(spec)
         if request_key is not None:
             body["_request_key"] = request_key
+        if preview_hash is not None:
+            body["_preview_hash"] = preview_hash
         return self._post(f"{_API_PREFIX}/experiments", body)
 
     def experiment_status(

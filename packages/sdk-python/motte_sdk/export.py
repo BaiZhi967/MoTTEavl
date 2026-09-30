@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import xml.etree.ElementTree as ET
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -178,6 +179,59 @@ def comparison_to_json(view: Mapping[str, Any]) -> dict[str, Any]:
         "case_diff": dict(view.get("case_diff") or {}),
         "allowed_differences": list(view.get("allowed_differences") or ()),
     }
+
+
+def statistics_to_json(view: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical statistical result unchanged, with detached inputs."""
+    return deepcopy(dict(view))
+
+
+def statistics_to_junit(view: Mapping[str, Any]) -> str:
+    """Serialize interval qualification, not a quality gate or a ranking.
+
+    All descriptors and frozen inputs survive in system-out. Inapplicable
+    statistics are skipped, never a passing quality assertion. No recomputation
+    or store/current lookup occurs while rendering either export format.
+    """
+    payload = statistics_to_json(view)
+    applicable = payload.get("applicable") is True
+    suite = ET.Element("testsuite", {
+        "name": "motte-comparison-statistics", "tests": "1", "failures": "0",
+        "errors": "0", "skipped": "0" if applicable else "1", "time": "0",
+    })
+    properties = ET.SubElement(suite, "properties")
+    fields = {
+        name: payload.get(name) for name in (
+            "refs", "input_digest", "policy_ref", "policy_hash", "implementation_version",
+            "unit", "method", "missing_policy", "seed", "iterations", "k",
+            "n_selected", "n_pairs", "missing_pairs", "applicable", "reason",
+        )
+    }
+    fields["interpretation"] = "descriptive_statistics_not_quality_gate"
+    fields["descriptive_missing"] = {
+        side: {
+            "unknown_cost_count": descriptor.get("cost", {}).get("unknown_cost_count"),
+            "unknown_currency_count": descriptor.get("cost", {}).get("unknown_currency_count"),
+            "latency_missing": descriptor.get("latency_ms", {}).get("missing"),
+        }
+        for side, descriptor in (payload.get("descriptive") or {}).items()
+    }
+    for name, value in fields.items():
+        text = (value if isinstance(value, str) else
+                json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False))
+        ET.SubElement(properties, "property", {"name": name, "value": text})
+    case = ET.SubElement(suite, "testcase", {
+        "classname": "comparison.statistics", "name": "paired_interval_applicability",
+    })
+    if not applicable:
+        ET.SubElement(case, "skipped", {
+            "message": str(payload.get("reason") or "not_applicable"),
+        })
+    ET.SubElement(suite, "system-out").text = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, allow_nan=False,
+    )
+    ET.indent(suite, space="  ")
+    return ET.tostring(suite, encoding="unicode")
 
 
 def _stable_json_line(payload: Mapping[str, Any]) -> str:

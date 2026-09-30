@@ -14,7 +14,7 @@ from .comparison import RunReportRef
 from .hashing import canonical_hash
 from .messages import Contract
 
-GATE_ENGINE_VERSION = "gate-engine@1"
+GATE_ENGINE_VERSION = "gate-engine@2"
 GATE_RULE_REGISTRY_VERSION = "gate-rules@1"
 
 #: 规则 kind 集合（协议 §6 首批；新增 kind 必须同步协议文档并升 registry 版本）。

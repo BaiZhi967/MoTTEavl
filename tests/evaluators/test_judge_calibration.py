@@ -402,6 +402,115 @@ def test_qualified_calibration_requires_measured_repeats_and_swap():
     assert report.reasons == []
 
 
+@pytest.mark.parametrize("reverse_changes", [
+    {"presentation_order": ["cand-a", "cand-b"]},
+    {"presentation_order": ["cand-c", "cand-a"]},
+    {"presentation_order": []},
+    {"presentation_order": ["cand-a", "cand-a"]},
+    {"outcome": "failed", "status": "malformed"},
+    {"outcome": "indeterminate"},
+    {"status": "refused"},
+    {"invocation_id": "inv-fwd"},
+    {"judge_job_id": "sjob-fwd", "call_id": "swap-fwd"},
+    {"invocation_id": "inv-s0"},
+], ids=[
+    "same-order", "different-candidates", "empty-order", "duplicate-candidate",
+    "failed", "indeterminate", "refused", "reused-swap-invocation",
+    "reused-job-call", "reused-single-invocation",
+])
+def test_position_swap_rejects_invalid_measurement_evidence(reverse_changes):
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    calls = measurement_calls(calibration, observed)
+    calls[-1] = CalibrationCall.model_validate({
+        **calls[-1].model_dump(), **reverse_changes,
+    })
+
+    report = build_calibration_report(calibration, observed=observed, calls=calls)
+
+    assert report.qualified is False
+    assert report.gate_eligible is False
+    assert report.position_swap["consistent"] == 0
+    assert report.position_swap["invalid_samples"] == ["pair-sample"]
+    assert any("swap" in reason for reason in report.reasons)
+
+
+def test_position_swap_rejects_matching_winners_outside_the_candidate_pair():
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    calls = measurement_calls(calibration, observed)
+    for index in (-2, -1):
+        calls[index] = CalibrationCall.model_validate({
+            **calls[index].model_dump(), "winner_candidate_id": "outsider",
+        })
+
+    report = build_calibration_report(calibration, observed=observed, calls=calls)
+
+    assert report.qualified is False
+    assert report.position_swap["consistent"] == 0
+    assert report.position_swap["invalid_samples"] == ["pair-sample"]
+
+
+@pytest.mark.parametrize("winner", ["", "cand-b"])
+def test_position_swap_rejects_empty_candidate_identity(winner):
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    calls = measurement_calls(calibration, observed)
+    for index, order in [(-2, ["", "cand-b"]), (-1, ["cand-b", ""])]:
+        calls[index] = CalibrationCall.model_validate({
+            **calls[index].model_dump(), "presentation_order": order,
+            "winner_candidate_id": winner,
+        })
+
+    report = build_calibration_report(calibration, observed=observed, calls=calls)
+
+    assert report.qualified is False
+    assert report.position_swap["consistent"] == 0
+    assert report.position_swap["invalid_samples"] == ["pair-sample"]
+
+
+@pytest.mark.parametrize("duplicate_first", [False, True])
+def test_position_swap_duplicate_direction_cannot_hide_a_disagreement(duplicate_first):
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    calls = measurement_calls(calibration, observed)
+    duplicate = CalibrationCall.model_validate({
+        **calls[-1].model_dump(), "call_id": "reverse-disagreement",
+        "invocation_id": "inv-reverse-disagreement", "winner_candidate_id": "cand-b",
+    })
+    calls.insert(len(calls) - int(duplicate_first), duplicate)
+
+    report = build_calibration_report(calibration, observed=observed, calls=calls)
+
+    assert report.qualified is False
+    assert report.position_swap["consistent"] == 0
+    assert report.position_swap["invalid_samples"] == ["pair-sample"]
+
+
+@pytest.mark.parametrize("kind", ["order_forward", "order_reverse"])
+def test_position_swap_valid_pair_cannot_hide_an_unpaired_measurement(kind):
+    spec = judge_spec(calibration_version="1")
+    calibration = calibration_with(human_samples(6), judge_spec_sha256=spec.spec_sha256)
+    observed = matching_observed(calibration, spec)
+    calls = measurement_calls(calibration, observed)
+    calls.append(CalibrationCall.model_validate({
+        **calls[-1].model_dump(), "call_id": "orphan", "invocation_id": "inv-orphan",
+        "sample_id": "unpaired-sample", "kind": kind,
+    }))
+
+    report = build_calibration_report(calibration, observed=observed, calls=calls)
+
+    assert report.qualified is False
+    assert report.position_swap["pairs"] == 2
+    assert report.position_swap["consistent"] == 1
+    assert report.position_swap["rate"] == pytest.approx(0.5)
+    assert report.position_swap["invalid_samples"] == ["unpaired-sample"]
+
+
 def test_gate_eligibility_is_per_pass_and_never_inherited():
     experimental_spec = judge_spec()
     calibration = calibration_with(
@@ -1052,5 +1161,3 @@ def test_qualification_is_read_through_the_real_published_pass(tmp_path):
     )
     assert other["gate_eligible"] is False and other["experimental"] is True
     assert submitted["request_key"] == "qual-1"
-
-

@@ -203,3 +203,325 @@ def test_gc_apply_holds_maintenance_barrier(tmp_path):
         "/api/v1/runs",
         json={"scenario_version": "json_extract@1"},
     ).status_code == 202  # 屏障解除后写入恢复
+
+
+REFERENCE_SHAPES = (
+    "locator", "raw_ref", "raw_bundle_artifact", "id", "artifact_id", "sha256",
+)
+REFERENCE_LOCATIONS = (
+    "run", "case", "invocation", "score_set", "baseline", "gate", "event", "experiment_cell",
+)
+
+
+def _artifact_reference(shape, artifact_id, sha256):
+    if shape == "locator":
+        ref = {"event_refs": [{"kind": "artifact", "run_id": "external", "locator": artifact_id}]}
+    elif shape in {"raw_ref", "raw_bundle_artifact"}:
+        ref = {shape: artifact_id}
+    elif shape == "sha256":
+        ref = {"artifacts": [{"sha256": sha256}]}
+    else:
+        ref = {"artifact_refs": [{shape: artifact_id}]}
+    return {"nested": [{"observation": ref}]}
+
+
+def _store_reference(store, location, run_id, payload):
+    """Persist a reference in exactly one repository, without touching Run evidence."""
+    if location == "run":
+        current = store.runs.get(run_id)
+        store.runs.save({**current, "evidence": payload})
+    elif location == "case":
+        store.case_runs.upsert({"run_id": run_id, "case_id": "ref-case", "evidence": payload})
+    elif location == "invocation":
+        store.invocations.create({
+            "id": "ref-invocation", "run_id": run_id, "case_id": "ref-case",
+            "kind": "model", "step": 1, "status": "prepared", "request_summary": payload,
+        })
+    elif location == "score_set":
+        store.scoring_passes.append(
+            {"id": "ref-pass", "run_id": run_id},
+            [{"case_id": "ref-case", "value": 1, "details": payload}],
+        )
+        # Historical backends may keep scores only in score_sets. Remove the
+        # redundant embedded copy so the test cannot pass by scanning the pass.
+        import json
+        import sqlite3
+        from contextlib import closing
+
+        with closing(sqlite3.connect(store.runs._path)) as connection, connection:
+            connection.execute(
+                "UPDATE scoring_passes SET payload = ? WHERE id = ?",
+                (json.dumps({"id": "ref-pass", "run_id": run_id}), "ref-pass"),
+            )
+    elif location == "baseline":
+        store.baselines.put({
+            "id": "ref-baseline", "run_id": run_id, "scoring_pass_id": "old-pass",
+            "metrics": {}, "evidence": payload,
+        })
+    elif location == "gate":
+        store.gate_store.put_result({
+            "gate_result_id": "ref-gate", "policy_id": "ref-policy", "evidence": payload,
+        })
+    elif location == "experiment_cell":
+        store.experiments.publish_spec_and_cells(
+            {"experiment_id": "ref-experiment", "version": "1"},
+            [{"cell_id": "pending-cell", "experiment_id": "ref-experiment",
+              "experiment_version": "1", "allocation_status": "pending", "repeat_index": 0,
+              "factor_assignment": {}, "prepared_run": {"manifest": payload, "case_ids": []}}],
+        )
+    elif location == "event":
+        store.events.append({"run_id": run_id, "type": "evidence", "data": payload})
+    else:
+        raise AssertionError(location)
+
+
+def _old_artifact(root, artifact_id, content):
+    from motte_storage.artifacts import ArtifactStore
+
+    artifact = ArtifactStore(root).put_bytes(artifact_id, content)
+    old = (datetime.now(UTC) - timedelta(days=200)).timestamp()
+    os.utime(root / artifact_id, (old, old))
+    return artifact
+
+
+@pytest.mark.parametrize("shape", REFERENCE_SHAPES)
+@pytest.mark.parametrize("location", REFERENCE_LOCATIONS)
+@pytest.mark.parametrize("reference_after_plan", [False, True], ids=["plan", "apply-recheck"])
+def test_gc_preserves_every_nested_reference(tmp_path, shape, location, reference_after_plan):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "evidence/only.bin", b"referenced evidence")
+    _old_artifact(root, "orphan.bin", b"unreferenced evidence")
+    payload = _artifact_reference(shape, artifact.id, artifact.sha256)
+    if reference_after_plan:
+        plan = plan_gc(store, root)
+        assert artifact.id in {entry["artifact_id"] for entry in plan.deletable}
+    # needs_review cannot compensate for a missing decoder; its child evidence
+    # must be found by the same complete traversal as completed Run evidence.
+    _store_reference(store, location, "run-review", payload)
+    if not reference_after_plan:
+        plan = plan_gc(store, root)
+        assert artifact.id in {entry["artifact_id"] for entry in plan.protected}
+    assert "run-review" in plan.trace_retention["pinned_run_ids"]
+
+    result = apply_gc(store, root, plan, confirm=True)
+
+    assert (root / artifact.id).read_bytes() == b"referenced evidence"
+    assert not (root / "orphan.bin").exists()
+    assert result["deleted"] == 1
+    assert artifact.id not in {row["artifact_id"] for row in platform_for(store).tombstones.list()}
+    if reference_after_plan:
+        assert any(row["artifact_id"] == artifact.id and row["reason"] == "protected_after_recheck"
+                   for row in result["skipped"])
+
+
+@pytest.mark.parametrize("key", ["artifacts", "artifact_ids"])
+def test_gc_keeps_legacy_string_reference(tmp_path, key):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "legacy/only.bin", b"legacy reference")
+    _store_reference(store, "case", "run-review", {key: artifact.id})
+
+    plan = plan_gc(store, root)
+
+    assert [row["artifact_id"] for row in plan.protected] == [artifact.id]
+
+
+def test_gc_keeps_import_mapping_only_reference_when_import_prefix_protection_disabled(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "imports/batch/only.bin", b"ledger-only evidence")
+    ledger = platform_for(store).imports
+    ledger.begin_import({"import_id": "batch", "manifest_sha256": "manifest", "status": "applied"})
+    ledger.put_mapping({
+        "mapping_key": "only", "import_id": "batch", "target_type": "artifact",
+        "target_id": artifact.id, "artifact_sha256": artifact.sha256,
+    })
+
+    plan = plan_gc(store, root, import_audit_protected=False)
+    assert [row["artifact_id"] for row in plan.protected] == [artifact.id]
+    assert plan.protected[0]["reason"] == "referenced"
+
+
+def test_gc_rechecks_current_content_instead_of_using_stale_plan_hash(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "changed.bin", b"old unreferenced content")
+    plan = plan_gc(store, root)
+    # A writer replaces the file after planning; a new digest-only reference
+    # points to the replacement. Neither stale consent nor hash is applicable.
+    from motte_storage.artifacts import ArtifactStore
+
+    replacement = ArtifactStore(root).put_bytes(artifact.id, b"new referenced content")
+    _store_reference(store, "case", "run-review", {"artifacts": [{"sha256": replacement.sha256}]})
+
+    result = apply_gc(store, root, plan, confirm=True)
+
+    assert (root / artifact.id).read_bytes() == b"new referenced content"
+    assert result["deleted"] == 0
+    assert result["skipped"][0]["reason"] in {"changed_since_plan", "protected_after_recheck"}
+    assert platform_for(store).tombstones.list() == []
+
+
+def test_gc_does_not_treat_non_artifact_locator_or_hash_as_reference(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "123", b"ordinary orphan")
+    _store_reference(store, "case", "run-review", {
+        "kind": "event", "locator": artifact.id, "sha256": artifact.sha256,
+        "id": artifact.id, "configuration": {"sha256": artifact.sha256},
+    })
+
+    plan = plan_gc(store, root)
+
+    assert [row["artifact_id"] for row in plan.deletable] == [artifact.id]
+
+
+@pytest.mark.parametrize("location", ["scoring_job", "calibration_invocation"])
+def test_gc_preserves_durable_job_and_parentless_calibration_evidence(tmp_path, location):
+    from motte_storage.scoring_jobs import scoring_jobs_for
+    from tests.storage.test_scoring_jobs import invocation_record, job_record
+
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "judge/only.bin", b"durable judge evidence")
+    payload = _artifact_reference("locator", artifact.id, artifact.sha256)
+    owner = {"kind": "calibration", "calibration_job_id": "cal-1"}
+    job = job_record(owner=owner, status="completed")
+    if location == "scoring_job":
+        job["evidence"] = payload
+    scoring_jobs_for(store).submit(job)
+    if location == "calibration_invocation":
+        invocation = invocation_record(owner={**owner, "sample_id": "sample-1"})
+        invocation["request_summary"] = payload
+        store.invocations.create(invocation)
+    assert store.runs.get("calibration:cal-1") is None
+    assert getattr(store, "scoring_jobs", None) is None
+
+    plan = plan_gc(store, root)
+
+    assert [row["artifact_id"] for row in plan.protected] == [artifact.id]
+    assert apply_gc(store, root, plan, confirm=True)["deleted"] == 0
+    assert (root / artifact.id).exists()
+
+
+def test_gc_keeps_pending_cell_only_reference_before_any_run_exists(tmp_path):
+    store = SQLiteRunStore(tmp_path / "gc.db")
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "prepared/model.bin", b"frozen preparation")
+    _store_reference(store, "experiment_cell", None, {"raw_bundle_artifact": artifact.id})
+    assert store.runs.list() == []
+    assert store.experiments.get_cell("pending-cell")["allocation_status"] == "pending"
+
+    plan = plan_gc(store, root)
+
+    assert [row["artifact_id"] for row in plan.protected] == [artifact.id]
+    assert apply_gc(store, root, plan, confirm=True)["deleted"] == 0
+    assert (root / artifact.id).exists()
+
+
+def test_gc_apply_fails_closed_if_reference_repository_cannot_be_read(tmp_path, monkeypatch):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "candidate.bin", b"do not delete after incomplete scan")
+    plan = plan_gc(store, root)
+
+    def unavailable(_run_id):
+        raise RuntimeError("reference repository unavailable")
+
+    monkeypatch.setattr(store.case_runs, "list_for_run", unavailable)
+    with pytest.raises(RuntimeError, match="reference repository unavailable"):
+        apply_gc(store, root, plan, confirm=True)
+
+    assert (root / artifact.id).exists()
+    assert platform_for(store).tombstones.list() == []
+    assert platform_for(store).meta.get("maintenance") is None
+
+
+class _CrashAfterUnlink(BaseException):
+    """Simulates a process exit before deletion completion can be persisted."""
+
+
+def test_gc_crash_after_unlink_retains_durable_intent_and_replay_is_unconfirmed(tmp_path, monkeypatch):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "crash.bin", b"planned deletion")
+    plan = plan_gc(store, root)
+    original_unlink = Path.unlink
+
+    def crash_after_unlink(path, *args, **kwargs):
+        result = original_unlink(path, *args, **kwargs)
+        if path == root / artifact.id:
+            raise _CrashAfterUnlink()
+        return result
+
+    monkeypatch.setattr(Path, "unlink", crash_after_unlink)
+    with pytest.raises(_CrashAfterUnlink):
+        apply_gc(store, root, plan, confirm=True)
+    assert not (root / artifact.id).exists()
+    intent = platform_for(store).tombstones.list()[0]
+    assert intent["artifact_id"] == artifact.id
+    assert intent["deletion_status"] == "deleting"
+    assert "deleted_at" not in intent
+
+    monkeypatch.undo()
+    replay = apply_gc(store, root, plan, confirm=True)
+    assert replay["deleted"] == 0
+    assert replay["skipped"][0]["reason"] == "absence_unconfirmed"
+    audit = platform_for(store).tombstones.list()[0]
+    assert audit["deletion_status"] == "absence_unconfirmed"
+    assert audit["deletion_started_at"] == intent["deletion_started_at"]
+    assert "deleted_at" not in audit
+
+
+def test_gc_failed_unlink_records_failed_attempt_without_claiming_deletion(tmp_path, monkeypatch):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "failed.bin", b"retained deletion candidate")
+    plan = plan_gc(store, root)
+    original_unlink = Path.unlink
+
+    def failed_unlink(path, *args, **kwargs):
+        if path == root / artifact.id:
+            raise PermissionError("simulated unlink failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failed_unlink)
+    with pytest.raises(PermissionError, match="simulated unlink failure"):
+        apply_gc(store, root, plan, confirm=True)
+
+    assert (root / artifact.id).exists()
+    audit = platform_for(store).tombstones.list()[0]
+    assert audit["deletion_status"] == "failed"
+    assert audit["error_type"] == "PermissionError"
+    assert "deleted_at" not in audit
+
+
+def test_gc_replay_of_confirmed_deletion_does_not_replace_completion(tmp_path):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    _old_artifact(root, "deleted.bin", b"delete once")
+    plan = plan_gc(store, root)
+    assert apply_gc(store, root, plan, confirm=True)["deleted"] == 1
+    first = platform_for(store).tombstones.list()[0]
+
+    result = apply_gc(store, root, plan, confirm=True)
+
+    assert result["deleted"] == 0
+    assert result["skipped"][0]["reason"] == "already_deleted"
+    assert platform_for(store).tombstones.list()[0] == first
+
+
+@pytest.mark.parametrize("alias", ["./real/evidence.bin", "real//evidence.bin", "link/evidence.bin"])
+def test_gc_protects_lexical_and_in_root_symlink_reference_aliases(tmp_path, alias):
+    store = _make_store_with_evidence(tmp_path)
+    root = tmp_path / "artifacts"
+    artifact = _old_artifact(root, "real/evidence.bin", b"aliased evidence")
+    (root / "link").symlink_to(root / "real", target_is_directory=True)
+    _store_reference(store, "case", "run-review", {"raw_ref": alias})
+
+    plan = plan_gc(store, root)
+
+    assert artifact.id in {row["artifact_id"] for row in plan.protected}
+    assert apply_gc(store, root, plan, confirm=True)["deleted"] == 0
+    assert (root / artifact.id).exists()

@@ -15,6 +15,13 @@ from motte_storage.artifacts import ArtifactStore
 from motte_storage.platform import platform_for
 from motte_storage.run_store import SQLiteRunStore
 
+from tests.security.test_gc_retention import (
+    REFERENCE_LOCATIONS,
+    REFERENCE_SHAPES,
+    _artifact_reference,
+    _store_reference,
+)
+
 from .conftest import build_legacy_export
 
 RUN_ID = "imp-run-9001"
@@ -179,3 +186,281 @@ def test_rollback_is_idempotent_and_keeps_terminal_status(tmp_path, export_build
     # 账本行保留（审计不删除），批次终态一致。
     ledger = platform_for(store).imports
     assert len(ledger.mappings_for("imp-twice")) == first["kept_mapping_rows"]
+
+
+@pytest.mark.parametrize("shape", REFERENCE_SHAPES)
+@pytest.mark.parametrize("location", REFERENCE_LOCATIONS)
+def test_rollback_preserves_other_repository_reference(tmp_path, export_builder, shape, location):
+    import hashlib
+
+    content = b"shared imported evidence"
+    root = export_builder(
+        tmp_path / "pkg", import_id="imp-shared", with_in_flight=False,
+        artifacts=[("shared", content), ("unique", b"exclusive evidence")],
+    )
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(root), operator="op")
+    artifact_id = "imports/imp-shared/shared"
+    store.runs.create({
+        "id": "external", "status": "needs_review", "scenario_version": "replay@1",
+        "revision": 1, "manifest": {}, "case_ids": [],
+    })
+    payload = _artifact_reference(shape, artifact_id, hashlib.sha256(content).hexdigest())
+    _store_reference(store, location, "external", payload)
+
+    result = rollback_import(store, artifacts_root, "imp-shared", operator="op", confirm=True)
+
+    assert {"object": artifact_id, "reason": "artifact_in_use"} in result["blocked"]
+    assert (artifacts_root / artifact_id).read_bytes() == content
+    assert result["deleted_artifacts"] == ["imports/imp-shared/unique"]
+    assert store.runs.get("external")["status"] == "needs_review"
+    assert artifact_id not in {row["artifact_id"] for row in platform_for(store).tombstones.list()}
+
+
+def test_rollback_reference_check_and_deletion_share_maintenance_barrier(
+    tmp_path, export_builder, monkeypatch,
+):
+    from motte_sdk.migration import rollback as rollback_module
+
+    source = export_builder(tmp_path / "pkg", import_id="imp-locked", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    observed = []
+    original_refs = rollback_module.referenced_artifact_hashes
+    original_delete = ArtifactStore.delete
+
+    def scan(*args, **kwargs):
+        observed.append(("scan", platform_for(store).meta.get("maintenance_owner")))
+        return original_refs(*args, **kwargs)
+
+    def delete(self, artifact_id, **kwargs):
+        observed.append(("delete", platform_for(store).meta.get("maintenance_owner")))
+        return original_delete(self, artifact_id, **kwargs)
+
+    monkeypatch.setattr(rollback_module, "referenced_artifact_hashes", scan)
+    monkeypatch.setattr(ArtifactStore, "delete", delete)
+
+    result = rollback_import(store, artifacts_root, "imp-locked", operator="op", confirm=True)
+
+    assert [stage for stage, _ in observed] == ["scan", "delete"]
+    assert observed[0][1] is not None
+    assert observed[0][1] == observed[1][1]
+    assert result["deactivated_runs"] == [RUN_ID]
+    assert platform_for(store).meta.get("maintenance") is None
+
+
+def test_rollback_preserves_replaced_content_with_digest_only_reference(tmp_path, export_builder):
+    source = export_builder(tmp_path / "pkg", import_id="imp-replaced", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    artifact = ArtifactStore(artifacts_root).put_bytes(
+        "imports/imp-replaced/art-out", b"replacement evidence",
+    )
+    store.runs.create({
+        "id": "external", "status": "completed", "scenario_version": "replay@1",
+        "revision": 1, "manifest": {}, "case_ids": [],
+    })
+    _store_reference(store, "case", "external", {"artifacts": [{"sha256": artifact.sha256}]})
+
+    result = rollback_import(store, artifacts_root, "imp-replaced", operator="op", confirm=True)
+
+    assert (artifacts_root / artifact.id).read_bytes() == b"replacement evidence"
+    assert {"object": artifact.id, "reason": "artifact_in_use"} in result["blocked"]
+    assert result["deleted_artifacts"] == []
+
+
+def test_rollback_does_not_exclude_an_unmapped_run_claiming_same_import(tmp_path, export_builder):
+    source = export_builder(tmp_path / "pkg", import_id="imp-owned", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    artifact_id = "imports/imp-owned/art-out"
+    store.runs.create({
+        "id": "imp-unmapped", "status": "needs_review", "scenario_version": "replay@1",
+        "revision": 1, "manifest": {"import_source": {"import_id": "imp-owned"}},
+        "case_ids": [], "artifact_refs": [{"artifact_id": artifact_id}],
+    })
+
+    result = rollback_import(store, artifacts_root, "imp-owned", operator="op", confirm=True)
+
+    assert {"object": artifact_id, "reason": "artifact_in_use"} in result["blocked"]
+    assert (artifacts_root / artifact_id).exists()
+    assert "rolled_back_import" not in store.runs.get("imp-unmapped")
+
+
+def test_rollback_fails_closed_if_reference_repository_cannot_be_read(
+    tmp_path, export_builder, monkeypatch,
+):
+    source = export_builder(tmp_path / "pkg", import_id="imp-scan-fail", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("reference repository unavailable")
+
+    monkeypatch.setattr(store.gate_store, "list_results", unavailable)
+    with pytest.raises(RuntimeError, match="reference repository unavailable"):
+        rollback_import(store, artifacts_root, "imp-scan-fail", operator="op", confirm=True)
+
+    assert (artifacts_root / "imports/imp-scan-fail/art-out").exists()
+    assert "rolled_back_import" not in store.runs.get(RUN_ID)
+    assert platform_for(store).tombstones.list() == []
+    assert platform_for(store).meta.get("maintenance") is None
+
+
+def test_rollback_crash_after_unlink_preserves_intent_without_replay_confirmation(
+    tmp_path, export_builder, monkeypatch,
+):
+    class CrashAfterDelete(BaseException):
+        pass
+
+    source = export_builder(tmp_path / "pkg", import_id="imp-crash", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    artifact_id = "imports/imp-crash/art-out"
+    original_delete = ArtifactStore.delete
+
+    def crash_after_delete(self, *args, **kwargs):
+        original_delete(self, *args, **kwargs)
+        raise CrashAfterDelete()
+
+    monkeypatch.setattr(ArtifactStore, "delete", crash_after_delete)
+    with pytest.raises(CrashAfterDelete):
+        rollback_import(store, artifacts_root, "imp-crash", operator="op", confirm=True)
+    assert not (artifacts_root / artifact_id).exists()
+    audit = platform_for(store).tombstones.list()[0]
+    assert audit["deletion_status"] == "deleting"
+    assert "deleted_at" not in audit
+
+    monkeypatch.undo()
+    result = rollback_import(store, artifacts_root, "imp-crash", operator="op", confirm=True)
+    assert result["deleted_artifacts"] == []
+    assert {"object": artifact_id, "reason": "absence_unconfirmed"} in result["skipped_artifacts"]
+    audit = platform_for(store).tombstones.list()[0]
+    assert audit["deletion_status"] == "absence_unconfirmed"
+    assert "deleted_at" not in audit
+
+
+@pytest.mark.parametrize("reference_kind", ["baseline", "gate", "experiment_cell", "superseding_cell"])
+def test_rollback_preserves_artifacts_transitively_pinned_by_other_resources(
+    tmp_path, export_builder, reference_kind,
+):
+    source = export_builder(tmp_path / "pkg", import_id="imp-pinned", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    ref = {"run_id": RUN_ID, "scoring_pass_id": "frozen-pass", "report_schema": "run-report@2",
+           "evidence_hash": "sha256:baseline"}
+    if reference_kind == "baseline":
+        baseline = store.baseline_store.put({
+            "baseline_id": "independent", "entries": [{"cell_key": None, "ref": ref}],
+            "comparison_policy_hash": "sha256:policy", "eligibility": "formal",
+            "reason": "retain historical evidence", "created_by": "operator",
+            "created_at": "2026-09-30T00:00:00Z", "metrics": {},
+        })
+    elif reference_kind == "gate":
+        store.gate_store.put_result({
+            "gate_result_id": "independent", "policy_id": "policy", "refs": {"baseline": ref},
+        })
+    elif reference_kind == "experiment_cell":
+        _store_reference(store, "experiment_cell", None, {"baseline": ref})
+    else:
+        store.experiments.publish_spec_and_cells(
+            {"experiment_id": "ref-experiment", "version": "1"},
+            [{"cell_id": "pending-cell", "experiment_id": "ref-experiment",
+              "experiment_version": "1", "allocation_status": "allocated", "repeat_index": 0,
+              "factor_assignment": {}, "run_id": "unrelated", "superseding_run_ids": [RUN_ID]}],
+        )
+
+    result = rollback_import(store, artifacts_root, "imp-pinned", operator="op", confirm=True)
+
+    artifact_id = "imports/imp-pinned/art-out"
+    assert (artifacts_root / artifact_id).exists()
+    assert {"object": artifact_id, "reason": "artifact_in_use"} in result["blocked"]
+    assert {"object": RUN_ID, "reason": "run_in_use"} in result["blocked"]
+    assert "rolled_back_import" not in store.runs.get(RUN_ID)
+    if reference_kind == "baseline":
+        assert store.baseline_store.get("independent") == baseline
+
+
+@pytest.mark.parametrize("reference_state", ["none", "foreign", "foreign_child", "foreign_score", "unconfirmed"])
+def test_rollback_backup_archives_only_confirmed_inactive_own_references(
+    tmp_path, export_builder, reference_state,
+):
+    from motte_storage.maintenance import BackupIncomplete, consistent_backup
+
+    source = export_builder(tmp_path / "pkg", import_id="imp-archive", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    rollback_import(store, artifacts_root, "imp-archive", operator="op", confirm=True)
+    artifact_id = "imports/imp-archive/art-out"
+    mappings_before = platform_for(store).imports.mappings_for("imp-archive")
+    inactive_before = store.runs.get(RUN_ID)
+    audit = platform_for(store).tombstones.list()[0]
+    if reference_state == "foreign":
+        store.runs.create({
+            "id": "foreign", "status": "needs_review", "scenario_version": "replay@1",
+            "revision": 1, "manifest": {"raw_ref": artifact_id}, "case_ids": [],
+        })
+    elif reference_state == "foreign_child":
+        _store_reference(store, "invocation", RUN_ID, {"raw_ref": artifact_id})
+    elif reference_state == "foreign_score":
+        store.scores.replace_for_run(RUN_ID, [
+            {"case_id": "new", "value": 1, "details": {"raw_ref": artifact_id}},
+        ])
+    elif reference_state == "unconfirmed":
+        audit.pop("deleted_at", None)
+        platform_for(store).tombstones.append([{**audit, "deletion_status": "absence_unconfirmed"}])
+
+    if reference_state == "none":
+        manifest = consistent_backup(store, tmp_path / "backups", artifacts_root=artifacts_root)
+        assert manifest["status"] == "complete"
+    else:
+        with pytest.raises(BackupIncomplete):
+            consistent_backup(store, tmp_path / "backups", artifacts_root=artifacts_root)
+    assert platform_for(store).imports.mappings_for("imp-archive") == mappings_before
+    assert store.runs.get(RUN_ID) == inactive_before
+
+
+def test_rollback_preserves_foreign_child_on_its_own_imported_run(tmp_path, export_builder):
+    source = export_builder(tmp_path / "pkg", import_id="imp-new-child", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    artifact_id = "imports/imp-new-child/art-out"
+    _store_reference(store, "invocation", RUN_ID, {"raw_ref": artifact_id})
+
+    result = rollback_import(store, artifacts_root, "imp-new-child", operator="op", confirm=True)
+
+    assert (artifacts_root / artifact_id).exists()
+    assert {"object": RUN_ID, "reason": "run_in_use"} in result["blocked"]
+    assert "rolled_back_import" not in store.runs.get(RUN_ID)
+
+
+def test_rollback_never_deletes_foreign_target_through_import_namespace_symlink(
+    tmp_path, export_builder,
+):
+    source = export_builder(tmp_path / "pkg", import_id="imp-symlink", with_in_flight=False)
+    store = SQLiteRunStore(tmp_path / "target.db")
+    artifacts_root = tmp_path / "artifacts"
+    apply_import(store, artifacts_root, load_source_package(source), operator="op")
+    artifact_id = "imports/imp-symlink/art-out"
+    imported_path = artifacts_root / artifact_id
+    content = imported_path.read_bytes()
+    foreign = ArtifactStore(artifacts_root).put_bytes("foreign/existing.bin", content)
+    imported_path.unlink()
+    imported_path.symlink_to(artifacts_root / foreign.id)
+
+    result = rollback_import(store, artifacts_root, "imp-symlink", operator="op", confirm=True)
+
+    assert (artifacts_root / foreign.id).read_bytes() == content
+    assert imported_path.is_symlink()
+    assert {"object": artifact_id, "reason": "foreign_object"} in result["blocked"]
+    assert result["deleted_artifacts"] == []
+    assert platform_for(store).tombstones.list() == []

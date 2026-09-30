@@ -8,6 +8,7 @@ from motte_sdk.replay_run import ReplayProvider
 from motte_sdk.service import RunService
 from motte_storage.gc import apply_gc, plan_gc
 from motte_storage.maintenance import (
+    BackupUnsupported,
     MaintenanceConflict,
     backup_sqlite,
     begin_maintenance,
@@ -33,7 +34,7 @@ def test_maintenance_barrier_helpers_are_idempotent(tmp_path):
     assert first["active"] is True
     assert first["started_at"]
     # 同一操作幂等重入：不刷新 started_at
-    again = begin_maintenance(store, reason="backup")
+    again = begin_maintenance(store, reason="backup", owner=first["owner"])
     assert again["started_at"] == first["started_at"]
     assert again["owner"] == first["owner"]
     assert maintenance_status(store)["active"] is True
@@ -149,11 +150,9 @@ def test_cleanup_artifacts_defaults_to_dry_run(tmp_path):
     assert report["freed_bytes"] == 100
     assert old.exists() and recent.exists()  # dry-run 不删
 
-    applied = cleanup_artifacts(root, older_than_days=7, dry_run=False)
-    assert applied["dry_run"] is False
-    assert not old.exists()
-    assert recent.exists()
-    assert applied["kept"] == 1
+    with pytest.raises(BackupUnsupported, match="motte gc"):
+        cleanup_artifacts(root, older_than_days=7, dry_run=False)
+    assert old.exists() and recent.exists()
 
 
 def test_cleanup_reports_empty_root(tmp_path):
@@ -169,3 +168,360 @@ def test_backup_manifest_is_valid_json(tmp_path):
     stored = json.loads(sorted(path.glob("manifest-*.json"))[-1].read_text(encoding="utf-8"))
     assert stored == manifest
     assert "created_at" in stored
+
+
+def _maintenance_contender(db_path, started, result):
+    store = SQLiteRunStore(db_path)
+    started.set()
+    try:
+        lease = begin_maintenance(store, reason="backup")
+    except MaintenanceConflict:
+        result.put("conflict")
+    else:
+        end_maintenance(store, owner=lease["owner"])
+        result.put("acquired")
+
+
+def test_same_reason_cannot_claim_another_operation_lease(tmp_path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    other = SQLiteRunStore(tmp_path / "runs.db")
+    first = begin_maintenance(store)
+    try:
+        for contender in (store, other):
+            with pytest.raises(MaintenanceConflict):
+                begin_maintenance(contender, reason="backup")
+        with pytest.raises(MaintenanceConflict):
+            end_maintenance(other)
+        assert maintenance_status(store)["active"] is True
+    finally:
+        end_maintenance(store, owner=first["owner"])
+
+
+def test_cross_process_same_reason_cannot_release_active_lease(tmp_path):
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    db = tmp_path / "runs.db"
+    store = SQLiteRunStore(db)
+    lease = begin_maintenance(store)
+    started, result = context.Event(), context.Queue()
+    process = context.Process(target=_maintenance_contender, args=(str(db), started, result))
+    try:
+        process.start()
+        assert started.wait(15)
+        assert result.get(timeout=15) == "conflict"
+        process.join(15)
+        assert process.exitcode == 0
+        assert maintenance_status(store)["active"] is True
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join()
+        end_maintenance(store, owner=lease["owner"])
+
+
+def test_maintenance_bars_direct_repository_and_pin_mutations(tmp_path):
+    import sqlite3
+
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    run = _populate(tmp_path / "runs.db")
+    lease = begin_maintenance(store)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            store.runs.save({**run, "status": "needs_review"})
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            store.case_runs.upsert({"run_id": run["id"], "case_id": "new-ref",
+                                   "artifact_refs": [{"id": "late.bin"}]})
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            store.baseline_store.put({
+                "baseline_id": "late-pin", "entries": [{"cell_key": None, "ref": {
+                    "run_id": run["id"], "scoring_pass_id": "p1",
+                    "report_schema": "run-report@2", "evidence_hash": "sha256:x",
+                }}], "comparison_policy_hash": "sha256:y", "created_by": "test",
+                "reason": "late pin", "created_at": "2026-09-30T00:00:00Z",
+                "metrics": {},
+            })
+        assert store.runs.get(run["id"])["status"] == "queued"
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+    store.runs.save({**run, "status": "needs_review"})
+    assert store.runs.get(run["id"])["status"] == "needs_review"
+
+
+def test_maintenance_refuses_active_executor(tmp_path):
+    from motte_sdk.execution_lock import worker_execution_lock
+
+    db = tmp_path / "runs.db"
+    store = SQLiteRunStore(db)
+    with worker_execution_lock(db):
+        with pytest.raises(MaintenanceConflict, match="executor"):
+            begin_maintenance(store)
+    assert maintenance_status(store)["active"] is False
+    lease = begin_maintenance(store)
+    end_maintenance(store, owner=lease["owner"])
+
+
+def _artifact_contender(root, result):
+    from motte_storage.artifacts import ArtifactStore
+
+    try:
+        ArtifactStore(root).put_bytes("evidence.bin", b"changed")
+    except RuntimeError:
+        result.put("conflict")
+    else:
+        result.put("written")
+
+
+def test_maintenance_bars_cross_process_artifact_overwrite(tmp_path):
+    import multiprocessing
+    from motte_storage.artifacts import ArtifactStore
+
+    context = multiprocessing.get_context("spawn")
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    root = tmp_path / "artifacts"
+    artifacts = ArtifactStore(root)
+    artifacts.put_bytes("evidence.bin", b"original")
+    lease = begin_maintenance(store, artifacts_root=root)
+    result = context.Queue()
+    process = context.Process(target=_artifact_contender, args=(str(root), result))
+    try:
+        process.start()
+        assert result.get(timeout=15) == "conflict"
+        process.join(15)
+        assert process.exitcode == 0
+        assert artifacts.read_bytes("evidence.bin") == b"original"
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join()
+        end_maintenance(store, owner=lease["owner"])
+    artifacts.put_bytes("evidence.bin", b"after")
+    assert artifacts.read_bytes("evidence.bin") == b"after"
+
+
+def test_reentry_cannot_claim_a_different_artifact_root(tmp_path):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    lease = begin_maintenance(store, artifacts_root=tmp_path / "a")
+    try:
+        with pytest.raises(MaintenanceConflict, match="artifact root"):
+            begin_maintenance(store, owner=lease["owner"], artifacts_root=tmp_path / "b")
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+
+
+def _abandon_maintenance(db_path, root, result):
+    store = SQLiteRunStore(db_path)
+    lease = begin_maintenance(store, artifacts_root=root)
+    result.send(lease["owner"])
+    result.close()
+    os._exit(0)
+
+
+def test_crashed_owner_stays_fail_closed_until_explicit_recovery(tmp_path):
+    import multiprocessing
+    import sqlite3
+    from motte_storage.artifacts import ArtifactStore
+
+    context = multiprocessing.get_context("spawn")
+    db, root = tmp_path / "runs.db", tmp_path / "artifacts"
+    store = SQLiteRunStore(db)
+    run = _populate(db)
+    parent, child = context.Pipe(duplex=False)
+    process = context.Process(target=_abandon_maintenance, args=(str(db), str(root), child))
+    process.start()
+    try:
+        assert parent.poll(15)
+        owner = parent.recv()
+        process.join(15)
+        assert process.exitcode == 0
+        with pytest.raises(MaintenanceConflict):
+            begin_maintenance(store)
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            store.runs.save({**run, "status": "needs_review"})
+        with pytest.raises(MaintenanceConflict):
+            end_maintenance(store, owner="not-the-owner")
+        end_maintenance(store, owner=owner)
+        assert maintenance_status(store)["active"] is False
+        lease = begin_maintenance(store, artifacts_root=root)
+        end_maintenance(store, owner=lease["owner"])
+        ArtifactStore(root).put_bytes("after-recovery", b"ok")
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join()
+        parent.close()
+        child.close()
+
+
+def _race_maintenance(db_path, ready, start, release, result):
+    store = SQLiteRunStore(db_path)
+    ready.put(True)
+    assert start.wait(15)
+    try:
+        lease = begin_maintenance(store)
+    except MaintenanceConflict:
+        result.put("conflict")
+    else:
+        result.put("acquired")
+        assert release.wait(15)
+        end_maintenance(store, owner=lease["owner"])
+
+
+def test_simultaneous_processes_have_exactly_one_maintenance_owner(tmp_path):
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    db = tmp_path / "runs.db"
+    store = SQLiteRunStore(db)
+    ready, result = context.Queue(), context.Queue()
+    start, release = context.Event(), context.Event()
+    processes = [context.Process(target=_race_maintenance,
+                                 args=(str(db), ready, start, release, result)) for _ in range(2)]
+    try:
+        for process in processes:
+            process.start()
+        assert ready.get(timeout=15) and ready.get(timeout=15)
+        start.set()
+        assert sorted([result.get(timeout=15), result.get(timeout=15)]) == ["acquired", "conflict"]
+        assert maintenance_status(store)["active"] is True
+        release.set()
+        for process in processes:
+            process.join(15)
+            assert process.exitcode == 0
+        assert maintenance_status(store)["active"] is False
+    finally:
+        release.set()
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join()
+
+
+def test_owner_release_closes_locks_even_if_flag_was_removed(tmp_path):
+    from motte_storage.artifacts import ArtifactStore
+    from motte_storage.platform import platform_for
+
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    root = tmp_path / "artifacts"
+    lease = begin_maintenance(store, artifacts_root=root)
+    platform_for(store).meta.delete("maintenance")
+    end_maintenance(store, owner=lease["owner"])
+    artifact = ArtifactStore(root).put_bytes("after", b"released")
+    assert artifact.id == "after"
+
+
+def test_memory_store_cannot_claim_a_durable_write_barrier():
+    from motte_storage.maintenance import BackupUnsupported
+    from motte_storage.run_store import InMemoryRunStore
+
+    with pytest.raises(BackupUnsupported, match="persistent"):
+        begin_maintenance(InMemoryRunStore())
+
+
+def test_unrelated_artifact_writers_can_share_the_mutation_gate(tmp_path):
+    from motte_storage.artifacts import ArtifactStore
+    from motte_storage.operation_locks import artifact_mutation
+
+    root = tmp_path / "artifacts"
+    store = ArtifactStore(root)
+    with artifact_mutation(root):
+        assert store.put_bytes("parallel-evidence", b"safe").id == "parallel-evidence"
+
+
+def test_lazy_scoring_job_cannot_publish_after_barrier_activation(tmp_path):
+    import sqlite3
+    from motte_storage.scoring_jobs import ScoringJobConflict, scoring_jobs_for
+    from tests.storage.test_scoring_jobs import job_record
+
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    lease = begin_maintenance(store)
+    try:
+        jobs = scoring_jobs_for(store)
+        with pytest.raises(ScoringJobConflict) as error:
+            jobs.submit(job_record(owner={"kind": "calibration", "calibration_job_id": "late"}))
+        assert isinstance(error.value.__cause__, sqlite3.IntegrityError)
+        assert "maintenance" in str(error.value.__cause__)
+        assert jobs.get("sjob-1") is None
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+
+
+def test_lazy_resource_repository_cannot_write_after_barrier_activation(tmp_path):
+    import sqlite3
+    from motte_storage.resource_store import SQLiteResourceStore
+
+    db = tmp_path / "runs.db"
+    store = SQLiteRunStore(db)
+    lease = begin_maintenance(store)
+    try:
+        resources = SQLiteResourceStore(db)
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            resources.providers.put({"name": "late-provider"})
+        assert resources.providers.get("late-provider") is None
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+
+
+@pytest.mark.parametrize("action", ["append", "update", "delete"])
+def test_backup_barrier_freezes_reference_bearing_tombstones(tmp_path, action):
+    import sqlite3
+    from motte_storage.platform import platform_for
+
+    db = tmp_path / "runs.db"
+    store = SQLiteRunStore(db)
+    tombstones = platform_for(store).tombstones
+    tombstones.append([{"gc_run_id": "old", "artifact_id": "archived.bin"}])
+    # The reason is an audit label, not permission to alter backup inputs.
+    lease = begin_maintenance(store, reason="gc")
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            if action == "append":
+                tombstones.append([{"gc_run_id": "new", "artifact_id": "other.bin"}])
+            else:
+                query = ("UPDATE motte_gc_tombstones SET payload = '{}'" if action == "update"
+                         else "DELETE FROM motte_gc_tombstones")
+                with sqlite3.connect(db) as connection:
+                    connection.execute(query)
+        assert len(tombstones.list()) == 1
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+
+
+def test_gc_explicitly_allows_audit_writes_and_cannot_upgrade_reentry(tmp_path):
+    from motte_storage.platform import platform_for
+
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    lease = begin_maintenance(store, reason="gc", allow_tombstone_writes=True)
+    try:
+        platform_for(store).tombstones.append([{"gc_run_id": "gc", "artifact_id": "deleted.bin"}])
+        assert len(platform_for(store).tombstones.list()) == 1
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+    lease = begin_maintenance(store)
+    try:
+        with pytest.raises(MaintenanceConflict, match="tombstone"):
+            begin_maintenance(store, owner=lease["owner"], allow_tombstone_writes=True)
+    finally:
+        end_maintenance(store, owner=lease["owner"])
+
+
+@pytest.mark.parametrize("in_maintenance", [False, True])
+def test_legacy_cleanup_apply_preserves_old_referenced_evidence(tmp_path, in_maintenance):
+    db, root = tmp_path / "runs.db", tmp_path / "artifacts"
+    store = SQLiteRunStore(db)
+    run = _populate(db)
+    root.mkdir()
+    evidence = root / "evidence.bin"
+    evidence.write_bytes(b"referenced")
+    old = time.time() - 86400 * 365
+    os.utime(evidence, (old, old))
+    store.runs.save({**run, "artifact_refs": [{"id": evidence.name}]})
+    lease = begin_maintenance(store, artifacts_root=root) if in_maintenance else None
+    try:
+        with pytest.raises(BackupUnsupported, match="motte gc"):
+            cleanup_artifacts(root, older_than_days=7, dry_run=False)
+        assert evidence.read_bytes() == b"referenced"
+        assert store.runs.get(run["id"])["artifact_refs"] == [{"id": evidence.name}]
+    finally:
+        if lease:
+            end_maintenance(store, owner=lease["owner"])

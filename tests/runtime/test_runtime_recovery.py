@@ -6,6 +6,7 @@ fixture 进程经 SupervisedProcess 派生（受控 env，不经 shell）。
 """
 from __future__ import annotations
 
+import os
 import sys
 import textwrap
 import time
@@ -99,7 +100,7 @@ def test_recovery_flags_pid_reuse_without_touching_new_process(tmp_path):
     record = {
         **record,
         "state": "spawned",
-        "pid": 4,  # Windows 上长期存在的系统进程；POSIX 上 kernel 线程
+        "pid": os.getpid(),  # 当前测试进程确定存在；只观察，不发信号
         "identity": {"create_time": None, "cmdline": ["definitely", "not", "this"]},
     }
     verdict = recover_session(record)

@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
@@ -613,26 +614,57 @@ def _repeat_stability(calls: list[CalibrationCall]) -> dict[str, Any]:
 
 
 def _position_swap(calls: list[CalibrationCall]) -> dict[str, Any]:
-    forward: dict[str, CalibrationCall] = {}
-    reverse: dict[str, CalibrationCall] = {}
+    """Only distinct, successful calls of the same pair in opposite orders count.
+
+    Keep invalid and incomplete groups in the denominator: dropping them, or
+    overwriting a duplicate direction, could turn incomplete evidence into a
+    perfect consistency rate. Ledger references must also be unique across the
+    report, so a single/repeat call cannot be reused as a swapped call.
+    """
+    groups: dict[str, list[CalibrationCall]] = {}
+    invocation_counts = Counter(call.invocation_id for call in calls)
+    call_counts = Counter((call.judge_job_id, call.call_id) for call in calls)
     for call in calls:
-        if call.kind == "order_forward":
-            forward[call.sample_id] = call
-        elif call.kind == "order_reverse":
-            reverse[call.sample_id] = call
-    pairs = sorted(set(forward) & set(reverse))
-    if not pairs:
+        if call.kind in {"order_forward", "order_reverse"}:
+            groups.setdefault(call.sample_id, []).append(call)
+    if not groups:
         return {"measured": False, "reason": "no swapped presentation was recorded",
                 "pairs": 0, "consistent": 0, "rate": None}
-    consistent = [
-        sample_id for sample_id in pairs
-        if forward[sample_id].winner_candidate_id is not None
-        and forward[sample_id].winner_candidate_id == reverse[sample_id].winner_candidate_id
-    ]
+
+    consistent: list[str] = []
+    invalid: dict[str, str] = {}
+    for sample_id, items in sorted(groups.items()):
+        forward = [item for item in items if item.kind == "order_forward"]
+        reverse = [item for item in items if item.kind == "order_reverse"]
+        if len(forward) != 1 or len(reverse) != 1:
+            invalid[sample_id] = "requires exactly one forward and one reverse call"
+            continue
+        first, second = forward[0], reverse[0]
+        if any(
+            invocation_counts[item.invocation_id] != 1
+            or call_counts[(item.judge_job_id, item.call_id)] != 1
+            for item in items
+        ):
+            invalid[sample_id] = "swap calls must have distinct, unreused ledger references"
+        elif any(item.outcome != "succeeded" or item.status != "ok" for item in items):
+            invalid[sample_id] = "swap calls must both succeed with valid judge outcomes"
+        elif (
+            len(first.presentation_order) != 2
+            or len(set(first.presentation_order)) != 2
+            or not all(first.presentation_order)
+            or second.presentation_order != list(reversed(first.presentation_order))
+        ):
+            invalid[sample_id] = "presentation orders must reverse the same two candidates"
+        elif any(item.winner_candidate_id not in first.presentation_order for item in items):
+            invalid[sample_id] = "swap winners must belong to the presented candidate pair"
+        elif first.winner_candidate_id == second.winner_candidate_id:
+            consistent.append(sample_id)
     return {
-        "measured": True, "pairs": len(pairs), "consistent": len(consistent),
-        "rate": len(consistent) / len(pairs),
-        "inconsistent_samples": sorted(set(pairs) - set(consistent)),
+        "measured": len(invalid) < len(groups),
+        "pairs": len(groups), "consistent": len(consistent),
+        "rate": len(consistent) / len(groups),
+        "inconsistent_samples": sorted(set(groups) - set(consistent)),
+        "invalid_samples": sorted(invalid), "invalid_reasons": invalid,
     }
 
 

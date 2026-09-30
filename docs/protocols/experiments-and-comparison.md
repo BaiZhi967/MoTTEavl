@@ -217,3 +217,54 @@ RunReportRef、政策 hash、单位、seed、次数、k 与每 Task 资格。CLI
 保留全部 Experiment/Cell/Run/Trial/ScoreSet/ScoringPass/Baseline/GateResult/
 ReportSnapshot/Artifact pin 与不确定记录。新算法/阈值/统计实现 = 新版本，不重写
 原 policy 或历史结论。
+
+## M8 预检绑定与恢复补充（2026-09-30）
+
+`preview` 返回 canonical `preview_hash`，覆盖规范化 Spec 与每个 Cell 实际解析的
+manifest、case IDs、requested manifest。API 创建体的 `_preview_hash`、SDK
+`experiment_create(..., preview_hash=...)`、本地/远程 CLI 的 `--preview-hash` 可绑定该预览。
+首次创建时合法但不同的资源也会触发 `PREVIEW_STALE`（HTTP 409），且不创建 Spec/Cell/Run。
+Web 创建沿用刚预览的 hash。未带 hash 的兼容调用仍重新预检，回执明确
+`preflight_mode=create_revalidated`，不能宣称绑定了用户先前看到的预览。
+
+新 Spec 与整批含 `prepared_run` 的 Cell 在同一存储事务内发布；之后分配仅消费该冻结输入，
+不再次解析可变资源。事务中途失败不留下半个矩阵；成功发布后的进程重建可在资源仓库不可用时
+恢复原矩阵。幂等重放核对完整 Cell ID 集合并返回原 hash/模式；不能拿新预览给旧 Run 重新背书。
+历史未冻结 Cell 仍标 `legacy_revalidated`，历史缺失 Cell 矩阵明确报 `EXPERIMENT_INCOMPLETE`，
+不静默混用新旧快照。实验外部来源和执行时资源能力仍需各自验收；hash 不是授权或实时环境保证。
+
+Agent suite 额外接受固定控制条件 `agent_mode=legacy-json|native-tool`（默认 legacy-json）；
+其他 suite 拒绝该条件。native-tool 沿用 standalone 的 prompt、工具、Agent budget 冻结链，
+仍只接受 model_profile 实验因子；这不代表任意外部 Runtime 已装配。
+
+### M8 subject 描述统计与自包含导出补充（2026-09-30）
+
+`paired_statistics` 现在同时返回 `k`、`descriptive`、`inputs` 与 `input_digest`。
+`descriptive.baseline/candidate` 只读取各自选中 Case 的 `result.cost` 与
+`result.metering.latency_ms`：一个 Case 一个观测，Terminal-Bench 中一个选中
+Task 一个 Case-result 观测。成本按显式币种分别给出 count/mean/median/p10/p90/
+min/max/missing，不跨币种相加或换汇；缺币种、非有限值、负数与缺测仍计入
+unknown/missing，不补成 USD 或零。延迟按毫秒给出 count/mean/p50/p90/missing。
+这些数据仅为 subject 描述统计，不合并 ScoringPass 的 Judge 费用、Judge 延迟，
+不把 transport retry 当作独立样本，也不从 Trial 分数推测缺失的 Task 计量。
+
+RunReportRef 的 evidence hash 不包含上述 Case 计量，因此 `inputs` 额外冻结
+实际采用的 subject 成本/延迟字段、两个固定引用、allowed_factors 与 k，
+`input_digest` 是该对象的 canonical hash。NaN/Infinity 在冻结输入中以具名标记
+保留，在描述数值中算 missing，整个结果可严格 JSON 序列化。现有结果可在不读
+current、计量存储或执行模型调用的前提下导出；若底层计量事实后来改变，重新
+求值会得到不同 digest，不应将相同 Run/Pass 引用误认为完全相同的统计输入。
+
+`statistics_to_json` 保留完整 canonical 对象；`statistics_to_junit` 在 properties
+记录固定引用、input_digest、政策、k、缺失数、单位、seed 与迭代次数，并在
+system-out 保留完整同一 JSON。唯一 testcase 表达配对区间的适用资格，
+`applicable=false` 映射 skipped，绝不伪装成质量通过；它不是质量 Gate 或排名。
+这些自包含导出不等于独立 append-only 统计报告的持久发布，后者仍待实现。
+
+## Cell 显式重试的冻结输入（2026-09-30）
+
+retry_cell 从初始 Run 读取已冻结的 executable manifest、ordered case_ids 与 requested_manifest，
+创建新的 superseding Run；不从当前资源重新解析 selector，也不重新选择 Cases。
+这同样适用于没有 prepared_run 字段的历史 Cell。原 Run 缺失时拒绝创建，不能以空 Cases
+生成替代记录。新 Run 的执行身份通过既有 refreeze helper 派生，保留原 Run 与父子审计链。
+重试继续检查 suite 支持边界，不能通过手写持久 Spec/Cell 绕过未支持外部 Runtime 的拒绝。

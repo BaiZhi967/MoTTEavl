@@ -17,9 +17,16 @@
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
+from motte_storage.artifact_refs import (
+    canonical_artifact_id, collect_artifact_refs, referenced_artifact_hashes,
+    referenced_run_ids, resolve_artifact_refs,
+)
 from motte_storage.artifacts import ArtifactStore
+from motte_storage.deletion_audit import audit_missing_artifact, delete_with_audit
+from motte_storage.maintenance import begin_maintenance, end_maintenance
 from motte_storage.platform import platform_for
 
 from .sources import utc_now
@@ -36,18 +43,10 @@ class RollbackNotConfirmed(ValueError):
 
 def _run_artifact_keys(run: dict[str, Any]) -> set[str]:
     """收集一个 run payload 里引用的 artifact id 与内容 sha256。"""
-    keys: set[str] = set()
-    for ref in run.get("artifact_refs") or []:
-        if isinstance(ref, dict):
-            if isinstance(ref.get("artifact_id"), str):
-                keys.add(ref["artifact_id"])
-            if isinstance(ref.get("sha256"), str):
-                keys.add(ref["sha256"])
-    legacy = (run.get("manifest") or {}).get("legacy") or {}
-    for entry in legacy.get("artifacts") or []:
-        if isinstance(entry, dict) and isinstance(entry.get("sha256"), str):
-            keys.add(entry["sha256"])
-    return keys
+    refs: dict[str, str | None] = {}
+    hashes: set[str] = set()
+    collect_artifact_refs(run, refs, hashes=hashes)
+    return set(refs) | hashes
 
 
 def rollback_import(
@@ -69,57 +68,97 @@ def rollback_import(
     artifact_store = ArtifactStore(artifacts_root)
     artifact_prefix = f"imports/{import_id}/"
 
-    # 其他批次的映射：同目标 id 或同内容 sha 都算"跨批引用"。
-    other_mappings: list[dict[str, Any]] = []
-    for other in ledger.list_imports():
-        if other.get("import_id") != import_id:
-            other_mappings.extend(ledger.mappings_for(other["import_id"]))
-
     blocked: list[dict[str, str]] = []
     deleted_artifacts: list[str] = []
     deactivated_runs: list[str] = []
+    skipped_artifacts: list[dict[str, str]] = []
     inactive_references = 0
     tombstones: list[dict[str, Any]] = []
+
+    lease = begin_maintenance(
+        store, reason="import_rollback", artifacts_root=artifacts_root, allow_tombstone_writes=True,
+    )
+    try:
+        # Exclude only owned Runs that this batch will actually deactivate. A
+        # matching manifest alone cannot waive another resource's reference.
+        own_runs = set()
+        for mapping in mappings:
+            if mapping.get("target_type") != "run":
+                continue
+            run_id = mapping.get("target_id", "")
+            run = store.runs.get(run_id)
+            if run_id.startswith("imp-") and run is not None:
+                source = (run.get("manifest") or {}).get("import_source") or {}
+                if source.get("import_id") == import_id:
+                    own_runs.add(run_id)
+        external_run_refs = referenced_run_ids(
+            store, exclude_run_ids=own_runs, exclude_import_ids={import_id},
+        )
+        pinned_runs = own_runs & external_run_refs
+        reference_hashes: set[str] = set()
+        references = referenced_artifact_hashes(
+            store, exclude_run_ids=own_runs - pinned_runs,
+            exclude_import_ids={import_id}, hashes=reference_hashes,
+        )
+
+        references = resolve_artifact_refs(references, artifact_store.root)
+        for mapping in mappings:
+            target_type = mapping.get("target_type", "")
+            target_id = mapping.get("target_id", "")
+            if target_type != "artifact":
+                continue
+            if not target_id.startswith(artifact_prefix):
+                blocked.append({"object": target_id, "reason": "foreign_object"})
+                continue
+            sha = mapping.get("artifact_sha256", "")
+            target_identity = canonical_artifact_id(target_id, root=artifact_store.root)
+            if not target_identity.startswith(artifact_prefix):
+                blocked.append({"object": target_id, "reason": "foreign_object"})
+                continue
+            if target_identity in references or (sha and sha.removeprefix("sha256:") in reference_hashes):
+                blocked.append({"object": target_id, "reason": "artifact_in_use"})
+                continue
+            try:
+                actual_content = artifact_store.read_bytes(target_id)
+                actual_sha = hashlib.sha256(actual_content).hexdigest()
+                actual_bytes = len(actual_content)
+            except FileNotFoundError:
+                actual_sha = None  # replay cannot retrospectively confirm an absent file
+                actual_bytes = None
+            if actual_sha in reference_hashes:
+                blocked.append({"object": target_id, "reason": "artifact_in_use"})
+                continue
+            if actual_sha is not None and sha and actual_sha != sha.removeprefix("sha256:"):
+                blocked.append({"object": target_id, "reason": "artifact_changed"})
+                continue
+            audit_entry = {
+                "gc_run_id": ROLLBACK_TOMBSTONE_PREFIX + import_id,
+                "artifact_id": target_id, "sha256": actual_sha or sha, "bytes": actual_bytes,
+                "reason": "import_rollback",
+                "import_id": import_id, "operator": operator,
+            }
+            if actual_sha is None:
+                reason = audit_missing_artifact(platform.tombstones, audit_entry)
+                skipped_artifacts.append({"object": target_id, "reason": reason})
+                continue
+            tombstones.append(delete_with_audit(
+                platform.tombstones, audit_entry,
+                delete=lambda: artifact_store.delete(target_id, maintenance_owner=lease["owner"]),
+                exists=lambda: (artifact_store.root / target_id).exists(),
+            ))
+            deleted_artifacts.append(target_id)
+    finally:
+        end_maintenance(store, owner=lease["owner"])
 
     for mapping in mappings:
         target_type = mapping.get("target_type", "")
         target_id = mapping.get("target_id", "")
         if target_type == "artifact":
-            if not target_id.startswith(artifact_prefix):
-                blocked.append({"object": target_id, "reason": "foreign_object"})
-                continue
-            sha = mapping.get("artifact_sha256", "")
-            referenced = False
-            for run in store.runs.list():
-                own = (run.get("manifest") or {}).get("import_source", {})
-                if own.get("import_id") == import_id:
-                    # 本批次自己的 run 正在同一批次里停用，不构成外部引用。
-                    continue
-                keys = _run_artifact_keys(run)
-                if target_id in keys or sha in keys:
-                    referenced = True
-                    break
-            if not referenced:
-                referenced = any(
-                    other.get("target_id") == target_id
-                    or other.get("artifact_sha256") == sha
-                    for other in other_mappings
-                )
-            if referenced:
-                blocked.append({"object": target_id, "reason": "artifact_in_use"})
-                continue
-            artifact_store.delete(target_id)
-            deleted_artifacts.append(target_id)
-            tombstones.append({
-                "gc_run_id": ROLLBACK_TOMBSTONE_PREFIX + import_id,
-                "artifact_id": target_id,
-                "sha256": sha,
-                "reason": "import_rollback",
-                "import_id": import_id,
-                "operator": operator,
-                "deleted_at": utc_now(),
-            })
+            continue
         elif target_type == "run":
+            if target_id in pinned_runs:
+                blocked.append({"object": target_id, "reason": "run_in_use"})
+                continue
             if not target_id.startswith("imp-"):
                 blocked.append({"object": target_id, "reason": "foreign_object"})
                 continue
@@ -149,7 +188,6 @@ def rollback_import(
             # 引用类映射（provider/dataset/case/...）：只保留账本审计，无实体可删。
             inactive_references += 1
 
-    platform.tombstones.append(tombstones)
     ledger.set_status(import_id, "rolled_back")
     return {
         "import_id": import_id,
@@ -159,6 +197,7 @@ def rollback_import(
         "deactivated_runs": deactivated_runs,
         "deleted_artifacts": deleted_artifacts,
         "blocked": blocked,
+        "skipped_artifacts": skipped_artifacts,
         "inactive_reference_mappings": inactive_references,
         "tombstoned": len(tombstones),
         "kept_mapping_rows": len(mappings),

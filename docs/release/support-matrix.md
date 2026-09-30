@@ -1,14 +1,38 @@
-# MoTTEavl 支持矩阵（M7 RC）
+# MoTTEavl 支持矩阵（M8 修复候选）
 
 > M8 候选增量以 `docs/verification/M8.md` 为准。下表原 M7 收据只证明其各自
 > 记录的 SHA/环境，不自动证明 M8 候选；M8 的 `stable_supported` 与
 > `cutover_ready` 均未达到。
 
-> 状态：draft（随 T11 证据回填）。取值：`tested`（本仓真实执行证据）＞ `supported`
-> （tested 子集 + 无已知反例）＞ `experimental`（有实现、证据不足或已知限制）＞
-> `blocked`（环境/授权缺失）＞ `not_run`（未执行）。skip 不计入 supported。
+> 历史术语保留用于追溯：tested 是限定环境的已执行证据；supported 是另需验收的支持承诺；
+> experimental 表示实验性实现；blocked 是环境/授权缺失；not_run 是未执行。
+> 它们不是同一维度的线性排名；skip 不计入 supported。
 > 每行必须给出证据（测试 node / 命令记录 / 验证账本链接）；没有证据的行保持
 > not_run，不因代码存在或 CI 总体通过而升级。
+
+## 当前候选唯一结论
+
+以 `docs/verification/m8-repair-receipt.json` 的源码提交、命令结果与限制为当前收据，
+`docs/verification/M8-repair-2026-09-30.md` 解释具体修复边界。
+实现状态与证据层分开记录，不使用 tested/supported 的线性排名。
+源码候选 `ffdcbbb` 本地 Python 3219 passed / 88 skipped，Web 304 passed；
+`make check` 停在缺 Docker 的 Compose config。历史主干 CI 仍不能代替本分支远端 CI。
+`stable_supported=false`、`cutover_ready=false` 保持不变，未授权缩减原 M8 门槛。
+
+| 范围 | 实现状态 | 本轮证据边界 |
+|---|---|---|
+| CLI 固定 Pass、历史缺币种成本 | 已修复 | 本轮离线 SQLite/HTTP 回归；不构成新 live |
+| preview 绑定、整批冻结、恢复 | 已修复 | SQLite/Memory；PG 实现尚待本候选真实 PG 节点 |
+| native-tool Agent 实验 | 受限已实现 | scripted Provider + 真实 Dispatcher，不是外部 Runtime/live |
+| GC/rollback/backup 引用与维护互斥 | 已修复候选 | 临时 SQLite/文件/跨进程负例；PG/Windows 必须另验 |
+| 统计分布和比较 JUnit | 受限已实现 | subject Case/Task 描述统计；独立持久发布仍缺 |
+| Judge 正式 Gate 资格 | 拒绝未校准已实现 | 不假造资格；公开校准/人审/pairwise/持久资格仍缺 |
+| Trace DB 行 retention | 未实现 | 设计与保留策略待确认，无实际裁剪 |
+| C-Eval、Harbor、Scenario/Skill 实验装配与真验收 | 部分/未实现 | 不因 native Agent 或合成测试而扩大支持 |
+| Compose、PG 在途快照、Windows 支持 | 缺本轮环境验证 | 本环境无 Docker/PG；Linux测试不能替代 Windows |
+| 官方数据、付费 L1–L5、私有旧导出、RC/cutover | 未闭合 | 无新增费用/私有源/生产/发布授权 |
+
+## 历史 M7 记录（以下不是当前候选结论）
 
 ## 1. 操作系统 / 运行方式
 

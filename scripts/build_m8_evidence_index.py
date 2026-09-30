@@ -6,6 +6,7 @@ Run from the repository root; the output is deterministic and reviewable in Git.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -207,6 +208,31 @@ def packages(goal_id: str) -> list[str]:
     return list(dict.fromkeys(result))
 
 
+def validate_evidence_reference(root: Path, reference: str) -> str:
+    """Validate source identity without claiming that any test was executed."""
+    path, *nodes = reference.split("::")
+    source = root / path
+    if not source.is_file():
+        raise ValueError(f"missing evidence path {reference}")
+    if not nodes:
+        return "source_file"
+    if source.suffix == ".py":
+        children = ast.parse(source.read_text(encoding="utf-8-sig")).body
+        for node in nodes:
+            name = node.split("[", 1)[0]
+            selected = next((item for item in children if isinstance(
+                item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ) and item.name == name), None)
+            if selected is None:
+                raise ValueError(f"missing test node {reference}")
+            children = selected.body
+        return "python_node"
+    text = source.read_text(encoding="utf-8-sig")
+    if any(node not in text for node in nodes):
+        raise ValueError(f"missing source label {reference}")
+    return "source_label"
+
+
 def main() -> None:
     goals: list[dict[str, object]] = []
     for line in ASSESSMENT.read_text(encoding="utf-8").splitlines():
@@ -218,6 +244,10 @@ def main() -> None:
         evidence = CURRENT_EVIDENCE.get(goal_id)
         current = {
             "baseline_sha": BASE_SHA,
+            "implementation_commit": None,
+            "execution_sha": None,
+            "result": "not_recorded",
+            "reference_validation": {},
             "implementation_status": "gap_recheck" if historical_status == "I" else "not_reverified",
             "consumer_paths": [],
             "test_nodes": [],
@@ -283,11 +313,17 @@ def main() -> None:
     for goal in goals:
         current = goal["current"]
         for path in [*current["consumer_paths"], *current["test_nodes"]]:
-            source = ROOT / path.split("::", 1)[0]
-            if not source.is_file():
-                raise SystemExit(f"{goal['goal_id']}: missing evidence path {path}")
+            try:
+                current["reference_validation"][path] = validate_evidence_reference(ROOT, path)
+            except ValueError as error:
+                raise SystemExit(f"{goal['goal_id']}: {error}") from error
+    repair_path = ROOT / "docs/verification/m8-repair-receipt.json"
+    repair_receipt = json.loads(repair_path.read_text(encoding="utf-8")) if repair_path.exists() else None
     OUTPUT.write_text(
-        json.dumps({"schema_version": 1, "assessment": ASSESSMENT.relative_to(ROOT).as_posix(),
+        json.dumps({"schema_version": 2,
+                    "validation_scope": "source references only; execution status requires receipt",
+                    "repair_receipt": repair_receipt,
+                    "assessment": ASSESSMENT.relative_to(ROOT).as_posix(),
                     "goals": goals}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )

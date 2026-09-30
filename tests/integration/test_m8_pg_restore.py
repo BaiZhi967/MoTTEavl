@@ -64,7 +64,7 @@ def disposable_pg_pair():
     reason="pg_dump and pg_restore required for PostgreSQL recovery exercise",
 )
 def test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact(
-    disposable_pg_pair: tuple[str, str], tmp_path: Path,
+    disposable_pg_pair: tuple[str, str], tmp_path: Path, monkeypatch,
 ) -> None:
     source_dsn, staging_dsn = disposable_pg_pair
     upgrade(source_dsn)
@@ -112,11 +112,48 @@ def test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact(
         policy={"allowed_factors": ["model"]}, created_by="m8-test",
         reason="disposable recovery verification",
     )
+    # Try changing both reference-bearing rows and evidence after pg_dump's
+    # snapshot, before manifest collection. Maintenance must keep them frozen.
+    import psycopg
+    from motte_storage import maintenance
+    from motte_storage.maintenance import MaintenanceConflict
+
+    original_run = maintenance.subprocess.run
+    observed = {"database_write_blocked": False, "artifact_write_blocked": False,
+                "tombstone_write_blocked": False}
+
+    def dump_with_contending_writers(argv, **kwargs):
+        completed = original_run(argv, **kwargs)
+        if argv[0] == "pg_dump" and completed.returncode == 0:
+            with psycopg.connect(source_dsn) as contender:
+                contender.execute("SET LOCAL lock_timeout = '100ms'")
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    contender.execute(
+                        "UPDATE runs SET payload = jsonb_set(payload, '{status}', "
+                        "to_jsonb('needs_review'::text)) WHERE id = %s", (run_id,),
+                    )
+                contender.rollback()
+                observed["database_write_blocked"] = True
+                contender.execute("SET LOCAL lock_timeout = '100ms'")
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    contender.execute(
+                        "INSERT INTO motte_gc_tombstones(gc_run_id, artifact_id, payload) "
+                        "VALUES ('after-dump', %s, '{}'::jsonb)", (artifact.id,),
+                    )
+                contender.rollback()
+                observed["tombstone_write_blocked"] = True
+            with pytest.raises(MaintenanceConflict):
+                ArtifactStore(artifact_root).put_bytes(artifact.id, b"changed-after-dump")
+            observed["artifact_write_blocked"] = True
+        return completed
+
+    monkeypatch.setattr(maintenance.subprocess, "run", dump_with_contending_writers)
     backup_dir = tmp_path / "backup"
     manifest = consistent_backup_postgres(
         source_dsn, backup_dir, artifacts_root=artifact_root, store=source,
     )
     assert manifest["status"] == "complete"
+    assert all(observed.values())
     assert manifest["counts"]["runs"] == 2
     assert manifest["counts"]["scoring_passes"] == 1
     assert manifest["counts"]["baselines"] == 1

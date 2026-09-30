@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
 import time
-from contextlib import closing
+from contextlib import ExitStack, closing, contextmanager
 from threading import RLock, get_ident
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
@@ -37,6 +38,7 @@ from typing import Any
 from uuid import uuid4
 
 from .platform import platform_for
+from .operation_locks import MaintenanceConflict
 
 try:  # workspace 安装时读包元数据；checkout 直接运行时回退到源码常量
     APP_VERSION = _package_version("motte-storage")
@@ -54,14 +56,18 @@ MAINTENANCE_STARTED_AT = "maintenance_started_at"
 MAINTENANCE_OWNER = "maintenance_owner"
 MAINTENANCE_REASON = "maintenance_reason"
 MAINTENANCE_LEASE_UNTIL = "maintenance_lease_until"
+MAINTENANCE_ALLOW_TOMBSTONES = "maintenance_allow_tombstone_writes"
 RESTORE_GUARD_KEY = "restored_from_backup"
 
 _MAINTENANCE_LOCK = RLock()
 _LOCAL_MAINTENANCE_LEASES: dict[tuple[int, int], str] = {}
 
 
-class MaintenanceConflict(RuntimeError):
-    """A maintenance operation attempted to take or release another lease."""
+_ACTIVE_MAINTENANCE: dict[str, tuple[str, ExitStack, Any, int, str | None]] = {}
+_MAINTENANCE_KEYS = (
+    MAINTENANCE_FLAG, MAINTENANCE_STARTED_AT, MAINTENANCE_OWNER,
+    MAINTENANCE_REASON, MAINTENANCE_LEASE_UNTIL, MAINTENANCE_ALLOW_TOMBSTONES,
+)
 
 #: staging 恢复后需要操作员显式决定的 Run 状态（协议 §9.2：不自动付费执行）。
 UNRESOLVED_RUN_STATUSES = (
@@ -101,65 +107,305 @@ def _lease_key(store: Any) -> tuple[int, int]:
     return id(store), get_ident()
 
 
-def begin_maintenance(store: Any, *, reason: str = "backup") -> dict[str, Any]:
-    """Acquire the shared maintenance barrier for one named operation.
+def _store_identity(store: Any) -> str:
+    dsn = getattr(store, "dsn", None)
+    if dsn:
+        return "postgres:" + dsn
+    path = getattr(getattr(store, "runs", None), "_path", None)
+    return "sqlite:" + str(Path(path).resolve()) if path else "memory:" + str(id(store))
 
-    Re-entry by the same operation remains idempotent, but a different reason
-    cannot steal or replace the active owner.  The lease token is returned to
-    internal callers and persisted in the shared metadata store.
-    """
+
+@contextmanager
+def _metadata_transaction(store: Any):
+    """Serialize acquire/release with one database transaction, including absent keys."""
     meta = platform_for(store).meta
-    with _MAINTENANCE_LOCK:
-        if meta.get(MAINTENANCE_FLAG) == "active":
-            current_reason = meta.get(MAINTENANCE_REASON) or "backup"
-            if current_reason != reason:
-                raise MaintenanceConflict(
-                    f"maintenance barrier owned by {current_reason!r}, cannot acquire for {reason!r}"
-                )
-            owner = meta.get(MAINTENANCE_OWNER)
-            started_at = meta.get(MAINTENANCE_STARTED_AT)
-            if not owner:
-                owner = uuid4().hex
-                meta.set(MAINTENANCE_OWNER, owner)
-            _LOCAL_MAINTENANCE_LEASES[_lease_key(store)] = owner
-            return {"active": True, "started_at": started_at, "reason": reason, "owner": owner}
+    path = getattr(meta, "_path", None)
+    dsn = getattr(meta, "_dsn", None)
+    if path:
+        with closing(sqlite3.connect(path, isolation_level=None, timeout=10.0)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield connection, "?"
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+    elif dsn:
+        from .postgres import _connect
 
-        owner = uuid4().hex
-        started_at = _utc_now_iso()
-        meta.set(MAINTENANCE_FLAG, "active")
-        meta.set(MAINTENANCE_STARTED_AT, started_at)
-        meta.set(MAINTENANCE_OWNER, owner)
-        meta.set(MAINTENANCE_REASON, reason)
-        # The token is a lease identity; no caller may clear it without matching it.
-        meta.set(MAINTENANCE_LEASE_UNTIL, "session")
-        _LOCAL_MAINTENANCE_LEASES[_lease_key(store)] = owner
-        return {"active": True, "started_at": started_at, "reason": reason, "owner": owner}
+        with _connect(dsn) as connection:
+            connection.execute("SET LOCAL lock_timeout = '10s'")
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", ("motteavl:maintenance-meta",)
+            )
+            yield connection, "%s"
+    else:
+        # InMemoryRunStore is process-local; its metadata shares this RLock.
+        with meta._lock:
+            yield None, meta
+
+
+def _meta_values(connection, placeholder) -> dict[str, str]:
+    if connection is None:
+        return dict(placeholder._rows)
+    return dict(connection.execute("SELECT meta_key, meta_value FROM motte_meta").fetchall())
+
+
+def _set_meta_values(connection, placeholder, values: dict[str, str]) -> None:
+    if connection is None:
+        placeholder._rows.update(values)
+        return
+    for key, value in values.items():
+        connection.execute(
+            "INSERT INTO motte_meta(meta_key, meta_value) VALUES ("
+            + placeholder + ", " + placeholder + ") ON CONFLICT(meta_key) "
+            "DO UPDATE SET meta_value = excluded.meta_value", (key, value),
+        )
+
+
+def _clear_meta_values(connection, placeholder) -> None:
+    for key in _MAINTENANCE_KEYS:
+        if connection is None:
+            placeholder._rows.pop(key, None)
+        else:
+            connection.execute("DELETE FROM motte_meta WHERE meta_key = " + placeholder, (key,))
+
+
+def _initialize_lazy_sqlite_repositories(store: Any) -> None:
+    """Materialize runtime-created tables before enumerating the write barrier.
+
+    RunStore already initializes its core repositories. ScoringJob and Resource
+    repositories are normally constructed lazily and must not create an
+    unguarded table after maintenance has become active.
+    """
+    path = getattr(getattr(store, "runs", None), "_path", None)
+    if path is None:
+        return
+    from .resource_store import SQLiteResourceStore
+    from .scoring_jobs import SQLiteScoringJobs
+
+    SQLiteScoringJobs(str(path))
+    SQLiteResourceStore(path)
+
+
+def _install_write_barrier(connection, placeholder) -> None:
+    """Guard business/reference/pin tables even when callers bypass API checks.
+
+    Installation runs in the same transaction as activation, draining existing
+    database writers before publishing the flag. Metadata remains writable for
+    owner release. Tombstones are frozen unless an audit-writing maintenance
+    operation explicitly opts in; their data affects reference scanning. Triggers
+    stay installed but inert when maintenance is inactive, including after a
+    staging restore. Schema changes during maintenance are not supported.
+    """
+    if connection is None:
+        return
+    if placeholder == "?":
+        names = [row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )]
+        for name in names:
+            if name == "motte_meta":
+                continue
+            audit_guard = (
+                " AND NOT EXISTS (SELECT 1 FROM motte_meta "
+                "WHERE meta_key = 'maintenance_allow_tombstone_writes' AND meta_value = 'true')"
+                if name == "motte_gc_tombstones" else ""
+            )
+            quoted = '"' + name.replace('"', '""') + '"'
+            for action in ("INSERT", "UPDATE", "DELETE"):
+                trigger = '"motte_maintenance_' + name.replace('"', '""') + '_' + action + '"'
+                connection.execute(
+                    f"CREATE TRIGGER IF NOT EXISTS {trigger} BEFORE {action} ON {quoted} "
+                    "WHEN EXISTS (SELECT 1 FROM motte_meta WHERE meta_key = 'maintenance' "
+                    "AND meta_value = 'active')" + audit_guard
+                    + " BEGIN SELECT RAISE(ABORT, 'maintenance mode active'); END"
+                )
+        return
+    from psycopg import sql
+
+    connection.execute("""
+        CREATE OR REPLACE FUNCTION public.motte_maintenance_guard() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN
+          IF EXISTS (SELECT 1 FROM public.motte_meta
+                     WHERE meta_key = 'maintenance' AND meta_value = 'active')
+             AND (TG_TABLE_NAME <> 'motte_gc_tombstones' OR NOT EXISTS (
+                  SELECT 1 FROM public.motte_meta
+                  WHERE meta_key = 'maintenance_allow_tombstone_writes' AND meta_value = 'true')) THEN
+            RAISE EXCEPTION 'maintenance mode active';
+          END IF;
+          RETURN NULL;
+        END $$
+    """)
+    tables = connection.execute(
+        "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public' "
+        "AND tablename <> 'motte_meta' ORDER BY tablename"
+    ).fetchall()
+    for (name,) in tables:
+        connection.execute(sql.SQL("DROP TRIGGER IF EXISTS motte_maintenance_write ON {}").format(
+            sql.Identifier("public", name)
+        ))
+        connection.execute(sql.SQL(
+            "CREATE TRIGGER motte_maintenance_write BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE "
+            "ON {} FOR EACH STATEMENT EXECUTE FUNCTION public.motte_maintenance_guard()"
+        ).format(sql.Identifier("public", name)))
+
+
+def _acquire_operation_locks(store: Any, stack: ExitStack, owner: str,
+                             reason: str, artifacts_root: str | Path | None) -> Any:
+    from .operation_locks import artifact_maintenance_lock, file_lock
+
+    dsn = getattr(store, "dsn", None)
+    path = getattr(getattr(store, "runs", None), "_path", None)
+    connection = None
+    if dsn:
+        from .postgres import _connect
+
+        connection = _connect(dsn)
+        stack.callback(connection.close)
+        connection.autocommit = True
+        for key in ("motteavl:maintenance", "motteavl:executor"):
+            acquired = connection.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s))", (key,)
+            ).fetchone()[0]
+            if not acquired:
+                raise MaintenanceConflict(key + " is held by another operation")
+    elif path:
+        path = Path(path).resolve()
+        stack.enter_context(file_lock(str(path) + ".maintenance.lock", label="maintenance"))
+        stack.enter_context(file_lock(str(path) + ".worker.lock", label="executor"))
+    if artifacts_root is not None:
+        stack.enter_context(artifact_maintenance_lock(artifacts_root, owner, reason))
+    return connection
+
+
+def _hold_postgres_writes(connection, *, allow_tombstone_writes: bool = False) -> None:
+    """Keep dump and all manifest reads on the same quiescent database state.
+
+    SHARE locks allow pg_dump/readers, block all DML/DDL, and drain writers that
+    started before activation (including old repeatable-read transactions).
+    Metadata remains writable for release. Tombstones are snapshot inputs too:
+    only GC/rollback's explicit audit-writing mode leaves that table unlocked.
+    """
+    if connection is None:
+        return
+    from psycopg import sql
+
+    connection.execute("BEGIN")
+    connection.execute("SET LOCAL lock_timeout = '10s'")
+    tables = connection.execute(
+        "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public' "
+        "AND tablename <> 'motte_meta' ORDER BY tablename"
+    ).fetchall()
+    for (name,) in tables:
+        if name == "motte_gc_tombstones" and allow_tombstone_writes:
+            continue
+        connection.execute(sql.SQL("LOCK TABLE {} IN SHARE MODE").format(sql.Identifier("public", name)))
+
+
+def begin_maintenance(
+    store: Any, *, reason: str = "backup", owner: str | None = None,
+    artifacts_root: str | Path | None = None, allow_tombstone_writes: bool = False,
+) -> dict[str, Any]:
+    """Acquire one exclusive operation; re-entry requires its explicit live token.
+
+    A matching reason is never proof of ownership. Running executors must stop
+    before maintenance; direct database writers and ArtifactStore mutations are
+    barred for the whole window. A crashed operation leaves the persisted flag
+    active (fail closed) until an operator explicitly releases its owner token.
+    """
+    identity = _store_identity(store)
+    if identity.startswith("memory:"):
+        raise BackupUnsupported("maintenance requires a persistent SQLite or PostgreSQL store")
+    with _MAINTENANCE_LOCK:
+        if owner is not None:
+            held = _ACTIVE_MAINTENANCE.get(owner)
+            if held is None or held[0] != identity or held[3] != os.getpid():
+                raise MaintenanceConflict("re-entry requires the live maintenance owner")
+            if artifacts_root is not None and str(Path(artifacts_root).resolve()) != held[4]:
+                raise MaintenanceConflict("re-entry cannot change the locked artifact root")
+            with _metadata_transaction(store) as (connection, placeholder):
+                values = _meta_values(connection, placeholder)
+                if values.get(MAINTENANCE_OWNER) != owner or values.get(MAINTENANCE_REASON) != reason:
+                    raise MaintenanceConflict("maintenance owner or reason does not match")
+                audit_setting = "true" if allow_tombstone_writes else "false"
+                if values.get(MAINTENANCE_ALLOW_TOMBSTONES, "false") != audit_setting:
+                    raise MaintenanceConflict("re-entry cannot change tombstone write permission")
+                return {"active": True, "started_at": values[MAINTENANCE_STARTED_AT],
+                        "reason": reason, "owner": owner}
+        token = uuid4().hex
+        stack = ExitStack()
+        activated = False
+        try:
+            pg_connection = _acquire_operation_locks(store, stack, token, reason, artifacts_root)
+            if maintenance_status(store)["active"]:
+                raise MaintenanceConflict("maintenance barrier already owned by another operation")
+            _initialize_lazy_sqlite_repositories(store)
+            with _metadata_transaction(store) as (connection, placeholder):
+                values = _meta_values(connection, placeholder)
+                if values.get(MAINTENANCE_FLAG) == "active":
+                    raise MaintenanceConflict("maintenance barrier already owned by another operation")
+                _install_write_barrier(connection, placeholder)
+                started_at = _utc_now_iso()
+                _set_meta_values(connection, placeholder, {
+                    MAINTENANCE_FLAG: "active", MAINTENANCE_STARTED_AT: started_at,
+                    MAINTENANCE_OWNER: token, MAINTENANCE_REASON: reason,
+                    MAINTENANCE_LEASE_UNTIL: "session",
+                    MAINTENANCE_ALLOW_TOMBSTONES: "true" if allow_tombstone_writes else "false",
+                })
+            activated = True
+            _hold_postgres_writes(pg_connection, allow_tombstone_writes=allow_tombstone_writes)
+        except BaseException:
+            # Close table/advisory/file locks before cleanup so failure cannot
+            # strand resources or deadlock the metadata release transaction.
+            stack.close()
+            if activated:
+                with _metadata_transaction(store) as (connection, placeholder):
+                    if _meta_values(connection, placeholder).get(MAINTENANCE_OWNER) == token:
+                        _clear_meta_values(connection, placeholder)
+            raise
+        _LOCAL_MAINTENANCE_LEASES[_lease_key(store)] = token
+        _ACTIVE_MAINTENANCE[token] = (
+            identity, stack, pg_connection, os.getpid(),
+            str(Path(artifacts_root).resolve()) if artifacts_root is not None else None,
+        )
+        return {"active": True, "started_at": started_at, "reason": reason, "owner": token}
 
 
 def end_maintenance(
     store: Any, *, owner: str | None = None, reason: str | None = None
 ) -> dict[str, Any]:
-    """Release only the lease owned by this operation.
-
-    The optional owner preserves the old API for the thread that acquired the
-    lease; explicit owners are required across worker/operation boundaries.
-    """
-    meta = platform_for(store).meta
+    """Release only this owner; explicit tokens also recover abandoned barriers."""
     with _MAINTENANCE_LOCK:
-        if meta.get(MAINTENANCE_FLAG) != "active":
-            return {"active": False, "started_at": None, "ended_at": _utc_now_iso()}
-        current_owner = meta.get(MAINTENANCE_OWNER)
-        expected_owner = owner or _LOCAL_MAINTENANCE_LEASES.get(_lease_key(store))
-        current_reason = meta.get(MAINTENANCE_REASON) or "backup"
-        if expected_owner != current_owner or (reason is not None and reason != current_reason):
-            raise MaintenanceConflict("maintenance barrier cannot be cleared by a different operation")
-        started_at = meta.get(MAINTENANCE_STARTED_AT)
-        for key in (
-            MAINTENANCE_FLAG, MAINTENANCE_STARTED_AT, MAINTENANCE_OWNER,
-            MAINTENANCE_REASON, MAINTENANCE_LEASE_UNTIL,
-        ):
-            meta.delete(key)
-        _LOCAL_MAINTENANCE_LEASES.pop(_lease_key(store), None)
+        token = owner or _LOCAL_MAINTENANCE_LEASES.get(_lease_key(store))
+        held = _ACTIVE_MAINTENANCE.get(token)
+        identity = _store_identity(store)
+        if held is not None and (held[0] != identity or held[3] != os.getpid()):
+            raise MaintenanceConflict("maintenance owner belongs to another store or process")
+        with ExitStack() as recovery:
+            # If the token's process is still alive, another process must not
+            # release its flag while it is copying evidence or deleting files.
+            if held is None and maintenance_status(store)["active"]:
+                _acquire_operation_locks(store, recovery, token or "", reason or "recovery", None)
+            with _metadata_transaction(store) as (connection, placeholder):
+                values = _meta_values(connection, placeholder)
+                if values.get(MAINTENANCE_FLAG) != "active":
+                    started_at = None
+                    if held is not None:
+                        _clear_meta_values(connection, placeholder)
+                else:
+                    if token != values.get(MAINTENANCE_OWNER) or (
+                        reason is not None and reason != values.get(MAINTENANCE_REASON)
+                    ):
+                        raise MaintenanceConflict("maintenance barrier cannot be cleared by a different operation")
+                    started_at = values.get(MAINTENANCE_STARTED_AT)
+                    _clear_meta_values(connection, placeholder)
+            if held is not None:
+                held[1].close()
+                del _ACTIVE_MAINTENANCE[token]
+            for key, current in list(_LOCAL_MAINTENANCE_LEASES.items()):
+                if current == token:
+                    del _LOCAL_MAINTENANCE_LEASES[key]
         return {"active": False, "started_at": started_at, "ended_at": _utc_now_iso()}
 
 
@@ -236,108 +482,46 @@ def _snapshot_sqlite(db_path: Path, snapshot: Path) -> None:
 # ------------------------------------------------- artifact 引用收集（宽口径）
 
 
-#: payload 中直接承载 artifact id 的字符串键。
-_ARTIFACT_STRING_KEYS = frozenset({"artifact_id", "artifact", "raw_ref", "raw_bundle_artifact"})
-
-
 def _collect_artifact_refs(value: Any, refs: dict[str, str | None]) -> None:
-    """递归收集 payload 里的 artifact 引用（artifact id → 嵌入的 sha256 或 None）。
+    from .artifact_refs import collect_artifact_refs
 
-    payload 形状随采集后端/里程碑演进变化，这里按**约定启发式宽口径**收集：
-
-    - ``artifact_id`` / ``artifact`` / ``raw_ref`` / ``raw_bundle_artifact`` 的字符串值；
-    - 名字含 "artifact" 的列表：字符串项、以及 dict 项的 ``id``（覆盖
-      cli_runtime 的 ``artifact_refs: [{id, kind, uri, sha256}]`），嵌入 sha256
-      一并记录用于备份期校验；
-    - ``kind == "artifact"`` 的证据引用 dict 的 ``locator``（cli_runtime 的
-      EvidenceRef 冻结 stdout/stderr 的写法）。
-
-    宽口径的取舍：多扫的代价是备份多带一个文件（或对悬空引用 fail-closed 报
-    incomplete），漏扫的代价是备份悄悄缺证据——按协议 §9.1 选 fail-closed。
-    """
-    if isinstance(value, dict):
-        kind = value.get("kind")
-        for key, item in value.items():
-            if isinstance(item, str) and item and (
-                key in _ARTIFACT_STRING_KEYS or (key == "locator" and kind == "artifact")
-            ):
-                refs.setdefault(item, None)
-            elif "artifact" in key.lower() and isinstance(item, list):
-                for entry in item:
-                    if isinstance(entry, str) and entry:
-                        refs.setdefault(entry, None)
-                    elif isinstance(entry, dict):
-                        identifier = entry.get("id")
-                        if isinstance(identifier, str) and identifier:
-                            embedded = entry.get("sha256")
-                            refs.setdefault(
-                                identifier, embedded if isinstance(embedded, str) else None
-                            )
-                        _collect_artifact_refs(entry, refs)
-            else:
-                _collect_artifact_refs(item, refs)
-    elif isinstance(value, list):
-        for entry in value:
-            _collect_artifact_refs(entry, refs)
+    collect_artifact_refs(value, refs)
 
 
 def _referenced_artifact_hashes(store: Any) -> dict[str, str | None]:
-    """从 store 各仓库的 payload 收集被引用的 artifact id 及嵌入哈希。
+    from .artifact_refs import referenced_artifact_hashes
 
-    覆盖协议 §9.1 的清单：runs payload、case_runs、agent_invocations、
-    external_jobs（job + records）、baselines、import 账本（best-effort：平台
-    账本不可用时跳过，不让它单独阻断备份）。external_job_conflicts 是审计侧
-    记录、其 incoming payload 未必对应已落盘文件，不纳入引用面。
-    """
-    refs: dict[str, str | None] = {}
-    for run in store.runs.list():
-        run_id = run.get("id")
-        _collect_artifact_refs(run, refs)
-        for repo_name in (
-            "case_runs", "attempts", "invocations", "scoring_passes",
-            "commands", "trials", "runtime_sessions", "scoring_jobs",
-        ):
-            repo = getattr(store, repo_name, None)
-            if repo is None or not hasattr(repo, "list_for_run"):
-                continue
-            for record in repo.list_for_run(run_id):
-                _collect_artifact_refs(record, refs)
-                if repo_name == "scoring_passes":
-                    score_sets = getattr(store, "score_sets", None)
-                    if score_sets is not None and hasattr(score_sets, "list_for_pass"):
-                        for score in score_sets.list_for_pass(record.get("id", "")):
-                            _collect_artifact_refs(score, refs)
-        external_jobs = getattr(store, "external_jobs", None)
-        if external_jobs is not None:
-            for job in external_jobs.jobs_for_run(run_id):
-                _collect_artifact_refs(job, refs)
-                for record in external_jobs.list_records(job.get("job_id", "")):
-                    _collect_artifact_refs(record, refs)
-        baselines = getattr(store, "baselines", None)
-        if baselines is not None and hasattr(baselines, "get_for_run"):
-            for baseline in baselines.get_for_run(run_id):
-                _collect_artifact_refs(baseline, refs)
-    baseline_store = getattr(store, "baseline_store", None)
-    if baseline_store is not None:
-        for baseline in baseline_store.list(limit=_ALL_LIMIT):
-            _collect_artifact_refs(baseline, refs)
-    gate_store = getattr(store, "gate_store", None)
-    if gate_store is not None and hasattr(gate_store, "list_results"):
-        for result in gate_store.list_results(limit=_ALL_LIMIT):
-            _collect_artifact_refs(result, refs)
-    try:
-        ledger = platform_for(store).imports
-        for record in ledger.list_imports():
-            _collect_artifact_refs(record, refs)
-            for mapping in ledger.mappings_for(record.get("import_id", "")):
-                _collect_artifact_refs(mapping, refs)
-    except Exception:  # noqa: BLE001 - 导入账本缺失不阻断备份
-        pass
-    return refs
+    return referenced_artifact_hashes(store)
 
 
 def _referenced_artifacts(store: Any) -> set[str]:
     return set(_referenced_artifact_hashes(store))
+
+
+def _backup_references(
+    store: Any, artifacts_root: str | Path | None,
+) -> tuple[dict[str, str | None], list[str]]:
+    """Resolve legacy digest-only refs without treating hashes as file paths."""
+    from .artifact_refs import referenced_artifact_hashes
+
+    hashes: set[str] = set()
+    refs = referenced_artifact_hashes(store, hashes=hashes)
+    unresolved = hashes - {digest.removeprefix("sha256:") for digest in refs.values() if digest}
+    if unresolved and artifacts_root is not None:
+        root = Path(artifacts_root).resolve()
+        for candidate in sorted(root.rglob("*")):
+            if not candidate.is_file():
+                continue
+            identifier = candidate.relative_to(root).as_posix()
+            try:
+                source = _artifact_path(root, identifier)
+            except ValueError:
+                continue
+            digest = _sha256_file(source)
+            if digest in unresolved:
+                refs[identifier] = digest
+        unresolved -= {digest.removeprefix("sha256:") for digest in refs.values() if digest}
+    return refs, ["sha256:" + digest for digest in sorted(unresolved)]
 
 
 def _store_counts(store: Any) -> dict[str, int]:
@@ -390,7 +574,7 @@ def _backup_artifact_files(
         shutil.copyfile(source, destination)
         digest = _sha256_file(destination)
         expected = refs.get(artifact_id)
-        if expected is not None and expected != digest:
+        if expected is not None and expected.removeprefix("sha256:") != digest:
             mismatched.append(artifact_id)
             continue
         files.append({"path": artifact_id, "bytes": destination.stat().st_size, "sha256": digest})
@@ -470,7 +654,7 @@ def consistent_backup(
     target.mkdir(parents=True, exist_ok=True)
     stamp = _backup_stamp(datetime.now(UTC))
     snapshot = target / f"runs-{stamp}.db"
-    begin = begin_maintenance(store, reason=reason)
+    begin = begin_maintenance(store, reason=reason, artifacts_root=artifacts_root)
     try:
         _snapshot_sqlite(Path(db_path), snapshot)
         # Read references and counts from the immutable DB snapshot, not the live
@@ -479,7 +663,7 @@ def consistent_backup(
         from .run_store import SQLiteRunStore
 
         snapshot_store = SQLiteRunStore(snapshot)
-        refs = _referenced_artifact_hashes(snapshot_store)
+        refs, unresolved_hashes = _backup_references(snapshot_store, artifacts_root)
         artifacts_section: dict[str, Any] | None = None
         missing: list[str] = []
         mismatched: list[str] = []
@@ -490,6 +674,9 @@ def consistent_backup(
                 refs, Path(artifacts_root), artifact_dir
             )
             artifacts_section = {"dir": artifact_dir.name, "files": files}
+        else:
+            missing.extend(sorted(refs))
+        missing.extend(unresolved_hashes)
         counts = _store_counts(snapshot_store)
         ended_at = _utc_now_iso()
         manifest = _write_manifest_v2(
@@ -510,7 +697,6 @@ def consistent_backup(
             mismatched=mismatched,
             warnings=warnings,
         )
-        end_maintenance(store, owner=begin["owner"])
         if missing or mismatched:
             raise BackupIncomplete(
                 "backup incomplete: referenced artifacts missing or hash-mismatched",
@@ -539,6 +725,11 @@ def consistent_backup_postgres(
     """
     if shutil.which("pg_dump") is None:
         raise BackupUnsupported("pg_dump not available")
+    from .postgres import normalize_dsn
+
+    dsn = normalize_dsn(dsn)
+    if store is not None and getattr(store, "dsn", None) != dsn:
+        raise BackupUnsupported("backup store must use the same PostgreSQL DSN as pg_dump")
     if store is None:
         from .factory import create_run_store
 
@@ -547,7 +738,7 @@ def consistent_backup_postgres(
     target.mkdir(parents=True, exist_ok=True)
     stamp = _backup_stamp(datetime.now(UTC))
     dump_path = target / f"runs-{stamp}.dump"
-    begin = begin_maintenance(store, reason=reason)
+    begin = begin_maintenance(store, reason=reason, artifacts_root=artifacts_root)
     try:
         completed = subprocess.run(
             ["pg_dump", "--format=custom", "--file", str(dump_path), dsn],
@@ -559,7 +750,7 @@ def consistent_backup_postgres(
             raise BackupIncomplete(
                 "pg_dump failed: " + (completed.stderr or "").strip()[:500]
             )
-        refs = _referenced_artifact_hashes(store)
+        refs, unresolved_hashes = _backup_references(store, artifacts_root)
         artifacts_section: dict[str, Any] | None = None
         missing: list[str] = []
         mismatched: list[str] = []
@@ -570,6 +761,9 @@ def consistent_backup_postgres(
                 refs, Path(artifacts_root), artifact_dir
             )
             artifacts_section = {"dir": artifact_dir.name, "files": files}
+        else:
+            missing.extend(sorted(refs))
+        missing.extend(unresolved_hashes)
         counts = _store_counts(store)
         try:
             from .migrations import current as _alembic_current
@@ -596,7 +790,6 @@ def consistent_backup_postgres(
             mismatched=mismatched,
             warnings=warnings,
         )
-        end_maintenance(store, owner=begin["owner"])
         if missing or mismatched:
             raise BackupIncomplete(
                 "backup incomplete: referenced artifacts missing or hash-mismatched",
@@ -725,8 +918,7 @@ def restore_staging(
                 f"restored count mismatch for {key}",
                 details={"expected": expected, "actual": actual_counts.get(key)},
             )
-    referenced = _referenced_artifacts(staging_store)
-    missing_refs: list[str] = []
+    referenced, missing_refs = _backup_references(staging_store, artifacts_root)
     for artifact_id in sorted(referenced):
         try:
             restored_file = _artifact_path(artifacts_root, artifact_id)
@@ -747,8 +939,8 @@ def restore_staging(
     # 结束时已解除（manifest.maintenance.ended_at），staging 不能继承"维护中"
     # 状态，否则恢复后永远 503。staging 的写保护由下面的恢复守卫承担。
     meta = platform_for(staging_store).meta
-    meta.delete(MAINTENANCE_FLAG)
-    meta.delete(MAINTENANCE_STARTED_AT)
+    for key in _MAINTENANCE_KEYS:
+        meta.delete(key)
     meta.set(RESTORE_GUARD_KEY, manifest_path.name)
     unresolved = [
         {"id": run.get("id"), "status": run.get("status")}
@@ -885,8 +1077,8 @@ def restore_postgres_staging(
     # verification failure. No Worker may claim a queued staging Run.
     meta = platform_for(store).meta
     meta.set(RESTORE_GUARD_KEY, manifest_path.name)
-    meta.delete(MAINTENANCE_FLAG)
-    meta.delete(MAINTENANCE_STARTED_AT)
+    for key in _MAINTENANCE_KEYS:
+        meta.delete(key)
     expected_counts = dict(expected_counts)
     actual_counts = _store_counts(store)
     for key, expected in expected_counts.items():
@@ -911,7 +1103,8 @@ def restore_postgres_staging(
         shutil.copyfile(source, destination)
         if _sha256_file(destination) != expected_hash:
             raise RestoreIncomplete(f"artifact hash mismatch after copy: {artifact_id}")
-    missing_refs = sorted(_referenced_artifacts(store) - {item[0] for item in backed_files})
+    referenced, missing_hashes = _backup_references(store, target_root)
+    missing_refs = sorted(set(referenced) - {item[0] for item in backed_files}) + missing_hashes
     if missing_refs:
         raise RestoreIncomplete(
             "referenced artifacts missing from staging restore",
@@ -1060,7 +1253,16 @@ def cleanup_artifacts(
     dry_run: bool = True,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """按 TTL 清理 artifact 文件；默认 dry-run 只报告不删除。"""
+    """Legacy TTL diagnostics only; unbound deletion cannot verify live references.
+
+    Keep the historical dry-run report shape for callers, but never infer a
+    database from an artifact path or permit this entry point to bypass GC.
+    """
+    if not dry_run:
+        raise BackupUnsupported(
+            "legacy artifact cleanup apply is disabled: use motte gc plan and motte gc apply "
+            "with the correct database and artifact root for reference-aware deletion"
+        )
     root = Path(root)
     report: dict[str, Any] = {"dry_run": dry_run, "deleted": [], "kept": 0, "freed_bytes": 0}
     if not root.exists():
@@ -1074,13 +1276,7 @@ def cleanup_artifacts(
         if stat.st_mtime < cutoff:
             deleted.append({"name": str(path.relative_to(root)), "bytes": stat.st_size})
             report["freed_bytes"] += stat.st_size
-            if not dry_run:
-                path.unlink()
         else:
             report["kept"] += 1
     report["deleted"] = deleted
-    if not dry_run:
-        for directory in sorted((item for item in root.rglob("*") if item.is_dir()), reverse=True):
-            if not any(directory.iterdir()):
-                directory.rmdir()
     return report

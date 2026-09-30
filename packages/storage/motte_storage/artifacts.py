@@ -2,6 +2,8 @@ import hashlib
 from pathlib import Path
 from motte_contracts.evidence import Artifact
 
+from .operation_locks import artifact_mutation
+
 
 class ArtifactStore:
     def __init__(self, root: str | Path):
@@ -28,9 +30,10 @@ class ArtifactStore:
     def put_bytes(
         self, artifact_id: str, data: bytes, *, kind: str = "file", media_type: str | None = None
     ) -> Artifact:
-        path = self._resolve_artifact_path(artifact_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        with artifact_mutation(self.root):
+            path = self._resolve_artifact_path(artifact_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
         return Artifact(
             id=artifact_id, kind=kind, uri=str(path), sha256=hashlib.sha256(data).hexdigest()
         )
@@ -38,5 +41,6 @@ class ArtifactStore:
     def read_bytes(self, artifact_id: str) -> bytes:
         return self._resolve_artifact_path(artifact_id).read_bytes()
 
-    def delete(self, artifact_id: str) -> None:
-        self._resolve_artifact_path(artifact_id).unlink(missing_ok=True)
+    def delete(self, artifact_id: str, *, maintenance_owner: str | None = None) -> None:
+        with artifact_mutation(self.root, maintenance_owner=maintenance_owner):
+            self._resolve_artifact_path(artifact_id).unlink(missing_ok=True)

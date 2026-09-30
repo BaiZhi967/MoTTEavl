@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "source_commit": "ffdcbbbac562c3940805c53284293c32937e2fff",
+  "baseline_commit": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+  "source_branch": "fix/m8-closure-20260930",
+  "environment": {
+    "os": "Linux-6.18.44-x86_64-with-glibc2.41",
+    "python": "3.12.14",
+    "node": "v24.19.0",
+    "pnpm": "9.15.0",
+    "postgres": "not available",
+    "docker": "not available"
+  },
+  "scope": "offline fixes and synthetic isolated integration; no paid calls, private exports, production, push or merge",
+  "started_at_utc": "2026-09-30T01:25:27Z",
+  "python": {
+    "tests": 3307,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 88,
+    "passed": 3219,
+    "live_deselected": 1,
+    "junit_sha256": "f2c689cbee6ad1328b8bd3e6a13b60ec76714247b399d5d873efb8f0758500c8",
+    "skip_reasons": {
+      "Windows drive-letter compose syntax": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL manual-revision CAS test": 1,
+      "Windows Job ownership": 2,
+      "set MOTTE_PG_DSN to run PostgreSQL integration tests": 40,
+      "real Harbor runner required (MOTTE_HARBOR_RUNNER_PYTHON)": 7,
+      "real Docker CLI required": 2,
+      "real Docker daemon required": 3,
+      "pg_dump and pg_restore required for PostgreSQL recovery exercise": 1,
+      "set MOTTE_OC042_PYTHON to the isolated fixed runner": 3,
+      "set MOTTE_SANDBOX_LIVE=1 and provide a reachable Docker daemon": 4,
+      "Windows junction coverage": 1,
+      "set MOTTE_R4_PG_DSN for isolated PostgreSQL concurrency coverage": 9,
+      "PostgreSQL integration DSN unavailable; no PG concurrency claim": 5,
+      "real PostgreSQL required": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL scoring-job transaction test": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL scoring-job race test": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL recovery race test": 1,
+      "real PostgreSQL required (MOTTE_PG_DSN)": 5
+    }
+  },
+  "make_check": {
+    "exit_code": 2,
+    "log_sha256": "46d82948e715fb7a0be3f9aaf8e9b05717e50de7c2061c6e9175f5e628291b20"
+  },
+  "wheels": {
+    "exit_code": 0,
+    "files": [
+      {
+        "name": "motte_cli-0.1.0-py3-none-any.whl",
+        "sha256": "35b92942f35711fe57fc427a3d0170d30768776ea32bc14f5b61849297cbbc62"
+      },
+      {
+        "name": "motte_contracts-0.1.0-py3-none-any.whl",
+        "sha256": "a7704f8b02b1ff62320649232ce20200f93bdf62f6eb2385e9d5278ce1664c75"
+      },
+      {
+        "name": "motte_eval-0.1.0-py3-none-any.whl",
+        "sha256": "718903b054f2bbc82557ff2ef4258c00171bc46e5d48bc8387aa440acdf62113"
+      },
+      {
+        "name": "motte_sdk-0.1.0-py3-none-any.whl",
+        "sha256": "29b0437902f65f3a069a8bb91aa185eab75b6a26791094c47061cb3cdc3430c1"
+      },
+      {
+        "name": "motte_storage-0.1.0-py3-none-any.whl",
+        "sha256": "75b9ae4deb091540c7162a902b86c90ee71dadf13664e653dcb35a1a9a1c6cb6"
+      },
+      {
+        "name": "motte_trace-0.1.0-py3-none-any.whl",
+        "sha256": "cb15eb9dc83493ae8b708675c2767bef6f49101557e3394026ade46df3b34f66"
+      }
+    ]
+  },
+  "additional_tsc": {
+    "baseline_sha": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+    "baseline_errors": 49,
+    "candidate_errors": 49,
+    "diagnostic_messages_equal": true,
+    "scope": "tsc --noEmit additional check, not in Makefile CI; same dependency install"
+  },
+  "stable_supported": false,
+  "cutover_ready": false,
+  "remaining_code": [
+    "C-Eval/Harbor/Scenario-Skill external suite assemblers",
+    "public persistent Judge calibration and exact policy-bound qualification",
+    "append-only independent StatisticalReport publication",
+    "Trace DB retention with archive/seq/snapshot contracts",
+    "additional strict TypeScript check: 49 identical baseline/current diagnostics; not part of existing make check"
+  ],
+  "remaining_environment": [
+    "PostgreSQL candidate concurrency/backup snapshot/restore integration",
+    "Docker Compose build/up and image hash",
+    "Windows lock/symlink capability and full regression",
+    "current build browser/visual receipts"
+  ],
+  "remaining_authorization": [
+    "new bounded paid L1-L5/Judge call card",
+    "real human-reviewed calibration sources",
+    "private legacy export source/scope",
+    "original replacement scenarios with true backends",
+    "publication/push, merge, release and production cutover"
+  ],
+  "review": {
+    "comparison_preview": "no remaining P1/P2",
+    "judge_native": "no remaining high-priority issue",
+    "statistics_exports": "no P1/P2",
+    "storage_safety": "no remaining P1/P2; real PG/Windows not exercised"
+  },
+  "checks": {
+    "ruff": {
+      "result": "passed",
+      "command": "uv run ruff check ."
+    },
+    "contracts_mypy": {
+      "result": "passed",
+      "source_files": 33,
+      "command": "uv run mypy packages/contracts"
+    },
+    "compileall": {
+      "result": "passed",
+      "command": "uv run python -m compileall -q packages apps"
+    },
+    "web_build": {
+      "result": "passed",
+      "command": "pnpm --dir apps/web build"
+    },
+    "web_tests": {
+      "result": "passed",
+      "files": 22,
+      "tests": 304,
+      "command": "pnpm -r test"
+    },
+    "pi_bridge_selftest": {
+      "result": "passed",
+      "scope": "real SDK, scripted model, file written; zero paid calls"
+    },
+    "compose_config": {
+      "result": "blocked",
+      "reason": "docker executable absent",
+      "command": "docker compose -f infra/docker-compose.yml config -q"
+    },
+    "openapi_check": {
+      "result": "passed",
+      "command": "uv run python scripts/check_openapi.py",
+      "log_sha256": "f9e7ff23a9eb021b121a47b0156e523837131c58abb6ad8069b50fdf155c4902"
+    },
+    "python_dependency_audit": {
+      "result": "passed",
+      "command": "uv run pip-audit --skip-editable",
+      "scope": "no known vulnerabilities in audited noneditable dependencies",
+      "log_sha256": "ff0bc4a073f1ae336cb4dbb61ac31f360c1a5ae57b9b35563ab53b579f7efba7"
+    },
+    "web_dependency_audit": {
+      "result": "passed",
+      "command": "pnpm --dir apps/web audit --audit-level high",
+      "log_sha256": "d66f638bde1cb5e66f3db883910cf82997d65fffcb799efa05b01b3621324269"
+    },
+    "wheel_clean_install": {
+      "result": "passed",
+      "scope": "new external venv, no PYTHONPATH; install six wheels; SDK import and CLI help",
+      "log_sha256": "40c7dc944a07f5cd2f0cac52ed974afaa8407acbc1274b33fb6fa2711e00888f"
+    }
+  },
+  "verified_source_trees": {
+    "packages": "31df03ed1051ed620db9b1592d09a848ccd1e8c9",
+    "apps": "f19e42e2be995272232c7bd2a933d8a4401e51e1",
+    "tests": "a9d31d9da30d1bb8255ad5a275f831c6a7c2ce07",
+    "scripts": "9ca5d1629abeb8d7a8b20e9f78710893f737ff33",
+    "bridges": "aab9b82c42ee10355f80c0ba5d5cb07e904a0897",
+    "api": "d05bdb2806fdcb52ba91f6cd1e458a0195afb18f"
+  },
+  "web_assets": [
+    {
+      "path": "apps/web/dist/assets/DirectLlmOperate-DJY21omf.js",
+      "sha256": "13c7487b746c541d44ea6de1e3273a745f7d733a683aaf65a078a2cd1d95b343"
+    },
+    {
+      "path": "apps/web/dist/assets/JudgesPage-B6pngab2.js",
+      "sha256": "a51a2fcecffd81edf00b147f2f6983be0dbdccfa6f57774e9f9fd5a53ddf7f5b"
+    },
+    {
+      "path": "apps/web/dist/assets/ResourcesPage-CPvwHGr6.js",
+      "sha256": "8973f4b941159a1dc6b43668ed86e2cb5cc1726d74d6df6402b9cf5c01a0fe40"
+    },
+    {
+      "path": "apps/web/dist/assets/ScenarioPages-DnEVZEwD.js",
+      "sha256": "dabf85e00e2507a4cf7604864696907add89967bd859be6b3195c3bce4ada32d"
+    },
+    {
+      "path": "apps/web/dist/assets/SkillPages-DZnKDrmC.js",
+      "sha256": "c147e624dbcd621c7e6a7d8145081b492b2f31bc9b5141263ef543e7fb8616a8"
+    },
+    {
+      "path": "apps/web/dist/assets/TerminalBenchPages-3x18UB8q.js",
+      "sha256": "0dcb1b26b554bb37898e1c9739c59ee7df59ae599d083e6f085eccd2695cdd07"
+    },
+    {
+      "path": "apps/web/dist/assets/barlow-semi-condensed-500-latin-G0uxJNrM.woff2",
+      "sha256": "0d7513795eaf8fdab7f340144841bd2d9fac7d9303c03aa6b525a2c908e9b371"
+    },
+    {
+      "path": "apps/web/dist/assets/barlow-semi-condensed-600-latin-BkLiAYu4.woff2",
+      "sha256": "f158417e9207b5362f9b71a2fe779ce5bb836ad972f38445c3163af39d2c998d"
+    },
+    {
+      "path": "apps/web/dist/assets/barlow-semi-condensed-700-latin-BpqDG8I9.woff2",
+      "sha256": "fb958c8c20a05552ac8a85d925d96028d52565792650e941a5fe96b6997aa5cb"
+    },
+    {
+      "path": "apps/web/dist/assets/index-BzqyGsQW.css",
+      "sha256": "2f12514b4a7c9a418c1e827e3045c5841d82ed86908cd3cddb84f858b07d22be"
+    },
+    {
+      "path": "apps/web/dist/assets/index-KDHqtGfS.js",
+      "sha256": "24524fcb90ee3c5309885ec1da5bbbcbe8cef0726780b98e549ccfb54765eedb"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2",
+      "sha256": "14425ba9c695763c1547f48a206b7aa60350a33ae23de09f0407877f3fcd89eb"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-500-normal-BWZEU5yA.woff2",
+      "sha256": "cb182feeed4d798ff6961d3c79f7026279448fca0676438aaecb21f3fc39553a"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-600-normal-C8RAYTDA.woff2",
+      "sha256": "400c6bfda18d5d14acad1c15d6dcb9f8e13c015e7286317e0b9a482539bef147"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-700-normal-BYuf6tUa.woff2",
+      "sha256": "d0d4e818808f2a0ba39b2b09d1989366f63494e295f003c7ef436697378507e8"
+    },
+    {
+      "path": "apps/web/dist/assets/jsonValues-CxpwwIqg.js",
+      "sha256": "308c6cf0a0b024098a2213fccdf7f38db30b22235a6eca0bf63f1d8b2f4430ca"
+    },
+    {
+      "path": "apps/web/dist/assets/rolldown-runtime-CbXtAM7H.js",
+      "sha256": "bbf7c5086ae414dc3f33777e3eebf16ea8631325b8bb4690d25091c03567f31a"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-DgN2ufTs.js",
+      "sha256": "94c3d8ce4a95d326add774c1a7e27c2c7b45cbd2002d55e657dc253ac66adbf5"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-icons-DhaHBq-B.js",
+      "sha256": "4f68e13c9e2b26d868d7a008e712c95058890df0053c926399bb2313e60b5d73"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-radix-CO1tAGYS.js",
+      "sha256": "b1e542db85f0128d442f5992b5dcb494c94c5ac2d75b52863be3dc395f097f03"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-react-PU5TT05C.js",
+      "sha256": "b65efc5316d6de277d01c6bf61b6af57a2fb61318e38ea317346f39cde5b329a"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-router-Dr301lO5.js",
+      "sha256": "dada2c15f89335a10ab4eb95079857e93c73eb61c0d1e33f79b05de91f7bd155"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-semi-C37W-MdM.js",
+      "sha256": "4632ed4f20464a8d16e83a31d7f8034ccc7693a572699a1cd6d90ad8b0d0eeae"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-semi-DCkYSUZS.css",
+      "sha256": "8c6efca9b86b52f2cbcf9b2a3484f2581d675aa98b09b780d872fef878564c68"
+    },
+    {
+      "path": "apps/web/dist/index.html",
+      "sha256": "5b1d4f3efb92b41bbecbdc291f28e350fc156e6c2dc934aa5b6cff6b98ba8deb"
+    }
+  ],
+  "main_verified_at_finish": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef"
+}

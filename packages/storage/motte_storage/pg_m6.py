@@ -13,7 +13,9 @@ from typing import Any
 from psycopg.types.json import Json
 
 from .baseline_store import BaselineConflict, _validate as _validate_baseline
-from .experiments import _validate_cell, _validate_spec
+from .experiments import (
+    _validate_cell, _validate_spec, _validate_publication, _check_existing_publication,
+)
 from .gate_store import _validate_policy, _validate_result
 from .pg_audit_store import _as_payload, _connect
 
@@ -27,6 +29,36 @@ class PgExperiments:
         self._dsn = dsn
 
     # -- spec ---------------------------------------------------------------
+
+    def publish_spec_and_cells(self, payload, cell_payloads):
+        """Spec and every frozen cell commit together in the same transaction."""
+        spec, cells = _validate_publication(payload, cell_payloads)
+        key = (spec["experiment_id"], spec["version"])
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM experiment_specs WHERE experiment_id = %s AND version = %s FOR UPDATE",
+                    key,
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    cursor.execute(
+                        "SELECT payload FROM experiment_cells WHERE experiment_id = %s AND experiment_version = %s",
+                        key,
+                    )
+                    _check_existing_publication(_as_payload(row[0]),
+                        [_as_payload(r[0]) for r in cursor.fetchall()], spec, cells)
+                    return deepcopy(spec)
+                cursor.execute(
+                    "INSERT INTO experiment_specs(experiment_id, version, payload) VALUES (%s, %s, %s)",
+                    (*key, _dumps(spec)),
+                )
+                for cell in cells:
+                    cursor.execute(
+                        "INSERT INTO experiment_cells(cell_id, experiment_id, experiment_version, allocation_status, payload) VALUES (%s, %s, %s, %s, %s)",
+                        (cell["cell_id"], *key, cell["allocation_status"], _dumps(cell)),
+                    )
+        return deepcopy(spec)
 
     def put_spec(self, payload: dict[str, Any]) -> dict[str, Any]:
         spec = _validate_spec(payload)

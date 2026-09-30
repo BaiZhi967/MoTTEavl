@@ -6957,6 +6957,16 @@
               "title": "K",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "title": "Format",
+              "type": "string"
+            }
           }
         ],
         "responses": {

@@ -888,3 +888,123 @@ def test_deterministic_run_id_shape() -> None:
     assert deterministic_run_id(cell_id) == "run-exp-" + "ab" * 12
     with pytest.raises(ValueError):
         deterministic_run_id("not-a-hash")
+
+
+def test_preview_hash_rejects_legal_resource_drift_before_persistence():
+    store, _runs, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    preview = service.preview(payload)
+    assert preview["preview_hash"].startswith("sha256:")
+    assert service.preview(payload)["preview_hash"] == preview["preview_hash"]
+    model = service.resources.models.get("model-a")
+    model["model"] = "legal-but-different"
+    service.resources.models.put(model)
+    with pytest.raises(ExperimentError, match="PREVIEW_STALE"):
+        service.create(payload, expected_preview_hash=preview["preview_hash"])
+    assert store.experiments.list_specs() == []
+    assert store.experiments.list_cells("exp-alpha", "v1") == []
+    assert store.runs.list() == []
+
+
+def test_create_consumes_exact_preflight_and_persists_snapshot_for_resume(monkeypatch):
+    store, _runs, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    preview = service.preview(payload)
+    original = service._create_cell_run
+    def mutate_after_preflight(*args, **kwargs):
+        model = service.resources.models.get("model-a")
+        model["model"] = "changed-after-preflight"
+        service.resources.models.put(model)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(service, "_create_cell_run", mutate_after_preflight)
+    outcome = service.create(payload, expected_preview_hash=preview["preview_hash"])
+    assert outcome["preflight_mode"] == "preview_bound"
+    assert outcome["preview_hash"] == preview["preview_hash"]
+    assert outcome["failed"] == []
+    run = store.runs.get(outcome["cells"][0]["run_id"])
+    assert run["manifest"]["provider"]["model"] == "probe-1"
+    cell = store.experiments.get_cell(outcome["cells"][0]["cell_id"])
+    assert cell["prepared_run"]["manifest"] == run["manifest"]
+
+
+def test_create_without_preview_reports_fresh_preflight_boundary():
+    _store, _runs, service = make_service()
+    outcome = service.create(spec_payload(factors={"model_profile": ("model-a",)}, repeats=1))
+    assert outcome["preflight_mode"] == "create_revalidated"
+    assert outcome["preview_hash"].startswith("sha256:")
+
+
+def test_experiment_matrix_publication_is_atomic_on_second_insert_failure():
+    import sqlite3
+    store, _runs, service = make_service()
+    with sqlite3.connect(store.runs._path) as connection:
+        connection.execute("""CREATE TRIGGER injected_cell_failure BEFORE INSERT ON experiment_cells
+            WHEN (SELECT count(*) FROM experiment_cells) = 1
+            BEGIN SELECT RAISE(ABORT, 'injected second-cell failure'); END""")
+    with pytest.raises(sqlite3.DatabaseError, match="second-cell"):
+        service.create(spec_payload(factors={"model_profile": ("model-a", "model-b")}, repeats=1),
+                       request_key="atomic-matrix")
+    assert store.experiments.list_specs() == []
+    assert store.experiments.list_cells("exp-alpha", "v1") == []
+    assert store.runs.list() == []
+
+
+def test_replay_preserves_original_preview_after_resource_change():
+    store, _runs, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    preview = service.preview(payload)
+    created = service.create(payload, expected_preview_hash=preview["preview_hash"])
+    model = service.resources.models.get("model-a")
+    model["model"] = "changed-but-valid"
+    service.resources.models.put(model)
+    rebuilt = ExperimentService(store, RunService(store), resources=service.resources)
+    replay = rebuilt.create(payload, expected_preview_hash=preview["preview_hash"])
+    assert replay["created"] is False
+    assert replay["preview_hash"] == created["preview_hash"]
+    assert len(store.runs.list()) == 1
+    with pytest.raises(ExperimentError, match="PREVIEW_STALE"):
+        rebuilt.create(payload, expected_preview_hash="sha256:wrong", request_key="replay-key")
+
+
+def test_published_matrix_recovers_without_mutable_resources(monkeypatch):
+    store, _runs, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a", "model-b")}, repeats=1)
+    preview = service.preview(payload)
+    def interrupted(*args):
+        raise RuntimeError("after atomic publication")
+    monkeypatch.setattr(service, "_allocate_locked", interrupted)
+    with pytest.raises(RuntimeError, match="atomic publication"):
+        service.create(payload, request_key="published", expected_preview_hash=preview["preview_hash"])
+    assert len(store.experiments.list_cells("exp-alpha", "v1")) == 2
+    assert store.runs.list() == []
+    rebuilt = ExperimentService(store, RunService(store), resources=None)
+    recovered = rebuilt.create(payload, request_key="published", expected_preview_hash=preview["preview_hash"])
+    assert recovered["allocated"] == 2
+    assert recovered["failed"] == []
+    assert recovered["preflight_mode"] == "preview_bound"
+    assert {run["manifest"]["provider"]["model"] for run in store.runs.list()} == {"probe-1"}
+
+
+def test_legacy_partial_matrix_cannot_be_reported_as_complete():
+    store, _runs, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a", "model-b")}, repeats=1)
+    spec = ExperimentSpec.model_validate(payload)
+    store.experiments.put_spec(spec.model_dump(mode="json"))
+    with pytest.raises(ExperimentError, match="EXPERIMENT_INCOMPLETE"):
+        service.create(payload, request_key="legacy-incomplete")
+    assert store.runs.list() == []
+
+
+def test_replay_rejects_corrupted_saved_cell_identity_before_run():
+    store, _runs, service = make_service()
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    spec = ExperimentSpec.model_validate(payload)
+    assignment = FactorAssignment(values=(FactorValue(factor="model_profile", value="model-a"),))
+    cell = service._cell_payload(spec, assignment, 0)
+    cell["resolved_spec_hash"] = "sha256:wrong-content"
+    cell["factor_assignment"]["values"][0]["value"] = "model-b"
+    store.experiments.put_spec(spec.model_dump(mode="json"))
+    store.experiments.put_cell(cell)
+    with pytest.raises(ExperimentError, match="CELL_CONTENT_CONFLICT"):
+        service.create(payload)
+    assert store.runs.list() == []
