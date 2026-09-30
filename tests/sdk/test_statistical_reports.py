@@ -66,8 +66,8 @@ def store(request, tmp_path):
     if request.param == "sqlite":
         return _seed(SQLiteRunStore(tmp_path / "reports.db"))
     dsn = request.getfixturevalue("isolated_pg_database")
-    from tests.storage.test_statistical_reports_pg import _upgrade
-    _upgrade(dsn)
+    from motte_storage.migrations import upgrade
+    upgrade(dsn)
     return _seed(_open("postgres", dsn))
 
 
@@ -77,8 +77,8 @@ def persistent_store(request, tmp_path):
         location = str(tmp_path / "race.db")
     else:
         location = request.getfixturevalue("isolated_pg_database")
-        from tests.storage.test_statistical_reports_pg import _upgrade
-        _upgrade(location)
+        from motte_storage.migrations import upgrade
+        upgrade(location)
     return request.param, location, _seed(_open(request.param, location))
 
 

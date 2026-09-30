@@ -155,6 +155,13 @@ def evaluate_gate(
         if isinstance(qualification, dict) and qualification.get("required"):
             rules.append({"id": key, "passed": qualification.get("gate_eligible") is True,
                           "reason": qualification.get("reason") or "Judge qualification unknown"})
+    qualifications = {key: candidate[key] for key in ("judge_qualification", "baseline_judge_qualification")
+                      if isinstance(candidate.get(key), dict) and candidate[key].get("required")}
+    if metric_id in {"accuracy", "judged_accuracy", "valid_trial_pass_rate"} and any(
+        item.get("mode") == "pairwise" for item in qualifications.values()
+    ):
+        rules.append({"id": "pairwise_quality_unavailable", "passed": False,
+                      "reason": "pairwise preference has no supported Boolean quality metric"})
     passed = all(rule["passed"] for rule in rules)
     conclusion = {
         "schema": GATE_SCHEMA_VERSION,
@@ -162,6 +169,7 @@ def evaluate_gate(
         "metric_id": metric_id,
         "passed": passed,
         "rules": rules,
+        **({"judge_qualification": qualifications} if qualifications else {}),
     }
     conclusion["conclusion_hash"] = _conclusion_hash(conclusion)
     conclusion["evaluated_at"] = evaluated_at
@@ -590,14 +598,27 @@ def evaluate_gate_policy(
 
     qualifications = evidence.get("judge_qualification") or {}
     for role, qualification in qualifications.items():
-        if isinstance(qualification, Mapping) and qualification.get("required") \
-                and qualification.get("gate_eligible") is not True:
+        if isinstance(qualification, Mapping) and qualification.get("required"):
+            eligible = qualification.get("gate_eligible") is True
             rule_results.append(RuleResult(
                 rule_id="judge_qualification" if role == "candidate" else "baseline_judge_qualification",
-                kind="judge_qualification", status="insufficient", severity="block",
-                decision=GateDecision.INSUFFICIENT_EVIDENCE,
+                kind="judge_qualification", status="pass" if eligible else "insufficient", severity="block",
+                decision=None if eligible else GateDecision.INSUFFICIENT_EVIDENCE,
                 reason=str(qualification.get("reason") or "Judge qualification unknown"),
             ))
+    pairwise_quality = any(isinstance(item, Mapping) and item.get("mode") == "pairwise"
+                           for item in qualifications.values()) and any(
+        rule.kind == "critical_case" or rule.metric_id in {
+            "accuracy", "judged_accuracy", "valid_trial_pass_rate", "cost.per_success_usd",
+        }
+        for rule in policy.rules
+    )
+    if pairwise_quality:
+        rule_results.append(RuleResult(
+            rule_id="pairwise_quality_unavailable", kind="quality_availability", status="insufficient",
+            decision=GateDecision.INSUFFICIENT_EVIDENCE,
+            reason="pairwise preference has no supported Boolean quality metric",
+        ))
 
     # 聚合决策（协议 §6 优先级）：warn 规则不贡献决策。
     contributions = [
@@ -629,6 +650,9 @@ def evaluate_gate_policy(
         "rule_registry": GATE_RULE_REGISTRY_VERSION,
         "metric_registry": METRIC_REGISTRY_VERSION,
         "statistical_policy": statistical_policy_ref,
+        **({"judge_source": "calibration-binding@1"} if pairwise_quality or any(
+            isinstance(item, Mapping) and item.get("binding") for item in qualifications.values()
+        ) else {}),
     })
     suggested: list[str] = []
     if decision in (GateDecision.INSUFFICIENT_EVIDENCE, GateDecision.NOT_COMPARABLE):
@@ -662,6 +686,9 @@ def evaluate_gate_policy(
         conclusion_hash="pending",
         evaluated_at=evaluated_at,
         suggested_actions=tuple(suggested),
+        judge_qualification=qualifications if any(
+            isinstance(item, Mapping) and item.get("required") for item in qualifications.values()
+        ) else {},
     )
     return result.model_copy(update={
         "gate_result_id": result.compute_gate_result_id(),

@@ -1709,23 +1709,9 @@ class PostgresScoringJobs:
                 updated = _next_revision(record, current["revision"])
                 self._write(cursor, updated, expected_revision=current["revision"],
                             expected_status=current["status"])
+                from .postgres import _append_event as append_pg_event
                 for event in events or []:
-                    run_id = event["run_id"]
-                    cursor.execute(
-                        "SELECT pg_advisory_xact_lock(hashtext(%s))", (run_id,)
-                    )
-                    cursor.execute(
-                        "SELECT COALESCE(MAX(seq), 0) + 1 FROM trace_events "
-                        "WHERE run_id = %s",
-                        (run_id,),
-                    )
-                    seq = cursor.fetchone()[0]
-                    stored_event = {**deepcopy(event), "seq": seq}
-                    cursor.execute(
-                        "INSERT INTO trace_events(run_id, seq, payload) "
-                        "VALUES (%s, %s, %s)",
-                        (run_id, seq, self._json(stored_event)),
-                    )
+                    append_pg_event(cursor, event)
         return {"job": deepcopy(updated), "receipt": deepcopy(updated["receipt"]),
                 "published": True, "outcome": "published"}
 

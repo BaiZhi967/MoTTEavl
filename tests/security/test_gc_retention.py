@@ -396,6 +396,8 @@ def test_gc_preserves_durable_job_and_parentless_calibration_evidence(tmp_path, 
         invocation["request_summary"] = payload
         store.invocations.create(invocation)
     assert store.runs.get("calibration:cal-1") is None
+    # Emulate an older facade: current factories now retain the eager repository.
+    store.scoring_jobs = None
     assert getattr(store, "scoring_jobs", None) is None
 
     plan = plan_gc(store, root)

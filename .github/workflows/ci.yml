@@ -37,6 +37,11 @@ jobs:
           uv run pytest -vv
           tests/storage/test_m8_experiment_pg_concurrency.py::test_two_postgres_processes_do_not_reclaim_active_cell
           tests/integration/test_m8_pg_restore.py::test_pg_dump_restore_preserves_run_trial_pass_baseline_and_artifact
+      - name: M8 isolated PostgreSQL Trace retention transactions
+        run: >-
+          uv run pytest -vv
+          tests/storage/test_trace_retention_transactions.py
+          tests/storage/test_trace_retention_pg.py
       - run: uv run pip-audit --skip-editable
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -99,3 +104,31 @@ jobs:
           uv run pytest -q -rA
           tests/storage/test_artifacts.py
           tests/storage/test_windows_artifact_io.py
+
+  compose-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Real shipped image, migration, API, Worker and restart acceptance
+        timeout-minutes: 15
+        run: python scripts/compose_acceptance.py
+      - name: Retry owned-resource cleanup even after timeout or cancellation
+        if: always()
+        timeout-minutes: 5
+        run: python scripts/compose_acceptance.py --cleanup-only
+      - name: Compose logs and exact-SHA acceptance receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-acceptance-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            var/m8-compose-acceptance/receipt.json
+            var/m8-compose-acceptance/commands.log
+            var/m8-compose-acceptance/compose.json
+            var/m8-compose-acceptance/effective-compose.json
+            var/m8-compose-acceptance/fixed-pass-report.json
+          if-no-files-found: error
+          retention-days: 7

@@ -19,6 +19,7 @@ from typing import Any
 
 from motte_contracts.comparison import BaselineSnapshot
 
+from .statistical_reports import _limit, _MAX_SQL_LIMIT
 from .run_store import _connect
 from .sqlite_schema import create_and_upgrade
 
@@ -68,11 +69,12 @@ class MemoryBaselineStore:
             snapshot = self._snapshots.get(baseline_id)
             return deepcopy(snapshot) if snapshot is not None else None
 
-    def list(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list(self, limit: int | None = 100) -> list[dict[str, Any]]:
+        _limit(limit)
         with self._lock:
             snapshots = [deepcopy(item) for item in self._snapshots.values()]
         snapshots.sort(key=lambda item: item.get("created_at", ""))
-        return snapshots[-limit:]
+        return snapshots if limit is None else (snapshots[-limit:] if limit else [])
 
     def set_default(
         self, pointer: dict[str, Any], *, expected_current: str | None = None,
@@ -155,11 +157,12 @@ class SQLiteBaselineStore:
             ).fetchone()
         return json.loads(row[0]) if row is not None else None
 
-    def list(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list(self, limit: int | None = 100) -> list[dict[str, Any]]:
+        _limit(limit)
         with closing(_connect(self._path)) as connection:
             rows = connection.execute(
                 "SELECT payload FROM m6_baselines ORDER BY rowid DESC LIMIT ?",
-                (limit,),
+                (-1 if limit is None else min(limit, _MAX_SQL_LIMIT),),
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 

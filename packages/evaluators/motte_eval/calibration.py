@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
 from pydantic import Field, model_validator
 
@@ -37,6 +37,10 @@ from .rubrics import (
     policy_for,
     validate_policy,
 )
+
+if TYPE_CHECKING:
+    from .calibration_records import CalibrationVersion, PairwiseCalibrationCall
+    from .judge import JudgePairwiseOutcome
 
 __all__ = [
     "CALIBRATION_SCHEMA_VERSION",
@@ -694,6 +698,126 @@ def repeat_plan(
                 "sample_id": sample_id, "kind": "order_reverse", "repeat": 0,
             })
     return plan
+
+
+def pairwise_calibration_statistics(
+    version: CalibrationVersion, parsed_by_call: dict[str, JudgePairwiseOutcome],
+    calls: list[PairwiseCalibrationCall],
+) -> dict[str, Any]:
+    """Pure label-domain statistics over all planned samples and distinct ledger calls.
+
+    Only the designated single call supplies human agreement. Repeat/swap each
+    consume their own two calls. Expected non-scored gold can establish outcome
+    consistency, but never a correct preference or an invented tie.
+    """
+    from .calibration_records import PairwiseConfusionCell, PairwiseCriterionConfusion, PairwiseLabel
+
+    samples = version.calibration.samples
+    criteria = version.spec.criteria
+    groups: dict[str, dict[str, list]] = {}
+    invocation_counts = Counter(item.call.invocation_id for item in calls)
+    call_counts = Counter(item.call.call_id for item in calls)
+    for item in calls:
+        groups.setdefault(item.call.sample_id, {}).setdefault(item.call.kind, []).append(item)
+    buckets = {key: {"missing_evidence": 0, "refusals": 0, "errors": 0} for key in criteria}
+    cells = {key: Counter() for key in criteria}
+    compared = disagreements = missing = refused = errors = 0
+
+    def label_key(label):
+        return label.kind, label.candidate_id
+
+    for sample in samples:
+        primary = groups.get(sample.sample_id, {}).get("single", [])
+        call = primary[0].call if len(primary) == 1 else None
+        parsed = parsed_by_call.get(call.call_id) if call and call.outcome == "succeeded" else None
+        judgments = {item.criterion_id: item for item in parsed.judgements} if parsed else {}
+        gold = version.pairwise_gold.get(sample.sample_id, {})
+        for key in criteria:
+            judgment = judgments.get(key)
+            status = judgment.outcome if judgment is not None else "missing_call"
+            if status == "scored":
+                if key in gold:
+                    actual = PairwiseLabel(kind="tie") if judgment.preference == "tie" else (
+                        PairwiseLabel(kind="candidate", candidate_id=judgment.preferred_candidate_id)
+                    )
+                    cells[key][(label_key(gold[key]), label_key(actual))] += 1
+                    compared += 1
+                    disagreements += gold[key] != actual
+            elif status == "missing_evidence":
+                buckets[key]["missing_evidence"] += 1
+                missing += 1
+            elif status == "refused":
+                buckets[key]["refusals"] += 1
+                refused += 1
+            else:
+                buckets[key]["errors"] += 1
+                errors += 1
+
+    def consistency(first_kind, second_kind, *, swap=False):
+        consistent, expected_absence, invalid = [], [], {}
+        for sample in samples:
+            grouped = groups.get(sample.sample_id, {})
+            first, second = grouped.get(first_kind, []), grouped.get(second_kind, [])
+            if len(first) != 1 or len(second) != 1:
+                invalid[sample.sample_id] = "requires exactly two planned directions"
+                continue
+            left, right = first[0], second[0]
+            pair = [left.call, right.call]
+            if any(item.outcome != "succeeded" or invocation_counts[item.invocation_id] != 1
+                   or call_counts[item.call_id] != 1 for item in pair):
+                invalid[sample.sample_id] = "requires distinct successful invocations"
+                continue
+            if (len(left.call.presentation_order) != 2
+                    or len(set(left.call.presentation_order)) != 2
+                    or right.call.presentation_order != (list(reversed(left.call.presentation_order))
+                                                        if swap else left.call.presentation_order)):
+                invalid[sample.sample_id] = "candidate presentation order differs from the plan"
+                continue
+            expected = version.expected_outcomes.get(sample.sample_id)
+            if expected is not None and expected.kind == "non_scored":
+                valid = left.call.status == right.call.status == expected.status
+                if valid:
+                    expected_absence.append(sample.sample_id)
+            else:
+                valid = (
+                    left.call.status == right.call.status == "ok"
+                    and set(left.preferences) == set(right.preferences) == set(criteria)
+                    and left.winner is not None and right.winner is not None
+                    and left.preferences == right.preferences and left.winner == right.winner
+                )
+            if valid:
+                consistent.append(sample.sample_id)
+            else:
+                invalid[sample.sample_id] = "complete scored labels or explicit expected outcomes differ"
+        denominator = len(samples)
+        return {
+            "measured": bool(consistent), "pairs" if swap else "samples": denominator,
+            "consistent" if swap else "stable": len(consistent),
+            "rate": _rate(len(consistent), denominator),
+            "consistent_expected_non_scored": sorted(expected_absence),
+            "invalid_samples": sorted(invalid), "invalid_reasons": invalid,
+        }
+
+    confusion = []
+    for key in criteria:
+        confusion.append(PairwiseCriterionConfusion(
+            criterion_id=key, **buckets[key], cells=[
+                PairwiseConfusionCell(
+                    expected=PairwiseLabel(kind=expected[0], candidate_id=expected[1]),
+                    observed=PairwiseLabel(kind=observed[0], candidate_id=observed[1]), count=count,
+                )
+                for (expected, observed), count in sorted(cells[key].items(), key=lambda row: str(row[0]))
+            ],
+        ))
+    denominator = len(samples) * len(criteria)
+    return {
+        "per_criterion": [], "pairwise_confusion": confusion,
+        "disagreement_rate": _rate(disagreements, compared),
+        "missing_evidence_rate": _rate(missing, denominator),
+        "refusal_rate": _rate(refused, denominator), "error_rate": _rate(errors, denominator),
+        "repeat_stability": consistency("single", "repeat"),
+        "position_swap": consistency("order_forward", "order_reverse", swap=True),
+    }
 
 
 # ------------------------------------------------------------------ 资格

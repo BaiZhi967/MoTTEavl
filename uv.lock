@@ -978,13 +978,17 @@ dependencies = [
 
 [package.optional-dependencies]
 postgresql = [
+    { name = "alembic" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", marker = "extra == 'postgresql'", specifier = ">=1.13,<2" },
     { name = "motte-contracts", editable = "packages/contracts" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgresql'", specifier = ">=3" },
+    { name = "sqlalchemy", marker = "extra == 'postgresql'", specifier = ">=2.0,<3" },
 ]
 provides-extras = ["postgresql"]
 

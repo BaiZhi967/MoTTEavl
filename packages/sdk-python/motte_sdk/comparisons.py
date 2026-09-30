@@ -537,7 +537,7 @@ _PROVENANCE_JUDGE_FIELDS: tuple[str, ...] = (
 )
 
 #: 人工修订沿血缘回溯的层数上限：只走已保存的 pass 引用，容忍损坏的血缘环。
-_MANUAL_REVISION_LINEAGE_LIMIT = 8
+_MANUAL_REVISION_LINEAGE_LIMIT = 100
 
 
 def _manual_revision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -545,36 +545,47 @@ def _manual_revision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None
     return dict(value) if isinstance(value, dict) else None
 
 
-def _instrument_pass(store: Any, record: Mapping[str, Any]) -> Mapping[str, Any]:
-    """评分工具的出处：人工修订沿**已保存的血缘**回退到被修订的 pass。
+def _selected_pass_source(store: Any, pass_id: str) -> tuple[dict | None, str | None]:
+    """Follow only explicit same-Run manual sources before inspecting Judge data."""
+    seen, run_id = set(), None
+    while pass_id and pass_id not in seen and len(seen) <= _MANUAL_REVISION_LINEAGE_LIMIT:
+        seen.add(pass_id)
+        record = store.scoring_passes.get(pass_id)
+        if not isinstance(record, dict) or record.get("id") != pass_id:
+            return None, "selected scoring lineage is incomplete or has a mismatched identity"
+        if run_id is None:
+            run_id = record.get("run_id")
+        if not run_id or record.get("run_id") != run_id:
+            return None, "manual scoring lineage crosses Run ownership"
+        if record.get("source") != "manual_revision":
+            if record.get("judge") is not None and not isinstance(record["judge"], Mapping):
+                return None, "selected Judge instrument is malformed"
+            return record, None
+        revision = record.get("manual_revision") or {}
+        summary = record.get("summary") or {}
+        if not isinstance(revision, Mapping) or not isinstance(summary, Mapping):
+            return None, "manual scoring source is malformed"
+        source = revision.get("source_pass_id")
+        copied = summary.get("manual_revision") or {}
+        if not isinstance(copied, Mapping):
+            return None, "copied manual scoring source is malformed"
+        if (not isinstance(source, str) or not source
+                or record.get("previous_pass_id") not in (None, source)
+                or copied.get("source_pass_id") not in (None, source)
+                or revision.get("revision_id") not in (None, record["id"])):
+            return None, "manual scoring source is missing or mismatched"
+        pass_id = source
+    return None, "manual scoring lineage is cyclic or exceeds 100 links"
 
-    只读 pass 之间记录在案的引用（manual_revision.source_pass_id /
-    previous_pass_id）：不读 current 指针，也不读任何当前资源设置；血缘缺失
-    就停在该 pass 上，身份保持 unknown（review F09）。
-    """
-    current: Mapping[str, Any] = record
-    run_id = record.get("run_id")
-    seen: set[str] = set()
-    for _ in range(_MANUAL_REVISION_LINEAGE_LIMIT):
-        judge = current.get("judge")
-        if isinstance(judge, dict) and judge:
-            return current
-        if current.get("source") != "manual_revision":
-            return current
-        manual = _manual_revision_summary(current) or {}
-        source_id = manual.get("source_pass_id") or current.get("previous_pass_id")
-        if not isinstance(source_id, str) or not source_id or source_id in seen:
-            return current
-        seen.add(source_id)
-        passes = getattr(store, "scoring_passes", None)
-        parent = passes.get(source_id) if passes is not None else None
-        if not isinstance(parent, dict):
-            return current
-        # 血缘只在同一个 Run 内成立：跨 Run 引用保持 unknown，不继承外来身份。
-        if run_id is not None and parent.get("run_id") != run_id:
-            return current
-        current = parent
-    return current
+
+def _instrument_pass(store: Any, record: Mapping[str, Any]) -> Mapping[str, Any]:
+    source, error = _selected_pass_source(store, str(record.get("id") or ""))
+    return source if source is not None else {**record, "judge": {}}
+
+
+def _pairwise_origin(store: Any, record: Mapping[str, Any]) -> bool:
+    source, _ = _selected_pass_source(store, str(record.get("id") or ""))
+    return bool(source and (source.get("judge") or {}).get("mode") == "pairwise")
 
 
 def _scoring_provenance(store: Any, record: Mapping[str, Any]) -> dict[str, Any]:
@@ -698,7 +709,12 @@ class ComparisonService:
         record = _resolve_pass(self.store, run_id, scoring_pass_id)
         manifest = run.get("manifest") or {}
         if _is_terminal_bench_run(manifest):
-            return _terminal_bench_summary(manifest, record, self._score_rows(record))
+            result = _terminal_bench_summary(manifest, record, self._score_rows(record))
+            if _pairwise_origin(self.store, record):
+                result["metric_values"]["valid_trial_pass_rate"] = None
+                result["metric_value"] = None
+                result["cost"]["per_success_usd"] = None
+            return result
         selected_ids = list(run.get("case_ids") or [])
         selected = len(selected_ids)
         summary = record.get("summary") or {}
@@ -730,7 +746,10 @@ class ComparisonService:
             (run.get("manifest") or {}).get("cost", {}).get("total_usd")
             if cost_known else None
         )
-        return coverage_summary(
+        pairwise_origin = _pairwise_origin(self.store, record)
+        if pairwise_origin:
+            accuracy = None
+        result = coverage_summary(
             denominator="selected_cases",
             selected=selected,
             judged=attempted,
@@ -742,6 +761,10 @@ class ComparisonService:
                 "cost.total_usd": total_usd,
             },
         )
+        if pairwise_origin:
+            # Edited Boolean rows cannot supply a pairwise success denominator.
+            result["cost"]["per_success_usd"] = None
+        return result
 
     # ------------------------------------------------------------------ 比较
 
@@ -1045,36 +1068,47 @@ class ComparisonService:
     # ------------------------------------------------------------------ 门禁
 
     def _judge_gate_qualification(self, scoring_pass_id: str) -> dict[str, Any]:
-        """Resolve the selected Pass lineage; client flags cannot grant qualification.
-
-        Persistent, policy-bound calibration publication is not wired yet. Judge
-        and Judge-derived manual revisions therefore remain explicitly ineligible.
-        """
-        seen: set[str] = set()
-        current = scoring_pass_id
-        expected_run_id = None
-        while current and current not in seen and len(seen) < 100:
-            seen.add(current)
-            record = self.store.scoring_passes.get(current)
-            if record is None:
-                return {"required": True, "gate_eligible": False,
-                        "reason": "selected scoring lineage is incomplete", "pass_id": scoring_pass_id}
-            if expected_run_id is None:
-                expected_run_id = record.get("run_id")
-            elif record.get("run_id") != expected_run_id:
-                return {"required": True, "gate_eligible": False,
-                        "reason": "manual scoring lineage crosses Run ownership", "pass_id": scoring_pass_id}
-            if record.get("source") == "judge" or record.get("judge"):
-                return {"required": True, "gate_eligible": False,
-                        "reason": "no authoritative persistent calibration qualification for selected Judge Pass",
-                        "pass_id": scoring_pass_id, "judge_pass_id": current}
-            if record.get("source") != "manual_revision":
+        """Verify the exact bound Judge source, never names, flags or current pointers."""
+        base = {"required": True, "gate_eligible": False, "experimental": True,
+                "pass_id": scoring_pass_id}
+        try:
+            record, error = _selected_pass_source(self.store, scoring_pass_id)
+            if error:
+                return {**base, "reason": error}
+            judge = record.get("judge") or {}
+            is_judge = (record.get("source") == "judge" or bool(judge)
+                        or record.get("purpose") == "judge"
+                        or str(record.get("scorer_id") or "").startswith("judge:"))
+            if not is_judge:
                 return {"required": False, "gate_eligible": True}
-            revision = record.get("manual_revision")
-            revision = revision if isinstance(revision, dict) else {}
-            current = str(revision.get("source_pass_id") or record.get("previous_pass_id") or "")
-        return {"required": True, "gate_eligible": False,
-                "reason": "manual scoring lineage is missing or cyclic", "pass_id": scoring_pass_id}
+            base.update(judge_pass_id=record["id"], mode=judge.get("mode"))
+            from .scoring_jobs import JudgeProviderSnapshot, verify_subject_qualification
+            from motte_eval.judge import JudgeSpec
+            from motte_storage.scoring_jobs import scoring_jobs_for
+            jobs = getattr(self.store, "scoring_jobs", None) or scoring_jobs_for(self.store)
+            job = jobs.get(record.get("job_id")) if record.get("job_id") else None
+            if (record.get("source") != "judge" or record.get("purpose") != "judge"
+                    or not job or job.get("status") != "completed" or job.get("purpose") != "judge"
+                    or job.get("job_id") != record.get("job_id")
+                    or job.get("owner") != {"kind": "subject", "run_id": record["run_id"]}
+                    or job.get("run_id") != record["run_id"]
+                    or job.get("reserved_pass_id") != record["id"]
+                    or (job.get("receipt") or {}).get("scoring_pass_id") != record["id"]
+                    or not record.get("qualification_binding")
+                    or record["qualification_binding"] != job.get("qualification_binding")):
+                raise ValueError("Judge Pass has no matching authoritative Job/source binding")
+            spec = JudgeSpec.model_validate(job["judge_spec"])
+            snapshot = JudgeProviderSnapshot.model_validate(job["provider_snapshot"])
+            if (any(judge.get(key) != value for key, value in spec.as_summary().items())
+                    or judge.get("provider_snapshot_sha256") != snapshot.snapshot_sha256
+                    or judge.get("owner") != job["owner"] or job.get("mode") != spec.mode
+                    or job.get("judge_spec_sha256") != spec.spec_sha256):
+                raise ValueError("selected Pass instrument differs from its frozen Job")
+            binding = verify_subject_qualification(self.store, record["qualification_binding"], spec, snapshot)
+            return {**base, "gate_eligible": True, "experimental": False,
+                    "reason": "verified_calibration_source", "binding": binding.model_dump(mode="json")}
+        except Exception as error:
+            return {**base, "reason": "selected Judge source is unverifiable: " + type(error).__name__}
 
     def evaluate_gate(
         self,
@@ -1278,6 +1312,11 @@ class ComparisonService:
                 )
                 for case_id, disposition in dispositions.items()
             ]
+        if _pairwise_origin(self.store, _resolve_pass(self.store, run_id, scoring_pass_id)):
+            # Per-success cost also requires a trustworthy Boolean success count.
+            for quality_metric in ("accuracy", "judged_accuracy", "valid_trial_pass_rate", "cost.per_success_usd"):
+                if quality_metric in metric_values:
+                    metric_values[quality_metric] = None
         snapshot = ReportSnapshot(
             snapshot_id="pending",
             ref=ref,

@@ -195,3 +195,21 @@ def test_pre_0016_database_upgrades_twice_without_changing_existing_rows(tmp_pat
     assert rows(path, "SELECT payload FROM score_sets") == [('{"passed": true}',)]
     assert rows(path, "SELECT payload FROM trials") == [('{"plan": 1}',)]
     assert rows(path, "SELECT payload FROM external_jobs") == [('{"job": 1}',)]
+
+
+def test_legacy_trace_time_stays_unknown_after_startup_upgrade(tmp_path):
+    from motte_storage.run_store import SQLiteRunStore
+    path = tmp_path / 'legacy-trace.db'
+    payload = {'run_id': 'r', 'seq': 7, 'stored_at': '1900-01-01T00:00:00+00:00'}
+    with sqlite3.connect(path) as connection:
+        connection.execute('CREATE TABLE trace_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, '
+                           'payload TEXT NOT NULL, PRIMARY KEY(run_id,seq))')
+        connection.execute('INSERT INTO trace_events VALUES (?,?,?)', ('r', 7, json.dumps(payload)))
+    for _ in range(2):
+        store = SQLiteRunStore(path)
+        row, = store.events.stored_for_run('r')
+        assert row.stored_at is None and row.payload == payload
+    with sqlite3.connect(path) as connection:
+        columns = {r[1]: r for r in connection.execute('PRAGMA table_info(trace_events)')}
+        assert columns['stored_at'][2:5] == ('TEXT', 0, None)
+        assert connection.execute('SELECT stored_at FROM trace_events').fetchone() == (None,)

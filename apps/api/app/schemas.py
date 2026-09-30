@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from motte_contracts.run import ReplayCase, Run, RunCommand
+from motte_eval.calibration_records import QualificationBinding
+from motte_sdk.scoring_jobs import SubjectPairReference
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -351,6 +353,7 @@ class ScoringPassView(APIModel):
     purpose: str | None = None
     job_id: str | None = None
     judge: dict[str, Any] | None = None
+    qualification_binding: QualificationBinding | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class JudgeBudgetRequest(APIModel):
@@ -404,6 +407,9 @@ class JudgeSubmissionBase(APIModel):
     repeats: int = Field(default=1, ge=1)
     presentation_orders: list[list[str]] = Field(default_factory=list)
     price_table_version: str | None = None
+    qualification_id: str | None = Field(default=None, min_length=1)
+    # Reuse the transport-independent strict reference contract, never input content.
+    pairwise_refs: list[SubjectPairReference] = Field(default_factory=list)
 
 
 class JudgePreflightRequest(JudgeSubmissionBase):
@@ -414,6 +420,16 @@ class JudgeSubmitRequest(JudgeSubmissionBase):
     """持久提交：request_key 是幂等键，内容 fingerprint 与它分离。"""
 
     request_key: str = Field(min_length=1)
+
+
+class JudgeErrorDetail(APIModel):
+    code: str
+    message: str
+    fields: list[dict[str, str]] | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class JudgeErrorResponse(APIModel):
+    error: JudgeErrorDetail
 
 
 class JudgePreflightView(APIModel):
@@ -462,6 +478,7 @@ class JudgeJobView(APIModel):
     cost_total_usd: float | None = None
     preflight: dict[str, Any] | None = None
     provider_snapshot: dict[str, Any] | None = None
+    qualification_binding: QualificationBinding | None = Field(default=None, exclude_if=lambda value: value is None)
     receipt: dict[str, Any] | None = None
     failure: dict[str, Any] | None = None
     cancellation: dict[str, Any] | None = None

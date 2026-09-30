@@ -1680,6 +1680,55 @@
         "title": "JudgeCancelView",
         "type": "object"
       },
+      "JudgeErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "JudgeErrorDetail",
+        "type": "object"
+      },
+      "JudgeErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/JudgeErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "JudgeErrorResponse",
+        "type": "object"
+      },
       "JudgeJobListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1829,6 +1878,16 @@
             ],
             "title": "Published"
           },
+          "qualification_binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualificationBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "receipt": {
             "anyOf": [
               {
@@ -1939,6 +1998,13 @@
             "title": "Mode",
             "type": "string"
           },
+          "pairwise_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SubjectPairReference"
+            },
+            "title": "Pairwise Refs",
+            "type": "array"
+          },
           "presentation_orders": {
             "items": {
               "items": {
@@ -1968,6 +2034,18 @@
             ],
             "title": "Publish Policy",
             "type": "string"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
           },
           "repeats": {
             "default": 1,
@@ -2232,6 +2310,13 @@
             "title": "Mode",
             "type": "string"
           },
+          "pairwise_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SubjectPairReference"
+            },
+            "title": "Pairwise Refs",
+            "type": "array"
+          },
           "presentation_orders": {
             "items": {
               "items": {
@@ -2261,6 +2346,18 @@
             ],
             "title": "Publish Policy",
             "type": "string"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
           },
           "repeats": {
             "default": 1,
@@ -2299,6 +2396,100 @@
           "request_key"
         ],
         "title": "JudgeSubmitRequest",
+        "type": "object"
+      },
+      "QualificationBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Calibration Content Sha256",
+            "type": "string"
+          },
+          "calibration_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "calibration_version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Version",
+            "type": "string"
+          },
+          "judge_spec_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Model",
+            "type": "string"
+          },
+          "policy_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Policy Sha256",
+            "type": "string"
+          },
+          "provider_snapshot_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Provider Snapshot Sha256",
+            "type": "string"
+          },
+          "qualification_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Qualification Id",
+            "type": "string"
+          },
+          "report_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "report_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Report Sha256",
+            "type": "string"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Rubric Sha256",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubric Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judge_spec_sha256",
+          "rubric_id",
+          "rubric_version",
+          "rubric_sha256",
+          "model",
+          "provider_snapshot_sha256",
+          "calibration_id",
+          "calibration_version",
+          "calibration_content_sha256",
+          "policy_sha256",
+          "report_id",
+          "report_sha256",
+          "qualification_id"
+        ],
+        "title": "QualificationBinding",
         "type": "object"
       },
       "ReplayCase": {
@@ -4136,6 +4327,16 @@
             ],
             "title": "Purpose"
           },
+          "qualification_binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualificationBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -5041,6 +5242,34 @@
           "candidate_run_id"
         ],
         "title": "StatisticalReportPublishRequest",
+        "type": "object"
+      },
+      "SubjectPairReference": {
+        "additionalProperties": false,
+        "description": "Only persisted same-case attempt identities cross the public boundary.",
+        "properties": {
+          "candidate_a_attempt_id": {
+            "minLength": 1,
+            "title": "Candidate A Attempt Id",
+            "type": "string"
+          },
+          "candidate_b_attempt_id": {
+            "minLength": 1,
+            "title": "Candidate B Attempt Id",
+            "type": "string"
+          },
+          "case_id": {
+            "minLength": 1,
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "candidate_a_attempt_id",
+          "candidate_b_attempt_id"
+        ],
+        "title": "SubjectPairReference",
         "type": "object"
       },
       "ValidationError": {
@@ -8213,15 +8442,35 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Judge Submit"
@@ -8251,15 +8500,35 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Judge Preflight"

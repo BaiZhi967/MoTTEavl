@@ -12,6 +12,7 @@ from typing import Any
 
 from psycopg.types.json import Json
 
+from .statistical_reports import _limit, _MAX_SQL_LIMIT
 from .baseline_store import BaselineConflict, _validate as _validate_baseline
 from .experiments import (
     _validate_cell, _validate_spec, _validate_publication, _check_existing_publication,
@@ -388,19 +389,20 @@ class PgGateStore:
         return _as_payload(row[0]) if row is not None else None
 
     def list_results(
-        self, policy_id: str | None = None, limit: int = 100,
+        self, policy_id: str | None = None, limit: int | None = 100,
     ) -> list[dict[str, Any]]:
+        _limit(limit)
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
                 if policy_id is None:
                     cursor.execute(
                         "SELECT payload FROM gate_results ORDER BY position DESC LIMIT %s",
-                        (limit,),
+                        (None if limit is None else min(limit, _MAX_SQL_LIMIT),),
                     )
                 else:
                     cursor.execute(
                         "SELECT payload FROM gate_results WHERE policy_id = %s ORDER BY position DESC LIMIT %s",
-                        (policy_id, limit),
+                        (policy_id, None if limit is None else min(limit, _MAX_SQL_LIMIT)),
                     )
                 rows = cursor.fetchall()
         return [_as_payload(row[0]) for row in rows]
@@ -445,12 +447,13 @@ class PgBaselineStore:
                 row = cursor.fetchone()
         return _as_payload(row[0]) if row is not None else None
 
-    def list(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list(self, limit: int | None = 100) -> list[dict[str, Any]]:
+        _limit(limit)
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT payload FROM m6_baselines ORDER BY position DESC LIMIT %s",
-                    (limit,),
+                    (None if limit is None else min(limit, _MAX_SQL_LIMIT),),
                 )
                 rows = cursor.fetchall()
         return [_as_payload(row[0]) for row in rows]

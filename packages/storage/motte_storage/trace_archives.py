@@ -110,3 +110,69 @@ def verify_trace_archive(data: bytes, receipt: TraceArchiveReceipt) -> None:
             raise ValueError("archive contains an event at or after the retention cutoff")
     except (ValueError, TypeError, OverflowError) as error:
         raise TraceArchiveInvalid("Trace archive receipt verification failed: " + str(error)) from error
+
+
+def _receipt_from_row(row) -> TraceArchiveReceipt:
+    """Validate both the immutable payload and every independently indexed field."""
+    archive_id, plan_id, run_id, first_seq, last_seq, payload = row
+    receipt = TraceArchiveReceipt.model_validate(json.loads(payload) if isinstance(payload, str) else payload)
+    if (receipt.committed_at is None or
+            (archive_id, plan_id, run_id, first_seq, last_seq) != (
+                receipt.archive_id, receipt.plan_id, receipt.prefix.run_id,
+                receipt.prefix.first_seq, receipt.prefix.last_seq)
+            or receipt.archive_id != 'trace-archive-' + receipt.sha256.removeprefix('sha256:')):
+        raise TraceArchiveInvalid('stored Trace receipt identity disagrees')
+    return receipt
+
+
+_RECEIPT_COLUMNS = 'archive_id, plan_id, run_id, first_seq, last_seq, payload'
+
+
+def _receipts_on_connection(connection) -> list[TraceArchiveReceipt]:
+    return [_receipt_from_row(row) for row in connection.execute(
+        'SELECT ' + _RECEIPT_COLUMNS + ' FROM trace_archive_receipts ORDER BY run_id, first_seq, archive_id'
+    ).fetchall()]
+
+
+class SQLiteTraceArchives:
+    """Read existing receipt storage; construction and reads never create schema."""
+    def __init__(self, path: str):
+        self._path = str(path)
+
+    def list(self) -> list[TraceArchiveReceipt]:
+        import sqlite3
+        from contextlib import closing
+        from urllib.parse import quote
+        uri = 'file:' + quote(str(Path(self._path).resolve()), safe='/') + '?mode=ro'
+        with closing(sqlite3.connect(uri, uri=True)) as connection:
+            return _receipts_on_connection(connection)
+
+    def get(self, archive_id: str) -> TraceArchiveReceipt | None:
+        return next((row for row in self.list() if row.archive_id == archive_id), None)
+
+    def list_for_run(self, run_id: str) -> list[TraceArchiveReceipt]:
+        return [row for row in self.list() if row.prefix.run_id == run_id]
+
+
+class PgTraceArchives(SQLiteTraceArchives):
+    def __init__(self, dsn: str):
+        self._dsn = dsn
+
+    def list(self) -> list[TraceArchiveReceipt]:
+        from .postgres import _connect
+        with _connect(self._dsn) as connection:
+            connection.execute('SET TRANSACTION READ ONLY')
+            return _receipts_on_connection(connection)
+
+
+class MemoryTraceArchives(SQLiteTraceArchives):
+    def __init__(self, lock):
+        self._lock = lock
+        self._rows: dict[str, TraceArchiveReceipt] = {}
+
+    def list(self) -> list[TraceArchiveReceipt]:
+        with self._lock:
+            rows = [_receipt_from_row((key, row.plan_id, row.prefix.run_id,
+                                       row.prefix.first_seq, row.prefix.last_seq, row.model_dump()))
+                    for key, row in self._rows.items()]
+            return sorted(rows, key=lambda row: (row.prefix.run_id, row.prefix.first_seq, row.archive_id))

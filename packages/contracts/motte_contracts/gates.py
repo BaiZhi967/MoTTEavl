@@ -7,6 +7,7 @@ GateResult 的结论等价性：同 evaluation_input_hash + 同 result_semantics
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
@@ -257,6 +258,7 @@ class GateResult(Contract):
     #: 审计字段：不进入任何 hash（协议 §8）。
     evaluated_at: str | None = None
     suggested_actions: tuple[str, ...] = ()
+    judge_qualification: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
     def compute_gate_result_id(self) -> str:
         """gate_result_id = sha256(evaluation_input_hash + semantics_hash)。"""

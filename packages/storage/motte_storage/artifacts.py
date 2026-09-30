@@ -83,6 +83,18 @@ class _PinnedArtifact:
 
 
 class ArtifactStore:
+    """Content storage with handle-bound mutation and reserved archive paths.
+
+    Generic operations preserve verifiable canonical Trace archives and reject
+    observed archive aliases. This is not filesystem access control against an
+    external process with equal write permissions. In particular, a new hardlink
+    created after the last link-count check may observe an ordinary in-place
+    write, even if that alias is placed in trace-archives. Such an unreceipted
+    alias is not verified archive evidence; an error does not roll back bytes.
+    Existing reserved orphans remain protected from generic operations and GC.
+    Archive consumers must verify canonical bytes against their typed receipt.
+    """
+
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
         self._archive_root_preexisting = self.root.is_dir()

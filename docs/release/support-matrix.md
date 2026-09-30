@@ -103,3 +103,54 @@
 | Docker Compose build/up | blocked_local | 本机无 Docker；Linux CI 仅 compose config，通过不代表 build/up/health/Worker 演练 |
 | 配置网关的 DeepSeek 单轮 Provider | live_scoped | 用户授权下 6 次真实 HTTP 尝试、0 重试；5 个隔离合成 Run 完成，显式 CNY 回执的双 Run 比较质量/成本合格。网关上游模型版本和实际账单未独立核验；见 M8 付费收据 |
 | 其他真实 Harness/Judge 与生产切换 | external_pending | C-Eval/Harbor/native Agent/Scenario/Skill/Judge 尚无本轮 live 收据；真实标签、环境和单独执行边界仍缺，未发布或切换 |
+
+## 8. 类型化实验的执行上界与外部拒绝边界（2026-09-30）
+
+本节只更新 Suite Task 1–4 的装配/预算边界，不升级整个 M8 的发布状态。
+“代码拒绝”“离线证明”“真实 Runner + 合成服务”“真实模型/官方数据验收”分列；
+前一层不能代替后一层。以下所有 Task 4 新测试都没有执行模型、CLI Agent 或容器。
+
+| Profile / 路径 | Experiment 准入 | 离线证据 | 实际 Runner / 模型证据 |
+|---|---|---|---|
+| native `builtin-agent@1`，legacy-json / native-tool | 保留既有原生路径；Case × 累积 model steps × 显式 Provider attempts | `test_m8_native_agent_experiments.py`；`test_m8_experiment_retry.py` 的真实 Worker + scripted Provider | 本轮没有新增真实模型证据；外部 Runtime 不借用此公式 |
+| typed Scenario / Skill，固定 Workflow + builtin Target | 受限准入，复用 standalone builder 和冻结 Cell | `test_experiment_scenario_skill.py`；不允许 Runtime 因素或未证明 Target | scripted Provider/Job 生命周期不是 CLI Agent 验收 |
+| `motte-ceval-oc042-bounded@1`，Linux x86_64 / Python 3.10.20 / 147-pin lock | 准入，固定单模型/worker/partition/batch，N × 2 客户端 sends / Run | `test_experiment_ceval.py` 的精确 revision、冻结重放、错误计数、无隐藏 retry/redirect、身份漂移拒绝 | Task 3 (`f4deeca`) 实际固定 OpenCompass CLI + localhost 合成服务通过成功及失败边界；[执行条件](../operations/ceval.md#6-实验矩阵的固定发送上界m8-task-3)。无官方数据/真实模型成绩 |
+| 旧 C-Eval / CMMLU standalone OpenCompass profile | 不能获得 Experiment 硬预算；旧 standalone 合约保留 | 旧 profile/未知 profile 在 preview/create/retry 拒绝；无 profile 的 proxy/redirect 兼容性已回归 | Task 3 的旧 standalone 合成 runner 测试只证明兼容；旧上游错误循环没有调用上界 |
+| Harbor 0.23.0 + Claude Code | 拒绝：`SUITE_UNSUPPORTED`；伪装为 native 的冻结输入为 `EXPERIMENT_BUDGET_UNPROVABLE` | `test_experiment_external_budget_guards.py`：max_turns、max_budget_usd、零 runner retry 都不构成 transport 证明 | 本轮真实 Harbor/Claude Agent 验收 `not_run`；CLI 内重试、fallback/helper 请求仍未被平台计数 |
+| Harbor Task × Trial / oracle | 拒绝，Trial 计划或 oracle 标签不等于模型 sends | 同上，Task=1、Trial=1 及 oracle 均拒绝；standalone fixture 的 Trial refreeze 保留 | oracle fixture 只证明确定性脚本/导入路径；任意任务脚本不能宣称零模型调用，更不是实际 Agent 支持 |
+| `claude-cli@1` / `codex-cli@1` | 拒绝 Runtime 因素：`FACTOR_UNSUPPORTED`；存量外部执行输入在 allocate/retry 先拒绝 | timeout、max_turns 与外部预算声明不升级为模型请求上界 | 本轮实际 CLI/model `not_run`；固定 CLI 版本本身不是 transport limiter |
+| `pi-agent@1` / 未知 opaque Runtime | 同上；不接受 caller 的 retries=0 或 streamFn 次数证明 | 累积 streamFn 上限只覆盖外层调用；内部 SDK retry、redirect、operation 重建仍需完整证明 | 本轮实际 Pi/provider `not_run`；不把某个 SDK 的 fetch 次数推成所有 provider 的 transport 上界 |
+
+`tests/sdk/test_experiment_external_budget_guards.py` 逐 profile 覆盖 preview/create
+零 Spec/Cell/Run/Job 写入；allocate/retry 还检查历史无 `prepared_run` 的原 Run 和
+已冻结 Cell 两份执行输入。只要出现未证明 Runtime/Harbor，便在整个恢复批次 claim、
+Trial refreeze、创建新 Run 或启动 Job 之前拒绝；不读取当前资源来替换历史配置。
+无关 native Cell 不得先分配后才发现另一 Cell 是外部 Runtime。
+这些拒绝并未关闭独立 standalone Runtime/Harbor 功能，也不把历史 native Cell
+补写成更强的冻结/审计保证。调用方不能提交任意 manifest、call_bound、retry_policy
+或执行证明来绕过窄 DTO；scalar timeout/turn/stream 条件也不能被静默忽略。
+
+### 未来接入口（保留接口，不注册新正向 profile）
+
+- `motte_sdk.terminalbench.build_run_inputs(record, run_id, job_id, profile, task_keys, work_root)`
+  继续负责从准备好的固定 revision 冻结任务内容、选择、Profile、Trial 计划和原生配置；
+  它是内部 standalone builder，不是 Experiment 的任意 manifest 输入通道
+- `refreeze_for_run(manifest, run_id, job_id)` 继续只重建新 Run/Job/Trial 身份，保留任务
+  内容和受控条件；已有 Job 恢复只能观察，显式 retry 才能创建独立新身份
+- 将来只有内部注册、源码/依赖身份固定且实际执行验证的窄 profile 才能接入 assembler：
+  必须控制所有 transport/SDK/CLI/runner 重试、redirect、fallback/helper、并发/进程
+  fanout 与恢复后的 allowance。不能用用户自报 cap、总耗时、费用或 Trial 数代替
+- `tests/integration/test_harbor_round2_service.py::test_retry_refreezes_child_trial_and_job_identity`
+  保留该 standalone 接口的离线回归，证明父子 Trial/Job 身份独立；它不授权 Harbor
+  Experiment 正路径，也不证明真实 Agent 的模型调用预算
+
+初始 factor × repeat 矩阵只对初始 Runs 求和。显式 retry 的新 Run 单独计其已证明
+上界；不能声称初始预算约束无限未来 retries 的终身累计请求或费用。
+
+上游缺口依据固定源：Harbor
+[`TrialQueue`](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/src/harbor/trial/queue.py)、
+[`Claude Code`](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/src/harbor/agents/installed/claude_code.py)、
+[`oracle`](https://github.com/harbor-framework/harbor/blob/1e5c5c6db929a10a140d05e606882c671ae20729/src/harbor/agents/oracle.py)；
+Pi 桥接 `session.mjs` 与仓库锁定的 Pi AI 0.73.1 内层 OpenAI 6.26.0 / Anthropic 0.91.1
+重试边界。Harbor 外层 Trial retry=0 不会禁用 CLI 内层请求，Pi 外层 streamFn 计数
+也不会自动计入 SDK 内部 retries。

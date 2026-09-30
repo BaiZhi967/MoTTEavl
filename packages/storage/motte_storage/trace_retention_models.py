@@ -272,6 +272,12 @@ class TraceEventWindow(_RetentionModel):
 
 
 class TraceRetentionResult(_RetentionModel):
+    """Operation result, not a proof authorizing mutation.
+
+    Zero with receipts represents exact replay. The storage operation must verify
+    the complete saved plan and archive bytes before constructing that result;
+    this pure model only checks committed identities and count consistency.
+    """
     plan_id: Sha256
     trimmed_events: NonNegativeInt
     receipts: list[TraceArchiveReceipt]
@@ -288,6 +294,6 @@ class TraceRetentionResult(_RetentionModel):
         if any(receipt.plan_id != self.plan_id or receipt.committed_at is None
                for receipt in self.receipts):
             raise ValueError("result requires committed receipts from its plan")
-        if self.trimmed_events != sum(receipt.prefix.event_count for receipt in self.receipts):
-            raise ValueError("trimmed_events must equal the committed receipt event count")
+        if self.trimmed_events not in (0, sum(receipt.prefix.event_count for receipt in self.receipts)):
+            raise ValueError("trimmed_events must be zero for verified replay or equal the complete receipt event count")
         return self

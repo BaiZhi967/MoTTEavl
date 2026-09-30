@@ -262,6 +262,25 @@ class JudgeCalibrationService:
     def list_executions(self, calibration_id: str) -> list[CalibrationExecution]:
         return self.repository.list_executions(calibration_id)
 
+    def publish_report(self, execution_id: str):
+        from motte_storage.calibrations import calibration_publication_guard
+        from .calibration_ledger import qualification_source, reconstruct_calibration_report
+
+        with calibration_publication_guard(self.store):
+            report = reconstruct_calibration_report(self.store, execution_id)
+            report = report.model_copy(update={"recorded_at": self._clock()})
+            source = qualification_source(report, recorded_at=report.recorded_at)
+            return self.repository.publish_report(report, source)
+
+    def get_report(self, report_id: str):
+        report = self.repository.get_report(report_id)
+        if report is None:
+            raise KeyError(report_id)
+        return report
+
+    def list_reports(self, execution_id: str):
+        return self.repository.list_reports(execution_id)
+
     def preflight(self, ref: CalibrationRef, request: CalibrationRunRequest) -> dict:
         execution, records = compile_calibration_execution(
             self.get_version(ref), request, self.resources, self.scoring_jobs,

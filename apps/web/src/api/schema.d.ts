@@ -2857,6 +2857,21 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** JudgeErrorDetail */
+        JudgeErrorDetail: {
+            /** Code */
+            code: string;
+            /** Fields */
+            fields?: {
+                [key: string]: string;
+            }[] | null;
+            /** Message */
+            message: string;
+        };
+        /** JudgeErrorResponse */
+        JudgeErrorResponse: {
+            error: components["schemas"]["JudgeErrorDetail"];
+        };
         /** JudgeJobListResponse */
         JudgeJobListResponse: {
             /** Items */
@@ -2917,6 +2932,7 @@ export interface components {
             publish_policy: string;
             /** Published */
             published?: boolean | null;
+            qualification_binding?: components["schemas"]["QualificationBinding"] | null;
             /** Receipt */
             receipt?: {
                 [key: string]: unknown;
@@ -2956,6 +2972,8 @@ export interface components {
              * @enum {string}
              */
             mode: "single" | "pairwise";
+            /** Pairwise Refs */
+            pairwise_refs?: components["schemas"]["SubjectPairReference"][];
             /** Presentation Orders */
             presentation_orders?: string[][];
             /** Price Table Version */
@@ -2966,6 +2984,8 @@ export interface components {
              * @enum {string}
              */
             publish_policy: "all_scored" | "allow_non_scored";
+            /** Qualification Id */
+            qualification_id?: string | null;
             /**
              * Repeats
              * @default 1
@@ -3073,6 +3093,8 @@ export interface components {
              * @enum {string}
              */
             mode: "single" | "pairwise";
+            /** Pairwise Refs */
+            pairwise_refs?: components["schemas"]["SubjectPairReference"][];
             /** Presentation Orders */
             presentation_orders?: string[][];
             /** Price Table Version */
@@ -3083,6 +3105,8 @@ export interface components {
              * @enum {string}
              */
             publish_policy: "all_scored" | "allow_non_scored";
+            /** Qualification Id */
+            qualification_id?: string | null;
             /**
              * Repeats
              * @default 1
@@ -3095,6 +3119,35 @@ export interface components {
             /** Source Pass Id */
             source_pass_id?: string | null;
             spec: components["schemas"]["JudgeSpecRequest"];
+        };
+        /** QualificationBinding */
+        QualificationBinding: {
+            /** Calibration Content Sha256 */
+            calibration_content_sha256: string;
+            /** Calibration Id */
+            calibration_id: string;
+            /** Calibration Version */
+            calibration_version: string;
+            /** Judge Spec Sha256 */
+            judge_spec_sha256: string;
+            /** Model */
+            model: string;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Provider Snapshot Sha256 */
+            provider_snapshot_sha256: string;
+            /** Qualification Id */
+            qualification_id: string;
+            /** Report Id */
+            report_id: string;
+            /** Report Sha256 */
+            report_sha256: string;
+            /** Rubric Id */
+            rubric_id: string;
+            /** Rubric Sha256 */
+            rubric_sha256: string;
+            /** Rubric Version */
+            rubric_version: string;
         };
         /** ReplayCase */
         ReplayCase: {
@@ -3601,6 +3654,7 @@ export interface components {
             previous_pass_id?: string | null;
             /** Purpose */
             purpose?: string | null;
+            qualification_binding?: components["schemas"]["QualificationBinding"] | null;
             /** Run Id */
             run_id: string;
             /** Scorer Id */
@@ -3891,6 +3945,18 @@ export interface components {
              * @default 1
              */
             k: number;
+        };
+        /**
+         * SubjectPairReference
+         * @description Only persisted same-case attempt identities cross the public boundary.
+         */
+        SubjectPairReference: {
+            /** Candidate A Attempt Id */
+            candidate_a_attempt_id: string;
+            /** Candidate B Attempt Id */
+            candidate_b_attempt_id: string;
+            /** Case Id */
+            case_id: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -6178,13 +6244,31 @@ export interface operations {
                     "application/json": components["schemas"]["JudgeJobView"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["JudgeErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeErrorResponse"];
                 };
             };
         };
@@ -6211,13 +6295,31 @@ export interface operations {
                     "application/json": components["schemas"]["JudgePreflightView"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["JudgeErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JudgeErrorResponse"];
                 };
             };
         };

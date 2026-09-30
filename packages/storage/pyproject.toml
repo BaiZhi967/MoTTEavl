@@ -7,8 +7,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# PostgreSQL 后端可选：默认安装（SQLite）不需要 psycopg（G09）。
-postgresql = ["psycopg[binary]>=3"]
+# PostgreSQL 后端及迁移栈可选：默认安装（SQLite）不需要这些依赖（G09）。
+postgresql = ["psycopg[binary]>=3", "alembic>=1.13,<2", "sqlalchemy>=2.0,<3"]
 
 [build-system]
 requires = ["hatchling"]

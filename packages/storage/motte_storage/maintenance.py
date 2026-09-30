@@ -35,11 +35,14 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from .platform import platform_for
 from .operation_locks import MaintenanceConflict
+
+if TYPE_CHECKING:
+    from .trace_retention_models import TraceArchiveReceipt, TraceRetentionPlan, TraceRetentionResult
 
 try:  # workspace 安装时读包元数据；checkout 直接运行时回退到源码常量
     APP_VERSION = _package_version("motte-storage")
@@ -1331,3 +1334,164 @@ def cleanup_artifacts(
             report["kept"] += 1
     report["deleted"] = deleted
     return report
+
+
+def _require_trace_retention_owner(store, owner):
+    from .operation_locks import _trace_archive_owner
+    held = _ACTIVE_MAINTENANCE.get(owner)
+    if held is None or held[3] != os.getpid() or held[0] != _store_identity(store) or held[4] is None:
+        raise MaintenanceConflict('Trace commit requires the live store/root owner')
+    _trace_archive_owner(store, held[4], owner)
+    if held[2] is not None and held[2].info.transaction_status.name != 'INTRANS':
+        raise MaintenanceConflict('Trace commit requires the original live lock transaction')
+    return held
+
+
+def commit_trace_retention(store: Any, *, owner: str, plan: TraceRetentionPlan,
+                           receipts: list[TraceArchiveReceipt]) -> TraceRetentionResult:
+    """Commit only the verified fixed receipt INSERT + Trace prefix DELETE operation.
+
+    The existing live owner supplies authority, never a reason string, callback,
+    connection or SQL argument. PG's quiescent transaction is never released and
+    reacquired. Guard DDL, every receipt/trim and owner clearance commit together.
+    """
+    from . import trace_retention_models as models
+    from .artifacts import ArtifactStore
+    from .operation_locks import trace_archive_write_capability
+    from .trace_archives import (
+        _receipts_on_connection, build_trace_archive, verify_trace_archive,
+    )
+    from .trace_retention import _plan_at_cutoff, _validate_apply_plan
+    from motte_contracts.identity import canonical_sha256
+
+    held = _require_trace_retention_owner(store, owner)
+    with _MAINTENANCE_LOCK:
+        if _ACTIVE_MAINTENANCE.get(owner) is not held:
+            raise MaintenanceConflict('Trace maintenance ownership changed')
+        plan = _validate_apply_plan(store, plan, plan.config)
+        receipts = [models.TraceArchiveReceipt.model_validate(row) for row in receipts]
+        if ([row.prefix for row in receipts] != plan.prefixes or
+                any(row.plan_id != plan.plan_id or row.cutoff != plan.cutoff or row.committed_at is not None
+                    or row.archive_id != 'trace-archive-' + row.sha256.removeprefix('sha256:')
+                    for row in receipts)):
+            raise models.TraceArchiveInvalid('pending receipts must match the complete exact plan')
+        if _plan_at_cutoff(store, config=plan.config, cutoff=plan.cutoff) != plan:
+            raise models.TraceRetentionPlanChanged('retention plan inputs changed before commit')
+        artifacts = ArtifactStore(held[4])
+        # Reverify durability in this entry point too; calling the fixed commit
+        # directly with guessed receipts cannot bypass archive fsync/verification.
+        from .operation_locks import _TRACE_ARCHIVE_CAPABILITIES
+        capability_key = (os.getpid(), get_ident(), held[4], owner)
+        with ExitStack() as capabilities:
+            if capability_key not in _TRACE_ARCHIVE_CAPABILITIES:
+                capabilities.enter_context(trace_archive_write_capability(
+                    store, artifacts_root=held[4], maintenance_owner=owner))
+            for receipt in receipts:
+                data = artifacts.read_bytes(receipt.artifact_id)
+                verify_trace_archive(data, receipt)
+                artifacts.put_trace_archive(data, maintenance_owner=owner)
+                verify_trace_archive(artifacts.read_bytes(receipt.artifact_id), receipt)
+
+        pg = held[2] is not None
+        connection = held[2] if pg else sqlite3.connect(
+            store.runs._path, isolation_level=None, timeout=10.0)
+        placeholder = '%s' if pg else '?'
+        try:
+            if not pg:
+                connection.execute('BEGIN IMMEDIATE')
+                values = _meta_values(connection, placeholder)
+            else:
+                connection.execute("SELECT pg_advisory_xact_lock(hashtext('motteavl:maintenance-meta'))")
+                # Metadata is intentionally outside the business-table SHARE
+                # barrier. Hold its owner rows from validation through clearance,
+                # including against direct metadata-repository writes.
+                values = dict(connection.execute(
+                    'SELECT meta_key, meta_value FROM motte_meta FOR UPDATE').fetchall())
+            if (values.get(MAINTENANCE_OWNER) != owner or values.get(MAINTENANCE_FLAG) != 'active'
+                    or values.get(MAINTENANCE_REASON) != 'trace_retention'
+                    or values.get(MAINTENANCE_ALLOW_TOMBSTONES) != 'false'):
+                raise MaintenanceConflict('Trace commit maintenance metadata disagrees')
+            existing = _receipts_on_connection(connection)
+            if existing:
+                raise models.TraceRetentionPlanChanged('existing Trace receipts require verified replay')
+            # Read exact rows on the lock-owning connection before any DDL/DML.
+            for receipt in receipts:
+                prefix = receipt.prefix
+                rows = connection.execute(
+                    'SELECT seq, payload, stored_at FROM trace_events WHERE run_id = ' + placeholder +
+                    ' ORDER BY seq', (prefix.run_id,)).fetchall()
+                events = [models.StoredTraceEvent(
+                    run_id=prefix.run_id, seq=seq,
+                    payload=json.loads(payload) if isinstance(payload, str) else payload,
+                    stored_at=stamp) for seq, payload, stamp in rows]
+                selected = [row for row in events if prefix.first_seq <= row.seq <= prefix.last_seq]
+                if (not events or events[-1].seq != prefix.keep_seq
+                        or [row.seq for row in selected] != list(range(prefix.first_seq, prefix.last_seq + 1))
+                        or canonical_sha256([row.model_dump(mode='json') for row in selected]) != prefix.events_sha256
+                        or build_trace_archive(prefix, selected) != artifacts.read_bytes(receipt.artifact_id)):
+                    raise models.TraceRetentionPlanChanged('Trace rows changed before fixed commit')
+
+            if pg:
+                # Statement triggers cover all actions. Exclude all competing
+                # writers before replacing just these two touched-table guards.
+                connection.execute('LOCK TABLE trace_events, trace_archive_receipts IN ACCESS EXCLUSIVE MODE')
+                guards = connection.execute("""
+                    SELECT c.relname, pg_get_triggerdef(t.oid) FROM pg_trigger t
+                    JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+                    WHERE n.nspname='public' AND c.relname IN ('trace_events','trace_archive_receipts')
+                    AND t.tgname='motte_maintenance_write' ORDER BY c.relname
+                """).fetchall()
+                if [row[0] for row in guards] != ['trace_archive_receipts', 'trace_events']:
+                    raise MaintenanceConflict('Trace commit requires both installed statement guards')
+                connection.execute('DROP TRIGGER motte_maintenance_write ON public.trace_archive_receipts')
+                connection.execute('DROP TRIGGER motte_maintenance_write ON public.trace_events')
+            else:
+                guards = connection.execute("""
+                    SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name IN (
+                    'motte_maintenance_trace_events_DELETE', 'motte_maintenance_trace_archive_receipts_INSERT')
+                    ORDER BY name
+                """).fetchall()
+                if len(guards) != 2:
+                    raise MaintenanceConflict('Trace commit requires both installed action guards')
+                connection.execute('DROP TRIGGER motte_maintenance_trace_events_DELETE')
+                connection.execute('DROP TRIGGER motte_maintenance_trace_archive_receipts_INSERT')
+            committed = []
+            stamp = models.utc_now()
+            for receipt in receipts:
+                row = models.TraceArchiveReceipt.model_validate({**receipt.model_dump(), 'committed_at': stamp})
+                payload = row.model_dump(mode='json')
+                if pg:
+                    from psycopg.types.json import Jsonb
+                    payload = Jsonb(payload)
+                else:
+                    payload = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                connection.execute(
+                    'INSERT INTO trace_archive_receipts(archive_id, plan_id, run_id, first_seq, last_seq, payload) '
+                    'VALUES (' + ', '.join([placeholder] * 6) + ')',
+                    (row.archive_id, row.plan_id, row.prefix.run_id, row.prefix.first_seq, row.prefix.last_seq, payload))
+                deleted = connection.execute(
+                    'DELETE FROM trace_events WHERE run_id = ' + placeholder + ' AND seq >= ' + placeholder +
+                    ' AND seq <= ' + placeholder, (row.prefix.run_id, row.prefix.first_seq, row.prefix.last_seq))
+                if deleted.rowcount != row.prefix.event_count:
+                    raise models.TraceRetentionPlanChanged('Trace prefix delete count disagrees')
+                committed.append(row)
+            for _, definition in guards:
+                connection.execute(definition)
+            _clear_meta_values(connection, placeholder)
+            result = models.TraceRetentionResult(plan_id=plan.plan_id,
+                trimmed_events=sum(row.prefix.event_count for row in committed), receipts=committed)
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            if not pg:
+                connection.close()
+        # Metadata already cleared in the exact receipt/trim transaction. Closing
+        # this owner's resources releases the PG session advisory/file locks last.
+        held[1].close()
+        del _ACTIVE_MAINTENANCE[owner]
+        for key, current in list(_LOCAL_MAINTENANCE_LEASES.items()):
+            if current == owner:
+                del _LOCAL_MAINTENANCE_LEASES[key]
+        return result

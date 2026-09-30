@@ -412,6 +412,8 @@ class ExperimentService:
             receipt = self._preflight_receipt(spec.experiment_id, spec.version)
             if expected_preview_hash is not None and expected_preview_hash != receipt["preview_hash"]:
                 raise ExperimentError("PREVIEW_STALE", "preview does not match published experiment")
+            # Admission failure must precede even a new idempotency-key write.
+            self._validate_allocation_inputs(spec)
             if registry_key is not None:
                 self._requests.bind(registry_key, content_hash, resource_ref)
             return {
@@ -472,22 +474,16 @@ class ExperimentService:
         ):
             return self._allocate_locked(experiment_id, version)
 
-    def _allocate_locked(self, experiment_id: str, version: str) -> dict[str, Any]:
+    def _validate_allocation_inputs(self, spec: ExperimentSpec) -> None:
+        """Read-only admission shared by create replay and allocation."""
         from .experiment_assemblers import validate_suite_assembly_ready
 
-        stored = self.store.experiments.get_spec(experiment_id, version)
-        if stored is None:
-            raise ExperimentError(
-                "EXPERIMENT_NOT_FOUND",
-                f"experiment {experiment_id}@{version} not found",
-            )
-        spec = ExperimentSpec.model_validate(stored)
         _validate_supported_suite(spec)
         validate_suite_assembly_ready(spec, resources=self.resources)
         self._validate_frozen_workflow_matrix(spec)
         if any(cell.get("allocation_status") in ("pending", "allocating")
                and not cell.get("prepared_run") for cell in
-               self.store.experiments.list_cells(experiment_id, version)):
+               self.store.experiments.list_cells(spec.experiment_id, spec.version)):
             if spec.suite_config is not None:
                 raise ExperimentError("FROZEN_INPUT_REQUIRED", "typed cells require frozen prepared_run")
             violations = self._compile(spec)["violations"]
@@ -496,6 +492,16 @@ class ExperimentService:
                     "EXPERIMENT_INVALID",
                     "; ".join(f"{item['code']}: {item['message']}" for item in violations),
                 )
+
+    def _allocate_locked(self, experiment_id: str, version: str) -> dict[str, Any]:
+        stored = self.store.experiments.get_spec(experiment_id, version)
+        if stored is None:
+            raise ExperimentError(
+                "EXPERIMENT_NOT_FOUND",
+                f"experiment {experiment_id}@{version} not found",
+            )
+        spec = ExperimentSpec.model_validate(stored)
+        self._validate_allocation_inputs(spec)
         allocated = 0
         skipped = 0
         failures: list[dict[str, str]] = []
@@ -523,9 +529,21 @@ class ExperimentService:
     def _validate_frozen_workflow_matrix(self, spec: ExperimentSpec) -> None:
         """Re-establish the saved preview and initial Run binding without resolution."""
         from motte_contracts.hashing import canonical_hash
-        from .experiment_assemblers import validate_frozen_workflow_cell
+        from .experiment_assemblers import (
+            validate_frozen_workflow_cell, validate_legacy_execution_boundary,
+        )
 
-        if spec.suite_config is None or spec.suite_config.kind not in {"scenario", "skill", "ceval"}:
+        if spec.suite_config is None:
+            # Historical native Cells need not have prepared_run. Inspect both
+            # frozen copies before any allocation claim or superseding Run;
+            # no current resource lookup and no external Trial refreeze here.
+            for cell in self.store.experiments.list_cells(spec.experiment_id, spec.version):
+                original = self.store.runs.get(cell.get("run_id") or deterministic_run_id(cell["cell_id"]))
+                for frozen in (cell.get("prepared_run"), original):
+                    if frozen is not None:
+                        validate_legacy_execution_boundary(spec, frozen["manifest"])
+            return
+        if spec.suite_config.kind not in {"scenario", "skill", "ceval"}:
             return
         cells = self.store.experiments.list_cells(spec.experiment_id, spec.version)
         expected = {}

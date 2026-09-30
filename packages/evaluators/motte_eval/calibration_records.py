@@ -18,7 +18,7 @@ from motte_contracts.identity import canonical_sha256
 from motte_contracts.messages import Contract
 
 from .calibration import (
-    CalibrationReport, CalibrationSample, CalibrationSet, HumanReviewRequired,
+    CalibrationCall, CalibrationReport, CalibrationSample, CalibrationSet, HumanReviewRequired,
     JudgeQualification, build_calibration_set, review_sample,
 )
 from .judge import JudgeAuthorisation, JudgeInputSelector, JudgeSpec
@@ -615,6 +615,22 @@ class PairwiseConfusionCell(Contract):
     count: int = Field(strict=True, ge=1)
 
 
+class PairwiseCalibrationCall(Contract):
+    """Stable candidate/tie labels, never encoded as Boolean pass/fail criteria."""
+
+    call: CalibrationCall
+    preferences: dict[str, PairwiseLabel] = Field(default_factory=dict)
+    winner: PairwiseLabel | None = None
+
+    @model_validator(mode="after")
+    def separate_label_domains(self) -> Self:
+        if self.call.criteria:
+            raise ValueError("pairwise calls cannot carry Boolean criteria")
+        if self.winner is not None and (self.call.outcome != "succeeded" or self.call.status != "ok"):
+            raise ValueError("a pairwise winner requires a successful complete parsed outcome")
+        return self
+
+
 class PairwiseCriterionConfusion(Contract):
     criterion_id: Text
     cells: list[PairwiseConfusionCell] = Field(default_factory=list)
@@ -647,6 +663,8 @@ class CalibrationReportRecord(Contract):
     source: CalibrationSourceBinding
     report: CalibrationReport
     pairwise_confusion: list[PairwiseCriterionConfusion] = Field(default_factory=list)
+    pairwise_calls: list[PairwiseCalibrationCall] = Field(default_factory=list,
+                                                       exclude_if=lambda value: not value)
     recorded_at: Text
     content_sha256: Digest
 

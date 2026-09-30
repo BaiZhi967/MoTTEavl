@@ -2,6 +2,10 @@
 
 All mutation uses an acquired handle. Names after the filesystem anchor contain
 one component and are opened relative to a live no-follow directory handle.
+The handles prevent redirection to a different object; sharing restrictions do
+not freeze hardlink topology. An external late unreceipted alias can observe an
+ordinary in-place write before the final validation raises. This adapter neither
+rolls back that write nor provides an immutable-directory security boundary.
 """
 from __future__ import annotations
 

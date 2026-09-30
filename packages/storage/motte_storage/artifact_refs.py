@@ -130,10 +130,152 @@ def _is_import_owned_record(record: dict[str, Any], run_id: str, import_ids: set
     )
 
 
+# Closed schema inventory: only read-only key scans, never caller-supplied SQL.
+_TRACE_KEYS = {
+    "trace_archive_receipts": ("archive_id",),
+    "runs": ("id",), "case_runs": ("run_id", "case_id"),
+    "case_attempts": ("run_id", "id"), "agent_invocations": ("run_id", "id"),
+    "scoring_passes": ("run_id", "id"), "trace_events": ("run_id", "seq"),
+    "scores": ("run_id", "case_id"), "run_commands": ("run_id", "id"),
+    "trials": ("run_id", "trial_id"), "runtime_sessions": ("run_id", "session_id"),
+    "scoring_jobs": ("run_id", "job_id"), "external_jobs": ("run_id", "job_id"),
+    "external_job_records": ("job_id", "source_record_key", "parser_version"),
+    "baseline_snapshots": ("run_id", "id"),
+    "score_sets": ("scoring_pass_id", "case_id", "trial_id", "metric_id", "evaluator_id", "evaluator_version"),
+    "experiment_specs": ("experiment_id", "version"),
+    "experiment_cells": ("experiment_id", "experiment_version", "cell_id"),
+    "benchmark_datasets": ("benchmark_id", "dataset_revision"),
+    "m6_baselines": ("baseline_id",), "gate_results": ("gate_result_id",),
+    "gate_policies": ("policy_id", "version"), "statistical_reports": ("report_id",),
+    "motte_imports": ("import_id",), "motte_import_mappings": ("import_id", "mapping_key"),
+    "judge_calibration_versions": ("calibration_id", "version"),
+    "judge_calibration_reviews": ("review_id",),
+    "judge_calibration_executions": ("execution_id",),
+    "judge_calibration_reports": ("report_id",),
+    "judge_calibration_qualifications": ("qualification_id",),
+}
+_TRACE_SOURCES = {"attempts": "case_attempts", "invocations": "agent_invocations",
+                  "events": "trace_events", "commands": "run_commands",
+                  "baselines": "baseline_snapshots"}
+
+
+class _TraceCoverage:
+    """Prove the ownership traversal omitted no stored row, including orphan edges."""
+    def __init__(self):
+        self.seen = {table: set() for table in _TRACE_KEYS}
+
+    def observe(self, source, record, owner=None, parent=None):
+        table = _TRACE_SOURCES.get(source, source)
+        if not isinstance(record, dict):
+            raise ValueError("malformed Trace reference record")
+        if source == "calibrations":
+            from .calibrations import _indices, _KEYS, _model
+            kind = ("qualifications" if "qualification" in record else
+                    "reports" if "report_id" in record else
+                    "executions" if "execution_id" in record else
+                    "reviews" if "review_id" in record else "versions")
+            self.seen["judge_calibration_" + kind].add(_indices(kind, _model(kind, record))[:_KEYS[kind]])
+            return
+        fields = dict(record)
+        if owner is not None:
+            if fields.get("run_id", owner) != owner:
+                raise ValueError("Trace reference ownership identity disagrees")
+            fields["run_id"] = owner
+        if table == "score_sets":
+            if fields.get("scoring_pass_id", parent) != parent:
+                raise ValueError("ScoreSet ownership identity disagrees")
+            fields["scoring_pass_id"] = parent
+            for key in ("trial_id", "metric_id", "evaluator_id", "evaluator_version"):
+                fields[key] = fields.get(key) or ""
+        self.seen[table].add(tuple(fields.get(key) for key in _TRACE_KEYS[table]))
+
+    def verify(self, store):
+        from contextlib import closing
+        dsn = getattr(store, "dsn", None)
+        path = getattr(store.runs, "_path", None)
+        if dsn or path:
+            if dsn:
+                from .postgres import _connect
+                context = _connect(dsn)
+            else:
+                import sqlite3
+                from urllib.parse import quote
+                uri = "file:" + quote(str(Path(path).resolve()), safe="/") + "?mode=ro"
+                context = closing(sqlite3.connect(uri, uri=True))
+            with context as connection:
+                if dsn:
+                    connection.execute("SET TRANSACTION READ ONLY")
+                expected = {
+                    table: set(connection.execute(
+                        "SELECT " + ", ".join(keys) + " FROM " + table).fetchall())
+                    for table, keys in _TRACE_KEYS.items()
+                }
+        else:
+            expected = self._memory_keys(store)
+        for table in _TRACE_KEYS:
+            if expected[table] != self.seen[table]:
+                raise ValueError("incomplete Trace reference coverage or orphan ownership: " + table)
+        # Even a reserved calibration Pass cannot explain independently stored
+        # scores until that actual Pass exists.
+        passes = {key[1] for key in self.seen["scoring_passes"]}
+        if any(key[0] not in passes for key in self.seen["score_sets"]):
+            raise ValueError("orphan ScoreSet ownership")
+
+    @staticmethod
+    def _memory_keys(store):
+        ledger = _read_only_import_ledger(store)
+        actual = _TraceCoverage()
+        with store.runs._lock, ledger._lock:
+            groups = {
+                "runs": store.runs._runs.values(),
+                "case_runs": [value[1] for value in store.case_runs._rows.values()],
+                "case_attempts": store.attempts._rows.values(),
+                "agent_invocations": store.invocations._rows.values(),
+                "scoring_passes": store.scoring_passes._passes.values(),
+                "run_commands": store.commands.transactions.original._rows.values(),
+                "trials": store.trials._rows.values(),
+                "runtime_sessions": store.runtime_sessions.transactions.sessions.values(),
+                "scoring_jobs": store.scoring_jobs._rows.values(),
+                "external_jobs": store.external_jobs._jobs.values(),
+                "external_job_records": store.external_jobs._records.values(),
+                "baselines": store.baselines._snapshots.values(),
+                "benchmark_datasets": store.benchmark_datasets._records.values(),
+                "experiment_specs": store.experiments._specs.values(),
+                "experiment_cells": store.experiments._cells.values(),
+                "m6_baselines": store.baseline_store._snapshots.values(),
+                "gate_results": store.gate_store._results.values(),
+                "gate_policies": store.gate_store._policies.values(),
+                "motte_imports": ledger._imports.values(),
+                "motte_import_mappings": ledger._mappings.values(),
+            }
+            for table, records in groups.items():
+                for record in records:
+                    actual.observe(table, record)
+            for owner, records in store.events._events.items():
+                for record in records:
+                    actual.observe("trace_events", record, owner)
+            for owner, records in store.scores._scores.items():
+                for record in records:
+                    actual.observe("scores", record, owner)
+            for parent, records in store.score_sets._sets.items():
+                for record in records:
+                    actual.observe("score_sets", record, parent=parent)
+            actual.seen["trace_archive_receipts"] = {(key,) for key in store.trace_archives._rows}
+            actual.seen["statistical_reports"] = {(key,) for key in store.statistical_reports._rows}
+            for kind, records in store.calibrations._rows.items():
+                actual.seen["judge_calibration_" + kind] = set(records)
+        return actual.seen
+
+
 def _iter_artifact_records_with_owners(
     store: Any, *, exclude_run_ids: Iterable[str] = (), exclude_import_ids: Iterable[str] = (),
+    read_only: bool = False, coverage: _TraceCoverage | None = None,
 ) -> Iterator[tuple[dict[str, Any], str | None, str | None]]:
     """Yield evidence payload plus its owning Run/import, keeping independent refs separate."""
+    def observe(source, record, owner=None, parent=None):
+        if coverage is not None:
+            coverage.observe(source, record, owner, parent)
+
     excluded_runs = set(exclude_run_ids)
     excluded_imports = set(exclude_import_ids)
     runs_repo = getattr(store, "runs", None)
@@ -141,6 +283,7 @@ def _iter_artifact_records_with_owners(
         raise AttributeError("store.runs.list is required for artifact reference scanning")
     for run in runs_repo.list():
         run_id = run.get("id")
+        observe("runs", run)
         if run_id not in excluded_runs:
             yield run, run_id, None
         for repo_name in (
@@ -151,6 +294,7 @@ def _iter_artifact_records_with_owners(
             if repo is None or not hasattr(repo, "list_for_run"):
                 continue
             for record in repo.list_for_run(run_id):
+                observe(repo_name, record, run_id)
                 if run_id not in excluded_runs or not _is_import_owned_record(
                     record, run_id, excluded_imports,
                 ):
@@ -159,6 +303,7 @@ def _iter_artifact_records_with_owners(
                     score_sets = getattr(store, "score_sets", None)
                     if score_sets is not None and hasattr(score_sets, "list_for_pass"):
                         for score in score_sets.list_for_pass(record.get("id", "")):
+                            observe("score_sets", score, parent=record.get("id"))
                             if run_id not in excluded_runs or not _is_import_owned_record(
                                 score, run_id, excluded_imports,
                             ):
@@ -166,17 +311,22 @@ def _iter_artifact_records_with_owners(
         external_jobs = getattr(store, "external_jobs", None)
         if external_jobs is not None and hasattr(external_jobs, "jobs_for_run"):
             for job in external_jobs.jobs_for_run(run_id):
+                observe("external_jobs", job, run_id)
                 yield job, run_id, None
                 for record in external_jobs.list_records(job.get("job_id", "")):
+                    observe("external_job_records", record)
                     yield record, run_id, None
         baselines = getattr(store, "baselines", None)
         if baselines is not None and hasattr(baselines, "get_for_run"):
             for baseline in baselines.get_for_run(run_id):
+                observe("baselines", baseline)
                 yield baseline, None, None
 
     # Durable ScoringJobs are independent of RunStore. Calibration Invocations
     # intentionally have no fabricated Run; list_for_job is their owning edge.
     jobs = getattr(store, "scoring_jobs", None)
+    if jobs is None and read_only:
+        raise AttributeError("existing ScoringJobs reader is required for read-only scanning")
     if jobs is None and (getattr(store, "dsn", None) or getattr(runs_repo, "_path", None)):
         from .scoring_jobs import scoring_jobs_for
 
@@ -184,8 +334,23 @@ def _iter_artifact_records_with_owners(
     if jobs is not None and hasattr(jobs, "list_by_status"):
         invocations = getattr(store, "invocations", None)
         for job in jobs.list_by_status():
+            observe("scoring_jobs", job)
             calibration_owned = job.get("owner_kind") == "calibration"
             run_id = None if calibration_owned else job.get("run_id")
+            if coverage is not None:
+                if calibration_owned:
+                    owner = job.get("owner") or {}
+                    namespace = "calibration:" + str(owner.get("calibration_job_id", ""))
+                    if (owner.get("kind") != "calibration" or not owner.get("calibration_job_id")
+                            or job.get("run_id") != namespace or job.get("owner_ref") != namespace):
+                        raise ValueError("calibration Job ownership identity disagrees")
+                else:
+                    owner = job.get("owner") or {}
+                    if (job.get("owner_kind") != "subject" or owner.get("kind") != "subject"
+                            or owner.get("run_id") != run_id or job.get("owner_ref") != "run:" + str(run_id)):
+                        raise ValueError("subject Job ownership identity disagrees")
+                    if (run_id,) not in coverage.seen["runs"]:
+                        raise ValueError("orphan ScoringJob ownership")
             yield job, run_id, None
             if calibration_owned:
                 # No actual Run can recover these edges. Every required facade
@@ -199,6 +364,14 @@ def _iter_artifact_records_with_owners(
                         raise AttributeError(f"store.{name}.{method} is required for calibration evidence scanning")
                     readers[name] = reader
                 for invocation in readers["invocations"](job.get("job_id", "")):
+                    if coverage is not None:
+                        owner = invocation.get("owner") or {}
+                        if (invocation.get("job_id") != job["job_id"]
+                                or invocation.get("run_id") != job["run_id"]
+                                or owner.get("kind") != "calibration"
+                                or owner.get("calibration_job_id") != job["owner"]["calibration_job_id"]):
+                            raise ValueError("calibration Invocation ownership identity disagrees")
+                    observe("agent_invocations", invocation)
                     yield invocation, None, None
                 pass_id = job.get("reserved_pass_id")
                 if not isinstance(pass_id, str) or not pass_id:
@@ -207,13 +380,22 @@ def _iter_artifact_records_with_owners(
                 if scoring_pass is not None:
                     if scoring_pass.get("id") != pass_id:
                         raise ValueError("calibration child Pass identity disagrees with its durable edge")
+                    if coverage is not None and scoring_pass.get("run_id") != job["run_id"]:
+                        raise ValueError("calibration Pass ownership identity disagrees")
+                    observe("scoring_passes", scoring_pass)
                     yield scoring_pass, None, None
                 # Retain independently stored scores even if the Pass is absent
                 # or damaged; a missing facade must never look like zero scores.
                 for score in readers["score_sets"](pass_id):
+                    observe("score_sets", score, parent=pass_id)
                     yield score, None, None
+                if coverage is not None:
+                    for event in store.events.list_for_run(job["run_id"]):
+                        observe("events", event, job["run_id"])
+                        yield event, job["run_id"], None
             elif invocations is not None and callable(getattr(invocations, "list_for_job", None)):
                 for invocation in invocations.list_for_job(job.get("job_id", "")):
+                    observe("agent_invocations", invocation, run_id)
                     yield invocation, run_id, None
 
     # Lifecycle sources are independent pins, never owned by a rollback Run.
@@ -221,21 +403,26 @@ def _iter_artifact_records_with_owners(
     if calibrations is None or not callable(getattr(calibrations, "iter_records", None)):
         raise AttributeError("store.calibrations.iter_records is required for reference scanning")
     for record in calibrations.iter_records():
+        observe("calibrations", record)
         yield record, None, None
 
     experiments = getattr(store, "experiments", None)
     if experiments is not None and hasattr(experiments, "list_specs"):
         for spec in experiments.list_specs():
+            observe("experiment_specs", spec)
             yield spec, None, None
             for cell in experiments.list_cells(spec["experiment_id"], spec["version"]):
+                observe("experiment_cells", cell)
                 yield cell, None, None
     baseline_store = getattr(store, "baseline_store", None)
     if baseline_store is not None and hasattr(baseline_store, "list"):
-        for baseline in baseline_store.list(limit=_ALL_LIMIT):
+        for baseline in baseline_store.list(limit=None):
+            observe("m6_baselines", baseline)
             yield baseline, None, None
     gate_store = getattr(store, "gate_store", None)
     if gate_store is not None and hasattr(gate_store, "list_results"):
-        for gate in gate_store.list_results(limit=_ALL_LIMIT):
+        for gate in gate_store.list_results(limit=None):
+            observe("gate_results", gate)
             yield gate, None, None
     reports = getattr(store, "statistical_reports", None)
     if reports is None or not hasattr(reports, "list"):
@@ -243,14 +430,79 @@ def _iter_artifact_records_with_owners(
     # Publications own their frozen evidence independently of the referenced
     # Runs/imports. Never inherit an exclusion or a finite UI/listing limit.
     for report in reports.list(limit=None):
+        observe("statistical_reports", report)
         yield report, None, None
-    ledger = platform_for(store).imports
+    ledger = _read_only_import_ledger(store) if read_only else platform_for(store).imports
     for batch in ledger.list_imports():
+        observe("motte_imports", batch)
         import_id = batch.get("import_id", "")
         if import_id not in excluded_imports:
             yield batch, None, import_id
             for mapping in ledger.mappings_for(import_id):
+                observe("motte_import_mappings", mapping)
                 yield mapping, None, import_id
+
+
+def _read_only_import_ledger(store: Any) -> Any:
+    """Bind existing storage without running SQLite schema creation/upgrade."""
+    from .platform import _SQLiteImportLedger, _PgImportLedger
+
+    if getattr(store, "dsn", None):
+        return _PgImportLedger(store.dsn)
+    path = getattr(store.runs, "_path", None)
+    if path is not None:
+        return _SQLiteImportLedger(str(path))
+    platform = getattr(store, "_motte_platform_stores", None)
+    ledger = getattr(platform, "imports", None)
+    if ledger is None:
+        raise AttributeError("existing import ledger is required for read-only reference scanning")
+    return ledger
+
+
+def iter_trace_reference_records(store: Any) -> Iterator[tuple[dict[str, Any], str | None]]:
+    """Complete read-only traversal, retaining ownership rather than treating it as a pin."""
+    required = {
+        "runs": ("list",), "events": ("list_for_run", "stored_for_run"),
+        "case_runs": ("list_for_run",), "attempts": ("list_for_run",),
+        "invocations": ("list_for_run", "list_for_job"),
+        "scoring_passes": ("list_for_run", "get"), "score_sets": ("list_for_pass",),
+        "scores": ("list_for_run",), "commands": ("list_for_run",),
+        "trials": ("list_for_run",), "runtime_sessions": ("list_for_run",),
+        "scoring_jobs": ("list_for_run", "list_by_status"),
+        "external_jobs": ("jobs_for_run", "list_records", "list_conflicts"),
+        "baselines": ("get_for_run",), "baseline_store": ("list",),
+        "benchmark_datasets": ("list",),
+        "gate_store": ("list_results", "list_policies"),
+        "experiments": ("list_specs", "list_cells"),
+        "statistical_reports": ("list",), "calibrations": ("iter_records",),
+        "trace_archives": ("list",),
+    }
+    for name, methods in required.items():
+        for method in methods:
+            if not callable(getattr(getattr(store, name, None), method, None)):
+                raise AttributeError(f"store.{name}.{method} is required for Trace protection")
+    ledger = _read_only_import_ledger(store)
+    if any(not callable(getattr(ledger, name, None)) for name in ("list_imports", "mappings_for")):
+        raise AttributeError("complete import ledger readers are required for Trace protection")
+    coverage = _TraceCoverage()
+    # Task 5 must preserve archived cross-Run/Pass/event reference closure before
+    # planning later prefixes. Empty/truncated facades cannot hide physical rows.
+    if store.trace_archives.list():
+        raise ValueError('Trace receipts require verified archived reference closure')
+    for record, owner, _ in _iter_artifact_records_with_owners(store, read_only=True, coverage=coverage):
+        if not isinstance(record, dict):
+            raise ValueError("reference repository returned a malformed record")
+        yield record, owner
+    for source, reader in (("gate_policies", store.gate_store.list_policies),
+                           ("benchmark_datasets", store.benchmark_datasets.list),
+                           (None, store.external_jobs.list_conflicts)):
+        for record in reader():
+            if not isinstance(record, dict):
+                raise ValueError("reference repository returned a malformed record")
+            if source is not None:
+                coverage.observe(source, record)
+            yield record, None
+    coverage.verify(store)
 
 
 def iter_artifact_records(

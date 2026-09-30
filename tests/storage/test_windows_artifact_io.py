@@ -125,6 +125,70 @@ def _archive_fixture(root):
     return store, archive
 
 
+
+def _verified_archive_fixture(root):
+    """Provision portable canonical evidence; do not claim Windows archive durability.
+
+    The typed receipt is test evidence, not a retention DB publication. Its full
+    production verification must pass before and after each adversarial action.
+    """
+    import hashlib
+    import json
+    from datetime import UTC, datetime, timedelta
+    from motte_contracts.identity import canonical_sha256
+    from motte_storage.artifacts import ArtifactStore
+    from motte_storage.trace_archives import build_trace_archive, trace_archive_artifact_id
+    from motte_storage.trace_retention_models import StoredTraceEvent, TraceArchiveReceipt, TracePrefix
+
+    cutoff = datetime(2026, 9, 30, tzinfo=UTC)
+    row = StoredTraceEvent(run_id="fixture-run", seq=1, stored_at=cutoff - timedelta(days=2),
+                           payload={"seq": 1, "type": "custom", "unchanged": [None, "证据"],
+                                    "artifact": {"artifact_id": "evidence.bin", "sha256": "a" * 64}})
+    prefix = TracePrefix(run_id=row.run_id, run_revision=3, status="completed", first_seq=1,
+                         last_seq=1, keep_seq=2, event_count=1,
+                         events_sha256=canonical_sha256([row.model_dump(mode="json")]))
+    data = build_trace_archive(prefix, [row])
+    body = json.loads(data)
+    receipt = TraceArchiveReceipt(
+        archive_id="provisioned-fixture", plan_id="c" * 64, prefix=prefix,
+        artifact_id=trace_archive_artifact_id(data), sha256=hashlib.sha256(data).hexdigest(),
+        bytes=len(data), cutoff=cutoff, artifact_refs=body["artifact_refs"],
+        artifact_hashes=body["artifact_hashes"],
+    )
+    store = ArtifactStore(root / "artifacts")
+    archive = store.root / receipt.artifact_id
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(data)
+    _assert_verified_archive(store, archive, data, receipt)
+    return store, archive, data, receipt
+
+
+def _assert_verified_archive(store, archive, data, receipt):
+    from motte_storage.trace_archives import verify_trace_archive
+    from motte_storage.trace_retention_models import TraceArchiveReceipt
+
+    assert isinstance(receipt, TraceArchiveReceipt)
+    assert archive.read_bytes() == data
+    actual = store.read_bytes(receipt.artifact_id)
+    assert actual == data
+    verify_trace_archive(actual, receipt)
+
+
+def test_provisioned_archive_fixture_requires_exact_receipt_and_content(tmp_path):
+    from motte_storage.trace_archives import verify_trace_archive
+    from motte_storage.trace_retention_models import TraceArchiveInvalid
+
+    store, archive, data, receipt = _verified_archive_fixture(tmp_path)
+    _assert_verified_archive(store, archive, data, receipt)
+    assert receipt.artifact_refs == {"evidence.bin": "sha256:" + "a" * 64}
+    with pytest.raises(TraceArchiveInvalid):
+        verify_trace_archive(data + b" ", receipt)
+    with pytest.raises(TraceArchiveInvalid):
+        verify_trace_archive(data, receipt.model_copy(update={"sha256": "b" * 64}))
+    with pytest.raises(TraceArchiveInvalid):
+        verify_trace_archive(data, receipt.model_copy(update={"artifact_refs": {}}))
+
+
 def _required_symlink(link, target, *, directory=False):
     try:
         link.symlink_to(target, target_is_directory=directory)
@@ -316,33 +380,123 @@ def test_native_attribute_only_in_place_reparse(ntfs_root, monkeypatch, boundary
 
 
 @native
-def test_native_new_hardlink_at_last_check_boundary(ntfs_root, monkeypatch):
-    """A successful late alias must not turn a put into an archive write."""
+@pytest.mark.parametrize("alias", ["symlink", "hardlink", "junction"])
+@pytest.mark.parametrize("operation", ["put", "delete"])
+def test_native_archive_aliases_preserve_verified_evidence(ntfs_root, alias, operation):
+    store, archive, data, receipt = _verified_archive_fixture(ntfs_root)
+    identity = archive.stat().st_ino
+    if alias == "junction":
+        _required_junction(store.root / "alias", archive.parent)
+        name = "alias/" + archive.name
+    else:
+        name = "alias.json"
+        if alias == "symlink":
+            _required_symlink(store.root / name, archive)
+        else:
+            os.link(archive, store.root / name)
+    _assert_verified_archive(store, archive, data, receipt)
+    if alias == "hardlink" and operation == "delete":
+        store.delete(name)
+        assert not (store.root / name).exists()
+    else:
+        with pytest.raises((ValueError, OSError)):
+            if operation == "put":
+                store.put_bytes(name, b"must not replace verified evidence")
+            else:
+                store.delete(name)
+    assert archive.stat().st_ino == identity
+    _assert_verified_archive(store, archive, data, receipt)
+
+
+@native
+@pytest.mark.parametrize("alias", ["symlink", "hardlink"])
+@pytest.mark.parametrize("boundary", ["before_open", "truncate"])
+def test_native_raced_alias_preserves_verified_evidence(ntfs_root, monkeypatch, alias, boundary):
     from motte_storage import _windows_artifact_io as win
-    store, archive = _archive_fixture(ntfs_root)
+
+    store, archive, data, receipt = _verified_archive_fixture(ntfs_root)
+    identity = archive.stat().st_ino
+    leaf, replacement = store.root / "ordinary.bin", store.root / "attacker-alias.bin"
+    leaf.write_bytes(b"ordinary original")
+    api, outcomes = win._api(), []
+    original_open, original_truncate = api.open, api.truncate
+
+    def attack():
+        if alias == "symlink":
+            _required_symlink(replacement, archive)
+        else:
+            os.link(archive, replacement)
+        assert replacement.read_bytes() == data  # The actual canonical target, not an orphan.
+        _assert_verified_archive(store, archive, data, receipt)
+        try:
+            os.replace(replacement, leaf)
+        except OSError as error:
+            assert boundary == "truncate" and error.winerror in {5, 32}, error
+            outcomes.append(("blocked", error.winerror))
+        else:
+            outcomes.append(("replaced", None))
+
+    def open_file(handles, parent, name, **kwargs):
+        if boundary == "before_open" and name == leaf.name and kwargs.get("create") and not outcomes:
+            attack()
+        return original_open(handles, parent, name, **kwargs)
+
+    def truncate(handle):
+        if boundary == "truncate":
+            attack()
+        return original_truncate(handle)
+
+    monkeypatch.setattr(api, "open", open_file)
+    monkeypatch.setattr(api, "truncate", truncate)
+    if boundary == "before_open":
+        with pytest.raises((ValueError, OSError)):
+            store.put_bytes(leaf.name, b"changed ordinary")
+        assert outcomes == [("replaced", None)]
+    else:
+        store.put_bytes(leaf.name, b"changed ordinary")
+        assert len(outcomes) == 1 and outcomes[0][0] == "blocked"
+        assert leaf.read_bytes() == b"changed ordinary"
+    assert archive.stat().st_ino == identity
+    _assert_verified_archive(store, archive, data, receipt)
+
+
+@native
+def test_native_late_unreceipted_hardlink_is_an_explicit_limit(ntfs_root, monkeypatch, record_property):
+    """Share=0 does not freeze link topology; an error cannot undo written bytes."""
+    from motte_storage import _windows_artifact_io as win
+    from motte_storage.trace_archives import verify_trace_archive
+    from motte_storage.trace_retention_models import TraceArchiveInvalid
+
+    store, archive, data, receipt = _verified_archive_fixture(ntfs_root)
+    identity = archive.stat().st_ino
     ordinary = store.root / "ordinary.bin"
     ordinary.write_bytes(b"ordinary original")
-    late_alias = archive.parent / "late-alias.bin"
-    api, attempted = win._api(), []
+    late_alias = archive.parent / "late-unreceipted-alias.bin"
+    api, attempts = win._api(), []
     truncate = api.truncate
 
     def attack(handle):
-        attempted.append(True)
-        try:
-            os.link(ordinary, late_alias)
-        except OSError as error:
-            assert error.winerror in {5, 32}, error
+        # This required native attack must actually succeed, not skip on failure.
+        os.link(ordinary, late_alias)
+        attempts.append(True)
+        assert late_alias.stat().st_ino != identity
+        _assert_verified_archive(store, archive, data, receipt)
         return truncate(handle)
 
     monkeypatch.setattr(api, "truncate", attack)
-    try:
+    with pytest.raises(ValueError, match="hard-linked") as outcome:
         store.put_bytes(ordinary.name, b"changed")
-    except (ValueError, OSError):
-        pass
-    assert attempted
-    assert archive.read_bytes() == b"immutable evidence"
-    if late_alias.exists():
-        assert late_alias.read_bytes() == b"ordinary original"
+    assert attempts == [True]
+    assert ordinary.read_bytes() == late_alias.read_bytes() == b"changed"
+    assert archive.stat().st_ino == identity
+    _assert_verified_archive(store, archive, data, receipt)
+    with pytest.raises(TraceArchiveInvalid):
+        verify_trace_archive(late_alias.read_bytes(), receipt)
+    record_property("late_alias_created", True)
+    record_property("ordinary_put_outcome", str(outcome.value))
+    record_property("late_unreceipted_alias_bytes", "changed")
+    print(f"Explicit limit: late alias created; put raised {outcome.value!s}; alias bytes changed; "
+          "canonical archive and typed receipt still verify")
 
 
 def _gc_fixture(root):

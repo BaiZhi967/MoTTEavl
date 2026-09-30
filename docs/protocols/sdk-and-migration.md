@@ -295,6 +295,29 @@ HTTP client 的依赖只有 `httpx`（新增 extras，见 §8）。执行类模�
 - GC apply 与采集/评分/备份互斥：必须持维护屏障执行。
 - 缺失证据后：rescore/compare 的既有 fail-closed 语义不变（不降级为成功）。
 
+
+### 9.3.1 Trace 归档完整性与 Windows 普通文件写入边界
+
+- 普通 `ArtifactStore.put_bytes/delete` 使用已校验的文件句柄；直接访问保留路径、
+  已观测到的 symlink/junction/硬链接别名不得重写规范 Trace 归档。保留目录下已有的
+  孤儿文件仍不可由普通 API 或 GC 删除；“尚无收据”不是清理孤儿的许可。
+- 强保证针对普通 API 操作不会破坏已登记且能以 `TraceArchiveReceipt` 验证的规范
+  归档。读取归档证据须调用生产校验器 `verify_trace_archive`，校验完整规范内容、
+  SHA-256、字节数、内容寻址路径、prefix、cutoff 和嵌套证据；仅位于
+  `trace-archives` 目录内并不使文件成为有效归档。收据的 DB 发布另受维护事务约束。
+- Windows 继续保留原有普通文件的原位写入及权限行为，不换新文件，也不把原文件
+  标记为待删除。共享限制与末次链接数检查不能冻结硬链接拓扑：同权限外部进程若在
+  检查之后把普通文件新建为保留目录下的硬链接，该没有有效收据的临时别名可能随
+  普通写入改变。末次校验可以报错，但错误不代表已经写入的字节被回滚。此情况是
+  明确的保证边界，不宣称整个目录对任意外部写入者绝对不可变。
+- 外部进程直接改写归档同样不是应用内维护锁提供的 OS 权限隔离；收据校验失败须
+  fail closed，不能继续把改变后的内容当成有效证据。此边界不放宽已有别名、重解析、
+  只读文件、根目录或 GC 审计保护。
+- 原生 Windows 普通 CRUD 与攻击边界必须由 NTFS CI 实测；Linux/mock 通过不能代替。
+  原生 Windows 的持久归档创建仍明确 fail closed，不能据此声称 Windows retention
+  事务或目录持久化已经受支持。测试中的预置规范归档与 typed receipt 只验证消费和
+  保护边界，不伪装为成功的 Windows 归档发布。
+
 ## 10. 单用户安全边界
 
 - 默认部署假设 loopback。Host 校验：默认 allowlist `localhost,127.0.0.1,[::1],

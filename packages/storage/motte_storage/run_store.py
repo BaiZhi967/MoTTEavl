@@ -18,6 +18,7 @@ from uuid import uuid4
 from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event, validate_scores
 from .platform import PLATFORM_SCHEMA
 from .calibrations import _SCHEMA as CALIBRATION_SCHEMA
+from . import trace_retention_models as trace_metadata
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -32,10 +33,22 @@ CREATE TABLE IF NOT EXISTS case_runs (
   payload TEXT NOT NULL,
   PRIMARY KEY (run_id, case_id)
 );
+CREATE TABLE IF NOT EXISTS trace_archive_receipts (
+    archive_id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    first_seq BIGINT NOT NULL,
+    last_seq BIGINT NOT NULL,
+    payload TEXT NOT NULL,
+    UNIQUE(run_id, first_seq, last_seq)
+);
+CREATE INDEX IF NOT EXISTS ix_trace_archive_receipts_run ON trace_archive_receipts(run_id);
+CREATE INDEX IF NOT EXISTS ix_trace_archive_receipts_plan ON trace_archive_receipts(plan_id);
 CREATE TABLE IF NOT EXISTS trace_events (
   run_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   payload TEXT NOT NULL,
+  stored_at TEXT,
   PRIMARY KEY (run_id, seq)
 );
 CREATE TABLE IF NOT EXISTS scores (
@@ -169,10 +182,27 @@ def _append_event(connection: sqlite3.Connection, event: dict[str, Any]) -> dict
     ).fetchone()[0]
     stored = {**deepcopy(event), "seq": seq}
     connection.execute(
-        "INSERT INTO trace_events(run_id, seq, payload) VALUES (?, ?, ?)",
-        (event["run_id"], seq, json.dumps(stored, sort_keys=True)),
+        "INSERT INTO trace_events(run_id, seq, payload, stored_at) VALUES (?, ?, ?, ?)",
+        (event["run_id"], seq, json.dumps(stored, sort_keys=True),
+         trace_metadata.utc_now().isoformat()),
     )
     return stored
+
+
+def _stored_trace_event(
+    run_id: str, seq: int, payload: dict[str, Any], stored_at: Any,
+) -> trace_metadata.StoredTraceEvent:
+    """Read storage metadata without trusting or repairing public payload fields."""
+    if (not isinstance(payload, dict) or payload.get("run_id") != run_id
+            or type(payload.get("seq")) is not int or payload["seq"] != seq):
+        raise ValueError("Trace storage index and payload identity differ")
+    try:
+        timestamp = trace_metadata._utc_datetime(stored_at)
+    except (ValueError, TypeError, OverflowError):
+        # Legacy NULL, malformed and naive values never authorize retention.
+        timestamp = None
+    return trace_metadata.StoredTraceEvent(
+        run_id=run_id, seq=seq, payload=payload, stored_at=timestamp)
 
 
 class _SQLiteRuns:
@@ -391,22 +421,18 @@ class _SQLiteTraceEvents:
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         """分配持久化的单调 seq；唯一约束 (run_id, seq) 由主键保证。"""
-        run_id = event["run_id"]
-        connection = _connect(self._path)
-        try:
+        with closing(_connect(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            seq = connection.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 FROM trace_events WHERE run_id = ?", (run_id,)
-            ).fetchone()[0]
-            stored = {**deepcopy(event), "seq": seq}
-            connection.execute(
-                "INSERT INTO trace_events(run_id, seq, payload) VALUES (?, ?, ?)",
-                (run_id, seq, json.dumps(stored, sort_keys=True)),
-            )
-            connection.execute("COMMIT")
-        finally:
-            connection.close()
-        return stored
+            return _append_event(connection, event)
+
+    def stored_for_run(self, run_id: str) -> list[trace_metadata.StoredTraceEvent]:
+        with closing(_connect(self._path)) as connection:
+            rows = connection.execute(
+                "SELECT seq, payload, stored_at FROM trace_events WHERE run_id = ? ORDER BY seq",
+                (run_id,),
+            ).fetchall()
+        return [_stored_trace_event(run_id, seq, json.loads(payload), stored_at)
+                for seq, payload, stored_at in rows]
 
     def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
         with closing(_connect(self._path)) as connection:
@@ -592,14 +618,24 @@ class _InMemoryCaseRuns:
 class _InMemoryTraceEvents:
     def __init__(self, lock: RLock) -> None:
         self._events: dict[str, list[dict[str, Any]]] = {}
+        self._stored_at: dict[tuple[str, int], Any] = {}
         self._lock = lock
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             events = self._events.setdefault(event["run_id"], [])
-            stored = {**deepcopy(event), "seq": len(events) + 1}
+            seq = max((item["seq"] for item in events), default=0) + 1
+            stored = {**deepcopy(event), "seq": seq}
+            timestamp = trace_metadata.utc_now()
             events.append(stored)
+            self._stored_at[(event["run_id"], seq)] = timestamp
             return deepcopy(stored)
+
+    def stored_for_run(self, run_id: str) -> list[trace_metadata.StoredTraceEvent]:
+        with self._lock:
+            return [_stored_trace_event(run_id, event["seq"], event,
+                                        self._stored_at.get((run_id, event["seq"])))
+                    for event in sorted(self._events.get(run_id, []), key=lambda row: row["seq"])]
 
     def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -647,15 +683,19 @@ class RunStore:
     statistical_reports: Any = None
     calibrations: Any = None
     scoring_jobs: Any = None
+    trace_archives: Any = None
 
     def __post_init__(self) -> None:
         if self.calibrations is not None:
             from .scoring_jobs import scoring_jobs_for
-            scoring_jobs_for(self)
+            self.scoring_jobs = scoring_jobs_for(self)
             self.calibrations._bind(self)
         if self.commands is not None:
             from .runtime_sessions import attach_interactive_repositories
             attach_interactive_repositories(self)
+        if isinstance(self.runs, _InMemoryRuns):
+            from .platform import platform_for
+            platform_for(self)  # Eager ledger: read-only reference scans never fabricate one.
 
 
 def SQLiteRunStore(path: str | Path) -> RunStore:
@@ -680,6 +720,7 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
     from .trials import SQLiteTrials
     from .statistical_reports import SQLiteStatisticalReports
     from .calibrations import SQLiteCalibrations
+    from .trace_archives import SQLiteTraceArchives
 
     return RunStore(
         runs=_SQLiteRuns(path),
@@ -700,6 +741,7 @@ def SQLiteRunStore(path: str | Path) -> RunStore:
         baseline_store=SQLiteBaselineStore(path),
         statistical_reports=SQLiteStatisticalReports(path),
         calibrations=SQLiteCalibrations(path),
+        trace_archives=SQLiteTraceArchives(path),
     )
 
 
@@ -722,6 +764,7 @@ def InMemoryRunStore() -> RunStore:
     from .trials import MemoryTrials
     from .statistical_reports import MemoryStatisticalReports
     from .calibrations import MemoryCalibrations
+    from .trace_archives import MemoryTraceArchives
 
     return RunStore(
         runs=runs,
@@ -742,4 +785,5 @@ def InMemoryRunStore() -> RunStore:
         baseline_store=MemoryBaselineStore(lock),
         statistical_reports=MemoryStatisticalReports(lock),
         calibrations=MemoryCalibrations(lock),
+        trace_archives=MemoryTraceArchives(lock),
     )

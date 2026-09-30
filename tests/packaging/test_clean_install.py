@@ -7,7 +7,7 @@
 - ``python -m motte_cli --help`` 退出码 0；
 - 包资源（importlib.resources）从不同 cwd 读取结果一致；
 - 依赖边界（G09）：docker / celery / psutil / pyyaml 不进入 SDK/API 交付闭包，
-  psycopg 只经 motte-storage 的 [postgresql] extra，pytest 只经 [pytest] extra。
+  psycopg/Alembic/SQLAlchemy 只经 motte-storage 的 [postgresql] extra，pytest 只经 [pytest] extra。
 
 pip 安装 wheel 需要访问 PyPI（httpx/pydantic 等非 workspace 依赖）。这里不设
 "无网络即静默通过"：只有当 pip 真的连不上 index 时才 skip，并把原因原样带出。
@@ -38,15 +38,140 @@ DELIVERABLE_PACKAGE_DIRS = [
 # G09：Runner/Worker 专属依赖，禁止出现在 SDK/API 交付闭包里（声明层）。
 RUNNER_ONLY_DEPS = {"docker", "celery", "psutil", "pyyaml"}
 
-# 解析层（干净 venv 实际装了什么）的额外禁区：pytest/psycopg 只应经 extra 进入。
-RESOLVED_FORBIDDEN = {"docker", "celery", "psutil", "pytest", "psycopg"}
+# 解析层（干净 venv 实际装了什么）：pytest 与 PostgreSQL 栈只应经 extra 进入。
+RESOLVED_FORBIDDEN = {"docker", "celery", "psutil", "pytest", "psycopg", "alembic", "sqlalchemy"}
 # 注意 pyyaml 不在 RESOLVED_FORBIDDEN：motte-contracts 的既定依赖 cel-python
 # 自身传递依赖 pyyaml（uv.lock 可查），该泄漏不在我们的声明控制内；G09 对
 # pyyaml 的约束因此落在声明层（wheel Requires-Dist 检查）。
 
-# 干净 venv 里做导入冒烟的交付包。motte_storage 不在其中：它的 __init__
-# 顶层导入 postgres.py（psycopg），按 G09 psycopg 只随 [postgresql] extra 安装。
-CLEAN_IMPORT_NAMES = ["motte_sdk", "motte_contracts", "motte_eval", "motte_trace", "motte_cli"]
+# 全部六个交付包都必须能在默认安装中导入；PostgreSQL 只经 extra 进入。
+CLEAN_IMPORT_NAMES = [
+    "motte_sdk", "motte_contracts", "motte_storage", "motte_eval", "motte_trace", "motte_cli",
+]
+
+_STORAGE_SMOKE_CODE = """
+import os
+from pathlib import Path
+os.environ.pop('MOTTE_STORAGE', None)
+import motte_storage
+from motte_storage import ArtifactStore, InMemoryRepository, InMemoryRunStore, SQLiteRunStore
+from motte_storage.factory import create_run_store, create_resource_store
+from motte_storage.repositories import SQLiteRepository
+from motte_storage.resource_store import InMemoryResourceStore
+
+artifact_store = ArtifactStore(Path('artifacts'))
+artifact = artifact_store.put_bytes('run-1/output.txt', b'clean storage')
+assert artifact_store.read_bytes(artifact.id) == b'clean storage'
+for repository in (InMemoryRepository(), SQLiteRepository('records.db')):
+    repository.put('record', {'value': 7})
+    assert repository.get('record') == {'value': 7}
+for store in (InMemoryRunStore(), SQLiteRunStore('runs.db'), create_run_store('factory.db')):
+    store.runs.create({'id': 'run-1', 'status': 'queued'})
+    assert store.runs.get('run-1')['status'] == 'queued'
+    assert store.events.append({'run_id': 'run-1', 'type': 'queued'})['seq'] == 1
+    assert len(store.events.list_for_run('run-1')) == 1
+assert SQLiteRunStore('runs.db').runs.get('run-1')['status'] == 'queued'
+for resources in (InMemoryResourceStore(), create_resource_store('resources.db')):
+    resources.models.put({'id': 'model-1', 'provider': 'test'})
+    assert resources.models.get('model-1')['provider'] == 'test'
+assert create_resource_store('resources.db').models.get('model-1')['provider'] == 'test'
+assert 'motte_storage.postgres' not in sys.modules
+assert 'motte_storage.migrations' not in sys.modules
+assert not hasattr(motte_storage, 'not_a_storage_export')
+print(motte_storage.__file__)
+"""
+
+
+def test_storage_source_works_without_optional_dependencies(tmp_path: Path) -> None:
+    # A subprocess prevents the development environment's already-imported PG
+    # modules from concealing an eager dependency. Real local operations follow.
+    code = f"""
+import importlib.abc
+import sys
+sys.path[:0] = {str(ROOT / 'packages/storage'), str(ROOT / 'packages/contracts')!r}
+class NoOptionalDependencies(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {{'psycopg', 'alembic', 'sqlalchemy', 'motte_eval', 'motte_sdk'}}:
+            raise AssertionError('optional dependency imported: ' + fullname)
+sys.meta_path.insert(0, NoOptionalDependencies())
+""" + _STORAGE_SMOKE_CODE
+    proc = _run_in_venv(Path(sys.executable), ["-I", "-c", code], tmp_path)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.fixture(scope="session")
+def storage_only_venv(request, wheel_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Install only storage + contracts, with the selected declared extra.
+
+    Unlike the historical six-wheel fixture, any installation failure is a
+    failure: dependency closure must not become an optional/skipped assertion.
+    """
+    extra = request.param
+    home = tmp_path_factory.mktemp(f"storage-{extra or 'base'}")
+    venv_dir = home / "venv"
+    create = subprocess.run(
+        [sys.executable, "-m", "venv", str(venv_dir)], cwd=home,
+        env=_stripped_env(), capture_output=True, text=True, timeout=300,
+    )
+    assert create.returncode == 0, create.stderr
+    python = _venv_python(venv_dir)
+    contracts, = wheel_dir.glob("motte_contracts-*.whl")
+    storage, = wheel_dir.glob("motte_storage-*.whl")
+    requirement = str(storage) + (f"[{extra}]" if extra else "")
+    install = _run_in_venv(python, ["-m", "pip", "install", str(contracts), requirement], home)
+    assert install.returncode == 0, install.stdout + install.stderr
+    check = _run_in_venv(python, ["-m", "pip", "check"], home)
+    assert check.returncode == 0, check.stdout + check.stderr
+    return python
+
+
+@pytest.mark.parametrize("storage_only_venv", [""], indirect=True)
+def test_storage_base_wheel_works_without_optional_dependencies(
+    storage_only_venv: Path, tmp_path: Path,
+) -> None:
+    code = """
+import importlib.util
+import sys
+for name in ('psycopg', 'alembic', 'sqlalchemy', 'motte_sdk', 'motte_eval', 'httpx'):
+    assert importlib.util.find_spec(name) is None, name
+""" + _STORAGE_SMOKE_CODE
+    proc = _run_in_venv(storage_only_venv, ["-I", "-c", code], tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "site-packages" in proc.stdout.replace("\\", "/"), proc.stdout
+    assert str(ROOT).replace("\\", "/") not in proc.stdout.replace("\\", "/")
+
+
+@pytest.mark.parametrize("storage_only_venv", ["postgresql"], indirect=True)
+def test_storage_postgresql_extra_closes_import_dependencies(
+    storage_only_venv: Path, tmp_path: Path,
+) -> None:
+    code = """
+import importlib.util
+import motte_storage
+from motte_storage import PostgresRunStore, UnsupportedStorageError, create_postgres_run_store
+from motte_storage.factory import create_resource_store, create_run_store
+from motte_storage import migrations, postgres
+assert PostgresRunStore is postgres.PostgresRunStore
+assert UnsupportedStorageError is postgres.UnsupportedStorageError
+assert create_postgres_run_store is postgres.create_postgres_run_store
+assert all(hasattr(motte_storage, name) for name in motte_storage.__all__)
+for name in ('psycopg', 'alembic', 'sqlalchemy'):
+    assert importlib.util.find_spec(name) is not None, name
+for name in ('motte_sdk', 'motte_eval', 'httpx'):
+    assert importlib.util.find_spec(name) is None, name
+# Existing constructor-only paths do not contact a database or run migrations.
+dsn = 'postgresql://localhost:1/not_connected'
+assert isinstance(create_postgres_run_store(dsn), PostgresRunStore)
+assert isinstance(create_run_store(storage='postgres', dsn=dsn), PostgresRunStore)
+assert create_resource_store(storage='postgres', dsn=dsn) is not None
+config = migrations.alembic_config(dsn)
+assert config.get_main_option('sqlalchemy.url') == dsn.replace('postgresql:', 'postgresql+psycopg:')
+print(motte_storage.__file__)
+"""
+    proc = _run_in_venv(storage_only_venv, ["-I", "-c", code], tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "site-packages" in proc.stdout.replace("\\", "/"), proc.stdout
+    assert str(ROOT).replace("\\", "/") not in proc.stdout.replace("\\", "/")
 
 _RESOURCES_CODE = (
     "import importlib.resources, json\n"
@@ -260,17 +385,21 @@ def test_sdk_wheel_dependency_boundary(wheel_dir: Path) -> None:
 
 def test_cli_and_storage_wheel_dependency_boundary(wheel_dir: Path) -> None:
     expected_plain = {"motte-cli": {"motte-sdk", "motte-storage"}, "motte-storage": {"motte-contracts"}}
+    expected_extras = {"motte-cli": set(), "motte-storage": {"psycopg", "alembic", "sqlalchemy"}}
     for dist_name, expected in expected_plain.items():
         requires = _requires_dist_of_wheel(wheel_dir, dist_name)
         plain: set[str] = set()
+        extras: set[str] = set()
         for requirement in requires:
             name = _requirement_name(requirement)
             assert name not in RUNNER_ONLY_DEPS, f"{dist_name}: {requirement}"
             if "extra ==" in requirement:
-                assert name == "psycopg", f"unexpected extra in {dist_name}: {requirement}"
+                assert "extra == 'postgresql'" in requirement.replace('"', "'"), requirement
+                extras.add(name)
                 continue
             plain.add(name)
         assert plain == expected, f"{dist_name}: {sorted(plain)}"
+        assert extras == expected_extras[dist_name], f"{dist_name}: {sorted(extras)}"
 
 
 def test_web_build_artifact_configured() -> None:

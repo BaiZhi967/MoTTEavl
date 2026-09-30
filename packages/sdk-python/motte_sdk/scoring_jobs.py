@@ -21,6 +21,7 @@ Worker 接线（见模块末尾 WorkerIntegration 说明）：
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -34,6 +35,8 @@ from motte_contracts.messages import Contract
 from motte_eval.judge import (
     JUDGE_PURPOSE,
     JudgeAuthorisation,
+    JudgeCandidateInput,
+    JudgeCandidateRef,
     JudgeBudgetError,
     JudgeError,
     JudgeInputBundle,
@@ -43,6 +46,8 @@ from motte_eval.judge import (
     JudgeSpec,
     build_judge_input,
     build_judge_request,
+    build_pairwise_input,
+    canonical_evidence_token,
     declared_output_ceiling,
     judge_job_fingerprint,
     judge_metrics,
@@ -52,7 +57,9 @@ from motte_eval.judge import (
     preflight_judge,
     price_view,
     prompt_token_upper_bound,
+    scan_candidate_content,
 )
+from motte_eval.calibration_records import QualificationBinding
 from motte_provider.errors import is_indeterminate_error
 from motte_eval.observation import metric_result_to_score
 from motte_storage.integrity import RunConflictError
@@ -76,10 +83,12 @@ __all__ = [
     "ScoringJobConflict",
     "ScoringJobRequest",
     "ScoringJobService",
+    "SubjectPairReference",
     "build_judge_submission",
     "default_artifact_reader",
     "freeze_judge_provider_snapshot",
     "resolve_saved_observations",
+    "resolve_saved_pairwise_inputs",
 ]
 
 #: 一次调用的 usage 累计维度；任一已结算调用缺失就整项保持未知。
@@ -226,6 +235,89 @@ def resolve_saved_observations(
         else:
             raise failure
     return resolved
+
+
+class SubjectPairReference(Contract):
+    """Only persisted same-case attempt identities cross the public boundary."""
+
+    case_id: str = Field(min_length=1)
+    candidate_a_attempt_id: str = Field(min_length=1)
+    candidate_b_attempt_id: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def distinct_attempts(self):
+        if self.candidate_a_attempt_id == self.candidate_b_attempt_id:
+            raise ValueError("pairwise candidates require two distinct attempts")
+        return self
+
+
+def resolve_saved_pairwise_inputs(store, run_id: str, refs: list[SubjectPairReference]) -> list[JudgePairwiseInput]:
+    """Freeze terminal attempt observations, never the mutable current CaseRun."""
+    run = store.runs.get(run_id)
+    if run is None or not refs:
+        raise JudgeEvidenceError("JUDGE_EVIDENCE_MISSING", "pairwise input requires a saved Run and attempt references")
+    pairs, seen = [], set()
+    for value in refs:
+        ref = SubjectPairReference.model_validate(value.model_dump() if hasattr(value, "model_dump") else value)
+        pair_key = (ref.case_id, *sorted((ref.candidate_a_attempt_id, ref.candidate_b_attempt_id)))
+        if ref.case_id not in (run.get("case_ids") or []) or pair_key in seen:
+            raise JudgeInputError("pair references must be distinct and belong to the saved Run")
+        seen.add(pair_key)
+        sides = []
+        for attempt_id in (ref.candidate_a_attempt_id, ref.candidate_b_attempt_id):
+            attempt = store.attempts.get(attempt_id)
+            if (attempt is None or attempt.get("id") != attempt_id
+                    or attempt.get("run_id") != run_id or attempt.get("case_id") != ref.case_id
+                    or attempt.get("status") not in {"succeeded", "failed", "indeterminate"}):
+                raise JudgeEvidenceError("JUDGE_EVIDENCE_INVALID", "candidate attempt is not terminal and owned by this Run/case")
+            candidates = _saved_observation_candidates(attempt.get("result"))
+            if not candidates:
+                raise JudgeEvidenceError("JUDGE_EVIDENCE_MISSING", "attempt has no immutable FrozenObservation")
+            # A present frozen observation is authoritative; do not mask its corruption.
+            raw = _verify_saved_observation(run_id, ref.case_id, candidates[0])
+            if raw.get("attempt_id") != attempt_id:
+                raise JudgeEvidenceError("JUDGE_EVIDENCE_INVALID", "observation belongs to another attempt")
+            tokens = set()
+            for evidence in raw.get("event_refs") or []:
+                if evidence.get("run_id") != run_id or evidence.get("kind") != "event":
+                    raise JudgeEvidenceError("JUDGE_EVIDENCE_INVALID", "event evidence crosses candidate ownership")
+                tokens.add(canonical_evidence_token("event", evidence["locator"]))
+            for artifact in raw.get("artifact_refs") or []:
+                if artifact.get("available") is not False:
+                    tokens.add(canonical_evidence_token("artifact", artifact["artifact_id"]))
+            content = raw["final_output"]
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False, sort_keys=True)
+            sides.append(JudgeCandidateInput(
+                candidate=JudgeCandidateRef(candidate_id="attempt:" + attempt_id, owner_kind="subject",
+                    run_id=run_id, case_id=ref.case_id, observation_id=raw["observation_id"],
+                    observation_evidence_hash=raw["evidence_hash"]),
+                content=content, evidence_allowlist=sorted(tokens), injection_flags=scan_candidate_content(content),
+            ))
+        pairs.append(build_pairwise_input(task_ref=ref.case_id, candidate_a=sides[0], candidate_b=sides[1]))
+    return pairs
+
+
+def verify_subject_qualification(store, binding, spec, snapshot) -> QualificationBinding:
+    """An optional source is usable only for this exact frozen subject instrument."""
+    from .calibration_ledger import verify_qualification_source
+    from motte_eval.rubrics import calibration_policy_sha256, policy_for
+    try:
+        binding = QualificationBinding.model_validate(binding.model_dump() if hasattr(binding, "model_dump") else binding)
+        expected = {
+            "judge_spec_sha256": spec.spec_sha256, "rubric_id": spec.rubric_id,
+            "rubric_version": spec.rubric_version, "rubric_sha256": spec.rubric_sha256,
+            "model": spec.model, "calibration_version": spec.calibration_version,
+            "provider_snapshot_sha256": snapshot.snapshot_sha256 if snapshot is not None else None,
+            "policy_sha256": calibration_policy_sha256(policy_for(spec.rubric_id, spec.rubric_version)),
+        }
+        if any(getattr(binding, key) != value for key, value in expected.items()):
+            raise ValueError("qualification differs from the exact frozen subject instrument")
+        if not verify_qualification_source(store, binding)["gate_eligible"]:
+            raise ValueError("qualification source cannot be reconstructed")
+    except (ValueError, TypeError, KeyError) as error:
+        raise JudgeInputError("qualification source is missing, corrupt or mismatched") from error
+    return binding
 
 
 class JudgeProviderSnapshot(Contract):
@@ -510,6 +602,8 @@ class ScoringJobRequest(Contract):
     price_table: dict[str, Any] | None = None
     #: 提交期冻结的非秘密 Provider 身份；存在时执行只按它构造 Provider。
     provider_snapshot: JudgeProviderSnapshot | None = None
+    qualification_binding: QualificationBinding | None = Field(default=None, exclude_if=lambda value: value is None)
+    submission_input: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def shape(self) -> "ScoringJobRequest":
@@ -629,6 +723,9 @@ def build_judge_submission(
     repeats: int = 1,
     presentation_orders: Any = None,
     price_table_version: str | None = None,
+    pairwise_refs: list[SubjectPairReference] | None = None,
+    qualification_id: str | None = None,
+    _lookup_existing: bool = True,
 ) -> ScoringJobRequest:
     """API 与 CLI 共用的提交编译：服务端解析资源与证据，客户端只给引用。
 
@@ -638,13 +735,55 @@ def build_judge_submission(
       客户端声明不了"价格已知"；
     - 证据只从保存过的 CaseRun 结果解析，客户端不提供 observation 内容，
       sample_count 因此也不是客户端能填的。
+    - 预检由服务端关闭 _lookup_existing，只编译本次输入，不消费提交幂等键。
     """
     from motte_eval.judge import JudgeAuthorisation, JudgeBudget, build_judge_spec
 
-    if mode != "single":
-        raise JudgeInputError(
-            "the public judge submission path accepts single-mode jobs only"
+    if mode not in {"single", "pairwise"} or (mode == "single" and pairwise_refs):
+        raise JudgeInputError("pairwise attempt references require pairwise mode")
+    if mode == "pairwise" and case_ids:
+        raise JudgeInputError("pairwise cases are selected exclusively by saved attempt references")
+    submission_input = None
+    if mode == "pairwise":
+        from motte_eval.calibration_records import _CalibrationSpecRequest
+        # The existing transport-independent public spec contract supplies the
+        # same defaults as the API before replay, without resolving resources.
+        public_spec = _CalibrationSpecRequest.model_validate(spec_request).model_dump(mode="json")
+        public_auth = JudgeAuthorisation.model_validate(
+            authorisation.model_dump(mode="json") if hasattr(authorisation, "model_dump") else authorisation,
+        ).model_dump(mode="json") if authorisation is not None else None
+        refs = [SubjectPairReference.model_validate(value.model_dump() if hasattr(value, "model_dump") else value)
+                for value in (pairwise_refs or [])]
+        submission_input = {
+            "run_id": run_id, "mode": mode, "spec_request": public_spec,
+            "pairwise_refs": [value.model_dump(mode="json") for value in refs],
+            "source_pass_id": source_pass_id, "qualification_id": qualification_id,
+            "authorisation": public_auth,
+            "publish_policy": publish_policy, "repeats": repeats,
+            "presentation_orders": presentation_orders or [], "price_table_version": price_table_version,
+        }
+        existing = (
+            scoring_jobs_for(store).get_by_request_key(request_key)
+            if _lookup_existing else None
         )
+        if existing is not None:
+            if existing.get("submission_input") != submission_input:
+                raise ScoringJobConflict("public subject request fingerprint conflict")
+            # Recover only saved base pairs; recompilation will verify their exact
+            # plan/fingerprint through ordinary idempotent Job submission.
+            pairs_by_id = {}
+            for plan in existing["plans"]:
+                pair = plan["pair"]
+                pairs_by_id.setdefault(pair["pair_id"], pair)
+            return ScoringJobRequest(
+                request_key=request_key, judge_spec=existing["judge_spec"], mode=existing["mode"],
+                run_id=existing["run_id"], source_pass_id=existing.get("source_pass_id"),
+                pairwise_pairs=list(pairs_by_id.values()), authorisation=existing["authorisation"],
+                publish_policy=existing["publish_policy"], repeats=existing["repeats"],
+                presentation_orders=existing["presentation_orders"], price_table=existing["price_table"],
+                provider_snapshot=existing["provider_snapshot"],
+                qualification_binding=existing.get("qualification_binding"), submission_input=submission_input,
+            )
     model_resource_id = spec_request.get("model")
     if not isinstance(model_resource_id, str) or not model_resource_id:
         raise JudgeInputError("judge submission requires a published model resource id")
@@ -676,7 +815,17 @@ def build_judge_submission(
         budget=budget,
         mode=mode,
     )
-    observations = resolve_saved_observations(store, run_id, case_ids)
+    observations = resolve_saved_observations(store, run_id, case_ids) if mode == "single" else {}
+    pairs = resolve_saved_pairwise_inputs(store, run_id, pairwise_refs or []) if mode == "pairwise" else []
+    binding = None
+    if qualification_id is not None:
+        try:
+            source = store.calibrations.get_qualification(qualification_id)
+        except (ValueError, TypeError, KeyError) as error:
+            raise JudgeInputError("qualification source is corrupt") from error
+        if source is None:
+            raise JudgeInputError("qualification source is missing")
+        binding = verify_subject_qualification(store, source.binding, spec, snapshot)
     auth = authorisation
     if isinstance(auth, dict):
         auth = JudgeAuthorisation.model_validate(auth)
@@ -687,6 +836,9 @@ def build_judge_submission(
         run_id=run_id,
         source_pass_id=source_pass_id,
         observations=observations,
+        pairwise_pairs=pairs,
+        qualification_binding=binding,
+        submission_input=submission_input,
         authorisation=auth,
         publish_policy=publish_policy,
         repeats=repeats,
@@ -753,6 +905,10 @@ class ScoringJobService:
         """
         spec = request.judge_spec
         snapshot = request.provider_snapshot
+        if request.qualification_binding is not None:
+            if request.calibration_job_id is not None:
+                raise JudgeInputError("calibration Jobs cannot borrow subject qualification")
+            verify_subject_qualification(self.store, request.qualification_binding, spec, snapshot)
         if snapshot is not None and snapshot.model != spec.model:
             raise JudgeProviderSnapshotError(
                 "JUDGE_SNAPSHOT_MODEL_MISMATCH",
@@ -838,6 +994,11 @@ class ScoringJobService:
                 "job_fingerprint": fingerprint,
                 "provider_snapshot_sha256": snapshot.snapshot_sha256,
             })
+        if request.qualification_binding is not None:
+            fingerprint = canonical_sha256({"job_fingerprint": fingerprint,
+                "qualification_binding": request.qualification_binding.model_dump(mode="json")})
+        if request.submission_input is not None:
+            fingerprint = canonical_sha256({"job_fingerprint": fingerprint, "submission_input": request.submission_input})
         return {
             "spec": spec,
             "inputs": inputs,
@@ -876,6 +1037,9 @@ class ScoringJobService:
         preflight = compiled["preflight"]
         record = {
             "schema_version": 1,
+            **({"qualification_binding": request.qualification_binding.model_dump(mode="json")}
+               if request.qualification_binding is not None else {}),
+            **({"submission_input": deepcopy(request.submission_input)} if request.submission_input is not None else {}),
             "job_id": job_id,
             "request_key": request.request_key,
             "fingerprint": compiled["fingerprint"],
@@ -1708,6 +1872,8 @@ class ScoringJobService:
         previous = self._previous_pass(job)
         record = {
             "id": job["reserved_pass_id"],
+            **({"qualification_binding": deepcopy(job["qualification_binding"])}
+               if job.get("qualification_binding") is not None else {}),
             "run_id": run_id,
             "scorer_id": f"judge:{spec.judge_profile_id}",
             "scorer_version": spec.evaluator_version,

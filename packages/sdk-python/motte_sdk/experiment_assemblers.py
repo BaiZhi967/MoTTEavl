@@ -143,9 +143,37 @@ def build_legacy_requested_manifest(
     return manifest
 
 
+def validate_legacy_execution_boundary(spec: ExperimentSpec, manifest: dict[str, Any]) -> None:
+    """External evidence cannot borrow a native suite's call formula on replay.
+
+    This is a rejection guard, not a new positive profile or a stronger promise
+    for historical native Cells. Time, turns, Trial counts and SDK stream counts
+    do not prove the transport attempts inside an opaque Runtime or task script.
+    """
+    from .experiments import ExperimentError
+
+    execution = manifest.get("execution") or {}
+    expected = "builtin-agent" if spec.task_ref["suite"] == "agent-tasks" else "direct-llm"
+    agent = manifest.get("agent")
+    if (
+        any(manifest.get(key) is not None for key in (
+            "runtime", "runtime_profile", "runtime_snapshot", "external_benchmark",
+        ))
+        or (isinstance(agent, str) and agent != "builtin-agent@1")
+        or (execution and (execution.get("backend_id"), execution.get("backend_version"))
+            != (expected, "1"))
+    ):
+        raise ExperimentError(
+            "EXPERIMENT_BUDGET_UNPROVABLE",
+            "external Runtime/Harbor profile has no verified transport bound; "
+            "native suite labels, time/turn/budget/Trial/stream limits are not proof",
+        )
+
+
 def _legacy_call_bound(spec: ExperimentSpec, manifest: dict[str, Any], cases: tuple[str, ...]):
     from .experiments import ExperimentError
 
+    validate_legacy_execution_boundary(spec, manifest)
     provider = manifest.get("provider") or {}
     # Managed standalone preparation explicitly pins its provider retry limit.
     retries = provider.get("max_retries") if isinstance(provider, dict) else None

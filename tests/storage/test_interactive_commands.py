@@ -36,7 +36,7 @@ def pg_interactive_stores():
         connection.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
         connection.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema)))
         connection.execute('CREATE TABLE runs (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload JSONB NOT NULL)')
-        connection.execute('CREATE TABLE trace_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload JSONB NOT NULL, PRIMARY KEY(run_id,seq))')
+        connection.execute('CREATE TABLE trace_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload JSONB NOT NULL, stored_at TEXT, PRIMARY KEY(run_id,seq))')
         connection.execute('CREATE TABLE run_commands (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), status TEXT NOT NULL, revision INTEGER NOT NULL, payload JSONB NOT NULL)')
         connection.execute('CREATE TABLE runtime_sessions (session_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), state TEXT NOT NULL, revision INTEGER NOT NULL, payload JSONB NOT NULL)')
         connection.execute("CREATE UNIQUE INDEX commands_dedupe ON run_commands(run_id,(payload->>'dedupe_key')) WHERE payload->>'dedupe_key' IS NOT NULL")

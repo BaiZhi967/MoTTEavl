@@ -983,11 +983,11 @@ class PgBenchmarkDatasets:
             with connection.cursor() as cursor:
                 if benchmark_id is None:
                     cursor.execute(
-                        "SELECT payload FROM benchmark_datasets ORDER BY position",
+                        "SELECT payload FROM benchmark_datasets ORDER BY created_at, benchmark_id, dataset_revision",
                     )
                 else:
                     cursor.execute(
-                        "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s ORDER BY position",  # noqa: E501
+                        "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s ORDER BY created_at, dataset_revision",  # noqa: E501
                         (benchmark_id,),
                     )
                 rows = cursor.fetchall()

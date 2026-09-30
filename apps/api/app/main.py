@@ -443,6 +443,13 @@ def create_app(
             status_code=409, content={"error": {"code": "RESOURCE_CONFLICT", "message": str(error)}}
         )
 
+    async def judge_request_validation(request, error):
+        if request.url.path in {"/api/v1/judges", "/api/v1/judges/preflight"}:
+            # Do not echo invalid JSON numbers (NaN/Infinity) into JSONResponse.
+            return _error_json(422, "JUDGE_CONTRACT_INVALID", "judge request does not satisfy its contract",
+                               fields=_contract_field_errors(error))
+        return await request_validation_exception_handler(request, error)
+
     @application.exception_handler(RunConflictError)
     async def run_conflict(request, error):
         return JSONResponse(
@@ -1226,7 +1233,7 @@ def create_app(
             return _error_json(404, "JUDGE_SPEC_NOT_FOUND", f"judge spec not found: {judge_id}")
         return item["calibration"]
 
-    def _judge_request(body: JudgeSubmissionBase, *, request_key: str):
+    def _judge_request(body: JudgeSubmissionBase, *, request_key: str, preflight: bool = False):
         """服务端解析资源与证据，编译唯一冻结请求（与 CLI 共用同一编译器）。"""
         from motte_sdk.scoring_jobs import build_judge_submission
 
@@ -1247,10 +1254,13 @@ def create_app(
             repeats=body.repeats,
             presentation_orders=body.presentation_orders,
             price_table_version=body.price_table_version,
+            pairwise_refs=body.pairwise_refs,
+            qualification_id=body.qualification_id,
+            _lookup_existing=not preflight,
         )
 
     def _judge_mode_supported(mode: str) -> JSONResponse | None:
-        if mode == "single":
+        if mode in {"single", "pairwise"}:
             return None
         return _error_json(
             422,
@@ -1259,20 +1269,25 @@ def create_app(
             "pairwise judge jobs stay on the library path",
         )
 
-    @application.post("/api/v1/judges/preflight", response_model=JudgePreflightView)
+    from apps.api.app.schemas import JudgeErrorResponse
+    judge_error_responses = {status: {"model": JudgeErrorResponse} for status in (409, 422, 503)}
+
+    @application.post("/api/v1/judges/preflight", response_model=JudgePreflightView,
+                      responses=judge_error_responses)
     def judge_preflight(body: JudgePreflightRequest):
         unsupported = _judge_mode_supported(body.mode)
         if unsupported is not None:
             return unsupported
         try:
             judge = _judge_service()
-            return judge.preflight(_judge_request(body, request_key="judge-preflight"))
+            return judge.preflight(_judge_request(body, request_key="judge-preflight", preflight=True))
         except Exception as error:  # noqa: BLE001 - 统一映射，未知异常继续抛
             return _judge_error(error)
 
     @application.post(
         "/api/v1/judges", status_code=202, response_model=JudgeJobView,
         response_model_exclude_unset=True,
+        responses=judge_error_responses,
     )
     def judge_submit(body: JudgeSubmitRequest):
         unsupported = _judge_mode_supported(body.mode)
@@ -3813,10 +3828,11 @@ def create_app(
     async def statistical_report_request_validation(request: Request, error: RequestValidationError):
         if (request.method != "POST" or getattr(request.scope.get("route"), "path", None)
                 != "/api/v1/statistical-reports"):
-            return await request_validation_exception_handler(request, error)
+            # Compose both endpoint-scoped renderers through one registration.
+            return await judge_request_validation(request, error)
         # Rejected JSON numbers may overflow to infinity. Do not echo arbitrary
         # input/ctx into a strict JSON error response; retain the usual detail
-        # shape and leave every other route's validation handler unchanged.
+        # shape; non-Stats requests retain the Judge/default dispatch above.
         return JSONResponse(status_code=422, content={"detail": [
             {key: item[key] for key in ("loc", "msg", "type")} for item in error.errors()
         ]})
