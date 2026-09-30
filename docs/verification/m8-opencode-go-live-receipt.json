@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "scope": "authorized small coding-agent live smoke only; no full benchmark, Judge qualification or production acceptance",
+  "official_docs": "https://opencode.ai/docs/go/",
+  "source_binding": {
+    "executed_source": "80713e00446ef37e8282c34edf8b903472c46a88",
+    "published_code_head": "0be094844ae02b6e46b8ee91fc410ce226aa4db4",
+    "complete_tree": "d2e7d85b05cffce2ca13977a4278a2739fe64509",
+    "local_equivalent": "3115e75030f0015f1ea227c8056db8458f3542df",
+    "prior_three_step_source": "e9b58a1880158dc69baac75dfb21fd0ade63d3a4"
+  },
+  "measurement_limits": {
+    "token_usage": "not captured",
+    "actual_header_values": "not persisted",
+    "free_availability": "limited time; reverify before future runs",
+    "throughput_or_production_gate": "not established"
+  },
+  "evidence": {
+    "source_sha": "80713e00446ef37e8282c34edf8b903472c46a88",
+    "model": "space-bunny-free",
+    "state": "finished",
+    "prior_rounds": [
+      {
+        "round": 1,
+        "source_sha": "e9b58a1880158dc69baac75dfb21fd0ade63d3a4",
+        "started_at": "2026-09-30T19:27:50.244351+00:00",
+        "state": "finished",
+        "exit_code": 0,
+        "finished_at": "2026-09-30T19:28:05.769177+00:00",
+        "report": {
+          "status": "passed",
+          "model": "space-bunny-free",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "cases": [
+            {
+              "id": "fix-add",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            {
+              "id": "fix-range",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            {
+              "id": "fix-default",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            }
+          ],
+          "max_http_requests": 10,
+          "max_retries": 0,
+          "max_steps_per_case": 3,
+          "max_output_tokens": 512,
+          "per_call_timeout_sec": 20.0,
+          "total_timeout_sec": 180.0,
+          "concurrency": 1,
+          "paid_fallback": false,
+          "follow_redirects": false,
+          "free_status": "limited time; operator must verify before live execution",
+          "http_requests": 9,
+          "execution_mode": "live"
+        }
+      },
+      {
+        "round": 2,
+        "started_at": "2026-09-30T19:30:12.172605+00:00",
+        "finished_at": "2026-09-30T19:30:24.574186+00:00",
+        "exit_code": 1,
+        "report": {
+          "status": "failed",
+          "model": "space-bunny-free",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "cases": [
+            {
+              "id": "fix-add",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            {
+              "id": "fix-range",
+              "passed": false,
+              "termination_reason": "max_steps",
+              "steps": 4,
+              "tools": [
+                "read_file",
+                "write_file",
+                "read_file"
+              ]
+            }
+          ],
+          "max_http_requests": 10,
+          "max_retries": 0,
+          "max_steps_per_case": 3,
+          "max_output_tokens": 512,
+          "per_call_timeout_sec": 20.0,
+          "total_timeout_sec": 180.0,
+          "concurrency": 1,
+          "paid_fallback": false,
+          "follow_redirects": false,
+          "free_status": "limited time; operator must verify before live execution",
+          "http_requests": 6,
+          "execution_mode": "live"
+        }
+      }
+    ],
+    "prior_http_requests": 15,
+    "historical_failed_rounds": [
+      2
+    ],
+    "max_cumulative_http_requests": 55,
+    "rounds": [
+      {
+        "round": 3,
+        "started_at": "2026-09-30T19:34:11.790873+00:00",
+        "finished_at": "2026-09-30T19:34:34.022459+00:00",
+        "exit_code": 0,
+        "report": {
+          "status": "passed",
+          "model": "space-bunny-free",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "cases": [
+            {
+              "id": "fix-add",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 4,
+              "tools": [
+                "read_file",
+                "write_file",
+                "read_file"
+              ]
+            },
+            {
+              "id": "fix-range",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 4,
+              "tools": [
+                "read_file",
+                "write_file",
+                "read_file"
+              ]
+            },
+            {
+              "id": "fix-default",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            }
+          ],
+          "max_http_requests": 20,
+          "max_retries": 0,
+          "max_steps_per_case": 6,
+          "max_output_tokens": 512,
+          "per_call_timeout_sec": 20.0,
+          "total_timeout_sec": 180.0,
+          "concurrency": 1,
+          "paid_fallback": false,
+          "follow_redirects": false,
+          "free_status": "limited time; operator must verify before live execution",
+          "http_requests": 11,
+          "execution_mode": "live"
+        }
+      },
+      {
+        "round": 4,
+        "started_at": "2026-09-30T19:34:34.023186+00:00",
+        "finished_at": "2026-09-30T19:34:55.201189+00:00",
+        "exit_code": 0,
+        "report": {
+          "status": "passed",
+          "model": "space-bunny-free",
+          "base_url": "https://opencode.ai/zen/go/v1",
+          "cases": [
+            {
+              "id": "fix-add",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            {
+              "id": "fix-range",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 3,
+              "tools": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            {
+              "id": "fix-default",
+              "passed": true,
+              "termination_reason": "final_answer",
+              "steps": 4,
+              "tools": [
+                "read_file",
+                "write_file",
+                "read_file"
+              ]
+            }
+          ],
+          "max_http_requests": 20,
+          "max_retries": 0,
+          "max_steps_per_case": 6,
+          "max_output_tokens": 512,
+          "per_call_timeout_sec": 20.0,
+          "total_timeout_sec": 180.0,
+          "concurrency": 1,
+          "paid_fallback": false,
+          "follow_redirects": false,
+          "free_status": "limited time; operator must verify before live execution",
+          "http_requests": 10,
+          "execution_mode": "live"
+        }
+      }
+    ],
+    "cumulative_http_requests": 36,
+    "latest_batch_status": "passed",
+    "coverage": "Two comparable 6-step-budget coding smoke repetitions; historical 3-step failure preserved; not a production gate or full benchmark",
+    "session_evidence": "Each CLI process creates fresh BuiltinSessions; session headers not persisted",
+    "usage_evidence": "Token usage is not captured by this smoke summary"
+  }
+}
