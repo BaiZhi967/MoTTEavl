@@ -7,7 +7,9 @@ repository 保证（同 key 同内容幂等、异内容具名冲突）。
 
 降级安全：motte_imports / motte_import_mappings 保存导入审计与 checkpoint，
 motte_gc_tombstones 保存删除审计；有行时普通 downgrade 具名拒绝。
-motte_request_keys / motte_meta 仅为运行时协调数据，可随降级丢弃。
+motte_request_keys / motte_meta 仅为运行时协调数据；维护屏障解除后才可降级。
+运行时安装的维护 trigger/function 依赖 motte_meta，必须先移除自有 trigger，
+再以 RESTRICT 删除 function，最后删除 metadata，避免遗留守卫破坏旧版本写入。
 
 Revision ID: 0015_m7_platform_tables
 Revises: 0014_experiments_and_gates
@@ -24,6 +26,24 @@ branch_labels = None
 depends_on = None
 
 DOWN_STATEMENTS: tuple[str, ...] = (
+    """DO $$
+    DECLARE owned_trigger RECORD;
+    BEGIN
+      FOR owned_trigger IN
+        SELECT namespace.nspname AS schema_name, relation.relname AS table_name
+        FROM pg_catalog.pg_trigger AS guard
+        JOIN pg_catalog.pg_class AS relation ON relation.oid = guard.tgrelid
+        JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'public'
+          AND guard.tgname = 'motte_maintenance_write'
+          AND guard.tgfoid = to_regprocedure('public.motte_maintenance_guard()')
+          AND NOT guard.tgisinternal
+      LOOP
+        EXECUTE format('DROP TRIGGER %I ON %I.%I', 'motte_maintenance_write',
+                       owned_trigger.schema_name, owned_trigger.table_name);
+      END LOOP;
+    END $$""",
+    "DROP FUNCTION IF EXISTS public.motte_maintenance_guard() RESTRICT",
     "DROP TABLE IF EXISTS motte_gc_tombstones",
     "DROP INDEX IF EXISTS motte_import_mappings_import_idx",
     "DROP TABLE IF EXISTS motte_import_mappings",
@@ -40,9 +60,17 @@ _COUNT_SQL: dict[str, str] = {
 }
 
 
+def _maintenance_active(bind: Any) -> bool:
+    return bool(inspect(bind).has_table("motte_meta") and bind.execute(text(
+        "SELECT 1 FROM motte_meta WHERE meta_key = 'maintenance' AND meta_value = 'active'"
+    )).scalar())
+
+
 def downgrade_blockers(bind: Any) -> list[str]:
     inspector = inspect(bind)
     blockers: list[str] = []
+    if _maintenance_active(bind):
+        blockers.append("maintenance is active; release its owner before downgrading")
     for table, count_sql in _COUNT_SQL.items():
         if inspector.has_table(table):
             rows = int(bind.execute(text(count_sql)).scalar() or 0)
@@ -83,6 +111,30 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # A repeatable snapshot may predate an audit writer's commit even after
+        # its table lock drains. Refuse rather than count invisible evidence.
+        if bind.get_isolation_level() != "READ COMMITTED":
+            raise RuntimeError(
+                "refusing to downgrade 0015_m7_platform_tables: READ COMMITTED "
+                "isolation is required to preserve concurrently committed audit evidence"
+            )
+        # Match maintenance activation/release serialization. Hold until the
+        # migration transaction commits so a new activation cannot race teardown.
+        bind.execute(text("SELECT pg_advisory_xact_lock(hashtext('motteavl:maintenance-meta'))"))
+        # Refuse before table locks: an earlier queued writer can make even a
+        # compatible SHARE request wait for maintenance's SHARE locks. Holding
+        # maintenance-meta during that wait would prevent the owner releasing.
+        if _maintenance_active(bind):
+            raise RuntimeError(
+                "refusing to downgrade 0015_m7_platform_tables: maintenance is active; "
+                "release its owner before downgrading"
+            )
+        # Audit writers do not take the metadata advisory lock. Drain their
+        # transactions before counting, then prevent new DML through DROP/commit.
+        bind.execute(text(
+            "LOCK TABLE motte_imports, motte_import_mappings, motte_gc_tombstones IN SHARE MODE"
+        ))
     blockers = downgrade_blockers(bind)
     if blockers:
         raise RuntimeError(
@@ -91,9 +143,5 @@ def downgrade() -> None:
             + "; import audit / GC tombstone evidence must be preserved; delete"
             " explicitly if you really want to discard it"
         )
-    op.execute("DROP TABLE IF EXISTS motte_gc_tombstones")
-    op.execute("DROP INDEX IF EXISTS motte_import_mappings_import_idx")
-    op.execute("DROP TABLE IF EXISTS motte_import_mappings")
-    op.execute("DROP TABLE IF EXISTS motte_imports")
-    op.execute("DROP TABLE IF EXISTS motte_meta")
-    op.execute("DROP TABLE IF EXISTS motte_request_keys")
+    for statement in DOWN_STATEMENTS:
+        op.execute(statement)

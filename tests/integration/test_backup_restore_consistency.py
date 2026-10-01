@@ -129,11 +129,14 @@ def test_manifest_v2_roundtrip_counts_hashes_and_extra_file_warning(tmp_path):
     assert any("orphan.log" in warning for warning in manifest["warnings"])
     assert manifest["counts"] == {
         "runs": len(store.runs.list()),
+        "trace_archive_receipts": 0,
         "scoring_passes": sum(
             len(store.scoring_passes.list_for_run(run["id"])) for run in store.runs.list()
         ),
         "baselines": 0,
         "gate_results": 0,
+        "statistical_reports": 0,
+        "calibration_records": 0,
     }
     assert manifest["maintenance"]["started_at"]
     assert manifest["maintenance"]["ended_at"]
@@ -318,10 +321,10 @@ def test_postgres_staging_report_database_identity_excludes_credentials():
     not os.environ.get("MOTTE_PG_DSN"),
     reason="set MOTTE_PG_DSN to run PostgreSQL integration tests",
 )
-def test_consistent_backup_postgres_manifest(tmp_path):
+def test_consistent_backup_postgres_manifest(tmp_path, isolated_pg_database):
     from motte_storage.factory import create_run_store
 
-    dsn = os.environ["MOTTE_PG_DSN"]
+    dsn = isolated_pg_database
     store = create_run_store(dsn=dsn, storage="postgres", migrate=True)
     manifest = consistent_backup_postgres(dsn, tmp_path / "backups", store=store)
     assert manifest["status"] == "complete"
@@ -329,4 +332,420 @@ def test_consistent_backup_postgres_manifest(tmp_path):
     dump = tmp_path / "backups" / manifest["database"]["snapshot"]
     assert dump.is_file() and dump.stat().st_size > 0
     assert maintenance._sha256_file(dump) == manifest["database"]["sha256"]
+    assert maintenance_status(store)["active"] is False
+
+
+def test_backup_does_not_release_a_new_operation_in_finally(tmp_path, monkeypatch):
+    store = SQLiteRunStore(tmp_path / "runs.db")
+    original_end = maintenance.end_maintenance
+    next_lease = {}
+
+    def end_and_start_next(store, *, owner):
+        result = original_end(store, owner=owner)
+        if not next_lease:
+            next_lease.update(maintenance.begin_maintenance(store, reason="gc"))
+        return result
+
+    monkeypatch.setattr(maintenance, "end_maintenance", end_and_start_next)
+    try:
+        manifest = consistent_backup(store, tmp_path / "backups")
+        assert manifest["status"] == "complete"
+        assert maintenance_status(store)["active"] is True
+    finally:
+        if next_lease:
+            original_end(store, owner=next_lease["owner"])
+
+
+def test_backup_resolves_digest_only_evidence_and_restores_it(tmp_path):
+    store, root, run_id = _store_with_referenced_artifacts(tmp_path)
+    artifact = ArtifactStore(root).put_bytes("legacy/digest-only.bin", b"digest-only-evidence")
+    store.case_runs.upsert({
+        "run_id": run_id, "case_id": "digest-only",
+        "artifacts": [{"sha256": artifact.sha256}],
+    })
+    backups = tmp_path / "backups"
+    manifest = consistent_backup(store, backups, artifacts_root=root)
+    assert artifact.id in {entry["path"] for entry in manifest["artifacts"]["files"]}
+    restore_staging(backups, tmp_path / "staging")
+    assert (tmp_path / "staging" / "artifacts" / artifact.id).read_bytes() == b"digest-only-evidence"
+
+
+def test_backup_missing_digest_only_evidence_is_incomplete(tmp_path):
+    store, root, run_id = _store_with_referenced_artifacts(tmp_path)
+    store.case_runs.upsert({
+        "run_id": run_id, "case_id": "missing-digest", "artifacts": [{"sha256": "0" * 64}],
+    })
+    with pytest.raises(BackupIncomplete) as error:
+        consistent_backup(store, tmp_path / "backups", artifacts_root=root)
+    assert "sha256:" + "0" * 64 in error.value.missing
+    assert error.value.manifest["status"] == "incomplete"
+
+
+def test_backup_with_references_requires_artifact_root(tmp_path):
+    store, _root, _run_id = _store_with_referenced_artifacts(tmp_path)
+    with pytest.raises(BackupIncomplete) as error:
+        consistent_backup(store, tmp_path / "backups")
+    assert "nested/dir/report.json" in error.value.missing
+    assert error.value.manifest["status"] == "incomplete"
+
+
+def test_postgres_backup_rejects_unrelated_barrier_store(tmp_path, monkeypatch):
+    store = SQLiteRunStore(tmp_path / "unrelated.db")
+    monkeypatch.setattr(maintenance.shutil, "which", lambda name: "/unused/pg_dump")
+
+    def forbid_dump(*args, **kwargs):
+        raise AssertionError("dump must not run with an unrelated store barrier")
+
+    monkeypatch.setattr(maintenance.subprocess, "run", forbid_dump)
+    with pytest.raises(BackupUnsupported, match="same PostgreSQL"):
+        consistent_backup_postgres("postgresql://localhost/source", tmp_path / "backups", store=store)
+    assert maintenance_status(store)["active"] is False
+
+
+def test_backup_rejects_conflicting_hashes_bound_to_the_same_path(tmp_path):
+    store, root, run_id = _store_with_referenced_artifacts(tmp_path)
+    artifacts = ArtifactStore(root)
+    current = artifacts.put_bytes("shared.bin", b"new-content")
+    legacy = artifacts.put_bytes("legacy-copy.bin", b"old-content")
+    store.case_runs.upsert({
+        "run_id": run_id, "case_id": "conflicting-bound-hashes",
+        "artifact_refs": [{"id": current.id, "sha256": current.sha256},
+                          {"id": current.id, "sha256": legacy.sha256}],
+    })
+    with pytest.raises(ValueError, match="conflicting"):
+        consistent_backup(store, tmp_path / "backups", artifacts_root=root)
+    assert maintenance_status(store)["active"] is False
+    assert not list((tmp_path / "backups").glob("manifest-*.json"))
+
+
+def test_reference_hash_conflict_normalizes_prefix_without_losing_path_binding():
+    from motte_storage.artifact_refs import ArtifactReferenceConflict, collect_artifact_refs
+
+    refs, hashes = {}, set()
+    collect_artifact_refs({"artifacts": [{"id": "shared.bin", "sha256": "a" * 64},
+                                        {"id": "shared.bin", "sha256": "sha256:" + "a" * 64}]},
+                          refs, hashes=hashes)
+    assert refs == {"shared.bin": "a" * 64}
+    assert hashes == {"a" * 64}
+    with pytest.raises(ArtifactReferenceConflict) as error:
+        collect_artifact_refs({"artifact_id": "shared.bin", "sha256": "b" * 64}, refs, hashes=hashes)
+    assert error.value.artifact_id == "shared.bin"
+    assert error.value.hashes == {"a" * 64, "b" * 64}
+    assert hashes == {"a" * 64}
+
+
+def test_backup_blocks_live_tombstone_append_after_database_snapshot(tmp_path, monkeypatch):
+    import sqlite3
+
+    store, root, _run_id = _store_with_referenced_artifacts(tmp_path)
+    tombstones = platform_for(store).tombstones
+    original_snapshot = maintenance._snapshot_sqlite
+
+    def snapshot_then_contend(source, destination):
+        original_snapshot(source, destination)
+        with pytest.raises(sqlite3.IntegrityError, match="maintenance"):
+            tombstones.append([{"gc_run_id": "late", "artifact_id": "nested/dir/report.json",
+                                "status": "deleted", "reason": "import_rollback"}])
+
+    monkeypatch.setattr(maintenance, "_snapshot_sqlite", snapshot_then_contend)
+    manifest = consistent_backup(store, tmp_path / "backups", artifacts_root=root, reason="gc")
+    assert manifest["status"] == "complete"
+    assert len(manifest["artifacts"]["files"]) == 2
+    assert tombstones.list() == []
+
+
+def test_report_backup_restore_and_barrier(tmp_path):
+    from tests.storage.test_statistical_report_references import put_report
+    from tests.sdk.test_statistical_reports import _seed
+
+    store = _seed(SQLiteRunStore(tmp_path / "reports.db"))
+    artifacts = tmp_path / "artifacts"
+    artifact = ArtifactStore(artifacts).put_bytes("publication/evidence.bin", b"frozen evidence")
+    report = put_report(store, runs=("base", "candidate"), passes=("old-base", "old-candidate"),
+                        evidence={"nested": {"artifact_id": artifact.id, "sha256": artifact.sha256}})
+    before_runs = store.runs.list()
+    before_passes = {run["id"]: store.scoring_passes.list_for_run(run["id"]) for run in before_runs}
+    backup = tmp_path / "backups"
+    manifest = consistent_backup(store, backup, artifacts_root=artifacts)
+    assert manifest["counts"]["statistical_reports"] == 1
+    assert [item["path"] for item in manifest["artifacts"]["files"]] == [artifact.id]
+    restored = restore_staging(backup, tmp_path / "restored")
+    reopened = SQLiteRunStore(restored["database"])
+    assert restored["counts"]["actual"]["statistical_reports"] == 1
+    assert reopened.statistical_reports.get(report["report_id"]) == report
+    assert reopened.runs.list() == before_runs
+    assert {run["id"]: reopened.scoring_passes.list_for_run(run["id"]) for run in before_runs} == before_passes
+    assert (tmp_path / "restored/artifacts" / artifact.id).read_bytes() == b"frozen evidence"
+    installed = restore_sqlite(
+        backup, tmp_path / "installed.db", artifacts_root=tmp_path / "installed-artifacts",
+    )
+    installed_store = SQLiteRunStore(installed["database"])
+    assert installed_store.statistical_reports.get(report["report_id"]) == report
+    assert platform_for(installed_store).meta.get("restored_from_backup") is not None
+    assert (tmp_path / "installed-artifacts" / artifact.id).read_bytes() == b"frozen evidence"
+
+
+@pytest.mark.parametrize("damage", ["missing", "mismatched"])
+@pytest.mark.parametrize("boundary", ["backup", "restore"])
+def test_report_pinned_artifact_damage_rejects_backup_and_restore(tmp_path, damage, boundary):
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "reports.db")
+    artifacts = tmp_path / "artifacts"
+    artifact = ArtifactStore(artifacts).put_bytes("publication/only.bin", b"frozen bytes")
+    put_report(store, evidence={"artifact_id": artifact.id, "sha256": artifact.sha256})
+    backups = tmp_path / "backups"
+    if boundary == "restore":
+        manifest = consistent_backup(store, backups, artifacts_root=artifacts)
+        target = backups / manifest["artifacts"]["dir"] / artifact.id
+        assert target.is_file(), "report-owned artifact must be included in backup"
+    else:
+        target = artifacts / artifact.id
+    if damage == "missing":
+        target.unlink()
+    else:
+        target.write_bytes(b"changed bytes")
+    if boundary == "backup":
+        with pytest.raises(BackupIncomplete) as failure:
+            consistent_backup(store, backups, artifacts_root=artifacts)
+        assert failure.value.manifest["status"] == "incomplete"
+        assert artifact.id in (failure.value.missing if damage == "missing" else failure.value.mismatched)
+    else:
+        with pytest.raises(RestoreIncomplete, match="artifact.*(missing|hash mismatch)"):
+            restore_staging(backups, tmp_path / "rejected")
+    assert maintenance_status(store)["active"] is False
+
+
+@pytest.mark.parametrize("failure", ["integrity", "list", "get", "conflict"])
+def test_report_reader_failure_never_creates_successful_backup(tmp_path, monkeypatch, failure):
+    from tests.storage.test_statistical_report_references import put_report, damage_report_reader
+
+    store = SQLiteRunStore(tmp_path / "report-failure.db")
+    artifacts = tmp_path / "artifacts"
+    artifact = ArtifactStore(artifacts).put_bytes("only.bin", b"must survive")
+    put_report(store, evidence={"artifact_id": artifact.id, "sha256": artifact.sha256})
+    error = damage_report_reader(store, monkeypatch, failure)
+    backups = tmp_path / "backups"
+    with pytest.raises(error):
+        consistent_backup(store, backups, artifacts_root=artifacts)
+    assert not any(json.loads(path.read_text())["status"] == "complete"
+                   for path in backups.glob("manifest-*.json"))
+    assert (artifacts / artifact.id).read_bytes() == b"must survive"
+    assert platform_for(store).tombstones.list() == []
+    assert maintenance_status(store)["active"] is False
+
+
+# Reuse the guarded fixture generator with a separate identity for staging.
+@pytest.fixture
+def report_restore_database():
+    from tests.storage.conftest import isolated_pg_database
+    yield from isolated_pg_database.__wrapped__()
+
+
+@pytest.mark.parametrize("rewritten_manifest", [False, True])
+def test_report_postgres_backup_restore_closure(
+    tmp_path, isolated_pg_database, report_restore_database, rewritten_manifest,
+):
+    import shutil
+    from motte_storage.postgres import create_postgres_run_store
+    from motte_storage.migrations import upgrade
+    from tests.storage.test_statistical_report_references import put_report
+    from tests.sdk.test_statistical_reports import _seed
+
+    if not shutil.which("pg_dump") or not shutil.which("pg_restore"):
+        pytest.skip("pg_dump and pg_restore are required for the disposable PG round trip")
+    dsn = isolated_pg_database
+    # Backups traverse the current unified evidence closure, not only 0016.
+    upgrade(dsn)
+    store = _seed(create_postgres_run_store(dsn))
+    artifacts = tmp_path / "artifacts"
+    artifact = ArtifactStore(artifacts).put_bytes("report/evidence.bin", b"postgres evidence")
+    report = put_report(store, runs=("base", "candidate"), passes=("old-base", "old-candidate"),
+                        evidence={"artifact_id": artifact.id, "sha256": artifact.sha256})
+    runs = store.runs.list()
+    passes = {run["id"]: store.scoring_passes.list_for_run(run["id"]) for run in runs}
+    backups = tmp_path / "backups"
+    manifest = consistent_backup_postgres(dsn, backups, store=store, artifacts_root=artifacts)
+    assert manifest["counts"]["statistical_reports"] == 1
+    assert [entry["path"] for entry in manifest["artifacts"]["files"]] == [artifact.id]
+    assert report_restore_database != dsn
+    if rewritten_manifest:
+        copied = backups / manifest["artifacts"]["dir"] / artifact.id
+        copied.write_bytes(b"rewritten PostgreSQL evidence")
+        manifest["artifacts"]["files"][0].update(
+            sha256=maintenance._sha256_file(copied), bytes=copied.stat().st_size,
+        )
+        manifest["manifest_sha256"] = maintenance._manifest_content_sha256(manifest)
+        next(backups.glob("manifest-*.json")).write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(RestoreIncomplete, match="reference.*hash mismatch"):
+            maintenance.restore_postgres_staging(
+                backups, report_restore_database, tmp_path / "rejected-artifacts",
+            )
+        rejected = create_postgres_run_store(report_restore_database)
+        assert platform_for(rejected).meta.get("restored_from_backup") is not None
+        assert store.statistical_reports.get(report["report_id"]) == report
+        assert (artifacts / artifact.id).read_bytes() == b"postgres evidence"
+        return
+    restored = maintenance.restore_postgres_staging(
+        backups, report_restore_database, tmp_path / "restored-artifacts",
+    )
+    reopened = create_postgres_run_store(report_restore_database)
+    assert restored["counts"]["actual"]["statistical_reports"] == 1
+    assert reopened.statistical_reports.get(report["report_id"]) == report
+    assert reopened.runs.list() == runs
+    assert {run["id"]: reopened.scoring_passes.list_for_run(run["id"]) for run in runs} == passes
+    assert (tmp_path / "restored-artifacts" / artifact.id).read_bytes() == b"postgres evidence"
+
+
+@pytest.mark.parametrize("entrypoint", ["staging", "sqlite"])
+def test_restore_rechecks_report_pinned_hash_against_rewritten_artifact_manifest(tmp_path, entrypoint):
+    """A consistent file inventory cannot override immutable report evidence hashes."""
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "reports.db")
+    artifacts = tmp_path / "artifacts"
+    artifact = ArtifactStore(artifacts).put_bytes("report/pinned.bin", b"original pinned bytes")
+    put_report(store, evidence={"artifact_id": artifact.id, "sha256": artifact.sha256})
+    backups = tmp_path / "backups"
+    manifest = consistent_backup(store, backups, artifacts_root=artifacts)
+    copied = backups / manifest["artifacts"]["dir"] / artifact.id
+    copied.write_bytes(b"different artifact bytes")
+    entry = manifest["artifacts"]["files"][0]
+    entry.update(sha256=maintenance._sha256_file(copied), bytes=copied.stat().st_size)
+    manifest["manifest_sha256"] = maintenance._manifest_content_sha256(manifest)
+    path = next(backups.glob("manifest-*.json"))
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    if entrypoint == "staging":
+        with pytest.raises(RestoreIncomplete, match="reference.*hash mismatch"):
+            restore_staging(backups, tmp_path / "rejected")
+        assert not (tmp_path / "rejected").exists()
+    else:
+        destination = tmp_path / "existing.db"
+        destination.write_bytes(b"existing target must remain untouched")
+        target_artifacts = tmp_path / "existing-artifacts"
+        target_artifacts.mkdir()
+        (target_artifacts / "precious.bin").write_bytes(b"unchanged")
+        with pytest.raises(RestoreIncomplete, match="reference.*hash mismatch"):
+            restore_sqlite(backups, destination, artifacts_root=target_artifacts, confirm_overwrite=True)
+        assert destination.read_bytes() == b"existing target must remain untouched"
+        assert (target_artifacts / "precious.bin").read_bytes() == b"unchanged"
+    assert (artifacts / artifact.id).read_bytes() == b"original pinned bytes"
+
+
+@pytest.mark.parametrize("failure", ["list", "get"])
+def test_restore_report_reader_failure_preserves_existing_destination(tmp_path, monkeypatch, failure):
+    from tests.storage.test_statistical_report_references import put_report, damage_report_reader
+
+    store = SQLiteRunStore(tmp_path / "reports.db")
+    put_report(store)
+    backups = tmp_path / "backups"
+    consistent_backup(store, backups)
+    target = tmp_path / "existing.db"
+    target.write_bytes(b"existing destination")
+    error = damage_report_reader(store, monkeypatch, failure)
+    with pytest.raises(error, match="report read unavailable"):
+        restore_sqlite(backups, target, confirm_overwrite=True)
+    assert target.read_bytes() == b"existing destination"
+
+
+def test_report_restore_requires_artifact_destination_before_overwrite(tmp_path):
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "reports.db")
+    artifacts = tmp_path / "artifacts"
+    artifact = ArtifactStore(artifacts).put_bytes("pinned.bin", b"must restore together")
+    put_report(store, evidence={"artifact_id": artifact.id, "sha256": artifact.sha256})
+    backups = tmp_path / "backups"
+    consistent_backup(store, backups, artifacts_root=artifacts)
+    target = tmp_path / "existing.db"
+    target.write_bytes(b"existing destination")
+    with pytest.raises(RestoreIncomplete, match="artifacts_root"):
+        restore_sqlite(backups, target, confirm_overwrite=True)
+    assert target.read_bytes() == b"existing destination"
+
+
+def test_invalid_report_restore_does_not_replace_existing_staging_store(tmp_path):
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "source.db")
+    put_report(store)
+    backups = tmp_path / "backups"
+    manifest = consistent_backup(store, backups)
+    manifest["counts"]["statistical_reports"] += 1
+    manifest["manifest_sha256"] = maintenance._manifest_content_sha256(manifest)
+    next(backups.glob("manifest-*.json")).write_text(json.dumps(manifest), encoding="utf-8")
+    target = tmp_path / "existing-staging"
+    target.mkdir()
+    database = target / "runs.db"
+    database.write_bytes(b"existing staging database")
+    (target / "precious.bin").write_bytes(b"existing staging artifact")
+    with pytest.raises(RestoreIncomplete, match="count mismatch for statistical_reports"):
+        restore_staging(backups, target, confirm_overwrite=True)
+    assert database.read_bytes() == b"existing staging database"
+    assert (target / "precious.bin").read_bytes() == b"existing staging artifact"
+
+
+@pytest.mark.parametrize("ownership", ["same_report", "independent_reports"])
+@pytest.mark.parametrize("boundary", ["backup", "staging", "sqlite"])
+def test_digest_only_resolution_cannot_replace_report_path_hash(tmp_path, ownership, boundary):
+    from motte_storage.artifact_refs import ArtifactReferenceConflict
+    from tests.storage.test_statistical_report_references import put_report
+
+    store = SQLiteRunStore(tmp_path / "source.db")
+    artifacts = tmp_path / "artifacts"
+    artifact_store = ArtifactStore(artifacts)
+    pinned = artifact_store.put_bytes("pinned.bin", b"original pinned A")
+    discovered = artifact_store.put_bytes("digest-only.bin", b"digest-only B")
+    explicit_ref = {"artifact_id": pinned.id, "sha256": pinned.sha256}
+    hash_only_ref = {"kind": "artifact", "sha256": discovered.sha256}
+    if ownership == "same_report":
+        put_report(store, evidence={"items": [explicit_ref, hash_only_ref]})
+    else:
+        put_report(store, evidence={"items": [explicit_ref]})
+        put_report(store, evidence={"items": [hash_only_ref]})
+    before_reports = store.statistical_reports.list()
+    backups = tmp_path / "backups"
+    manifest = consistent_backup(store, backups, artifacts_root=artifacts)
+    assert manifest["status"] == "complete"
+    assert {entry["path"] for entry in manifest["artifacts"]["files"]} == {
+        pinned.id, discovered.id,
+    }
+    if boundary == "backup":
+        (artifacts / pinned.id).write_bytes(b"digest-only B")
+        rejected = tmp_path / "rejected-backup"
+        with pytest.raises(ArtifactReferenceConflict) as failure:
+            consistent_backup(store, rejected, artifacts_root=artifacts)
+        assert not any(json.loads(path.read_text())["status"] == "complete"
+                       for path in rejected.glob("manifest-*.json"))
+        assert (artifacts / pinned.id).read_bytes() == b"digest-only B"
+    else:
+        copied = backups / manifest["artifacts"]["dir"] / pinned.id
+        copied.write_bytes(b"digest-only B")
+        for entry in manifest["artifacts"]["files"]:
+            if entry["path"] == pinned.id:
+                entry.update(sha256=maintenance._sha256_file(copied), bytes=copied.stat().st_size)
+        manifest["manifest_sha256"] = maintenance._manifest_content_sha256(manifest)
+        next(backups.glob("manifest-*.json")).write_text(json.dumps(manifest), encoding="utf-8")
+        existing = tmp_path / "existing"
+        existing.mkdir()
+        target_db = existing / "runs.db"
+        target_db.write_bytes(b"existing database must survive")
+        target_artifacts = existing / "artifacts"
+        target_artifacts.mkdir()
+        (target_artifacts / "precious.bin").write_bytes(b"existing artifact must survive")
+        with pytest.raises(ArtifactReferenceConflict) as failure:
+            if boundary == "staging":
+                restore_staging(backups, existing, confirm_overwrite=True)
+            else:
+                restore_sqlite(backups, target_db, artifacts_root=target_artifacts,
+                               confirm_overwrite=True)
+        assert target_db.read_bytes() == b"existing database must survive"
+        assert (target_artifacts / "precious.bin").read_bytes() == b"existing artifact must survive"
+        assert (artifacts / pinned.id).read_bytes() == b"original pinned A"
+    assert failure.value.artifact_id == pinned.id
+    assert failure.value.hashes == {pinned.sha256.removeprefix("sha256:"),
+                                    discovered.sha256.removeprefix("sha256:")}
+    assert (artifacts / discovered.id).read_bytes() == b"digest-only B"
+    assert store.statistical_reports.list() == before_reports
+    assert platform_for(store).tombstones.list() == []
     assert maintenance_status(store)["active"] is False

@@ -213,16 +213,12 @@ def _table_columns(path, table):  # noqa: ANN001
     not __import__("os").environ.get("MOTTE_PG_DSN"),
     reason="set MOTTE_PG_DSN to run PostgreSQL integration tests",
 )
-def test_postgres_multi_metric_score_sets():
+def test_postgres_multi_metric_score_sets(isolated_pg_database):
     """PG：migration 0004 后多指标复合键落库与查询（独立测试库）。"""
-    import os
-
-    from motte_storage.migrations import downgrade, revision_ids, upgrade
+    from motte_storage.migrations import upgrade
     from motte_storage.postgres import create_postgres_run_store
 
-    dsn = os.environ["MOTTE_PG_DSN"]
-    for _ in range(len(revision_ids())):
-        downgrade(dsn, 1) if __import__("motte_storage.migrations", fromlist=["current"]).current(dsn) else None
+    dsn = isolated_pg_database
     upgrade(dsn)
     store = create_postgres_run_store(dsn)
     service, run_id, _ = _execute_replay(store)

@@ -89,7 +89,8 @@ def build_agent_provider(manifest: dict[str, Any]):
 
     provider_config = manifest["provider"]
     projected = {"cases": deepcopy(manifest.get("cases") or {})}
-    return build_case_provider(provider_config, projected.get("cases"))
+    return build_case_provider(provider_config, projected.get("cases"),
+                               transport_policy=manifest.get("provider_transport_policy"))
 
 
 def _safe_path_component(value: str, label: str) -> str:

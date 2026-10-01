@@ -19,7 +19,8 @@
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections import Counter
+from typing import Any, Literal, TYPE_CHECKING
 
 from pydantic import Field, model_validator
 
@@ -36,6 +37,10 @@ from .rubrics import (
     policy_for,
     validate_policy,
 )
+
+if TYPE_CHECKING:
+    from .calibration_records import CalibrationVersion, PairwiseCalibrationCall
+    from .judge import JudgePairwiseOutcome
 
 __all__ = [
     "CALIBRATION_SCHEMA_VERSION",
@@ -222,6 +227,8 @@ def review_sample(
     expected_status: str | None = None,
 ) -> CalibrationSample:
     """记录一次真实人工复核（这是唯一能产生 human_reviewed 的入口）。"""
+    if sample.source != "human":
+        raise HumanReviewRequired("synthetic candidates cannot be reviewed as human")
     if not annotator or not reviewer or not reviewed_at:
         raise HumanReviewRequired(
             "human review requires a named annotator, reviewer and timestamp"
@@ -230,7 +237,6 @@ def review_sample(
         raise HumanReviewRequired("human review requires at least one labelled criterion")
     payload = sample.model_dump(mode="json")
     payload.update({
-        "source": "human",
         "status": "human_reviewed",
         "annotator": annotator,
         "reviewed_by": reviewer,
@@ -613,26 +619,57 @@ def _repeat_stability(calls: list[CalibrationCall]) -> dict[str, Any]:
 
 
 def _position_swap(calls: list[CalibrationCall]) -> dict[str, Any]:
-    forward: dict[str, CalibrationCall] = {}
-    reverse: dict[str, CalibrationCall] = {}
+    """Only distinct, successful calls of the same pair in opposite orders count.
+
+    Keep invalid and incomplete groups in the denominator: dropping them, or
+    overwriting a duplicate direction, could turn incomplete evidence into a
+    perfect consistency rate. Ledger references must also be unique across the
+    report, so a single/repeat call cannot be reused as a swapped call.
+    """
+    groups: dict[str, list[CalibrationCall]] = {}
+    invocation_counts = Counter(call.invocation_id for call in calls)
+    call_counts = Counter((call.judge_job_id, call.call_id) for call in calls)
     for call in calls:
-        if call.kind == "order_forward":
-            forward[call.sample_id] = call
-        elif call.kind == "order_reverse":
-            reverse[call.sample_id] = call
-    pairs = sorted(set(forward) & set(reverse))
-    if not pairs:
+        if call.kind in {"order_forward", "order_reverse"}:
+            groups.setdefault(call.sample_id, []).append(call)
+    if not groups:
         return {"measured": False, "reason": "no swapped presentation was recorded",
                 "pairs": 0, "consistent": 0, "rate": None}
-    consistent = [
-        sample_id for sample_id in pairs
-        if forward[sample_id].winner_candidate_id is not None
-        and forward[sample_id].winner_candidate_id == reverse[sample_id].winner_candidate_id
-    ]
+
+    consistent: list[str] = []
+    invalid: dict[str, str] = {}
+    for sample_id, items in sorted(groups.items()):
+        forward = [item for item in items if item.kind == "order_forward"]
+        reverse = [item for item in items if item.kind == "order_reverse"]
+        if len(forward) != 1 or len(reverse) != 1:
+            invalid[sample_id] = "requires exactly one forward and one reverse call"
+            continue
+        first, second = forward[0], reverse[0]
+        if any(
+            invocation_counts[item.invocation_id] != 1
+            or call_counts[(item.judge_job_id, item.call_id)] != 1
+            for item in items
+        ):
+            invalid[sample_id] = "swap calls must have distinct, unreused ledger references"
+        elif any(item.outcome != "succeeded" or item.status != "ok" for item in items):
+            invalid[sample_id] = "swap calls must both succeed with valid judge outcomes"
+        elif (
+            len(first.presentation_order) != 2
+            or len(set(first.presentation_order)) != 2
+            or not all(first.presentation_order)
+            or second.presentation_order != list(reversed(first.presentation_order))
+        ):
+            invalid[sample_id] = "presentation orders must reverse the same two candidates"
+        elif any(item.winner_candidate_id not in first.presentation_order for item in items):
+            invalid[sample_id] = "swap winners must belong to the presented candidate pair"
+        elif first.winner_candidate_id == second.winner_candidate_id:
+            consistent.append(sample_id)
     return {
-        "measured": True, "pairs": len(pairs), "consistent": len(consistent),
-        "rate": len(consistent) / len(pairs),
-        "inconsistent_samples": sorted(set(pairs) - set(consistent)),
+        "measured": len(invalid) < len(groups),
+        "pairs": len(groups), "consistent": len(consistent),
+        "rate": len(consistent) / len(groups),
+        "inconsistent_samples": sorted(set(groups) - set(consistent)),
+        "invalid_samples": sorted(invalid), "invalid_reasons": invalid,
     }
 
 
@@ -661,6 +698,126 @@ def repeat_plan(
                 "sample_id": sample_id, "kind": "order_reverse", "repeat": 0,
             })
     return plan
+
+
+def pairwise_calibration_statistics(
+    version: CalibrationVersion, parsed_by_call: dict[str, JudgePairwiseOutcome],
+    calls: list[PairwiseCalibrationCall],
+) -> dict[str, Any]:
+    """Pure label-domain statistics over all planned samples and distinct ledger calls.
+
+    Only the designated single call supplies human agreement. Repeat/swap each
+    consume their own two calls. Expected non-scored gold can establish outcome
+    consistency, but never a correct preference or an invented tie.
+    """
+    from .calibration_records import PairwiseConfusionCell, PairwiseCriterionConfusion, PairwiseLabel
+
+    samples = version.calibration.samples
+    criteria = version.spec.criteria
+    groups: dict[str, dict[str, list]] = {}
+    invocation_counts = Counter(item.call.invocation_id for item in calls)
+    call_counts = Counter(item.call.call_id for item in calls)
+    for item in calls:
+        groups.setdefault(item.call.sample_id, {}).setdefault(item.call.kind, []).append(item)
+    buckets = {key: {"missing_evidence": 0, "refusals": 0, "errors": 0} for key in criteria}
+    cells = {key: Counter() for key in criteria}
+    compared = disagreements = missing = refused = errors = 0
+
+    def label_key(label):
+        return label.kind, label.candidate_id
+
+    for sample in samples:
+        primary = groups.get(sample.sample_id, {}).get("single", [])
+        call = primary[0].call if len(primary) == 1 else None
+        parsed = parsed_by_call.get(call.call_id) if call and call.outcome == "succeeded" else None
+        judgments = {item.criterion_id: item for item in parsed.judgements} if parsed else {}
+        gold = version.pairwise_gold.get(sample.sample_id, {})
+        for key in criteria:
+            judgment = judgments.get(key)
+            status = judgment.outcome if judgment is not None else "missing_call"
+            if status == "scored":
+                if key in gold:
+                    actual = PairwiseLabel(kind="tie") if judgment.preference == "tie" else (
+                        PairwiseLabel(kind="candidate", candidate_id=judgment.preferred_candidate_id)
+                    )
+                    cells[key][(label_key(gold[key]), label_key(actual))] += 1
+                    compared += 1
+                    disagreements += gold[key] != actual
+            elif status == "missing_evidence":
+                buckets[key]["missing_evidence"] += 1
+                missing += 1
+            elif status == "refused":
+                buckets[key]["refusals"] += 1
+                refused += 1
+            else:
+                buckets[key]["errors"] += 1
+                errors += 1
+
+    def consistency(first_kind, second_kind, *, swap=False):
+        consistent, expected_absence, invalid = [], [], {}
+        for sample in samples:
+            grouped = groups.get(sample.sample_id, {})
+            first, second = grouped.get(first_kind, []), grouped.get(second_kind, [])
+            if len(first) != 1 or len(second) != 1:
+                invalid[sample.sample_id] = "requires exactly two planned directions"
+                continue
+            left, right = first[0], second[0]
+            pair = [left.call, right.call]
+            if any(item.outcome != "succeeded" or invocation_counts[item.invocation_id] != 1
+                   or call_counts[item.call_id] != 1 for item in pair):
+                invalid[sample.sample_id] = "requires distinct successful invocations"
+                continue
+            if (len(left.call.presentation_order) != 2
+                    or len(set(left.call.presentation_order)) != 2
+                    or right.call.presentation_order != (list(reversed(left.call.presentation_order))
+                                                        if swap else left.call.presentation_order)):
+                invalid[sample.sample_id] = "candidate presentation order differs from the plan"
+                continue
+            expected = version.expected_outcomes.get(sample.sample_id)
+            if expected is not None and expected.kind == "non_scored":
+                valid = left.call.status == right.call.status == expected.status
+                if valid:
+                    expected_absence.append(sample.sample_id)
+            else:
+                valid = (
+                    left.call.status == right.call.status == "ok"
+                    and set(left.preferences) == set(right.preferences) == set(criteria)
+                    and left.winner is not None and right.winner is not None
+                    and left.preferences == right.preferences and left.winner == right.winner
+                )
+            if valid:
+                consistent.append(sample.sample_id)
+            else:
+                invalid[sample.sample_id] = "complete scored labels or explicit expected outcomes differ"
+        denominator = len(samples)
+        return {
+            "measured": bool(consistent), "pairs" if swap else "samples": denominator,
+            "consistent" if swap else "stable": len(consistent),
+            "rate": _rate(len(consistent), denominator),
+            "consistent_expected_non_scored": sorted(expected_absence),
+            "invalid_samples": sorted(invalid), "invalid_reasons": invalid,
+        }
+
+    confusion = []
+    for key in criteria:
+        confusion.append(PairwiseCriterionConfusion(
+            criterion_id=key, **buckets[key], cells=[
+                PairwiseConfusionCell(
+                    expected=PairwiseLabel(kind=expected[0], candidate_id=expected[1]),
+                    observed=PairwiseLabel(kind=observed[0], candidate_id=observed[1]), count=count,
+                )
+                for (expected, observed), count in sorted(cells[key].items(), key=lambda row: str(row[0]))
+            ],
+        ))
+    denominator = len(samples) * len(criteria)
+    return {
+        "per_criterion": [], "pairwise_confusion": confusion,
+        "disagreement_rate": _rate(disagreements, compared),
+        "missing_evidence_rate": _rate(missing, denominator),
+        "refusal_rate": _rate(refused, denominator), "error_rate": _rate(errors, denominator),
+        "repeat_stability": consistency("single", "repeat"),
+        "position_swap": consistency("order_forward", "order_reverse", swap=True),
+    }
 
 
 # ------------------------------------------------------------------ 资格

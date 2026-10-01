@@ -9,6 +9,10 @@ import os
 
 import pytest
 
+# Runtime migration tests need the same disposable database safety checks as
+# storage tests; reuse the fixture rather than resetting the configured database.
+from tests.storage.conftest import isolated_pg_database
+
 
 @pytest.fixture(scope="session", autouse=True)
 def isolated_motte_env(tmp_path_factory):

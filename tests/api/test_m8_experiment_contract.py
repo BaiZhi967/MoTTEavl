@@ -58,3 +58,25 @@ def test_a05_request_key_conflict_is_http_409_after_app_rebuild() -> None:
     assert changed.json()["error"]["code"] == "REQUEST_KEY_CONFLICT"
     assert store.experiments.list_specs("exp-other") == []
     assert len(store.runs.list()) == 1
+
+
+def test_preview_resource_drift_is_http_409_and_sdk_transmits_binding():
+    from motte_sdk import MotteClient
+
+    store, _run_service, service = make_service()
+    app = create_app(store, service.resources)
+    http = TestClient(app)
+    client = MotteClient(base_url="http://testserver", transport=http._transport)
+    payload = spec_payload(factors={"model_profile": ("model-a",)}, repeats=1)
+    preview = client.experiment_preview(payload)
+    model = service.resources.models.get("model-a")
+    model["model"] = "new-legal-model"
+    service.resources.models.put(model)
+    response = http.post("/api/v1/experiments", json={**payload, "_preview_hash": preview["preview_hash"]})
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "PREVIEW_STALE"
+    assert store.runs.list() == []
+    fresh = client.experiment_preview(payload)
+    created = client.experiment_create(payload, preview_hash=fresh["preview_hash"])
+    assert created["preflight_mode"] == "preview_bound"
+    assert created["preview_hash"] == fresh["preview_hash"]

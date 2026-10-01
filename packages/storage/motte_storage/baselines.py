@@ -56,19 +56,20 @@ class MemoryBaselines:
 
 
 class SQLiteBaselines:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         self._path = path
-        with closing(_connect(path)) as connection:
-            connection.executescript("""
-                CREATE TABLE IF NOT EXISTS baseline_snapshots (
-                  id TEXT PRIMARY KEY,
-                  run_id TEXT NOT NULL,
-                  scoring_pass_id TEXT NOT NULL,
-                  metrics TEXT NOT NULL,
-                  payload TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS baseline_run_idx ON baseline_snapshots(run_id);
-            """)
+        if initialize:
+            with closing(_connect(path)) as connection:
+                connection.executescript("""
+                    CREATE TABLE IF NOT EXISTS baseline_snapshots (
+                      id TEXT PRIMARY KEY,
+                      run_id TEXT NOT NULL,
+                      scoring_pass_id TEXT NOT NULL,
+                      metrics TEXT NOT NULL,
+                      payload TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS baseline_run_idx ON baseline_snapshots(run_id);
+                """)
 
     def put(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         stored = _validate(snapshot)

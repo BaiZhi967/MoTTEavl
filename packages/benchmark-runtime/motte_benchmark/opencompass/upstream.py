@@ -31,7 +31,17 @@ class LocalMCQDataset(BaseDataset):
 class RuntimeOpenAI(OpenAI):
     """Resolve references after config serialization, never in config globals."""
 
-    def __init__(self, *, key_env="OPENAI_API_KEY", base_url_env=None, **kwargs):
+    def __init__(self, *, key_env="OPENAI_API_KEY", base_url_env=None,
+                 execution_profile=None, **kwargs):
+        if execution_profile is not None:
+            from .execution import RETRY_POLICY, verify_installed_profile
+
+            verify_installed_profile(execution_profile)
+            if type(kwargs.get("retry")) is not int or kwargs["retry"] != 1 + RETRY_POLICY["provider_transport"]:
+                raise ValueError("EXECUTION_PROFILE_INVALID: model attempts differ")
+        # Only a successfully verified opt-in may use the strict transport.
+        # Historical standalone C-Eval/CMMLU keep their upstream contract.
+        self._bounded_execution = execution_profile is not None
         key = os.environ.get(key_env)
         if not key:
             raise ValueError(f"runner credential environment is missing: {key_env}")
@@ -45,3 +55,11 @@ class RuntimeOpenAI(OpenAI):
                 base if base.endswith("/chat/completions") else base + "/chat/completions"
             )
         super().__init__(key=key, **kwargs)
+
+    def _generate(self, input, max_out_len, temperature):
+        if not self._bounded_execution:
+            return super()._generate(input, max_out_len, temperature)
+
+        from .execution import bounded_generate
+
+        return bounded_generate(self, input, max_out_len, temperature)

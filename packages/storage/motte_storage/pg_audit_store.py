@@ -608,6 +608,18 @@ class PgInvocations:
     def list_for_case(self, run_id: str, case_id: str) -> list[dict[str, Any]]:
         return [item for item in self.list_for_run(run_id) if item["case_id"] == case_id]
 
+    def list_for_job(self, job_id: str) -> list[dict[str, Any]]:
+        """Read calibration-owned calls without requiring a fabricated Run."""
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT payload FROM agent_invocations "
+                    "WHERE payload->>'job_id' = %s ORDER BY position",
+                    (job_id,),
+                )
+                rows = cursor.fetchall()
+        return [deepcopy(row[0]) for row in rows]
+
     def list_unsettled(self, run_id: str) -> list[dict[str, Any]]:
         return [item for item in self.list_for_run(run_id)
                 if item["status"] in {"prepared", "dispatching"}]
@@ -971,11 +983,11 @@ class PgBenchmarkDatasets:
             with connection.cursor() as cursor:
                 if benchmark_id is None:
                     cursor.execute(
-                        "SELECT payload FROM benchmark_datasets ORDER BY position",
+                        "SELECT payload FROM benchmark_datasets ORDER BY created_at, benchmark_id, dataset_revision",
                     )
                 else:
                     cursor.execute(
-                        "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s ORDER BY position",  # noqa: E501
+                        "SELECT payload FROM benchmark_datasets WHERE benchmark_id = %s ORDER BY created_at, dataset_revision",  # noqa: E501
                         (benchmark_id,),
                     )
                 rows = cursor.fetchall()

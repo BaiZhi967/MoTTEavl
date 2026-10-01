@@ -126,3 +126,53 @@ Parser 身份升级为 `<benchmark>-opencompass-parser@2`，历史报告保持�
 分派层对存量失败 Run 标 unsupported；Direct/GSM8K/Replay 与历史报告不受
 影响（tests/integration/test_ceval_external_job.py::test_disabling_external_adapter_keeps_other_suites）。
 保留 Job/Artifact/ScoringPass 表与历史记录；不删除未知状态的工作目录。
+
+## 6. 实验矩阵的固定发送上界（M8 Task 3）
+
+实验只接受 `execution_profile: motte-ceval-oc042-bounded@1`，仅 `model_profile`
+可作矩阵因素。必须指定固定 dataset revision；编译读取该 revision，复用 standalone
+`prepare_external_run_inputs`，冻结 scope/split/few-shot/seed、实际模型、逐题 prompt、
+gold/内容摘要、parser/scorer 和执行实现身份。分配、恢复和显式 retry 不读取当前资源。
+旧 OpenCompass profile、未知重试声明、任意 manifest/runner 注入继续拒绝。
+
+新 profile 的单位是「客户端 HTTP send」，不是 token、费用、workflow turn、few-shot
+示例或远端网关内部请求。固定一模型、一 worker、一 partition、每题一个 batch、`n=1`；
+LocalRunner 不重启任务，已有 Job 恢复只观察。每题最多两次发送（`provider_transport=1`）；
+所有 HTTP 错误、断连、无效 JSON 和限流响应均消耗一次，耗尽抛独立终止异常。
+私有 Requests Session 固定 adapter retry=0、禁重定向/环境代理，连接/读取超时为
+10/60 秒。仅 HTTPS 端点或 localhost HTTP 用于该路径，不运行额外 judge/helper/fallback。
+这些传输限制只在显式选择并验证新 profile 后生效。未带 execution_profile 的历史
+C-Eval/CMMLU standalone Run 保留上游端点、代理、重定向与失败重试语义；该旧路径
+没有硬调用上界，不能用于要求正向硬预算的实验。新 profile 验证失败不会回退到旧路径。
+
+单 Run 上界为 `N × (1 + 1)`。初始矩阵上界为所有 factor×repeat Cell 的这一数值之和。
+显式 retry 创建新的 superseding Run 与 Job，另外拥有自己的同一上界；初始矩阵预算
+不是允许无限次显式 retry 的整个实验终身累计上限。
+
+实现身份冻结桥接源码字节、OpenCompass 固定源文件、Requests/urllib3 传输源文件和
+完整依赖 lock。平台在调用旧/已配置 entry 前验证 canonical wrapper、相邻 Python 和
+已安装桥接字节；runner 内再次核验版本/源码。对 bounded profile 不允许 interpreter/
+PYTHONPATH 覆盖、任意脚本 runner 或模型/分区/批次自报证明。身份不匹配时不发送模型请求。
+
+原 `opencompass-0.4.2-py310.lock` 保留 macOS arm64 历史验收口径。新 Linux x86_64 lock
+为 `opencompass-0.4.2-linux-x86_64-py310.lock`，保持原128个精确版本，补齐19个原
+Torch 依赖所需的 Linux 传递包，不安装系统驱动。新 profile 只绑定 Linux x86_64 /
+Python3.10.20；其他平台未宣称支持。原始 lock 单独在 Linux 安装可能因缺 CUDA 共享库
+导致 import 失败，不能把 macOS 验证当作 Linux 验证。
+
+额外验收命令（全部 synthetic / localhost，无付费模型或官方私有数据）：
+
+```bash
+MOTTE_OC042_PYTHON=/absolute/runner/bin/python uv run pytest -q \
+  tests/integration/test_experiment_ceval.py \
+  tests/review/test_m2_round4_runner.py
+```
+
+未设置该解释器时真实 runner 项明确 skip；普通 Requests localhost 测试及脚本 Runner
+生命周期测试不能替代真实 OpenCompass CLI/partitioner/inferencer 验收。官方数据与真实
+模型 smoke/full 成绩仍需单独授权与验收。
+
+本次 Linux x86_64 验收已实际通过：新固定 profile 的两个合成学科在每题首发503、
+第二次成功时合计4次 localhost POST；持续503/429/无效JSON/限流/重定向每次在
+首题2次尝试后结束，不发生第二端点发送。旧 zero/few-shot、默认端点/引用与评分
+runner 用例也通过。以上只证明软件路径及合成题评分，不是官方成绩。

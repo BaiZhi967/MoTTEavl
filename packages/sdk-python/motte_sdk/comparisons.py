@@ -42,6 +42,7 @@ from motte_contracts.comparison import (
     CostSummary,
     DefaultBaselinePointer,
     ReportSnapshot,
+    PairwiseReportSnapshot,
     RunReportRef,
 )
 from motte_contracts.gates import GatePolicyVersion
@@ -49,12 +50,21 @@ from motte_contracts.metrics import METRIC_REGISTRY_VERSION, lookup_metric
 from motte_eval.comparison import ComparisonResult, _model_identity, compare_run_reports
 from motte_eval.coverage import coverage_summary
 from motte_eval.gates import (
+    GateInputError,
     _rule_direction_reason,
     evaluate_gate,
     evaluate_gate_policy,
     gate_exit_code,
+    references_pairwise_quality,
+    validate_pairwise_quality_policy,
 )
 from motte_eval.regression import regression_report
+
+def reconstruct_pairwise_quality(store, pass_id):
+    """Load workspace-only Judge reconstruction only for a local pairwise read."""
+    from .pairwise_quality import reconstruct_pairwise_quality as reconstruct
+
+    return reconstruct(store, pass_id)
 
 #: Terminal-Bench（Harbor）的 suite 身份：指标与覆盖按 **Trial 口径** 装配。
 TERMINAL_BENCH_SUITE = "terminal-bench-harbor"
@@ -165,6 +175,17 @@ def _number(value: Any) -> float | None:
         return None
     number = float(value)
     return number if math.isfinite(number) else None
+
+
+def _statistics_input_value(value: Any) -> Any:
+    """Freeze raw metering inputs as strict JSON, retaining non-finite identity."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return {"nonfinite": str(value)}
+    if isinstance(value, dict):
+        return {key: _statistics_input_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_statistics_input_value(item) for item in value]
+    return value
 
 
 def _count(value: Any) -> int:
@@ -526,7 +547,7 @@ _PROVENANCE_JUDGE_FIELDS: tuple[str, ...] = (
 )
 
 #: 人工修订沿血缘回溯的层数上限：只走已保存的 pass 引用，容忍损坏的血缘环。
-_MANUAL_REVISION_LINEAGE_LIMIT = 8
+_MANUAL_REVISION_LINEAGE_LIMIT = 100
 
 
 def _manual_revision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -534,36 +555,47 @@ def _manual_revision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None
     return dict(value) if isinstance(value, dict) else None
 
 
-def _instrument_pass(store: Any, record: Mapping[str, Any]) -> Mapping[str, Any]:
-    """评分工具的出处：人工修订沿**已保存的血缘**回退到被修订的 pass。
+def _selected_pass_source(store: Any, pass_id: str) -> tuple[dict | None, str | None]:
+    """Follow only explicit same-Run manual sources before inspecting Judge data."""
+    seen, run_id = set(), None
+    while pass_id and pass_id not in seen and len(seen) <= _MANUAL_REVISION_LINEAGE_LIMIT:
+        seen.add(pass_id)
+        record = store.scoring_passes.get(pass_id)
+        if not isinstance(record, dict) or record.get("id") != pass_id:
+            return None, "selected scoring lineage is incomplete or has a mismatched identity"
+        if run_id is None:
+            run_id = record.get("run_id")
+        if not run_id or record.get("run_id") != run_id:
+            return None, "manual scoring lineage crosses Run ownership"
+        if record.get("source") != "manual_revision":
+            if record.get("judge") is not None and not isinstance(record["judge"], Mapping):
+                return None, "selected Judge instrument is malformed"
+            return record, None
+        revision = record.get("manual_revision") or {}
+        summary = record.get("summary") or {}
+        if not isinstance(revision, Mapping) or not isinstance(summary, Mapping):
+            return None, "manual scoring source is malformed"
+        source = revision.get("source_pass_id")
+        copied = summary.get("manual_revision") or {}
+        if not isinstance(copied, Mapping):
+            return None, "copied manual scoring source is malformed"
+        if (not isinstance(source, str) or not source
+                or record.get("previous_pass_id") not in (None, source)
+                or copied.get("source_pass_id") not in (None, source)
+                or revision.get("revision_id") not in (None, record["id"])):
+            return None, "manual scoring source is missing or mismatched"
+        pass_id = source
+    return None, "manual scoring lineage is cyclic or exceeds 100 links"
 
-    只读 pass 之间记录在案的引用（manual_revision.source_pass_id /
-    previous_pass_id）：不读 current 指针，也不读任何当前资源设置；血缘缺失
-    就停在该 pass 上，身份保持 unknown（review F09）。
-    """
-    current: Mapping[str, Any] = record
-    run_id = record.get("run_id")
-    seen: set[str] = set()
-    for _ in range(_MANUAL_REVISION_LINEAGE_LIMIT):
-        judge = current.get("judge")
-        if isinstance(judge, dict) and judge:
-            return current
-        if current.get("source") != "manual_revision":
-            return current
-        manual = _manual_revision_summary(current) or {}
-        source_id = manual.get("source_pass_id") or current.get("previous_pass_id")
-        if not isinstance(source_id, str) or not source_id or source_id in seen:
-            return current
-        seen.add(source_id)
-        passes = getattr(store, "scoring_passes", None)
-        parent = passes.get(source_id) if passes is not None else None
-        if not isinstance(parent, dict):
-            return current
-        # 血缘只在同一个 Run 内成立：跨 Run 引用保持 unknown，不继承外来身份。
-        if run_id is not None and parent.get("run_id") != run_id:
-            return current
-        current = parent
-    return current
+
+def _instrument_pass(store: Any, record: Mapping[str, Any]) -> Mapping[str, Any]:
+    source, error = _selected_pass_source(store, str(record.get("id") or ""))
+    return source if source is not None else {**record, "judge": {}}
+
+
+def _pairwise_origin(store: Any, record: Mapping[str, Any]) -> bool:
+    source, _ = _selected_pass_source(store, str(record.get("id") or ""))
+    return bool(source and (source.get("judge") or {}).get("mode") == "pairwise")
 
 
 def _scoring_provenance(store: Any, record: Mapping[str, Any]) -> dict[str, Any]:
@@ -637,6 +669,13 @@ class ComparisonService:
             self._score_rows(dict(scoring_pass)), ensure_ascii=False,
             sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
+        pairwise = _pairwise_origin(self.store, scoring_pass)
+        if pairwise:
+            quality = reconstruct_pairwise_quality(self.store, str(scoring_pass["id"]))
+            evidence["pairwise_quality"] = {
+                "roles_sha256": quality.roles_sha256, "plan_sha256": quality.plan_sha256,
+                "ledger_sha256": quality.ledger_sha256, "quality_sha256": quality.content_sha256,
+            }
         digest = hashlib.sha256(json.dumps(
             evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()
@@ -646,7 +685,7 @@ class ComparisonService:
         return RunReportRef(
             run_id=run_id,
             scoring_pass_id=pass_id,
-            report_schema="report-v1",
+            report_schema="report-pairwise-v1" if pairwise else "report-v1",
             evidence_hash="sha256:" + digest,
         )
 
@@ -687,7 +726,13 @@ class ComparisonService:
         record = _resolve_pass(self.store, run_id, scoring_pass_id)
         manifest = run.get("manifest") or {}
         if _is_terminal_bench_run(manifest):
-            return _terminal_bench_summary(manifest, record, self._score_rows(record))
+            result = _terminal_bench_summary(manifest, record, self._score_rows(record))
+            if _pairwise_origin(self.store, record):
+                result["metric_values"]["valid_trial_pass_rate"] = None
+                result["metric_value"] = None
+                result["cost"]["per_success_usd"] = None
+                self._pairwise_summary(result, str(record["id"]))
+            return result
         selected_ids = list(run.get("case_ids") or [])
         selected = len(selected_ids)
         summary = record.get("summary") or {}
@@ -719,7 +764,10 @@ class ComparisonService:
             (run.get("manifest") or {}).get("cost", {}).get("total_usd")
             if cost_known else None
         )
-        return coverage_summary(
+        pairwise_origin = _pairwise_origin(self.store, record)
+        if pairwise_origin:
+            accuracy = None
+        result = coverage_summary(
             denominator="selected_cases",
             selected=selected,
             judged=attempted,
@@ -731,6 +779,17 @@ class ComparisonService:
                 "cost.total_usd": total_usd,
             },
         )
+        if pairwise_origin:
+            # Edited Boolean rows cannot supply a pairwise success denominator.
+            result["cost"]["per_success_usd"] = None
+            self._pairwise_summary(result, str(record["id"]))
+        return result
+
+    def _pairwise_summary(self, result: dict[str, Any], pass_id: str) -> None:
+        quality = reconstruct_pairwise_quality(self.store, pass_id)
+        result.update(pairwise_quality=quality.model_dump(mode="json"), scoring_pass_id=pass_id,
+                      report_schema="report-pairwise-v1", metric_registry_version="metric-registry@2")
+        result["metric_values"]["pairwise_challenger_score@1"] = quality.value
 
     # ------------------------------------------------------------------ 比较
 
@@ -762,6 +821,10 @@ class ComparisonService:
             policy=ComparisonPolicy(allowed_factors=tuple(allowed_factors)),
             baseline_cost=self._pass_cost_view(baseline_run_id, baseline_pass_id),
             candidate_cost=self._pass_cost_view(candidate_run_id, candidate_pass_id),
+            baseline_pairwise=(reconstruct_pairwise_quality(self.store, baseline_pass_id)
+                               if _pairwise_origin(self.store, self.store.scoring_passes.get(baseline_pass_id)) else None),
+            candidate_pairwise=(reconstruct_pairwise_quality(self.store, candidate_pass_id)
+                                if _pairwise_origin(self.store, self.store.scoring_passes.get(candidate_pass_id)) else None),
         )
 
     def _pass_cost_view(
@@ -792,8 +855,8 @@ class ComparisonService:
     def _case_cost_summary(self, run_id: str) -> tuple[CostSummary, float | None]:
         """从 case 结果的逐题成本块汇总（与 API report 同口径）。
 
-        每个有结果的 case 都带定价成本才算 known；无任何成本证据时
-        unknown（null 不是 0）。
+        每个有结果的 case 都带定价成本和显式币种才算 known；无任何成本
+        证据或历史成本缺少币种时 unknown（null 不是 0，不推定 USD）。
         """
         case_runs = getattr(self.store, "case_runs", None)
         if case_runs is None or not hasattr(case_runs, "list_for_run"):
@@ -809,10 +872,11 @@ class ComparisonService:
         for case in attempted:
             block = case["result"].get("cost")
             amount = _number(block.get("total")) if isinstance(block, dict) else None
-            if amount is None or amount < 0:
+            currency = block.get("currency") if isinstance(block, dict) else None
+            if (amount is None or amount < 0
+                    or not isinstance(currency, str) or not currency.strip()):
                 unknown += 1
                 continue
-            currency = str(block.get("currency") or "USD")
             totals[currency] = totals.get(currency, 0.0) + amount
             if block.get("price_table_version"):
                 versions.setdefault(currency, set()).add(str(block["price_table_version"]))
@@ -828,6 +892,70 @@ class ComparisonService:
             source="case_results",
         )
         return summary, summary.total_usd() if summary.known else None
+
+    def _subject_statistics(
+        self, run: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """One subject measurement per selected Case/Task, never Judge or retries.
+
+        Case metering is not covered by RunReportRef. Return a detached copy of
+        the actual inputs alongside descriptors so callers can bind its digest.
+        Missing Task-level measurements are not reconstructed from Trial scores.
+        """
+        from motte_eval.statistics import latency_summary, summary_statistics
+
+        case_store = getattr(self.store, "case_runs", None)
+        cases = (case_store.list_for_run(run["id"])
+                 if case_store is not None and hasattr(case_store, "list_for_run") else [])
+        by_case = {row["case_id"]: row for row in cases}
+        inputs: list[dict[str, Any]] = []
+        costs: dict[str, list[float | None]] = {}
+        latencies: list[float | None] = []
+        unknown_cost = unknown_currency = 0
+        selected = list(run.get("case_ids") or [])
+        unit = "task" if _is_terminal_bench_run(run.get("manifest") or {}) else "case"
+        for case_id in selected:
+            result = by_case.get(case_id, {}).get("result")
+            result = result if isinstance(result, dict) else {}
+            cost = result.get("cost")
+            metering = result.get("metering")
+            metering = metering if isinstance(metering, dict) else {}
+            inputs.append(_statistics_input_value({
+                "case_id": case_id, "cost": cost,
+                "metering": {"latency_ms": metering.get("latency_ms")},
+            }))
+            block = cost if isinstance(cost, dict) else {}
+            amount = _number(block.get("total"))
+            if (amount is not None and amount < 0) or block.get("scope", "subject") != "subject":
+                amount = None
+            currency = block.get("currency")
+            if not isinstance(currency, str) or not currency.strip():
+                unknown_currency += 1
+                unknown_cost += 1
+            else:
+                costs.setdefault(currency, []).append(amount)
+                unknown_cost += amount is None
+            latency = _number(metering.get("latency_ms"))
+            latencies.append(latency if latency is not None and latency >= 0 else None)
+        return inputs, {
+            "n_selected": len(selected),
+            "cost": {
+                "scope": "subject", "unit": unit,
+                "source": "result.cost",
+                "known_cost_count": len(selected) - unknown_cost,
+                "unknown_cost_count": unknown_cost,
+                "unknown_currency_count": unknown_currency,
+                "by_currency": {
+                    currency: summary_statistics(values)
+                    for currency, values in sorted(costs.items())
+                },
+            },
+            "latency_ms": {
+                "scope": "subject", "unit": unit,
+                "source": "result.metering.latency_ms",
+                **latency_summary(latencies),
+            },
+        }
 
     def paired_statistics(
         self, baseline_run_id: str, candidate_run_id: str, *,
@@ -847,6 +975,7 @@ class ComparisonService:
         from motte_eval.statistics import (
             STATISTICAL_POLICY_V1, paired_difference, statistical_policy_hash,
         )
+        from motte_contracts.hashing import canonical_hash
 
         comparison = self.compare(
             baseline_run_id, candidate_run_id, allowed_factors=allowed_factors,
@@ -861,8 +990,24 @@ class ComparisonService:
         base_run = self.store.runs.get(baseline_run_id)
         candidate_run = self.store.runs.get(candidate_run_id)
         selected = list(base_run.get("case_ids") or [])
+        base_inputs, base_descriptive = self._subject_statistics(base_run)
+        candidate_inputs, candidate_descriptive = self._subject_statistics(candidate_run)
+        inputs = {
+            "refs": refs,
+            "allowed_factors": sorted(set(allowed_factors)),
+            "k": k,
+            "subject_case_metrics": {
+                "baseline": base_inputs, "candidate": candidate_inputs,
+            },
+        }
         view: dict[str, Any] = {
             "refs": refs,
+            "inputs": inputs,
+            "input_digest": canonical_hash(inputs),
+            "k": k,
+            "descriptive": {
+                "baseline": base_descriptive, "candidate": candidate_descriptive,
+            },
             "unit": "task(case)",
             "method": "paired_task_cluster_bootstrap",
             "policy_ref": STATISTICAL_POLICY_V1["policy_id"],
@@ -878,6 +1023,9 @@ class ComparisonService:
             "reason": None,
             "statistics": None,
         }
+        if any(ref["report_schema"] == "report-pairwise-v1" for ref in refs.values()):
+            view["reason"] = "pairwise_statistical_inference_unsupported"
+            return view
         terminal_base = _is_terminal_bench_run(base_run.get("manifest") or {})
         terminal_candidate = _is_terminal_bench_run(candidate_run.get("manifest") or {})
         if terminal_base or terminal_candidate:
@@ -951,6 +1099,49 @@ class ComparisonService:
 
     # ------------------------------------------------------------------ 门禁
 
+    def _judge_gate_qualification(self, scoring_pass_id: str) -> dict[str, Any]:
+        """Verify the exact bound Judge source, never names, flags or current pointers."""
+        base = {"required": True, "gate_eligible": False, "experimental": True,
+                "pass_id": scoring_pass_id}
+        try:
+            record, error = _selected_pass_source(self.store, scoring_pass_id)
+            if error:
+                return {**base, "reason": error}
+            judge = record.get("judge") or {}
+            is_judge = (record.get("source") == "judge" or bool(judge)
+                        or record.get("purpose") == "judge"
+                        or str(record.get("scorer_id") or "").startswith("judge:"))
+            if not is_judge:
+                return {"required": False, "gate_eligible": True}
+            base.update(judge_pass_id=record["id"], mode=judge.get("mode"))
+            from .scoring_jobs import JudgeProviderSnapshot, verify_subject_qualification
+            from motte_eval.judge import JudgeSpec
+            from motte_storage.scoring_jobs import scoring_jobs_for
+            jobs = getattr(self.store, "scoring_jobs", None) or scoring_jobs_for(self.store)
+            job = jobs.get(record.get("job_id")) if record.get("job_id") else None
+            if (record.get("source") != "judge" or record.get("purpose") != "judge"
+                    or not job or job.get("status") != "completed" or job.get("purpose") != "judge"
+                    or job.get("job_id") != record.get("job_id")
+                    or job.get("owner") != {"kind": "subject", "run_id": record["run_id"]}
+                    or job.get("run_id") != record["run_id"]
+                    or job.get("reserved_pass_id") != record["id"]
+                    or (job.get("receipt") or {}).get("scoring_pass_id") != record["id"]
+                    or not record.get("qualification_binding")
+                    or record["qualification_binding"] != job.get("qualification_binding")):
+                raise ValueError("Judge Pass has no matching authoritative Job/source binding")
+            spec = JudgeSpec.model_validate(job["judge_spec"])
+            snapshot = JudgeProviderSnapshot.model_validate(job["provider_snapshot"])
+            if (any(judge.get(key) != value for key, value in spec.as_summary().items())
+                    or judge.get("provider_snapshot_sha256") != snapshot.snapshot_sha256
+                    or judge.get("owner") != job["owner"] or job.get("mode") != spec.mode
+                    or job.get("judge_spec_sha256") != spec.spec_sha256):
+                raise ValueError("selected Pass instrument differs from its frozen Job")
+            binding = verify_subject_qualification(self.store, record["qualification_binding"], spec, snapshot)
+            return {**base, "gate_eligible": True, "experimental": False,
+                    "reason": "verified_calibration_source", "binding": binding.model_dump(mode="json")}
+        except Exception as error:
+            return {**base, "reason": "selected Judge source is unverifiable: " + type(error).__name__}
+
     def evaluate_gate(
         self,
         run_id: str,
@@ -961,6 +1152,13 @@ class ComparisonService:
         baseline_snapshot_id: str | None = None,
         require_terminal: bool = True,
     ) -> dict[str, Any]:
+        if references_pairwise_quality(policy):
+            try:
+                validate_pairwise_quality_policy(policy)
+                if baseline_run_id is not None or baseline_snapshot_id is not None:
+                    raise GateInputError("PAIRWISE_POLICY_UNSUPPORTED", "pairwise baseline comparison is unsupported")
+            except GateInputError as error:
+                raise ComparisonError(error.code, str(error)) from error
         run = self.store.runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
@@ -971,7 +1169,9 @@ class ComparisonService:
                 f"run {run_id} is {run.get('status')!r}; gates evaluate fixed, "
                 "terminal reports only",
             )
+        scoring_pass_id = str(_resolve_pass(self.store, run_id, scoring_pass_id)["id"])
         candidate = self.candidate_summary(run_id, scoring_pass_id=scoring_pass_id)
+        candidate["judge_qualification"] = self._judge_gate_qualification(scoring_pass_id)
         candidate_ref = self.report_ref(run_id, scoring_pass_id=scoring_pass_id)
         comparison_view: dict[str, Any] | None = None
         baseline_view: dict[str, Any] | None = None
@@ -1029,8 +1229,12 @@ class ComparisonService:
             }
             baseline_view = {
                 "run_id": baseline_run_id,
-                "scoring_pass_id": _current_pass_id(self.store, baseline_run_id),
+                "scoring_pass_id": result.baseline_ref.scoring_pass_id,
             }
+        if baseline_view and baseline_view.get("scoring_pass_id"):
+            baseline_qualification = self._judge_gate_qualification(baseline_view["scoring_pass_id"])
+            if baseline_qualification["required"]:
+                candidate["baseline_judge_qualification"] = baseline_qualification
         conclusion = evaluate_gate(policy, candidate, comparison=comparison_view)
         conclusion["report_refs"] = {
             "candidate": {
@@ -1147,7 +1351,17 @@ class ComparisonService:
                 )
                 for case_id, disposition in dispositions.items()
             ]
-        snapshot = ReportSnapshot(
+        pairwise_quality = None
+        if _pairwise_origin(self.store, record):
+            pairwise_quality = reconstruct_pairwise_quality(self.store, str(record["id"]))
+            metric_values["pairwise_challenger_score@1"] = pairwise_quality.value
+            # Per-success cost also requires a trustworthy Boolean success count.
+            for quality_metric in ("accuracy", "judged_accuracy", "valid_trial_pass_rate", "cost.per_success_usd"):
+                if quality_metric in metric_values:
+                    metric_values[quality_metric] = None
+        snapshot_type = PairwiseReportSnapshot if pairwise_quality is not None else ReportSnapshot
+        snapshot = snapshot_type(
+            **({"pairwise_quality": pairwise_quality} if pairwise_quality is not None else {}),
             snapshot_id="pending",
             ref=ref,
             created_at=created_at,
@@ -1156,7 +1370,7 @@ class ComparisonService:
             counts=counts,
             coverage=coverage,
             metric_values=metric_values,
-            metric_registry_version=METRIC_REGISTRY_VERSION,
+            metric_registry_version="metric-registry@2" if pairwise_quality is not None else METRIC_REGISTRY_VERSION,
             cost=cost,
             evidence_pins=(),
             case_dispositions=tuple(records),
@@ -1178,6 +1392,8 @@ class ComparisonService:
             raise KeyError(run_id)
         manifest = run.get("manifest") or {}
         record = _resolve_pass(self.store, run_id, scoring_pass_id)
+        if _pairwise_origin(self.store, record):
+            return {case_id: None for case_id in run.get("case_ids") or []}
         rows = self._score_rows(record)
         if _is_terminal_bench_run(manifest):
             return _trial_case_outcomes(rows)
@@ -1355,14 +1571,20 @@ class ComparisonService:
         published / deprecated（deprecated 显式求值仍允许，§9）。
         """
         gate_store = self._gate_store()
+        pairwise_policy = references_pairwise_quality(payload)
         try:
+            if pairwise_policy:
+                validate_pairwise_quality_policy(payload)
             model = GatePolicyVersion.model_validate(payload)
+        except GateInputError as error:
+            raise ComparisonError(error.code, str(error)) from error
         except ValidationError as error:
             raise ComparisonError("GATE_POLICY_INVALID", str(error)) from error
         for rule in model.rules:
             if not rule.metric_id:
                 continue
-            definition = lookup_metric(rule.metric_id)
+            definition = lookup_metric(rule.metric_id, registry_version=(
+                "metric-registry@2" if pairwise_policy else METRIC_REGISTRY_VERSION))
             if definition is None:
                 raise ComparisonError(
                     "GATE_METRIC_UNKNOWN",
@@ -1406,7 +1628,13 @@ class ComparisonService:
                 f"gate policy {policy_id}@{policy_version} not found",
             )
         try:
+            if references_pairwise_quality(stored_policy):
+                validate_pairwise_quality_policy(stored_policy)
+                if baseline_id is not None:
+                    raise GateInputError("PAIRWISE_POLICY_UNSUPPORTED", "pairwise baseline comparison is unsupported")
             policy = GatePolicyVersion.model_validate(stored_policy)
+        except GateInputError as error:
+            raise ComparisonError(error.code, str(error)) from error
         except ValidationError as error:
             raise ComparisonError(
                 "GATE_POLICY_INVALID",
@@ -1427,6 +1655,7 @@ class ComparisonService:
                 f"run {run_id} is {run.get('status')!r}; gates evaluate fixed, "
                 "terminal reports only",
             )
+        scoring_pass_id = str(_resolve_pass(self.store, run_id, scoring_pass_id)["id"])
         candidate_ref = self.report_ref(run_id, scoring_pass_id=scoring_pass_id)
         candidate_snapshot = self.report_snapshot(
             run_id, scoring_pass_id=scoring_pass_id,
@@ -1496,6 +1725,11 @@ class ComparisonService:
                 # 实际模型身份按套件冻结口径投影（请求值不替代回报值）；
                 # 副作用/安全标记在固定报告里不可观测 → None（证据不足，
                 # fail-closed），绝不当成"无违规"。
+                "judge_qualification": {
+                    "candidate": self._judge_gate_qualification(scoring_pass_id),
+                    "baseline": self._judge_gate_qualification(baseline_ref.scoring_pass_id)
+                    if baseline_ref is not None else None,
+                },
                 "model_identity": _model_identity(dict(manifest)),
                 "side_effect_violations": None,
                 "safety_markers": None,

@@ -8,25 +8,49 @@
   证据视为 pinned；
 - 每次删除写 tombstone（gc_run_id、artifact_id、sha256、bytes、原因、时间）到
   motte_gc_tombstones；
-- trace 事件没有可靠时间戳，M7 GC v1 不做 DB 行裁剪；plan 里如实输出
-  trace_retention 报告（受保护 run 清单），不假装可裁剪。
+- GC 不裁剪 Trace DB 行；Trace 保留通过默认关闭的独立 trace-retention plan/apply
+  显式操作，先持久归档再裁剪。GC 始终保护归档命名空间。
 """
 from __future__ import annotations
 
 import hashlib
 import os
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .artifact_refs import (
+    canonical_artifact_id, collect_artifact_refs, iter_artifact_records,
+    referenced_artifact_hashes, resolve_artifact_refs,
+)
+from .artifacts import ArtifactMutationUnsupported, ArtifactStore
+from .deletion_audit import audit_missing_artifact, delete_with_audit
 from .maintenance import begin_maintenance, end_maintenance
 from .platform import platform_for
+from .trace_archives import is_trace_archive_id
 
-ARTIFACT_KEYS = ("artifact_id", "artifact_ids", "artifacts")
 PINNED_RUN_STATUSES = ("needs_review",)
 IMPORTED_PREFIX = "imports/"
+
+
+class _ReadOnlyArtifactReader:
+    """Read canonical evidence without ArtifactStore's root-creation side effect."""
+
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+
+    def read_bytes(self, artifact_id: str) -> bytes:
+        relative = canonical_artifact_id(artifact_id)
+        resolved = (self.root / relative).resolve()
+        try:
+            # Keep the constructor-resolved boundary if the root is replaced.
+            resolved.relative_to(self.root)
+        except ValueError as error:
+            raise ValueError("artifact path escapes root") from error
+        return resolved.read_bytes()
 
 
 @dataclass
@@ -51,87 +75,14 @@ class GCPlan:
 
 
 def _collect_artifact_ids(value: Any, found: set[str]) -> None:
-    """递归收集载荷里引用的 artifact id（键名约定 + EvidencePin 形状）。"""
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in ARTIFACT_KEYS:
-                if isinstance(child, str) and child:
-                    found.add(child)
-                elif isinstance(child, list):
-                    for item in child:
-                        if isinstance(item, str) and item:
-                            found.add(item)
-                        elif isinstance(item, dict) and isinstance(item.get("artifact_id"), str):
-                            found.add(item["artifact_id"])
-            elif key == "artifact_id" and isinstance(child, str):
-                found.add(child)
-            elif "artifact" in key.lower() and isinstance(child, list):
-                for item in child:
-                    if isinstance(item, str) and item:
-                        found.add(item)
-                    elif isinstance(item, dict):
-                        identifier = item.get("id") or item.get("artifact_id")
-                        if isinstance(identifier, str) and identifier:
-                            found.add(identifier)
-            _collect_artifact_ids(child, found)
-    elif isinstance(value, list):
-        for item in value:
-            _collect_artifact_ids(item, found)
+    """Compatibility wrapper over the shared evidence decoder."""
+    refs: dict[str, str | None] = {}
+    collect_artifact_refs(value, refs)
+    found.update(refs)
 
 
 def _walk_store(store: Any):
-    """遍历所有可能承载 artifact 引用的仓储。
-
-    Child repositories intentionally use their run-scoped list APIs.  Calling a
-    repository with the wrong shape is an implementation error and must propagate
-    instead of silently dropping retention references.
-    """
-    runs_repo = getattr(store, "runs", None)
-    if runs_repo is None or not hasattr(runs_repo, "list"):
-        raise AttributeError("store.runs.list is required for artifact GC")
-    runs = runs_repo.list()
-    for run in runs:
-        yield run
-        run_id = run.get("id") if isinstance(run, dict) else None
-        if not run_id:
-            continue
-        for repo_name in (
-            "case_runs", "attempts", "invocations", "scoring_passes",
-            "commands", "trials", "runtime_sessions", "scoring_jobs",
-        ):
-            repo = getattr(store, repo_name, None)
-            if repo is None:
-                continue
-            list_for_run = getattr(repo, "list_for_run", None)
-            if list_for_run is None:
-                continue
-            child_records = list_for_run(run_id)
-            for record in child_records:
-                yield record
-                if repo_name == "scoring_passes" and isinstance(record, dict):
-                    score_sets = getattr(store, "score_sets", None)
-                    if score_sets is not None and hasattr(score_sets, "list_for_pass"):
-                        for score in score_sets.list_for_pass(record.get("id", "")):
-                            yield score
-        external_jobs = getattr(store, "external_jobs", None)
-        if external_jobs is not None and hasattr(external_jobs, "jobs_for_run"):
-            for job in external_jobs.jobs_for_run(run_id):
-                yield job
-                for record in external_jobs.list_records(job.get("job_id", "")):
-                    yield record
-        baselines = getattr(store, "baselines", None)
-        if baselines is not None and hasattr(baselines, "get_for_run"):
-            for baseline in baselines.get_for_run(run_id):
-                yield baseline
-
-    baseline_store = getattr(store, "baseline_store", None)
-    if baseline_store is not None and hasattr(baseline_store, "list"):
-        for record in baseline_store.list(limit=1_000_000):
-            yield record
-    gate_store = getattr(store, "gate_store", None)
-    if gate_store is not None and hasattr(gate_store, "list_results"):
-        for record in gate_store.list_results(limit=1_000_000):
-            yield record
+    yield from iter_artifact_records(store)
 
 
 def _pinned_run_ids(store: Any) -> set[str]:
@@ -169,18 +120,15 @@ def plan_gc(
     """只读计算删除计划；不修改任何状态（默认 dry-run 的事实来源）。"""
     plan = GCPlan(gc_run_id="gc-" + uuid4().hex[:16])
     root = Path(artifacts_root)
-    referenced: set[str] = set()
-    for record in _walk_store(store):
-        _collect_artifact_ids(record, referenced)
+    from .trace_archives import verify_trace_archives
+    verify_trace_archives(store, _ReadOnlyArtifactReader(root))
+    referenced_hashes: set[str] = set()
+    referenced = resolve_artifact_refs(
+        referenced_artifact_hashes(store, hashes=referenced_hashes), root,
+    )
     pinned_runs = _pinned_run_ids(store)
-    # pinned run 的载荷整体再扫一遍（含 case/invocation 的引用已在 referenced）。
-    runs = getattr(store, "runs", None)
-    if runs is not None and hasattr(runs, "list"):
-        for run in runs.list():
-            if run["id"] in pinned_runs:
-                _collect_artifact_ids(run, referenced)
     plan.trace_retention = {
-        "db_row_pruning": "not_implemented_no_event_timestamps",
+        "db_row_pruning": "explicit_trace_retention_plan_apply_only_default_disabled",
         "pinned_run_count": len(pinned_runs),
         "pinned_run_ids": sorted(pinned_runs),
     }
@@ -199,7 +147,11 @@ def plan_gc(
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
         }
-        if rel in referenced:
+        if is_trace_archive_id(rel):
+            entry["reason"] = "trace_archive"
+            plan.protected.append(entry)
+            continue
+        if rel in referenced or entry["sha256"] in referenced_hashes:
             entry["reason"] = "referenced"
             plan.protected.append(entry)
             continue
@@ -235,24 +187,26 @@ def apply_gc(
     root = Path(artifacts_root).resolve()
     platform_stores = platform_for(store)
     # 与采集/评分/备份互斥：以带 owner 的维护租约保护整个 apply。
-    lease = begin_maintenance(store, reason="gc")
+    lease = begin_maintenance(
+        store, reason="gc", artifacts_root=root, allow_tombstone_writes=True,
+    )
     deleted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     try:
-        # 重算引用保护
-        referenced: set[str] = set()
-        for record in _walk_store(store):
-            _collect_artifact_ids(record, referenced)
-        pinned_runs = _pinned_run_ids(store)
-        runs = getattr(store, "runs", None)
-        if runs is not None and hasattr(runs, "list"):
-            for run in runs.list():
-                if run["id"] in pinned_runs:
-                    _collect_artifact_ids(run, referenced)
-        now_iso = datetime.now(UTC).isoformat()
+        from .trace_archives import verify_trace_archives
+        verify_trace_archives(store, ArtifactStore(root))
+        # Same decoder and repository traversal as planning and backup.
+        referenced_hashes: set[str] = set()
+        referenced = resolve_artifact_refs(
+            referenced_artifact_hashes(store, hashes=referenced_hashes), root,
+        )
+        artifacts = ArtifactStore(root) if root.is_dir() else None
         for entry in plan.deletable:
             rel = entry["artifact_id"]
-            if rel in referenced:
+            if is_trace_archive_id(rel):
+                skipped.append({**entry, "reason": "trace_archive"})
+                continue
+            if rel in referenced or entry["sha256"] in referenced_hashes:
                 skipped.append({**entry, "reason": "protected_after_recheck"})
                 continue
             target = root / rel
@@ -262,17 +216,37 @@ def apply_gc(
             except (ValueError, OSError):
                 skipped.append({**entry, "reason": "path_escape_blocked"})
                 continue
-            if not target.is_file():
-                skipped.append({**entry, "reason": "missing"})
+            if is_trace_archive_id(resolved.relative_to(root).as_posix()):
+                skipped.append({**entry, "reason": "trace_archive"})
                 continue
-            target.unlink()
-            deleted.append({
-                "gc_run_id": plan.gc_run_id, "artifact_id": rel,
-                "sha256": entry["sha256"], "bytes": entry["bytes"],
-                "reason": entry["reason"], "deleted_at": now_iso,
-            })
-        if deleted:
-            platform_stores.tombstones.append(deleted)
+            audit_entry = {**entry, "gc_run_id": plan.gc_run_id}
+            with ExitStack() as target_handles:
+                try:
+                    if artifacts is None:
+                        raise FileNotFoundError("artifact root is absent")
+                    target = target_handles.enter_context(
+                        artifacts._pinned_mutation_target(rel, resolve_aliases=False, read=True)
+                    )
+                except FileNotFoundError:
+                    reason = audit_missing_artifact(platform_stores.tombstones, audit_entry)
+                    skipped.append({**entry, "reason": reason})
+                    continue
+                except ArtifactMutationUnsupported:
+                    raise  # Unsupported is an operation blocker, not a path-escape skip.
+                except (OSError, ValueError):
+                    skipped.append({**entry, "reason": "path_escape_blocked"})
+                    continue
+                current_bytes = target.read_bytes()
+                current_sha256 = hashlib.sha256(current_bytes).hexdigest()
+                if current_sha256 in referenced_hashes:
+                    skipped.append({**entry, "reason": "protected_after_recheck"})
+                    continue
+                if current_sha256 != entry["sha256"] or len(current_bytes) != entry["bytes"]:
+                    skipped.append({**entry, "reason": "changed_since_plan"})
+                    continue
+                deleted.append(delete_with_audit(
+                    platform_stores.tombstones, audit_entry, delete=target.unlink, exists=target.exists,
+                ))
     finally:
         end_maintenance(store, owner=lease["owner"])
     return {

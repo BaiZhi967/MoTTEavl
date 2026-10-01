@@ -94,11 +94,19 @@ def evaluate_gate(
     （review R07）；缺覆盖、NaN/空分母、unknown cost、不可比分别对应硬
     规则失败；``evaluated_at`` 只进审计元数据，不进结论 hash。
     """
+    pairwise_policy = references_pairwise_quality(policy)
+    if pairwise_policy:
+        validate_pairwise_quality_policy(policy)
+        if comparison is not None:
+            raise GateInputError("PAIRWISE_POLICY_UNSUPPORTED", "pairwise baseline comparison is unsupported")
+        candidate = {**candidate, "pairwise_quality": _pairwise_section(candidate)}
     threshold = policy.get("threshold")
     operation = str(policy.get("op") or "gte")
     metric_id = str(policy.get("metric") or "accuracy")
-    metric_spec = METRIC_REGISTRY.get(metric_id) or {}
-    resolvable, metric_value, resolve_reason = _resolve_metric_value(policy, candidate)
+    metric_spec = (_pairwise_definition().model_dump() if pairwise_policy
+                   else METRIC_REGISTRY.get(metric_id) or {})
+    resolvable, metric_value, resolve_reason = (resolve_pairwise_gate_metric(candidate)
+        if pairwise_policy else _resolve_metric_value(policy, candidate))
     rules: list[dict] = []
 
     metric_ok = False
@@ -117,8 +125,11 @@ def evaluate_gate(
         )
     rules.append({"id": "metric_threshold", "passed": metric_ok, "reason": reason})
 
-    required_coverage = float(policy.get("required_coverage", 0.0))
-    coverage = candidate.get("coverage")
+    required_coverage = 1.0 if pairwise_policy else float(policy.get("required_coverage", 0.0))
+    coverage = (_pairwise_section(candidate).get("coverage") if pairwise_policy
+                else candidate.get("coverage"))
+    if pairwise_policy and (type(coverage) not in (int, float) or not 0 <= coverage <= 1):
+        coverage = None
     coverage_ok = coverage is not None and float(coverage) >= required_coverage
     rules.append({
         "id": "coverage",
@@ -150,13 +161,36 @@ def evaluate_gate(
             ),
         })
 
+    for key in ("judge_qualification", "baseline_judge_qualification"):
+        qualification = candidate.get(key)
+        if pairwise_policy and key == "judge_qualification":
+            eligible, reason = _pairwise_qualification(qualification, candidate)
+            rules.append({"id": key, "passed": eligible, "reason": reason})
+            continue
+        if isinstance(qualification, dict) and qualification.get("required"):
+            rules.append({"id": key, "passed": qualification.get("gate_eligible") is True,
+                          "reason": qualification.get("reason") or "Judge qualification unknown"})
+    qualifications = {key: candidate[key] for key in ("judge_qualification", "baseline_judge_qualification")
+                      if isinstance(candidate.get(key), dict) and candidate[key].get("required")}
+    if metric_id in {"accuracy", "judged_accuracy", "valid_trial_pass_rate"} and any(
+        item.get("mode") == "pairwise" for item in qualifications.values()
+    ):
+        rules.append({"id": "pairwise_quality_unavailable", "passed": False,
+                      "reason": "pairwise preference has no supported Boolean quality metric"})
     passed = all(rule["passed"] for rule in rules)
     conclusion = {
-        "schema": GATE_SCHEMA_VERSION,
+        "schema": "gate-lite@3" if pairwise_policy else GATE_SCHEMA_VERSION,
         "policy": dict(policy),
         "metric_id": metric_id,
         "passed": passed,
         "rules": rules,
+        **({"judge_qualification": qualifications} if qualifications else {}),
+        **({"pairwise_quality": candidate.get("pairwise_quality"),
+            "metric_registry_version": "metric-registry@2",
+            "pairwise_algorithm": "pairwise-quality@1",
+            "metric_definition_sha256": canonical_hash(metric_spec),
+            "qualification_source_sha256": _qualification_source_digest(candidate.get("judge_qualification")),
+            } if pairwise_policy else {}),
     }
     conclusion["conclusion_hash"] = _conclusion_hash(conclusion)
     conclusion["evaluated_at"] = evaluated_at
@@ -202,6 +236,222 @@ class GateInputError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+
+_PAIRWISE_QUALITY_METRIC = "pairwise_challenger_score"
+_PAIRWISE_QUALITY_VERSION = "1"
+_PAIRWISE_QUALITY_QUALIFIED = _PAIRWISE_QUALITY_METRIC + "@" + _PAIRWISE_QUALITY_VERSION
+
+
+def references_pairwise_quality(policy: GatePolicyVersion | Mapping[str, Any]) -> bool:
+    """Route the whole metric family to strict validation, including bad versions."""
+    def named(value: Any) -> bool:
+        return isinstance(value, str) and value.startswith(_PAIRWISE_QUALITY_METRIC)
+
+    rules = policy.rules if isinstance(policy, GatePolicyVersion) else policy.get("rules")
+    return (isinstance(policy, Mapping) and named(policy.get("metric"))) or any(
+        named(rule.metric_id if isinstance(rule, GateRule) else rule.get("metric_id"))
+        for rule in (rules if isinstance(rules, (list, tuple)) else ())
+        if isinstance(rule, (GateRule, Mapping))
+    )
+
+
+def _pairwise_definition() -> Any:
+    return lookup_metric(_PAIRWISE_QUALITY_QUALIFIED, registry_version="metric-registry@2")
+
+
+def _pairwise_section(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    from motte_contracts.pairwise_quality import PairwiseQualitySnapshot
+
+    value = snapshot.get("pairwise_quality")
+    if isinstance(value, PairwiseQualitySnapshot):
+        return value.model_dump(mode="json")
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def resolve_pairwise_gate_metric(snapshot: Mapping[str, Any]) -> tuple[bool, float | None, str]:
+    """Validate frozen typed evidence, never bare values or Boolean score rows.
+
+    This pure data boundary cannot prove ledger ownership. Public callers must
+    reconstruct from the selected server-owned Job/Invocation ledger first.
+    Qualification is deliberately a separate mandatory Gate input.
+    """
+    from motte_contracts.pairwise_quality import PairwiseQualitySnapshot
+
+    try:
+        quality = PairwiseQualitySnapshot.model_validate(snapshot.get("pairwise_quality"))
+        ref = snapshot.get("ref") or {}
+        if isinstance(ref, RunReportRef):
+            ref = ref.model_dump()
+        selected = ref.get("scoring_pass_id", snapshot.get("scoring_pass_id"))
+        schema = ref.get("report_schema", snapshot.get("report_schema"))
+        if (selected != quality.source_pass_id or schema != "report-pairwise-v1"
+                or snapshot.get("metric_registry_version") != "metric-registry@2"
+                or snapshot.get("scoring_pass_id", selected) != selected
+                or snapshot.get("report_schema", schema) != schema):
+            return False, None, "pairwise selected source/report binding mismatch"
+        if quality.value is None:
+            return False, None, "pairwise quality unavailable: " + "; ".join(quality.reasons)
+        if (quality.planned_pairs <= 0 or quality.valid_pairs != quality.planned_pairs
+                or quality.settled_calls != quality.planned_calls or quality.coverage != 1.0):
+            return False, None, "pairwise quality requires complete planned pairs and calls"
+        return True, quality.value, ""
+    except (ValueError, TypeError, AttributeError):
+        return False, None, "pairwise quality typed evidence/digest is missing or invalid"
+
+
+def _pairwise_qualification(value: Any, snapshot: Mapping[str, Any]) -> tuple[bool, str]:
+    """Check the shape/binding of the service's separately verified source."""
+    from .calibration_records import QualificationBinding
+
+    quality = _pairwise_section(snapshot)
+    try:
+        if (not isinstance(value, Mapping) or value.get("required") is not True
+                or value.get("gate_eligible") is not True or value.get("mode") != "pairwise"
+                or value.get("experimental") is not False
+                or value.get("pass_id") != quality.get("source_pass_id")
+                or value.get("judge_pass_id") != quality.get("source_pass_id")):
+            return False, "pairwise quality requires exact selected-Pass Judge qualification"
+        QualificationBinding.model_validate(value.get("binding"))
+    except (ValueError, TypeError, AttributeError):
+        return False, "pairwise quality requires a complete qualification source binding"
+    return True, "verified_calibration_source"
+
+
+def _qualification_source_digest(value: Any) -> str:
+    return canonical_hash(value.get("binding") if isinstance(value, Mapping) else None)
+
+
+def validate_pairwise_quality_policy(policy: GatePolicyVersion | dict[str, Any]) -> None:
+    """Validate explicit policy only; this establishes no metric or qualification.
+
+    Pass raw transport dictionaries here before any generic numeric coercion.
+    Normal typed GateRule construction rejects pairwise bool/string numbers
+    before parsing; all current typed values are revalidated, with explicit
+    presence checked separately so unchecked copies cannot hide prohibited
+    semantics or invent an omitted threshold/version. A numeric value whose original
+    type was already erased by unrelated caller code cannot reveal that history.
+    No defaults, normalization, I/O, publication or Gate evaluation occur here.
+    """
+    def invalid(message: str, *, unsupported: bool = False) -> None:
+        raise GateInputError(
+            "PAIRWISE_POLICY_UNSUPPORTED" if unsupported else "PAIRWISE_POLICY_INVALID", message,
+        )
+
+    def ratio(value: Any, label: str) -> None:
+        # Check exact types and range first, avoiding float(huge_int) overflow.
+        if (type(value) not in (int, float) or not 0 <= value <= 1
+                or (type(value) is float and not math.isfinite(value))):
+            invalid(f"{label} requires an explicit finite non-Boolean number in [0,1]")
+
+    def identity(metric: Any, version: Any) -> bool:
+        return ((metric == _PAIRWISE_QUALITY_QUALIFIED and version in (None, "1"))
+                or (metric == _PAIRWISE_QUALITY_METRIC and version == "1"))
+
+    def comparison_fields(value: Mapping[str, Any]) -> None:
+        forbidden = {"baseline_id", "baseline_run_id", "baseline_delta", "critical_case",
+                     "paired_inference", "paired_difference", "pass@k", "pass_at_k", "k"}
+        if forbidden.intersection(value) or value.get("require_comparable") is True:
+            invalid("pairwise baseline comparison, critical-case, paired inference and pass@k are unsupported",
+                    unsupported=True)
+
+    if isinstance(policy, GatePolicyVersion):
+        # Keep nested models long enough to inspect explicit-presence metadata,
+        # but never let that metadata erase their actual current semantics.
+        policy = {**policy.model_dump(warnings=False), "rules": policy.rules}
+    if not isinstance(policy, dict):
+        invalid("pairwise policy must be a policy object")
+    comparison_fields(policy)
+    if "rules" not in policy:
+        allowed = {"metric", "metric_version", "op", "threshold", "required_coverage",
+                   "severity", "missing_policy", "require_cost_known", "require_comparable",
+                   "policy_id", "version", "allowed_factors"}
+        if set(policy) - allowed:
+            invalid("unknown pairwise Lite policy fields")
+        if (policy.get("metric") != _PAIRWISE_QUALITY_QUALIFIED
+                or policy.get("metric_version") not in (None, "1")):
+            invalid("Lite pairwise policy requires metric='pairwise_challenger_score@1'")
+        if policy.get("op") != "gte":
+            invalid("pairwise threshold operator must be explicitly gte")
+        ratio(policy.get("threshold"), "pairwise threshold")
+        if policy.get("severity", "block") != "block" or policy.get("missing_policy", "fail_closed") != "fail_closed":
+            invalid("pairwise quality requires blocking, fail-closed rules")
+        if "required_coverage" in policy:
+            ratio(policy["required_coverage"], "pairwise coverage")
+            if policy["required_coverage"] != 1:
+                invalid("pairwise coverage must be exactly 1.0")
+        for field in ("require_cost_known", "require_comparable"):
+            if field in policy and type(policy[field]) is not bool:
+                invalid(f"{field} must be Boolean")
+        return
+
+    if policy.get("diagnostic", False) is not False:
+        invalid("pairwise quality policy cannot be diagnostic")
+    rules = policy["rules"]
+    if not isinstance(rules, (list, tuple)) or not rules:
+        invalid("pairwise policy requires a blocking quality threshold rule")
+    quality_count = 0
+    raw_rules = []
+    for item in rules:
+        explicit = set(item) if isinstance(item, dict) else set()
+        if isinstance(item, GateRule):
+            explicit = set(item.model_fields_set)
+            item = item.model_dump(warnings=False)
+        if not isinstance(item, dict):
+            invalid("pairwise policy rules must be objects")
+        raw_rules.append(item)
+        kind, metric = item.get("kind"), item.get("metric_id")
+        if not isinstance(kind, str):
+            invalid("pairwise rule kind must be a string")
+        unsupported_metrics = {"pass_at_k", "pass@k", "paired_difference", "paired_inference"}
+        if isinstance(metric, str) and any(
+            metric == name or metric.startswith(name + "@") for name in unsupported_metrics
+        ):
+            invalid("pairwise paired inference and pass@k are unsupported", unsupported=True)
+        if (kind in {"baseline_delta", "critical_case", "paired_inference", "pass_at_k"}
+                or item.get("required_comparability") is not None
+                or item.get("max_regression") is not None or item.get("critical_case_ids")):
+            invalid("pairwise comparison and critical-case rules are unsupported", unsupported=True)
+        selected = identity(metric, item.get("metric_version"))
+        if kind in {"metric_threshold", "coverage"} or selected or (
+            isinstance(metric, str) and metric.startswith(_PAIRWISE_QUALITY_METRIC)
+        ):
+            if not selected:
+                invalid("pairwise quality/coverage requires the explicit pairwise metric version 1")
+            if "metric_id" not in explicit or (metric == _PAIRWISE_QUALITY_METRIC and "metric_version" not in explicit):
+                invalid("pairwise quality/coverage requires explicitly supplied metric identity")
+            if kind not in {"metric_threshold", "coverage"}:
+                invalid("pairwise metric supports only threshold and coverage rules")
+            if item.get("severity", "block") != "block" or item.get("missing_policy", "fail_closed") != "fail_closed":
+                invalid("pairwise quality/coverage requires blocking, fail-closed rules")
+            if kind == "metric_threshold":
+                if item.get("min_samples") is not None or item.get("min_coverage") is not None:
+                    invalid("pairwise sample/coverage limits require an explicit coverage rule")
+                if "operator" not in explicit or item.get("operator") != "gte":
+                    invalid("pairwise threshold operator must be explicitly gte")
+                if "threshold" not in explicit:
+                    invalid("pairwise threshold must be explicitly supplied")
+                ratio(item.get("threshold"), "pairwise threshold")
+                quality_count += 1
+            else:
+                if "min_coverage" not in explicit:
+                    invalid("pairwise coverage must be explicitly supplied")
+                ratio(item.get("min_coverage"), "pairwise coverage")
+                if item["min_coverage"] != 1:
+                    invalid("pairwise coverage must be exactly 1.0")
+                minimum = item.get("min_samples")
+                if minimum is not None and (type(minimum) is not int or minimum <= 0):
+                    invalid("pairwise min_samples must be a positive strict integer")
+    if not quality_count:
+        invalid("pairwise policy requires a blocking quality threshold rule")
+    # Rebuild rather than trusting model_construct/model_copy instances. This
+    # also rejects unknown kinds/fields, missing policy metadata and duplicate IDs.
+    try:
+        raw = {**policy, "rules": raw_rules}
+        GatePolicyVersion.model_validate(raw)
+    except (ValueError, TypeError) as error:
+        raise GateInputError("PAIRWISE_POLICY_INVALID", "invalid pairwise policy contract: " + str(error)) from error
 
 
 def _metric_value(snapshot: Mapping[str, Any], metric_id: str) -> tuple[bool, float | None, str]:
@@ -336,6 +586,12 @@ def evaluate_gate_policy(
     ``candidate_evidence`` 是可选的额外证据视图（side effects / safety
     markers / 实际模型身份），全部由调用方从固定 pass/report 投影。
     """
+    pairwise_policy = references_pairwise_quality(policy)
+    if pairwise_policy:
+        validate_pairwise_quality_policy(policy)
+        policy = GatePolicyVersion.model_validate(policy.model_dump(warnings=False))
+        if baseline_ref is not None or baseline_snapshot is not None or comparison_level is not None:
+            raise GateInputError("PAIRWISE_POLICY_UNSUPPORTED", "pairwise baseline comparison is unsupported")
     snapshot_view: Mapping[str, Any] = (
         candidate_snapshot.model_dump() if isinstance(candidate_snapshot, ReportSnapshot)
         else candidate_snapshot
@@ -345,6 +601,22 @@ def evaluate_gate_policy(
         else baseline_snapshot
     )
     evidence: Mapping[str, Any] = candidate_evidence or {}
+    # The explicit selected reference remains authoritative even for mappings.
+    if pairwise_policy:
+        snapshot_view = {**snapshot_view, "pairwise_quality": _pairwise_section(snapshot_view),
+                         "ref": snapshot_view.get("ref", candidate_ref.model_dump())}
+    pairwise_resolved = resolve_pairwise_gate_metric(snapshot_view) if pairwise_policy else None
+    if pairwise_policy:
+        try:
+            nested_ref = snapshot_view.get("ref")
+            if isinstance(nested_ref, RunReportRef):
+                nested_ref = nested_ref.model_dump()
+            selected_ref = RunReportRef.model_validate(nested_ref)
+            matches = selected_ref.model_dump() == candidate_ref.model_dump()
+        except (ValueError, TypeError):
+            matches = False
+        if not matches:
+            pairwise_resolved = (False, None, "pairwise selected source/report binding mismatch")
     rule_results: list[RuleResult] = []
 
     def finish(
@@ -399,8 +671,10 @@ def evaluate_gate_policy(
         # 4) 按 kind 求值。
         if rule.kind in ("metric_threshold", "baseline_delta", "cost", "latency"):
             metric_id = rule.metric_id or ""
-            resolvable, value, resolve_reason = _metric_value(snapshot_view, metric_id)
-            definition = lookup_metric(metric_id)
+            pairwise_rule = pairwise_policy and rule.kind == "metric_threshold"
+            resolvable, value, resolve_reason = (pairwise_resolved if pairwise_rule
+                else _metric_value(snapshot_view, metric_id))
+            definition = _pairwise_definition() if pairwise_rule else lookup_metric(metric_id)
             if definition is None:
                 finish(rule, "insufficient", resolve_reason,
                        decision=GateDecision.INSUFFICIENT_EVIDENCE)
@@ -476,9 +750,16 @@ def evaluate_gate_policy(
             continue
 
         if rule.kind == "coverage":
-            coverage = snapshot_view.get("coverage")
-            counts = snapshot_view.get("counts") or {}
-            denominator = counts.get("selected", counts.get("judged", 0))
+            if pairwise_policy:
+                quality = snapshot_view.get("pairwise_quality") or {}
+                coverage = quality.get("coverage") if pairwise_resolved[0] else None
+                denominator = quality.get("planned_pairs", 0)
+                if type(denominator) is not int or denominator < 0:
+                    denominator = None
+            else:
+                coverage = snapshot_view.get("coverage")
+                counts = snapshot_view.get("counts") or {}
+                denominator = counts.get("selected", counts.get("judged", 0))
             problems: list[str] = []
             if rule.min_coverage is not None:
                 if coverage is None:
@@ -583,6 +864,39 @@ def evaluate_gate_policy(
 
         finish(rule, "not_applicable", f"rule kind {rule.kind!r} not wired")
 
+    qualifications = evidence.get("judge_qualification") or {}
+    if pairwise_policy:
+        eligible, reason = _pairwise_qualification(qualifications.get("candidate"), snapshot_view)
+        rule_results.append(RuleResult(
+            rule_id="judge_qualification", kind="judge_qualification",
+            status="pass" if eligible else "insufficient", severity="block",
+            decision=None if eligible else GateDecision.INSUFFICIENT_EVIDENCE, reason=reason,
+        ))
+    for role, qualification in qualifications.items():
+        if pairwise_policy and role == "candidate":
+            continue
+        if isinstance(qualification, Mapping) and qualification.get("required"):
+            eligible = qualification.get("gate_eligible") is True
+            rule_results.append(RuleResult(
+                rule_id="judge_qualification" if role == "candidate" else "baseline_judge_qualification",
+                kind="judge_qualification", status="pass" if eligible else "insufficient", severity="block",
+                decision=None if eligible else GateDecision.INSUFFICIENT_EVIDENCE,
+                reason=str(qualification.get("reason") or "Judge qualification unknown"),
+            ))
+    pairwise_quality = any(isinstance(item, Mapping) and item.get("mode") == "pairwise"
+                           for item in qualifications.values()) and any(
+        rule.kind == "critical_case" or rule.metric_id in {
+            "accuracy", "judged_accuracy", "valid_trial_pass_rate", "cost.per_success_usd",
+        }
+        for rule in policy.rules
+    )
+    if pairwise_quality:
+        rule_results.append(RuleResult(
+            rule_id="pairwise_quality_unavailable", kind="quality_availability", status="insufficient",
+            decision=GateDecision.INSUFFICIENT_EVIDENCE,
+            reason="pairwise preference has no supported Boolean quality metric",
+        ))
+
     # 聚合决策（协议 §6 优先级）：warn 规则不贡献决策。
     contributions = [
         result.decision for result in rule_results
@@ -606,12 +920,24 @@ def evaluate_gate_policy(
         "candidates": [candidate_ref.model_dump()],
         "baseline": baseline_ref.model_dump() if baseline_ref is not None else None,
         "statistical_policy": statistical_policy_ref,
+        "judge_qualification": qualifications,
+        **({"pairwise_quality_content_sha256": _pairwise_section(snapshot_view).get("content_sha256"),
+            "pairwise_quality_input_sha256": canonical_hash(snapshot_view.get("pairwise_quality")),
+            "metric_definition_sha256": canonical_hash(_pairwise_definition().model_dump()),
+            "qualification_source_sha256": _qualification_source_digest(qualifications.get("candidate")),
+            } if pairwise_policy else {}),
     })
     result_semantics_hash = canonical_hash({
-        "engine": GATE_ENGINE_VERSION,
+        "engine": "gate-engine@3" if pairwise_policy else GATE_ENGINE_VERSION,
         "rule_registry": GATE_RULE_REGISTRY_VERSION,
-        "metric_registry": METRIC_REGISTRY_VERSION,
+        "metric_registry": "metric-registry@2" if pairwise_policy else METRIC_REGISTRY_VERSION,
         "statistical_policy": statistical_policy_ref,
+        **({"judge_source": "calibration-binding@1"} if pairwise_policy or pairwise_quality or any(
+            isinstance(item, Mapping) and item.get("binding") for item in qualifications.values()
+        ) else {}),
+        **({"pairwise_algorithm": "pairwise-quality@1",
+            "metric_definition_sha256": canonical_hash(_pairwise_definition().model_dump()),
+            } if pairwise_policy else {}),
     })
     suggested: list[str] = []
     if decision in (GateDecision.INSUFFICIENT_EVIDENCE, GateDecision.NOT_COMPARABLE):
@@ -645,6 +971,9 @@ def evaluate_gate_policy(
         conclusion_hash="pending",
         evaluated_at=evaluated_at,
         suggested_actions=tuple(suggested),
+        judge_qualification=qualifications if any(
+            isinstance(item, Mapping) and item.get("required") for item in qualifications.values()
+        ) else {},
     )
     return result.model_copy(update={
         "gate_result_id": result.compute_gate_result_id(),

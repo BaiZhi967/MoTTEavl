@@ -57,6 +57,7 @@ def _build_http(config: dict[str, Any], manifest: dict[str, Any]):
         config,
         manifest.get("cases") or {},
         tools=manifest.get("tools"),
+        transport_policy=manifest.get("provider_transport_policy"),
     )
 
 
@@ -163,8 +164,14 @@ def build_case_provider(
     *,
     tools: list[dict[str, Any]] | None = None,
     api_key: str | None = None,
+    transport_policy: str | None = None,
 ) -> CaseDrivenProvider:
     """按 kind 构造 HTTP case provider；凭据链与传输参数来自 registry 的 AdapterSpec。"""
+    if transport_policy is not None:
+        if transport_policy != "bounded-http@1":
+            raise ValueError("unknown provider transport policy")
+        # Each counted attempt has one client send, including the redirect path.
+        config = {**config, "follow_redirects": False}
     validate_provider_config(config)
     kind = config["kind"]
     provider_cls = provider_class_for(kind)
@@ -182,6 +189,7 @@ def build_case_provider(
         api_key,
         timeout=config.get("timeout", 30.0),
         max_retries=config.get("max_retries", 2),
+        **({"follow_redirects": config["follow_redirects"]} if "follow_redirects" in config else {}),
         backoff_initial=float(config.get("backoff_initial_ms", 500)) / 1000,
         backoff_max=float(config.get("backoff_max_ms", 30000)) / 1000,
         **spec.transport_kwargs,

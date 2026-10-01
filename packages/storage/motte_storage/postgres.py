@@ -16,7 +16,8 @@ from psycopg.types.json import Json
 
 from .integrity import RunConflictError, new_run, next_run, stored_run, validate_event, validate_scores
 from .migrations import upgrade as upgrade_migrations
-from .run_store import INTERRUPTED_STATES, RunStore
+from .run_store import INTERRUPTED_STATES, RunStore, _stored_trace_event
+from . import trace_retention_models as trace_metadata
 
 
 class UnsupportedStorageError(RuntimeError):
@@ -48,8 +49,8 @@ def _append_event(cursor, event: dict[str, Any]) -> dict[str, Any]:
     cursor.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM trace_events WHERE run_id = %s", (run_id,))
     stored = {**deepcopy(event), "seq": cursor.fetchone()[0]}
     cursor.execute(
-        "INSERT INTO trace_events(run_id, seq, payload) VALUES (%s, %s, %s)",
-        (run_id, stored["seq"], Json(stored)),
+        "INSERT INTO trace_events(run_id, seq, payload, stored_at) VALUES (%s, %s, %s, %s)",
+        (run_id, stored["seq"], Json(stored), trace_metadata.utc_now().isoformat()),
     )
     return stored
 
@@ -275,12 +276,38 @@ class _PgTraceEvents:
             with connection.cursor() as cursor:
                 return _append_event(cursor, event)
 
+    def stored_for_run(self, run_id: str) -> list[trace_metadata.StoredTraceEvent]:
+        with _connect(self._dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT seq, payload, stored_at FROM trace_events WHERE run_id = %s ORDER BY seq",
+                    (run_id,),
+                )
+                rows = cursor.fetchall()
+        return [_stored_trace_event(run_id, seq, payload, stored_at)
+                for seq, payload, stored_at in rows]
+
     def list_for_run(self, run_id: str) -> list[dict[str, Any]]:
         with _connect(self._dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT payload FROM trace_events WHERE run_id = %s ORDER BY seq", (run_id,))
                 rows = cursor.fetchall()
         return [deepcopy(row[0]) for row in rows]
+
+    def read_window(self, run_id: str, after: int) -> trace_metadata.TraceEventWindow:
+        # READ COMMITTED is sufficient because both inputs belong to one statement.
+        with _connect(self._dsn) as connection:
+            rows = connection.execute(
+                "SELECT e.payload, r.trimmed_through FROM "
+                "(SELECT COALESCE(MAX(last_seq), 0) AS trimmed_through "
+                "FROM trace_archive_receipts WHERE run_id = %s) r "
+                "LEFT JOIN trace_events e ON e.run_id = %s AND e.seq > %s ORDER BY e.seq",
+                (run_id, run_id, after),
+            ).fetchall()
+        return trace_metadata.TraceEventWindow(
+            events=[payload for payload, _ in rows if payload is not None],
+            trimmed_through=rows[0][1],
+        )
 
     def list_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
         with _connect(self._dsn) as connection:
@@ -337,6 +364,9 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         PgTrials,
     )
     from .pg_m6 import PgBaselineStore, PgExperiments, PgGateStore
+    from .statistical_reports import PgStatisticalReports
+    from .pg_calibrations import PgCalibrations
+    from .trace_archives import PgTraceArchives
 
     normalized = normalize_dsn(dsn)
     if migrate:
@@ -359,4 +389,7 @@ def create_postgres_run_store(dsn: str, *, migrate: bool = False) -> PostgresRun
         experiments=PgExperiments(normalized),
         gate_store=PgGateStore(normalized),
         baseline_store=PgBaselineStore(normalized),
+        statistical_reports=PgStatisticalReports(normalized),
+        calibrations=PgCalibrations(normalized),
+        trace_archives=PgTraceArchives(normalized),
     )

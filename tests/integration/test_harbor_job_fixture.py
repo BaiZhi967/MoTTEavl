@@ -415,7 +415,10 @@ def test_conflicting_trial_evidence_blocks_without_overwriting(tmp_path: Path) -
     assert canonical_hash(stored["result"]) == canonical_hash(original)
 
 
-def test_adapter_records_owner_tokens_and_residual_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize("container_state,expected_state", [("clean", "residual"), ("unknown", "unknown")])
+def test_adapter_records_owner_tokens_and_residual_state(
+    tmp_path: Path, monkeypatch, container_state, expected_state,
+) -> None:
     """资源账本：容器标签/owner token 可核验，清理结果分 clean/residual。"""
     service, record = _build_store(tmp_path)
     inputs = tb.build_run_inputs(
@@ -432,6 +435,11 @@ def test_adapter_records_owner_tokens_and_residual_state(tmp_path: Path) -> None
     assert owned["owner_token"] == handle.launch_token
     assert owned["container_label"] == "motte.job=" + handle.job_id
     assert any(item["kind"] == "job_dir" for item in owned["resources"])
+    # 此测试验证账本/进程残留；显式注入容器能力，不依赖宿主 Docker daemon。
+    from types import SimpleNamespace
+    monkeypatch.setattr(adapter, "ownership", lambda _handle: SimpleNamespace(
+        stop_owned=lambda **_kwargs: {"state": container_state, "containers": [], "errors": []},
+    ))
     outcome = adapter.cleanup(started)
     assert outcome["owner_token"] == handle.launch_token
     assert outcome["job_id"] == handle.job_id
@@ -439,7 +447,7 @@ def test_adapter_records_owner_tokens_and_residual_state(tmp_path: Path) -> None
     assert outcome["job_dir_present"] is True
     # fixture Runner 没有真实子进程，所以"清理"只能如实报告"无法核验身份"，
     # 绝不宣称 clean（M3-T07：不确定的残留必须可定位，不能假装干净）。
-    assert outcome["state"] == "residual"
+    assert outcome["state"] == expected_state
     assert any(item.get("kind") == "identity_unverified" for item in outcome["leftovers"])
 
 

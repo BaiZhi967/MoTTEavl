@@ -20,6 +20,7 @@ from pydantic import Field, field_validator, model_validator
 
 from .hashing import canonical_hash
 from .messages import Contract
+from .pairwise_quality import PairwiseQualitySnapshot, _DetachedPairwiseContract
 
 ALLOWED_COMPARISON_FACTORS: frozenset[str] = frozenset({
     "model",
@@ -268,6 +269,29 @@ class ReportSnapshot(Contract):
         payload = self.model_dump()
         payload.pop("snapshot_id")
         return canonical_hash(payload)
+
+
+class PairwiseReportSnapshot(ReportSnapshot, _DetachedPairwiseContract):
+    """Additive v2 report; pair counts never replace historical Boolean counts."""
+
+    pairwise_quality: PairwiseQualitySnapshot
+    metric_registry_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _pairwise_source_is_bound(self) -> PairwiseReportSnapshot:
+        if self.ref.report_schema != "report-pairwise-v1" or self.metric_registry_version != "metric-registry@2":
+            raise ValueError("pairwise reports require report-pairwise-v1 and metric-registry@2")
+        if self.ref.scoring_pass_id != self.pairwise_quality.source_pass_id:
+            raise ValueError("pairwise quality must bind the report's fixed selected source Pass")
+        for metric, value in self.metric_values.items():
+            if metric.partition("@")[0] in {
+                "accuracy", "judged_accuracy", "valid_trial_pass_rate", "cost.per_success_usd",
+            } and value is not None:
+                raise ValueError("pairwise quality cannot manufacture Boolean success metrics")
+        for metric in ("pairwise_challenger_score", "pairwise_challenger_score@1"):
+            if metric in self.metric_values and self.metric_values[metric] != self.pairwise_quality.value:
+                raise ValueError("bare pairwise metric must equal its bound typed quality value")
+        return self
 
 
 #: Baseline 资格（协议 §4）。

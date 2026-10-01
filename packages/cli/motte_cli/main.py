@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from motte_cli import ops, remote, runops
+from motte_cli import judge_calibrations, ops, remote, runops
 
 
 def _runtime_catalog():
@@ -1001,11 +1001,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cleanup = sub.add_parser(
         "cleanup-artifacts",
-        help="按 TTL 清理 artifact（默认 dry-run；legacy 简单清理，M7 起优先使用 motte gc）",
+        help="旧版 TTL 只读诊断（删除入口已停用；请使用引用保护的 motte gc plan/apply）",
     )
     cleanup.add_argument("--older-than-days", type=float, required=True)
     cleanup.add_argument("--artifacts-root", default=None, help="artifact 根目录，默认 ARTIFACT_ROOT")
-    cleanup.add_argument("--apply", action="store_true", help="真正删除（缺省仅报告）")
+    cleanup.add_argument("--apply", action="store_true", help="已弃用且拒绝执行；请使用 motte gc apply")
     remote.add_mode_arguments(cleanup)
 
     experiment = sub.add_parser(
@@ -1024,6 +1024,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     exp_create.add_argument("--spec", required=True, help="ExperimentSpec JSON 或 @文件")
     exp_create.add_argument("--request-key", dest="request_key", help="幂等键（同键异内容拒绝）")
+    exp_create.add_argument("--preview-hash", help="绑定此前 preview 的 hash；资源或 spec 变化时拒绝")
     exp_create.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     remote.add_mode_arguments(exp_create)
     exp_status = experiment_sub.add_parser("status", help="读取实验状态与 cell 进度（只读）")
@@ -1057,12 +1058,37 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate-pass", dest="candidate_pass",
                          help="固定候选 scoring pass id（缺省 current）")
     compare.add_argument("--json", dest="json_out", help="把比较 JSON 写入文件")
+    compare.add_argument("--format", choices=("json", "junit"), default="json")
+    compare.add_argument("--output", help="把指定格式的比较/统计结果写入文件")
     compare.add_argument("--statistics", action="store_true",
                          help="附带固定 Case/Task 配对统计与资格（只读）")
     compare.add_argument("--k", type=int, default=1,
                          help="Terminal-Bench 的事前计划 Trial pass@k（默认 1）")
     compare.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
     remote.add_mode_arguments(compare)
+
+    statistical_report = sub.add_parser(
+        "statistical-report", help="显式发布 / 读取 / 导出不可变统计报告（零模型调用）",
+    )
+    report_sub = statistical_report.add_subparsers(dest="report_command", required=True)
+    report_publish = report_sub.add_parser("publish", help="计算一次并发布固定 Pass 统计报告")
+    report_publish.add_argument("--baseline", required=True)
+    report_publish.add_argument("--candidate", required=True)
+    report_publish.add_argument("--factors", default="model")
+    report_publish.add_argument("--baseline-pass")
+    report_publish.add_argument("--candidate-pass")
+    # Parse inside the handler so invalid values use the usual JSON error exit.
+    report_publish.add_argument("--k", default="1")
+    report_get = report_sub.add_parser("get", help="读取已发布正文，不重新计算")
+    report_get.add_argument("report_id")
+    report_export = report_sub.add_parser("export", help="导出已发布正文，不重新计算")
+    report_export.add_argument("report_id")
+    report_export.add_argument("--format", default="json")
+    report_export.add_argument("--output")
+    for report_parser in (report_publish, report_get, report_export):
+        report_parser.add_argument("--db", help="SQLite 路径，默认 MOTTE_DB_PATH")
+        report_parser.add_argument("--server", metavar="URL", help="远端 API 地址（server 模式）")
+        remote.add_mode_arguments(report_parser)
 
     baseline = sub.add_parser(
         "baseline", help="M6 BaselineSnapshot：创建 / 列表 / 默认指针（指针是 CAS 操作）",
@@ -1155,6 +1181,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # M7 新增：run 生命周期子命令与运维命令（local/server 路由见各模块）。
     runops.add_run_lifecycle_parsers(sub)
     ops.add_ops_parsers(sub)
+    judge_calibrations.add_parsers(sub)
+    from motte_cli.trace_retention import add_trace_retention_parser
+    add_trace_retention_parser(sub)
     return parser
 
 
@@ -1968,6 +1997,7 @@ def _judge_command(args) -> int:
 
     预检与读取零模型调用；提交只落持久作业，执行永远在 Worker 的执行锁内。
     """
+    from pydantic import ValidationError
     from motte_eval.judge import JudgeBudgetError, JudgeError, JudgeInputError, JudgeNotAuthorised
     from motte_sdk.resolve import ManifestResolutionError
     from motte_sdk.scoring_jobs import (
@@ -2015,7 +2045,14 @@ def _judge_command(args) -> int:
                 repeats=int(document.get("repeats") or 1),
                 presentation_orders=document.get("presentation_orders"),
                 price_table_version=document.get("price_table_version"),
+                pairwise_refs=document.get("pairwise_refs"),
+                qualification_id=document.get("qualification_id"),
+                _lookup_existing=command != "preflight",
             )
+        except ValidationError:
+            return _error("JUDGE_CONTRACT_INVALID", "judge request does not satisfy its contract")
+        except ScoringJobConflict as error:
+            return _error("SCORING_JOB_CONFLICT", str(error))
         except ManifestResolutionError as error:
             return _error(error.code, str(error))
         except JudgeEvidenceError as error:
@@ -2162,6 +2199,7 @@ def _experiment_command(args) -> int:
             if command == "create":
                 return client.experiment_create(
                     document, request_key=getattr(args, "request_key", None),
+                    preview_hash=args.preview_hash,
                 )
             if command == "status":
                 return client.experiment_status(
@@ -2193,6 +2231,7 @@ def _experiment_command(args) -> int:
             else:
                 outcome = service.create(
                     document, request_key=getattr(args, "request_key", None),
+                    expected_preview_hash=args.preview_hash,
                 )
         except ValidationError as error:
             return _error("EXPERIMENT_INVALID", str(error))
@@ -2205,7 +2244,7 @@ def _experiment_command(args) -> int:
             return 2 if view.get("violations") else 0
         print(_m6_json({key: outcome.get(key) for key in (
             "experiment_id", "version", "created", "allocated",
-            "skipped_existing", "failed", "cells",
+            "skipped_existing", "failed", "cells", "preview_hash", "preflight_mode",
         )}))
         return 0
 
@@ -2233,9 +2272,17 @@ def _compare_command(args) -> int:
 
     比较本身成功时退出 0；not_comparable 是"结论"不是崩溃，按协议 §7 退出 5。
     """
-    from motte_sdk.comparisons import ComparisonError
-    from motte_sdk.export import comparison_to_json
+    def emit(payload):
+        from motte_sdk.export import statistics_to_junit
+        output = statistics_to_junit(payload["statistics"]) if getattr(args, "format", "json") == "junit" else _m6_json(payload)
+        if args.json_out:
+            _write_text(args.json_out, _m6_json(payload))
+        if getattr(args, "output", None):
+            _write_text(args.output, output)
+        print(output)
 
+    if getattr(args, "format", "json") == "junit" and not args.statistics:
+        return _error("POLICY_INVALID", "junit comparison export requires --statistics")
     if args.statistics and args.k < 1:
         return _error("POLICY_INVALID", "k must be a positive integer")
     factors = [item.strip() for item in (args.factors or "model").split(",") if item.strip()]
@@ -2247,9 +2294,11 @@ def _compare_command(args) -> int:
                 baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
             ).raw
             if args.statistics:
+                # Reuse the resolved Pass pair; current may change between requests.
                 payload["statistics"] = client.compare_statistics(
                     args.baseline, args.candidate, factors=",".join(factors),
-                    baseline_pass=args.baseline_pass, candidate_pass=args.candidate_pass,
+                    baseline_pass=payload["refs"]["baseline"]["scoring_pass_id"],
+                    candidate_pass=payload["refs"]["candidate"]["scoring_pass_id"],
                     k=args.k,
                 )
             return payload
@@ -2257,11 +2306,12 @@ def _compare_command(args) -> int:
         outcome = remote.call_remote(args, invoke, default_code="RUN_NOT_FOUND")
         if isinstance(outcome, remote.RemoteOk):
             payload = outcome.payload
-            if args.json_out:
-                _write_text(args.json_out, _m6_json(payload))
-            print(_m6_json(payload))
+            emit(payload)
             return 5 if payload.get("level") == "not_comparable" else 0
         return outcome
+    from motte_sdk.comparisons import ComparisonError
+    from motte_sdk.export import comparison_to_json
+
     service = _comparison_service(args)
     try:
         result = service.compare(
@@ -2292,13 +2342,94 @@ def _compare_command(args) -> int:
     if args.statistics:
         payload["statistics"] = service.paired_statistics(
             args.baseline, args.candidate, allowed_factors=factors,
-            baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+            baseline_pass_id=result.baseline_ref.scoring_pass_id,
+            candidate_pass_id=result.candidate_ref.scoring_pass_id,
             k=args.k,
         )
-    if args.json_out:
-        _write_text(args.json_out, _m6_json(payload))
-    print(_m6_json(payload))
+    emit(payload)
     return 5 if result.level.value == "not_comparable" else 0
+
+
+def _statistical_report_command(args) -> int:
+    """Explicit publication; local and remote reads share pure stored exporters."""
+    from motte_contracts.statistical_reports import StatisticalReportPublishRequest
+    from motte_sdk.comparisons import ComparisonError
+    from motte_sdk.export import statistical_report_to_json, statistical_report_to_junit
+    from motte_storage.operation_locks import MaintenanceConflict
+    from motte_storage.statistical_reports import StatisticalReportConflict, StatisticalReportCorrupt
+
+    if args.server:
+        if args.cli_mode == "local" or (args.api_url and args.api_url != args.server):
+            return _error("MODE_MISMATCH", "--server conflicts with --mode local or --api-url")
+        args.cli_mode, args.api_url = "server", args.server
+    try:
+        command = args.report_command
+        if command == "publish":
+            request = StatisticalReportPublishRequest(
+                baseline_run_id=args.baseline, candidate_run_id=args.candidate,
+                allowed_factors=[factor.strip() for factor in args.factors.split(",")],
+                baseline_pass_id=args.baseline_pass, candidate_pass_id=args.candidate_pass,
+                k=int(args.k),
+            )
+        if command == "export" and args.format not in {"json", "junit"}:
+            raise ValueError("format must be json or junit")
+        if remote.is_server(args):
+            def invoke(client):
+                if command == "publish":
+                    return client.publish_statistical_report(**request.model_dump())
+                if command == "export":
+                    return client.export_statistical_report(args.report_id, args.format)
+                return client.get_statistical_report(args.report_id)
+
+            outcome = remote.call_remote(args, invoke, default_code="STATISTICAL_REPORT_NOT_FOUND")
+            if not isinstance(outcome, remote.RemoteOk):
+                return outcome
+            payload = outcome.payload
+        else:
+            from motte_sdk.statistical_reports import StatisticalReportService
+
+            service = StatisticalReportService(_m6_store(args))
+            if command == "publish":
+                payload = service.publish(**request.model_dump())
+            else:
+                report = service.get(args.report_id)
+                payload = (statistical_report_to_junit(report)
+                           if command == "export" and args.format == "junit"
+                           else statistical_report_to_json(report))
+        output = (payload if isinstance(payload, str) else json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False,
+        )) + "\n"
+        if command == "export" and args.output:
+            target = Path(args.output)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Render/validate completely before opening any file, then replace
+            # atomically so failures also leave an existing export untouched.
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(output.encode("utf-8"))
+                os.replace(temporary, target)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        print(output, end="")
+        return 0
+    except StatisticalReportCorrupt as error:
+        return _error("STATISTICAL_REPORT_CORRUPT", str(error))
+    except StatisticalReportConflict as error:
+        return _error("STATISTICAL_REPORT_CONFLICT", str(error))
+    except MaintenanceConflict as error:
+        return _error("MAINTENANCE_MODE", str(error))
+    except KeyError as error:
+        return _error("RUN_NOT_FOUND" if args.report_command == "publish"
+                      else "STATISTICAL_REPORT_NOT_FOUND", str(error))
+    except ComparisonError as error:
+        return _error(error.code, str(error))
+    except ValueError as error:
+        return _error("POLICY_INVALID", str(error))
+    except OSError as error:
+        return _error("EXPORT_FAILED", str(error))
 
 
 def _baseline_command(args) -> int:
@@ -2713,11 +2844,16 @@ def main(argv=None):
     if args.command == "scenario":
         return _scenario_command(args)
 
+    if args.command == "judge-calibration":
+        return judge_calibrations.run(args)
+
     if args.command == "judge":
         return _judge_command(args)
 
     if args.command == "experiment":
         return _experiment_command(args)
+    if args.command == "statistical-report":
+        return _statistical_report_command(args)
     if args.command == "compare":
         return _compare_command(args)
     if args.command == "baseline":
@@ -2756,6 +2892,9 @@ def main(argv=None):
         return ops.restore_guard_command(args)
     if args.command == "maintenance":
         return ops.maintenance_command(args)
+    if args.command == "trace-retention":
+        from motte_cli.trace_retention import trace_retention_command
+        return trace_retention_command(args)
     if args.command == "gc":
         return ops.gc_command(args)
     if args.command == "import":
@@ -3028,17 +3167,22 @@ def main(argv=None):
         return 0
 
     if args.command == "cleanup-artifacts":
-        # local-only（涉及宿主文件；协议 §3）；M7 起优先使用 motte gc。
+        # local-only diagnostics; unbound legacy deletion is deliberately disabled.
         blocked = remote.local_only_error(args, "cleanup-artifacts")
         if blocked is not None:
             return blocked
-        from motte_storage.maintenance import cleanup_artifacts
+        from motte_storage.maintenance import BackupUnsupported, cleanup_artifacts
 
         artifacts_root = getattr(args, "artifacts_root", None) or os.environ.get("ARTIFACT_ROOT")
         if not artifacts_root:
             print("cleanup-artifacts 需要 --artifacts-root 或 ARTIFACT_ROOT", file=sys.stderr)
             return 2
-        report = cleanup_artifacts(artifacts_root, older_than_days=args.older_than_days, dry_run=not args.apply)
+        try:
+            report = cleanup_artifacts(
+                artifacts_root, older_than_days=args.older_than_days, dry_run=not args.apply,
+            )
+        except BackupUnsupported as error:
+            return remote.cli_error("CLEANUP_UNSUPPORTED", str(error))
         print(json.dumps(report, ensure_ascii=False))
         return 0
 

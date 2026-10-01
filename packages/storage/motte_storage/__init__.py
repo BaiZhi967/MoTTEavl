@@ -1,7 +1,6 @@
 from .artifacts import ArtifactStore
 from .factory import create_run_store
 from .integrity import RunConflictError, new_run_id
-from .postgres import PostgresRunStore, UnsupportedStorageError, create_postgres_run_store
 from .repositories import InMemoryRepository
 from .run_store import InMemoryRunStore, SQLiteRunStore
 from .scoring_jobs import (
@@ -18,6 +17,17 @@ from .scoring_jobs import (
 )
 
 __version__ = "0.1.0"
+
+
+def __getattr__(name: str):
+    # Keep PostgreSQL's public exports while leaving the default SQLite/memory
+    # installation independent of the optional driver and migration stack.
+    if name in {"PostgresRunStore", "UnsupportedStorageError", "create_postgres_run_store"}:
+        from . import postgres
+
+        return getattr(postgres, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "ArtifactStore",

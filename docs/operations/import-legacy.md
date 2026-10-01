@@ -70,9 +70,28 @@ result = apply_import(store, "var/artifacts", source, operator="you@example")
 - 同 mapping_key 同内容 → reused；同 key 异内容 → conflicted（该单元停止、保留
   诊断，批次继续）。
 - `rollback_import(store, artifacts_root, import_id, operator=..., confirm=True)`：
-  只处理本批次创建的对象；artifact 被其他批次/任意 run 引用 → blocked（不删）；
+  只处理本批次创建的对象；artifact 被其他批次或任意资源引用 → blocked（不删）。
+  与 backup/GC 共用引用解码与仓储遍历：嵌套 `id`/`artifact_id`/`sha256`、
+  `kind=artifact` 的 `locator`、`raw_ref`/`raw_bundle_artifact`，包括
+  CaseRun、Invocation、ScoreSet、Baseline、Gate、Trace 事件、持久 ScoringJob/
+  无 Run 父项的 calibration Invocation、待分配 Experiment Cell 与导入账本。
+  只有本批次账本明确映射且归属校验通过的 Run，以及带 importer 来源的
+  子记录可排除；后续外部 Invocation/CaseRun 不继承该排除。独立 Baseline、
+  Gate 与 Experiment Cell（含 `superseding_run_ids`）的 Run 引用会保护
+  该 Run 全部工件，并以 `run_in_use` 阻断停用。引用扫描、文件删除与 tombstone
+  写入共持维护屏障和 artifact 根目录锁；扫描失败即中止，不按“无引用”处理。
+  文件内容与导入账本 SHA 不同则 `artifact_changed` 阻断；新内容被其他资源
+  以 SHA 引用时按 `artifact_in_use` 保留，不能用旧 hash 授权删除新内容。
   run 行不做物理删除（存储层不可变），整批标 `rolled_back` + run CAS 注记
   `rolled_back_import`，审计保留在账本与 tombstone。
+- 删除审计先持久写入 `deletion_status=deleting` 意图，再执行 unlink；仅在
+  unlink 正常返回且确认文件不存在后记 `deleted`/`deleted_at`。普通错误记
+  `failed`；中断后的缺文件重放只记 `absence_unconfirmed`，从未观察到删除的
+  缺文件记 `missing_unobserved`，不能补造完成时间。已确认完成的重放返回
+  `already_deleted` 并保留原审计。文件系统与数据库不是一个原子事务。
+- 完成回退后的备份可将“已停用、仅本批次持有、且有 `deleted` 完成审计”的
+  旧引用视为归档引用；账本与 Run 载荷不删改。外部引用、独立 pin、后续新建
+  子记录、缺失完成审计或未确认删除仍要求原证据存在，否则备份标 incomplete。
 
 ## 5. 对账与验收
 

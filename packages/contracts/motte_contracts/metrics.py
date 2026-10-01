@@ -18,6 +18,7 @@ METRIC_DENOMINATORS: frozenset[str] = frozenset({
     "judged_cases",     # Direct LLM：有期望且已判定
     "valid_trials",     # Harbor：有效 Trial
     "planned_trials",   # Harbor：计划 Trial（覆盖口径）
+    "planned_pairs",    # 显式 challenger/reference 配对；只在注册表 v2 使用
     "tasks",            # Task 级统计
     "run",              # Run 级（成本/时长的单位是 Run 本身）
 })
@@ -156,12 +157,33 @@ METRIC_REGISTRY: dict[str, MetricDefinition] = {
 }
 
 
-def lookup_metric(metric_id: str) -> MetricDefinition | None:
-    """按 metric_id 查注册表；带 ``@version`` 后缀时同时校验版本。"""
+METRIC_REGISTRY_V2: dict[str, MetricDefinition] = {
+    **METRIC_REGISTRY,
+    "pairwise_challenger_score": _metric(
+        "pairwise_challenger_score", unit="ratio", direction="gte", aggregation="mean",
+        denominator="planned_pairs",
+        eligibility="complete unique successful planned calls and explicit challenger/reference roles",
+        required_evidence=("pairwise_roles", "frozen_plan", "invocation_ledger"),
+        missing_policy="fail_closed",
+        description="equal planned-pair mean of challenger wins (1), reference wins (0) and explicit ties (0.5)",
+    ),
+}
+
+
+def lookup_metric(
+    metric_id: str, *, registry_version: str = METRIC_REGISTRY_VERSION,
+) -> MetricDefinition | None:
+    """显式注册表版本；默认 v1 身份与定义保持不变，未知版本 fail closed。"""
+    if registry_version == METRIC_REGISTRY_VERSION:
+        registry = METRIC_REGISTRY
+    elif registry_version == "metric-registry@2":
+        registry = METRIC_REGISTRY_V2
+    else:
+        return None
     if "@" in metric_id:
         base, _, version = metric_id.partition("@")
-        definition = METRIC_REGISTRY.get(base)
+        definition = registry.get(base)
         if definition is not None and definition.version != version:
             return None
         return definition
-    return METRIC_REGISTRY.get(metric_id)
+    return registry.get(metric_id)

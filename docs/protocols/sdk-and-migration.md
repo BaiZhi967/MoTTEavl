@@ -255,6 +255,13 @@ HTTP client 的依赖只有 `httpx`（新增 extras，见 §8）。执行类模�
   checkout 外目录运行，断言无 cwd/PYTHONPATH 依赖、资源可读、fake API 可调。
 - Docker 镜像：单阶段 python:3.12-slim + uv sync（既有）+ `HEALTHCHECK`；
   compose 保持 loopback 端口绑定。真实 build/up 证据按环境登记。
+  镜像默认探测 API 的 `http://127.0.0.1:8000/health`，API 服务继承这一检查。
+  同一镜像的 Worker 和一次性 migrate 服务不提供 HTTP 健康端点，正式 Compose
+  为这两种角色设置 `healthcheck.disable: true`；migrate 以退出码 0 为成功，
+  Worker 的 running 状态仅表示进程运行，不代表任务执行健康。实际验收必须继续
+  检查 queued Run 完成、固定 ScoringPass、共享 Artifact 以及重启后的持久性。
+  单独运行镜像时，API 默认探活保持不变；若改用 Worker／迁移命令，部署方需要
+  显式禁用 API 探活（例如 `docker run --no-healthcheck`），并按相同角色语义验证。
 
 ## 9. 备份、恢复与 GC
 
@@ -288,12 +295,49 @@ HTTP client 的依赖只有 `httpx`（新增 extras，见 §8）。执行类模�
 
 - 保留类：`pinned`（EvidencePin 引用/Baseline entry 引用/needs_review/import 审计
   引用→永不删）；`artifact`（TTL 天，默认 90）；`provider_payload`（原始请求/响应
-  payload，TTL 默认 30）；`trace`（普通事件，TTL 默认 180）。
+  payload，TTL 默认 30）；`trace` 使用独立显式配置，默认 disabled，
+  `retention_days=None`，不设默认天数。不可变 Trace 归档永久保留。
 - `motte gc plan`（默认 dry-run）输出分类清单+保留原因；`--apply` 才删；
   删除写 tombstone（DB 表 `motte_gc_tombstones`：artifact_id、sha256、bytes、
   reason、gc_run_id、deleted_at），保留审计可查。
 - GC apply 与采集/评分/备份互斥：必须持维护屏障执行。
+- Trace 行裁剪只通过 local-only `motte trace-retention plan [--config FILE] --output FILE`
+  与 `apply --config FILE --plan FILE --artifacts-root DIR --confirm`；未传配置的计划禁用，
+  无 scheduler/环境启用/HTTP mutation。apply 复验保存的精确计划而非重新计算后执行。
+  `motte_sdk.trace_retention` 原样导出存储层函数与模型，普通 `import motte_sdk` 不改变。
+- `events_window` 在单一一致快照读取事件与 receipt 高水位。游标早于高水位时，
+  `events/snapshot.partial=true`，SSE 先发 `motte-gap`，`next_seq=trimmed_through+1`，
+  即使返回事件为空也成立；无 receipt 的旧首条序号缺口仍保守报 partial。
+  SDK partial 为本次流的粘性事实，snapshot 补齐或终态对账不能重置它。
+  公共 Trace payload/导出不增加服务器时间字段。
+- 归档先持久化后原子 receipt+trim，未知旧时间保持未知，最高 seq 永不裁剪；
+  归档与其完整证据闭包进入 backup/GC/rollback 保护。没有归档到期或活动流恢复命令。
+  本轮 apply 限合成一次性数据库，Windows archive durability 尚未支持并明确拒绝。
+  操作与崩溃 owner 恢复说明见 [Trace 保留操作](../operations/trace-retention.md)。
 - 缺失证据后：rescore/compare 的既有 fail-closed 语义不变（不降级为成功）。
+
+
+### 9.3.1 Trace 归档完整性与 Windows 普通文件写入边界
+
+- 普通 `ArtifactStore.put_bytes/delete` 使用已校验的文件句柄；直接访问保留路径、
+  已观测到的 symlink/junction/硬链接别名不得重写规范 Trace 归档。保留目录下已有的
+  孤儿文件仍不可由普通 API 或 GC 删除；“尚无收据”不是清理孤儿的许可。
+- 强保证针对普通 API 操作不会破坏已登记且能以 `TraceArchiveReceipt` 验证的规范
+  归档。读取归档证据须调用生产校验器 `verify_trace_archive`，校验完整规范内容、
+  SHA-256、字节数、内容寻址路径、prefix、cutoff 和嵌套证据；仅位于
+  `trace-archives` 目录内并不使文件成为有效归档。收据的 DB 发布另受维护事务约束。
+- Windows 继续保留原有普通文件的原位写入及权限行为，不换新文件，也不把原文件
+  标记为待删除。共享限制与末次链接数检查不能冻结硬链接拓扑：同权限外部进程若在
+  检查之后把普通文件新建为保留目录下的硬链接，该没有有效收据的临时别名可能随
+  普通写入改变。末次校验可以报错，但错误不代表已经写入的字节被回滚。此情况是
+  明确的保证边界，不宣称整个目录对任意外部写入者绝对不可变。
+- 外部进程直接改写归档同样不是应用内维护锁提供的 OS 权限隔离；收据校验失败须
+  fail closed，不能继续把改变后的内容当成有效证据。此边界不放宽已有别名、重解析、
+  只读文件、根目录或 GC 审计保护。
+- 原生 Windows 普通 CRUD 与攻击边界必须由 NTFS CI 实测；Linux/mock 通过不能代替。
+  原生 Windows 的持久归档创建仍明确 fail closed，不能据此声称 Windows retention
+  事务或目录持久化已经受支持。测试中的预置规范归档与 typed receipt 只验证消费和
+  保护边界，不伪装为成功的 Windows 归档发布。
 
 ## 10. 单用户安全边界
 
@@ -337,3 +381,122 @@ A01–A21 的行为反例见执行计划 §5；本协议对应实现要点：
 A02/A03（§1.3/1.4）、A04（§3）、A05（§2）、A06/A07（§4）、A08（§5.2）、A09（§5.4）、
 A10（§5.3）、A11（§5.2）、A12/A13（§5.4）、A14–A16（§9）、A17（§10）、A18（§9.3）、
 A19（§11 升级演练）、A20（§11 矩阵）、A21（§11 切换）。
+
+
+## M8 扩展：不可变统计报告（2026-09-30）
+
+现有 `compare_statistics` / `motte compare --statistics` 保持只读，不自动持久发布。
+显式 SDK 方法均复用既有能力握手、错误分类、路径转义与 HTTP 重试矩阵：
+
+```python
+report = client.publish_statistical_report(
+    "baseline-run", "candidate-run", allowed_factors=("model",),
+    baseline_pass_id="baseline-pass", candidate_pass_id="candidate-pass", k=1,
+)
+report = client.get_statistical_report(report["report_id"])
+json_envelope = client.export_statistical_report(report["report_id"], format="json")
+junit_xml = client.export_statistical_report(report["report_id"], format="junit")
+```
+
+publish/get 返回 dict；export 返回 dict（json）或 str（junit），其他格式抛 ValueError。
+SDK export 先 GET 存储 envelope，再用纯 `statistical_report_to_json` /
+`statistical_report_to_junit` 校验与渲染，无 evaluator、current 或计量读取。
+POST 响应丢失时不自动重试；调用方可显式重送相同固定 Pass/输入请求，服务端按
+规范正文 ID 返回第一次的 envelope / UTC 时间。省略 Pass 会重新解析 current，
+已选 Pass 下 subject 计量改变也可生成新 ID，因此不可将只重送 Run ID 当作同输入保证。
+
+```sh
+motte statistical-report publish --baseline B --candidate C --factors model --baseline-pass P --candidate-pass Q --k 1 --db ./var/runs.db
+motte statistical-report get REPORT_ID --db ./var/runs.db
+motte statistical-report export REPORT_ID --format junit --output report.xml --db ./var/runs.db
+motte statistical-report publish --baseline B --candidate C --server http://localhost:8000
+motte statistical-report export REPORT_ID --format json --server http://localhost:8000
+```
+
+每个子命令均支持既有 `--mode server --api-url URL`、token 与环境变量；
+`--server URL` 是此命令的简写，不能与 `--db`、`--mode local` 或不同 `--api-url` 混用。
+发布默认 factor/model、k/1 与 compare 一致。get/export 只读已经发布的正文；
+不存在报告或无效请求走现有 stderr JSON `_error` / exit 2。有效报告即使区间不适用
+仍 exit 0，JUnit skipped。stdout 与 `--output` 为同一 UTF-8 内容（含尾随换行）；
+完全验证和渲染后原子替换文件，失败不生成半份导出或覆盖已有导出。
+HTTP 422/404/409/503 的细分与正文身份规则见 experiments-and-comparison.md §10.1。
+GET 沿用自动重试，POST 不重试；没有公共更新、删除、列表或任意正文导入。
+这些是离线软件契约，不代表真实模型、真实人审或 live 独立性验收完成。
+
+## M8 additive: persistent Judge calibration lifecycle
+
+The existing single-user deployment authorization, SDK retry policy and local/server
+CLI mode rules remain unchanged. Operator names and timestamps are declared provenance,
+not verified authentication claims. The following resources are rooted at
+`/api/v1/judge-calibrations`:
+
+| Method/path suffix | Request | Result |
+| --- | --- | --- |
+| POST root | `CalibrationImportRequest` (same import payload) | 201 immutable `CalibrationVersion` |
+| GET root | none | calibration IDs with exact version references |
+| GET `/{id}/versions` | none | version list |
+| GET `/{id}/versions/{version}` | none | exact version |
+| POST `/{id}/versions/{version}/reviews` | `CalibrationReviewRequest` | 201 new version |
+| GET same `/reviews` | none | outgoing review transitions from this parent version |
+| POST `/{id}/versions/{version}/preflight` | `CalibrationExecuteRequest` | zero-write/zero-call preflight |
+| POST `/{id}/versions/{version}/jobs` | same | 202 execution summary; existing Worker required |
+| GET same `/jobs` | none | executions for exactly this version |
+| GET `/{id}/jobs/{execution_id}` | none | execution and child status summary |
+| POST `/{id}/jobs/{execution_id}/reports` | no body or `{}` only | 201 stored report and optional qualification |
+| GET same `/reports` | none | already-published report envelopes |
+| GET `/{id}/reports/{report_id}` | none | stored report envelope |
+| GET `/{id}/qualifications/{qualification_id}` | none | stored qualification source |
+
+Lists return `{items,total}`. Every nested lookup verifies its path calibration owner.
+A review requires expected_parent_sha256, a new version name and complete typed review
+inputs. An execution envelope contains content_sha256 plus a CalibrationRunRequest
+under request; request_key is mandatory. Preflight consumes that key only as planning
+input, never a persisted reservation. Optional expected_preflight_sha256 detects drift.
+Exact submission replay returns the durable execution before mutable resource resolution.
+
+Public imports validate calibration_id and version; reviews validate new_version and the
+calibration owner before creating a new version. These are literal, nonblank Unicode path
+segments: slash, backslash, ASCII controls, percent-escape triplets (`%HH`), and exact `.`
+or `..` are unsupported. The boundary rejects them with CALIBRATION_CONTRACT_INVALID
+(422) before any durable write or model call, consistently for API, HTTP SDK and both
+CLI modes. Pass literal names, not pre-encoded URL segments; the SDK encodes selectors.
+Unicode, spaces, encoded query/fragment punctuation and non-escape percent signs retain
+their exact identity. No value or content hash is rewritten. The public request-only
+constraints leave stored/internal CalibrationImport, CalibrationSet and CalibrationVersion
+readable, including legacy names through local reads and catalogs. No alternate HTTP route
+is introduced for legacy unaddressable names; sample/candidate and other IDs are unchanged.
+
+Typed 404/409/422/503 errors use `{error:{code,message}}`. Stable codes include
+CALIBRATION_NOT_FOUND, CALIBRATION_CONFLICT, CALIBRATION_SOURCE_INVALID,
+CALIBRATION_CONTRACT_INVALID, JUDGE_NOT_AUTHORISED, JUDGE_BUDGET_NOT_EXECUTABLE and
+CALIBRATION_UNAVAILABLE. Unknown fields, imported reviewed/qualified facts and invalid
+numbers are rejected without writes/calls. Error rendering is scoped to these routes;
+existing deployment auth/maintenance behavior and unrelated FastAPI validation remain intact.
+
+MotteClient exposes import_judge_calibration, review_judge_calibration,
+preflight_judge_calibration, submit_judge_calibration, get_judge_calibration_job,
+publish_judge_calibration_report, get_judge_calibration_report, get_judge_qualification,
+and the corresponding catalog/version/review/job/report list methods. Requests accept
+mappings or local typed envelopes; returned lightweight views expose typed identities and
+retain full payloads in `.raw`. Local lifecycle models live in motte_sdk.calibration_transport;
+they are not imported by the installed HTTP client. SDK base dependencies remain contracts
+and httpx. GET retries retain the existing policy; POST never retries automatically, even
+after a lost response. Explicitly resend the identical submission key/body to recover.
+Report publication has content-addressed idempotency and accepts no caller report/qualification.
+
+`motte judge-calibration import|review|preflight|submit|get|report|qualification` has matching
+local/server behavior and typed JSON files via --file. --id/--version/--job/--report/
+--qualification select exact sources; report --publish is the only report write. No command
+executes a Provider. Local `motte judge` consumes the same pairwise_refs/qualification_id
+fields as HTTP; its private preview lookup distinction is not a public flag.
+
+This lifecycle supplies calibration qualification, not a pairwise quality metric or an
+operator's business threshold. Until Scope B Tasks 7–9 are integrated, pairwise quality
+Gates remain unavailable/fail-closed and Boolean accuracy stays None.
+
+Six-wheel remote consumers remain workspace-runtime independent: `motte compare --mode server`
+and `motte statistical-report get ID --mode server` dispatch through the HTTP client without
+importing provider/agent/benchmark runtime packages. Local pairwise reconstruction is loaded only
+when used; local statistical-report services are loaded after local/server routing. This adds no
+seventh delivery package or SDK base dependency. The clean-wheel regression exercises actual
+loopback HTTP commands with all runtime packages absent, rather than help/import-only checks.

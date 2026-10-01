@@ -27,6 +27,9 @@ services:
     environment:
       DATABASE_URL: postgresql://motteavl:motteavl@postgres:5432/motteavl
     command: ["alembic", "upgrade", "head"]
+    # One-shot migration has no HTTP server; success is its exit status.
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,6 +70,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_ROOT: /workspace/var/artifacts
     command: ["python", "-m", "apps.worker.motte_worker"]
+    # Worker has no HTTP health endpoint; verify actual queued Run completion.
+    healthcheck:
+      disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully

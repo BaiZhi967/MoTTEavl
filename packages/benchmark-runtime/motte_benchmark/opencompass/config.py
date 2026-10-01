@@ -21,6 +21,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .execution import bounded_generate, TransportBudgetExhausted
+
 ALLOWED_MODEL_PARAMETERS: frozenset[str] = frozenset(
     {"temperature", "top_p", "max_output_tokens"},
 )
@@ -118,6 +120,7 @@ def build_opencompass_config(
     credentials: Mapping[str, Any] | None = None,
     retry_policy: Mapping[str, int] | None = None,
     transport_owner: str = "runner-native",
+    execution_profile: str | None = None,
 ) -> dict[str, Any]:
     profile = _as_mapping(profile, "profile")
     model_section = _model_section(_as_mapping(model, "model"))
@@ -182,11 +185,16 @@ def build_opencompass_config(
         for example in few_shot_rows
     ]
 
-    retry = {
-        "runner": int((retry_policy or {}).get("runner", 0)),
-        "provider_transport": int((retry_policy or {}).get("provider_transport", 0)),
-        "operator": int((retry_policy or {}).get("operator", 0)),
-    }
+    if execution_profile is not None:
+        from .execution import freeze_execution_profile, profile_retry_policy
+
+        retry = profile_retry_policy(execution_profile, retry_policy)
+    else:
+        retry = {
+            "runner": int((retry_policy or {}).get("runner", 0)),
+            "provider_transport": int((retry_policy or {}).get("provider_transport", 0)),
+            "operator": int((retry_policy or {}).get("operator", 0)),
+        }
     credential_refs = _credential_refs(credentials)
 
     config = {
@@ -218,6 +226,8 @@ def build_opencompass_config(
         ),
         "cases": cases,
     }
+    if execution_profile is not None:
+        config["execution_profile"] = freeze_execution_profile(execution_profile)
     config["config_hash"] = "sha256:" + hashlib.sha256(json.dumps(
         config, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")).hexdigest()

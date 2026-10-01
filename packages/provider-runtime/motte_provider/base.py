@@ -19,6 +19,7 @@ from motte_trace.redaction import redact
 from .capabilities import validate_parameters
 from .errors import ProviderError, ProviderHTTPError, ProviderProtocolError, classify_exception
 from .identity import assess_identity, validate_identity_config
+from .opencode_go import conversation_headers
 from .pricing import PriceTable, cost_detail, parse_price_table
 from .transport import HTTPTransport, TransportOutcome
 
@@ -108,6 +109,9 @@ class BaseHTTPProvider:
     def build_request_body(self, request: ModelRequest) -> dict[str, Any]:
         raise NotImplementedError
 
+    def request_headers(self, request: ModelRequest) -> dict[str, str]:
+        return conversation_headers(getattr(self.transport, "base_url", ""), request.metadata)
+
     def normalize_response(self, body: dict[str, Any]) -> ModelResponse:
         raise NotImplementedError
 
@@ -126,6 +130,10 @@ class BaseHTTPProvider:
     def _normalize_stream_event(self, data: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
         return self.normalize_stream_event(data)
 
+    def _reported_stream_model(self, data: dict[str, Any]) -> Any:
+        """Chat SSE reports identity at $.model; other protocols override the path."""
+        return data.get("model")
+
     # ----------------------------------------------------------------- 流式
 
     def stream(self, request: ModelRequest):
@@ -142,6 +150,9 @@ class BaseHTTPProvider:
         - OpenAI 风格的 ``data: [DONE]`` 帧是传输层哨兵，不是终态事件，
           静默略过（M4 review R24）；
         - 事件顺序：增量 ... usage? finish（usage 缺失时如实省略，不填 0）。
+        - strict identity policies reject mismatches/changed identities before
+          yielding that chunk, and missing identity before final finish. Earlier
+          deltas remain provisional; streaming cannot recall already yielded data.
         """
         body = self.build_stream_request_body(request)
         body.update(reasoning_patch(self.reasoning, self.reasoning_level))
@@ -152,8 +163,14 @@ class BaseHTTPProvider:
         finish_reason: str | None = None
         chunks = 0
         terminal_seen = False
+        reported_model: str | None = None
+        sse_stream = None
         try:
-            for sse in self.transport.post_sse(self.request_path, body):
+            sse_stream = self.transport.post_sse(
+                self.request_path, body,
+                **({"headers_extra": headers} if (headers := self.request_headers(request)) else {}),
+            )
+            for sse in sse_stream:
                 data_text = sse["data"]
                 if isinstance(data_text, str) and data_text.strip() == "[DONE]":
                     # 传输层终止哨兵：不是 JSON 事件，也不是 assistant 终态。
@@ -169,6 +186,25 @@ class BaseHTTPProvider:
                         "stream chunk must be a JSON object", error_class="protocol",
                     )
                 chunks += 1
+                if self.identity_policy != "report_only":
+                    chunk_model = self._reported_stream_model(data)
+                    if isinstance(chunk_model, str) and chunk_model.strip():
+                        if reported_model is not None and chunk_model != reported_model:
+                            raise ProviderHTTPError(
+                                "provider model identity changed during stream",
+                                error_class="model_identity",
+                            )
+                        _, _, _, allowed = assess_identity(
+                            body["model"], chunk_model,
+                            policy=self.identity_policy, aliases=self.identity_aliases,
+                            alias_version=self.identity_alias_version,
+                        )
+                        if not allowed:
+                            raise ProviderHTTPError(
+                                "provider model identity does not match the requested model",
+                                error_class="model_identity",
+                            )
+                        reported_model = chunk_model
                 for event in self._normalize_stream_event(data, stream_state):
                     if event["type"] == self.STREAM_TEXT_DELTA:
                         started_any_text.append(event.get("delta") or "")
@@ -198,10 +234,18 @@ class BaseHTTPProvider:
             raise ProviderHTTPError(
                 f"stream failed: {error}", error_class="network",
             ) from error
+        finally:
+            if sse_stream is not None:
+                sse_stream.close()
         if not terminal_seen:
             raise ProviderHTTPError(
                 "stream ended without a native terminal event",
                 error_class="protocol",
+            )
+        if self.identity_policy != "report_only" and reported_model is None:
+            raise ProviderHTTPError(
+                "provider did not report a model identity",
+                error_class="model_identity",
             )
         yield {
             "type": self.STREAM_FINISH,
@@ -256,7 +300,10 @@ class BaseHTTPProvider:
         # Final, nonrecursive top-level merge. Validate again immediately before network.
         body.update(reasoning_patch(self.reasoning, self.reasoning_level))
         try:
-            outcome = self.transport.post_json_detailed(self.request_path, body)
+            outcome = self.transport.post_json_detailed(
+                self.request_path, body,
+                **({"headers_extra": headers} if (headers := self.request_headers(request)) else {}),
+            )
         except ProviderError as error:
             outcome: TransportOutcome | None = getattr(error, "outcome", None)
             envelope = self._envelope(body, outcome, error=error)

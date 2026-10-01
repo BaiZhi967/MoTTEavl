@@ -98,11 +98,19 @@ print(report)
 
 ## Artifact 清理 / GC（M7）
 
-TTL 清理（旧入口，仅按 mtime；CLI `cleanup-artifacts` 保留）与 M7 GC 并存；
+旧入口 `cleanup_artifacts` / CLI `cleanup-artifacts` 仅保留按 mtime 的只读诊断；
+其报告字段为兼容旧消费者仍使用 `deleted`，dry-run 列出的只是候选，绝不代表
+允许删除或已经删除。未绑定数据库的 `dry_run=False` / `--apply` 已弃用并明确拒绝：
+Python 抛 `BackupUnsupported`，CLI 返回 `CLEANUP_UNSUPPORTED` 与退出码 2。
+请明确指定正确数据库和工件根目录，改用引用保护的 `motte gc plan/apply`；
+不会从工件路径猜测数据库或静默改用另一目标。
 M7 GC 见 `motte_storage.gc`：默认 dry-run（`plan_gc`），apply（`apply_gc(confirm=True)`）
 在维护屏障内执行，被引用/被 pin（needs_review、imported、baseline 引用）/
 导入审计工件永不删除，每次删除写 tombstone（`motte_gc_tombstones`）保留
-hash/bytes/原因/时间。CLI `gc plan/apply` 自 M7-T03 起接线：
+hash/bytes/原因/时间。删除前先持久写入 `deleting` 意图，观察到 unlink 成功后
+才标 `deleted`；明确错误标 `failed`，重放时只观察到文件缺失则标
+`absence_unconfirmed`/`missing_unobserved`，不伪造已观察删除，也不宣称文件系统
+与数据库删除具有原子事务性。CLI `gc plan/apply` 自 M7-T03 起接线：
 
 ```
 motte gc plan --artifacts-root var/artifacts --ttl-days 90 --db var/runs.db
@@ -111,3 +119,56 @@ motte gc apply --confirm --artifacts-root var/artifacts --db var/runs.db
 
 演练：`uv run pytest -q tests/storage/test_maintenance.py
 tests/integration/test_backup_restore_consistency.py tests/security/test_gc_retention.py`。
+
+## M8 维护互斥与一致性边界
+
+- 先停止 Worker/CLI 执行器，再开始备份、GC 或导入回退。维护过程使用与
+  执行器相同的跨进程锁；执行器仍占锁时返回 `MaintenanceConflict`，不会在
+  一个执行步骤中间截断。竞争维护即使 `reason` 相同也不能复用另一个 owner；
+  只有传回当前活跃 owner 才能幂等重入，解除也核对 owner
+- 持久库的激活/解除在一个数据库事务内完成。SQLite 使用库内触发器阻止
+  Run、子记录、Baseline/Gate pin 等业务表的直接 INSERT/UPDATE/DELETE；激活前
+  预建正常运行会按需创建的 ScoringJob/ResourceStore 表，避免晚建表绕过屏障；
+  PostgreSQL 另持有 SHARE 表锁，排空在途写事务后保持到 dump、引用扫描、
+  counts 和工件复制全部结束。tombstone 会影响已回退引用的识别，因此备份也
+  冻结它；只有 GC/rollback 显式声明写审计模式才允许更新该表，reason 标签
+  不赋予这一权限。PG 锁等待上限为 10 秒，超时失败，不输出成功清单
+- 备份、GC、回退传入同一个 `artifacts_root` 并锁住整个窗口；`ArtifactStore`
+  的写入/删除也使用该根目录旁的跨进程锁。维护中的删除仅接受活跃维护 owner。
+  直接用文件系统工具修改工件、并行 DDL/迁移或绕过平台维护元数据的管理操作不在
+  支持范围内，必须停机协调。锁文件位于根目录旁，不会作为工件备份或清理
+- 正常成功或失败均释放本次操作一次。进程崩溃会释放 OS/PG 会话锁，但保留
+  maintenance 标志与数据库写保护；核对执行器已退出后，用原 owner 显式解除。
+  staging 恢复清除全部继承的 maintenance owner/reason 字段，保持恢复守卫激活
+- 备份、GC、回退共用引用解码/遍历：包括 artifact id/artifact_id/sha256、
+  `kind=artifact` 的 locator、raw_ref/raw_bundle_artifact、Run 子记录、ScoreSet、
+  Baseline/Gate、Trace/旧 scores 和导入账本。GC 也按内容 hash 保护只含摘要的引用，
+  plan/apply 都保护 needs_review；apply 会跳过计划后内容/大小已改变的文件。
+  同样扫描独立评分 Job/校准 Invocation 与待运行 ExperimentSpec/Cell 引用。
+  备份把只含摘要的引用解析为工件实际内容；找不到对应内容或存在引用却未传
+  `artifacts_root` 时写出 incomplete 清单，不会静默生成无法完整恢复的备份。
+  同一路径出现互相矛盾的 hash 声明属于无效引用集合，抛
+  `ArtifactReferenceConflict`（`ValueError`），不生成 manifest；这区别于有效引用
+  对应文件缺失/内容不符的 `BackupIncomplete` + incomplete manifest
+- 内存后端没有持久写屏障，维护操作明确抛 `BackupUnsupported`；不得把内存
+  metadata 标志当成 SQLite/PG 级别互斥。PG 备份传入的 store 必须与 dump 使用
+  同一 DSN，避免锁住一个库、实际导出另一个库
+
+本轮 SQLite 跨进程反例与恢复测试属于本地验证。PG dump 后竞争写入及工件改写
+的隔离恢复测试位于 `tests/integration/test_m8_pg_restore.py`；只有提供一次性
+loopback PG 和 pg_dump/pg_restore 实际通过后才能升级该项证据，缺依赖时仍为
+未运行，不能用 SQLite 或 mock 结果宣称 PG/Compose 生产恢复已经通过。
+
+## M8 Trace 归档与备份
+
+显式 Trace 保留见 [Trace 保留操作](trace-retention.md)：默认关闭，没有默认保留期，
+不由 GC 或备份自动触发。只在归档文件及其目录层级持久化后，原子发布收据并裁剪
+未受保护的终态旧前缀；服务器时间未知的旧行继续保留。本轮 apply 仅在合成测试库验证。
+
+备份 manifest counts 包括 `trace_archive_receipts`。一致备份与 staging 恢复必须
+验证归档字节、完整收据、序号范围/事件数量/摘要/服务器时间、引用闭包，以及与实时
+Trace 行的边界；缺失、篡改、重叠或越界均拒绝完整成功。归档本身与其嵌套工件、
+仅摘要引用都受 GC 和 import rollback 保护，孤立归档也不设 TTL。
+恢复保留 receipt 与剩余实时行，归档只作为证据复制，不重放到活动事件流。
+崩溃后先核对原进程已退出，再以原 maintenance owner 显式解除遗留屏障。
+Windows archive apply 仍是具名 unsupported/fail-closed 门槛；普通读取保持兼容。

@@ -25,6 +25,8 @@ TERMINAL_RUN_STATUSES = frozenset(
 __all__ = [
     "TERMINAL_RUN_STATUSES",
     "Baseline",
+    "CalibrationVersionView", "CalibrationJob", "CalibrationPreflight", "CalibrationReport",
+    "JudgeQualificationView", "CalibrationList",
     "Capabilities",
     "Comparison",
     "EventsSnapshot",
@@ -349,3 +351,110 @@ class Experiment:
             extra=_split(payload, known),
             raw=dict(payload),
         )
+
+
+@dataclass(frozen=True)
+class CalibrationVersionView:
+    """Typed projection; full version and unknown future fields remain in raw."""
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> CalibrationVersionView:
+        return cls(dict(payload))
+
+    @property
+    def calibration_id(self) -> str:
+        return str(self.raw["calibration"]["calibration_id"])
+
+    @property
+    def version(self) -> str:
+        return str(self.raw["calibration"]["version"])
+
+    @property
+    def content_sha256(self) -> str:
+        return str(self.raw["content_sha256"])
+
+
+@dataclass(frozen=True)
+class CalibrationJob:
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> CalibrationJob:
+        return cls(dict(payload))
+
+    @property
+    def execution_id(self) -> str:
+        return str(self.raw["execution_id"])
+
+    @property
+    def child_job_ids(self) -> list[str]:
+        return list(self.raw["child_job_ids"])
+
+    @property
+    def allowance(self) -> dict[str, Any] | None:
+        return self.raw["allowance"]
+
+
+@dataclass(frozen=True)
+class CalibrationPreflight:
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> CalibrationPreflight:
+        return cls(dict(payload))
+
+    @property
+    def max_calls(self) -> int:
+        return int(self.raw["max_calls"])
+
+    @property
+    def preflight_sha256(self) -> str:
+        return str(self.raw["preflight_sha256"])
+
+
+@dataclass(frozen=True)
+class CalibrationReport:
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> CalibrationReport:
+        return cls(dict(payload))
+
+    @property
+    def report_id(self) -> str:
+        return str(self.raw["report"]["report_id"])
+
+    @property
+    def qualification(self) -> JudgeQualificationView | None:
+        value = self.raw.get("qualification")
+        return JudgeQualificationView.from_payload(value) if value is not None else None
+
+
+@dataclass(frozen=True)
+class JudgeQualificationView:
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> JudgeQualificationView:
+        return cls(dict(payload))
+
+    @property
+    def qualification_id(self) -> str:
+        return str(self.raw["binding"]["qualification_id"])
+
+    @property
+    def binding(self) -> dict[str, Any]:
+        return self.raw["binding"]
+
+
+@dataclass(frozen=True)
+class CalibrationList:
+    items: list[dict[str, Any]]
+    total: int
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> CalibrationList:
+        return cls(items=[dict(item) for item in payload["items"]],
+                   total=int(payload["total"]), raw=dict(payload))

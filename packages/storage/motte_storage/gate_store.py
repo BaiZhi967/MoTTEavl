@@ -15,6 +15,7 @@ from copy import deepcopy
 from threading import RLock
 from typing import Any
 
+from .statistical_reports import _limit, _MAX_SQL_LIMIT
 from .run_store import _connect
 from .sqlite_schema import create_and_upgrade
 
@@ -110,8 +111,9 @@ class MemoryGateStore:
             return deepcopy(result) if result is not None else None
 
     def list_results(
-        self, policy_id: str | None = None, limit: int = 100,
+        self, policy_id: str | None = None, limit: int | None = 100,
     ) -> list[dict[str, Any]]:
+        _limit(limit)
         with self._lock:
             ordered = [
                 key for key, value in reversed(list(self._results.items()))
@@ -121,12 +123,13 @@ class MemoryGateStore:
 
 
 class SQLiteGateStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, initialize: bool = True) -> None:
         from .run_store import _SCHEMA
 
         self._path = path
-        with closing(_connect(path)) as connection:
-            create_and_upgrade(connection, _SCHEMA)
+        if initialize:
+            with closing(_connect(path)) as connection:
+                create_and_upgrade(connection, _SCHEMA)
 
     def put_policy(self, payload: dict[str, Any]) -> dict[str, Any]:
         policy = _validate_policy(payload)
@@ -229,17 +232,18 @@ class SQLiteGateStore:
         return json.loads(row[0]) if row is not None else None
 
     def list_results(
-        self, policy_id: str | None = None, limit: int = 100,
+        self, policy_id: str | None = None, limit: int | None = 100,
     ) -> list[dict[str, Any]]:
+        _limit(limit)
         with closing(_connect(self._path)) as connection:
             if policy_id is None:
                 rows = connection.execute(
                     "SELECT payload FROM gate_results ORDER BY rowid DESC LIMIT ?",
-                    (limit,),
+                    (-1 if limit is None else min(limit, _MAX_SQL_LIMIT),),
                 ).fetchall()
             else:
                 rows = connection.execute(
                     "SELECT payload FROM gate_results WHERE policy_id = ? ORDER BY rowid DESC LIMIT ?",
-                    (policy_id, limit),
+                    (policy_id, -1 if limit is None else min(limit, _MAX_SQL_LIMIT)),
                 ).fetchall()
         return [json.loads(row[0]) for row in rows]

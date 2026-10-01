@@ -148,6 +148,7 @@ describe("ExperimentsPage", () => {
 
   it("预览通过后创建（202），状态视图显示 cell 表与分配徽章", async () => {
     clientMocks.previewExperiment.mockResolvedValue({
+      preview_hash: "sha256:reviewed-resources",
       experiment_id: "exp-demo",
       version: "1",
       cells: [],
@@ -167,6 +168,7 @@ describe("ExperimentsPage", () => {
     await waitFor(() => expect(clientMocks.createExperiment).toHaveBeenCalledTimes(1));
     // 创建体就是预览过的 spec（服务端零猜测）
     expect(clientMocks.createExperiment.mock.calls[0][0]).toMatchObject({ experiment_id: "exp-demo", version: "1" });
+    expect(clientMocks.createExperiment.mock.calls[0][2]).toBe("sha256:reviewed-resources");
     // 状态刷新：cell 表 + run 链接 + 分配徽章 + 清单条目
     await waitFor(() => expect(screen.getByTestId("experiment-cells-table").textContent).toContain("run-exp-1"));
     expect(screen.getByTestId("experiment-cells-table").textContent).toContain("model_profile=model-a");

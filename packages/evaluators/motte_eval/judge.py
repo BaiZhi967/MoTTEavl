@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any, Callable, Literal
+from uuid import uuid4
 
 from pydantic import Field, model_validator
 
@@ -923,6 +924,9 @@ def build_judge_request(
         "max_output_tokens": max_output_tokens,
         "seed": spec.parameters.get("seed"),
         "metadata": {
+            # Each grading call is an independent conversation. Transport retries
+            # reuse this request and ID; frozen spec/input fingerprints stay unchanged.
+            "session_id": uuid4().hex,
             "purpose": JUDGE_PURPOSE,
             "judge_profile_id": spec.judge_profile_id,
             "spec_sha256": spec.spec_sha256,
@@ -1379,6 +1383,7 @@ def parse_pairwise_output(
             return failure("malformed", f"duplicate criterion entry: {criterion_id}")
         seen[criterion_id] = item
 
+    rubric = get_rubric(spec.rubric_id, spec.rubric_version)
     judgements: list[JudgePairwiseCriterionJudgement] = []
     for criterion_id in spec.criteria:
         item = seen.get(criterion_id)
@@ -1419,6 +1424,13 @@ def parse_pairwise_output(
                 evidence=list(forged),
             ))
             continue
+        criterion = rubric.criterion(criterion_id)
+        if (criterion is None or criterion.evidence_required) and not evidence:
+            judgements.append(JudgePairwiseCriterionJudgement(
+                criterion_id=criterion_id, outcome="missing_evidence",
+                reason="a preference requires at least one actual evidence reference",
+            ))
+            continue
         judgements.append(JudgePairwiseCriterionJudgement(
             criterion_id=criterion_id, outcome="scored", preference=str(preference),
             preferred_candidate_id=(
@@ -1431,10 +1443,10 @@ def parse_pairwise_output(
         status = "forged_evidence"
     elif any(item.outcome == "malformed" for item in judgements):
         status = "malformed"
-    elif winner_position == "tie" and not seen:
-        status = "ok"
     elif any(item.outcome == "missing_criterion" for item in judgements):
         status = "missing_criterion"
+    elif any(item.outcome == "missing_evidence" for item in judgements):
+        status = "missing_evidence"
     else:
         status = "ok"
     return JudgePairwiseOutcome(
@@ -1474,6 +1486,8 @@ def preference_value(preference: str, pair: JudgePairwiseInput) -> float:
 def pairwise_preference_value(
     outcome: JudgePairwiseOutcome, pair: JudgePairwiseInput,
 ) -> float | None:
+    if outcome.status != "ok":
+        return None
     if outcome.winner_candidate_id is None:
         if outcome.winner_position == "tie":
             return 0.0

@@ -2000,6 +2000,7 @@ export interface ExperimentPreviewViolation {
 
 /** 零创建预览（POST /experiments/preview）：矩阵展开 + 护栏，不触碰存储。 */
 export interface ExperimentPreviewView {
+  preview_hash: string;
   experiment_id: string;
   version: string;
   cells: Array<{ cell_id: string; factor_assignment: Record<string, any>; repeat_index: number }>;
@@ -2045,10 +2046,14 @@ export const previewExperiment = (specPayload: Record<string, unknown>) =>
 export const createExperiment = (
   specPayload: Record<string, unknown>,
   requestKey?: string,
+  previewHash?: string,
 ) =>
   request<ExperimentCreateOutcome>(
     "/api/v1/experiments",
-    jsonBody(requestKey ? { ...specPayload, _request_key: requestKey } : specPayload),
+    jsonBody({ ...specPayload,
+      ...(requestKey ? { _request_key: requestKey } : {}),
+      ...(previewHash ? { _preview_hash: previewHash } : {}),
+    }),
   );
 
 export const allocateExperiment = (experimentId: string, version?: string) =>

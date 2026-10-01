@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .postgres import create_postgres_run_store, normalize_dsn
 from .resource_store import PostgresResourceStore, ResourceStore, SQLiteResourceStore
 from .run_store import RunStore, SQLiteRunStore
 
@@ -31,6 +30,8 @@ def create_run_store(
         resolved = dsn or os.environ.get("MOTTE_PG_DSN") or os.environ.get("DATABASE_URL")
         if not resolved:
             raise ValueError("postgres storage requires MOTTE_PG_DSN or DATABASE_URL")
+        from .postgres import create_postgres_run_store
+
         return create_postgres_run_store(resolved, migrate=migrate)
     raise ValueError(f"unsupported storage backend: {backend!r} (expected one of {SUPPORTED_BACKENDS})")
 
@@ -72,5 +73,7 @@ def create_resource_store(
         resolved = dsn or os.environ.get("MOTTE_PG_DSN") or os.environ.get("DATABASE_URL")
         if not resolved:
             raise ValueError("postgres storage requires MOTTE_PG_DSN or DATABASE_URL")
+        from .postgres import normalize_dsn
+
         return PostgresResourceStore(normalize_dsn(resolved), content_store=content_store)
     raise ValueError(f"unsupported storage backend: {backend!r} (expected one of {SUPPORTED_BACKENDS})")

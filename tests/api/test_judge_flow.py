@@ -508,7 +508,8 @@ def test_gate_on_a_multi_metric_judge_pass_is_not_blocked_by_case_coverage(tmp_p
     assert summary["coverage"] == 1.0
     # 三条准则全部通过 = 该 Case 通过；accuracy 是 Case 口径的 ratio，不会超过 1。
     assert summary["metric_values"]["accuracy"] == 1.0
-    assert body["passed"] is True, body["rules"]
+    assert body["passed"] is False  # 未校准 Judge 不可用于正式放行
+    assert next(rule for rule in body["rules"] if rule["id"] == "judge_qualification")["passed"] is False
 
 
 def test_gate_quality_is_a_per_case_conjunction_not_a_metric_row_count(tmp_path):

@@ -58,7 +58,7 @@ class ScriptedProvider:
         return {
             "content": SCRIPTED_ANSWERS[case_id],
             "usage": {"total_tokens": 7},
-            "cost": {"total": 0.001, "price_table_version": "v1"},
+            "cost": {"total": 0.001, "currency": "USD", "price_table_version": "v1"},
         }
 
 

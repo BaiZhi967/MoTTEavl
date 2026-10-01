@@ -112,6 +112,25 @@ def render_opencompass_config_source(
     upstream from selecting different examples; target gold stays on the platform.
     Importable classes survive MMEngine's parent/task config dump and reload.
     """
+    bounded = config.get("execution_profile") is not None
+    fixed_infer = ""
+    profile_argument = ""
+    if bounded:
+        from .execution import validate_execution_config
+
+        profile = validate_execution_config(config)
+        profile_argument = (f"        execution_profile={profile!r},\n"
+                            "        run_cfg=dict(num_gpus=0, num_procs=1),\n")
+        fixed_infer = """
+from opencompass.partitioners import NumWorkerPartitioner
+from opencompass.runners import LocalRunner
+from opencompass.tasks import OpenICLInferTask
+infer = dict(
+    partitioner=dict(type=NumWorkerPartitioner, num_worker=1, num_split=1, strategy='heuristic'),
+    runner=dict(type=LocalRunner, max_num_workers=1, max_workers_per_gpu=1,
+                task=dict(type=OpenICLInferTask)),
+)
+"""
     model = config.get("model") or {}
     params = model.get("parameters") or {}
     creds = config.get("credentials") or {}
@@ -132,7 +151,7 @@ def render_opencompass_config_source(
             "        infer_cfg=dict(\n"
             "            prompt_template=dict(type=PromptTemplate, template='{prompt}'),\n"
             "            retriever=dict(type=ZeroRetriever),\n"
-            "            inferencer=dict(type=GenInferencer)),\n"
+            "            inferencer=dict(type=GenInferencer, batch_size=1)),\n"
             "    ),"
         )
     return f'''"""Generated for opencompass==0.4.2. Credential refs only.
@@ -147,7 +166,7 @@ from opencompass.openicl.icl_inferencer import GenInferencer
 models = [
     dict(
         type=RuntimeOpenAI,
-        abbr='motte-model',
+{profile_argument}        abbr='motte-model',
         path={str(model.get("model") or model.get("id") or "")!r},
         key_env={key_env!r},
         base_url_env={base_url_env!r},
@@ -163,6 +182,7 @@ models = [
 datasets = [
 {chr(10).join(dataset_entries)}
 ]
+{fixed_infer}
 '''
 
 
@@ -265,6 +285,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         record_launch_identity(work, argv if argv is not None else sys.argv)
         config = _read_platform_config(work)
+        if config.get("execution_profile") is not None:
+            from .execution import validate_execution_config, verify_installed_profile
+
+            verify_installed_profile(validate_execution_config(config))
+            selected = os.environ.get("MOTTE_RUNNER_PYTHON", DEFAULT_PINNED_PYTHON)
+            if Path(selected).resolve() != Path(sys.executable).resolve():
+                raise ValueError("EXECUTION_PROFILE_INVALID: CLI interpreter differs from checked runner")
         data_files = export_subject_files(work, config)
         generated = work / GENERATED_CONFIG
         generated.write_text(
@@ -289,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         pinned_python, "-m", "opencompass.cli.main", str(generated),
         "--work-dir", str(outputs), "--mode", "infer",
     ]
+    if config.get("execution_profile") is not None:
+        cli_argv += ["--max-num-workers", "1", "--retry", "0"]
     exit_code = asyncio.run(_run_cli(cli_argv))
     write_experiment_pointer(work, outputs)
     write_completion_marker(work, exit_code)

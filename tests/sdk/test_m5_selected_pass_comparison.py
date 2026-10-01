@@ -392,3 +392,20 @@ def test_a_manual_revision_is_a_human_change_within_the_same_instrument():
     assert any(
         "MANUAL_REVISION_CHANGED" in item for item in allowed.allowed_differences
     ), allowed.allowed_differences
+
+
+def test_selected_pairwise_comparison_exposes_absolute_values_without_delta_eligibility():
+    from tests.sdk.test_pairwise_quality import completed_quality
+
+    store = InMemoryRunStore()
+    _, job, _ = completed_quality(store, ((1,),))
+    service = ComparisonService(store)
+    result = service.compare(job["run_id"], job["run_id"], allowed_factors=(),
+                             baseline_pass_id=job["reserved_pass_id"],
+                             candidate_pass_id=job["reserved_pass_id"])
+    assert result.eligible and result.metric_eligibility["quality"]
+    assert not result.metric_eligibility["pairwise_challenger_score@1"]
+    assert result.pairwise_comparison == {
+        "eligible": False, "reason": "pairwise_baseline_comparison_unsupported",
+        "baseline_value": 1.0, "candidate_value": 1.0,
+    }

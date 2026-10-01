@@ -45,7 +45,8 @@ Benchmark runs use strict final-line Decimal scoring and a selected-case denomin
 - **错误映射**：HTTP 状态码分类之外，尽力解析错误体 `error.type`（OpenAI/Anthropic 通行形状）精化 `auth`/`rate_limit`/`server`/`timeout` 分类；Anthropic 529（overloaded）可重试。
 - **公共流程**：`BaseHTTPProvider` 持有 complete 全流程与 envelope（计量/成本快照/脱敏/ProviderCallError 证据），适配器只实现请求构造与响应归一化。
 - **模型身份**：envelope 分别保存 `requested_model`、`reported_model`、`resolved_model_identity`、原始 evidence、策略和结论。策略为 `report_only` / `require_reported` / `require_match`，alias 只来自版本化 ModelProfile，不做通用字符串裁剪。
-- **尚未接入**：流式（SSE）、GET probe（如 `/models`）、真实端点 live smoke 记录。
+- **流式模型身份**：三个 HTTP adapter 的 SSE 也执行上述 strict 策略：Chat 读取 `$.model`，Anthropic 读取 `message_start` 的 `$.message.model`，Responses 读取 `$.response.model`。`require_reported` 要求至少一次有效的非空字符串回报；`require_match` 还要求与实际请求模型完全匹配或符合显式版本化 alias。无需每个 chunk 重复模型，但 strict 策略下已报告的名称不能中途改变（包括两个允许的 alias 之间切换）。不匹配/改变的 chunk 在产出事件前抛出 `model_identity`；始终未报告模型的流在最终 `finish` 前失败。先前增量是 provisional，无法撤回；消费者必须等最终 `finish` 才能确认整次调用成功。连接在成功、错误和取消时关闭。`report_only` 保持原有事件形状与非阻断行为；SSE 不新增身份 envelope。
+- **尚未接入**：GET probe（如 `/models`）；真实端点 live smoke 证据另行记录，离线 SSE 测试不能替代真实调用证据。
 
 ## Agent
 

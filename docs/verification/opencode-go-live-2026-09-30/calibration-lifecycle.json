@@ -1,0 +1,128 @@
+{
+  "live": true,
+  "model": "space-bunny-free",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "feature_limits": {
+    "judge_calibration": 2
+  },
+  "max_http_requests": 2,
+  "concurrency": 1,
+  "retries": 0,
+  "output_token_limits": {
+    "judge_calibration": 4096
+  },
+  "socket_timeout_sec": {
+    "judge_calibration": 120
+  },
+  "feature_timeout_sec": {
+    "judge_calibration": 240
+  },
+  "prior_http_requests": 79,
+  "features": [
+    {
+      "name": "judge_calibration",
+      "status": "passed",
+      "evidence": {
+        "ok": true,
+        "execution_id": "calexec-ff263417c8057a1fba274938500880e94c5652f4a7ac4f6736679172db08e7e9",
+        "billed_calls": 2,
+        "human_reviewed_count": 0,
+        "candidate_only_count": 1,
+        "gate_eligible": false,
+        "qualified": false,
+        "qualification": "blocked_missing_human_review",
+        "report_immutable": true,
+        "ledger_complete": true,
+        "criterion_labels": [
+          {
+            "task_completion": false,
+            "constraint_adherence": false,
+            "evidence_grounding": false
+          },
+          {
+            "task_completion": true,
+            "constraint_adherence": true,
+            "evidence_grounding": true
+          }
+        ],
+        "repeat_stable": false,
+        "instability_gate_reason_present": true,
+        "repeat_stability": {
+          "measured": true,
+          "samples": 1,
+          "stable": 0,
+          "rate": 0.0
+        },
+        "model_quality_passed": false,
+        "diagnostics": {
+          "planned_calls": 2,
+          "billed_calls": 2,
+          "returned_calls": 2,
+          "settled_calls": 2,
+          "parse_failure_count": 0,
+          "non_scored_count": 0,
+          "completion_tokens": 1202,
+          "calls_at_output_cap": 0,
+          "job_status_code": 4,
+          "calibration_call_count": 2,
+          "repeat_measured": 1,
+          "repeat_sample_count": 1,
+          "repeat_stable_count": 0,
+          "repeat_unstable_count": 1,
+          "repeat_rate_is_one": 0,
+          "criterion_disagreement_count": 3,
+          "criterion_false_count": 3,
+          "criterion_missing_count": 0,
+          "calibration_invalid_call_count": 0
+        }
+      },
+      "http_requests": 2
+    }
+  ],
+  "requests": [
+    {
+      "feature": "judge_calibration",
+      "ordinal": 1,
+      "sent_at": "2026-09-30T21:37:15.424577+00:00",
+      "stream": false,
+      "max_tokens": 4096,
+      "session_sha256": "8814f0559b5825472d832e55e0e9a328c484c752af83613b0260a4b771d4bf5b",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 900,
+        "completion_tokens": 689,
+        "total_tokens": 1589
+      }
+    },
+    {
+      "feature": "judge_calibration",
+      "ordinal": 2,
+      "sent_at": "2026-09-30T21:37:22.698687+00:00",
+      "stream": false,
+      "max_tokens": 4096,
+      "session_sha256": "16ba41623ae1ffe778c736d7a3086f2d2290ec2adec815bb6740b5a32838696d",
+      "user_agent_valid": true,
+      "closed": true,
+      "active": false,
+      "http_status": 200,
+      "reported_model_matches": true,
+      "finish_reason": "stop",
+      "usage": {
+        "prompt_tokens": 900,
+        "completion_tokens": 513,
+        "total_tokens": 1413
+      }
+    }
+  ],
+  "source_sha": "f2a15ef8dc011c271258aa60a7243d2d118242b3",
+  "started_at": "2026-09-30T21:37:14.976162+00:00",
+  "http_requests": 2,
+  "cumulative_http_requests": 81,
+  "finished_at": "2026-09-30T21:37:28.660772+00:00",
+  "status": "passed"
+}

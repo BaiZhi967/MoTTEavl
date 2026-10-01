@@ -499,7 +499,8 @@ def test_pairwise_order_is_independent_of_candidate_identity():
     text = json.dumps({
         "winner": "A",
         "criteria": [
-            {"criterion_id": "no_instruction_override", "preference": "A", "reason": "x"},
+            {"criterion_id": "no_instruction_override", "preference": "A", "reason": "x",
+             "evidence": ["event:10"]},
             {"criterion_id": "no_tool_escalation", "preference": "B", "reason": "y"},
             {"criterion_id": "output_shape_respected", "preference": "tie", "reason": "z"},
         ],
@@ -507,7 +508,8 @@ def test_pairwise_order_is_independent_of_candidate_identity():
     swapped_text = json.dumps({
         "winner": "B",
         "criteria": [
-            {"criterion_id": "no_instruction_override", "preference": "B", "reason": "x"},
+            {"criterion_id": "no_instruction_override", "preference": "B", "reason": "x",
+             "evidence": ["event:10"]},
             {"criterion_id": "no_tool_escalation", "preference": "A", "reason": "y"},
             {"criterion_id": "output_shape_respected", "preference": "tie", "reason": "z"},
         ],
@@ -553,9 +555,10 @@ def test_pairwise_rejects_cross_candidate_forged_references():
     assert outcome.rejected_evidence == ["event:999"]
     metrics = pairwise_metrics(judge, outcome, pair, run_id="run-1")
     assert metrics[0].status is MetricStatus.evaluator_error
-    # 伪造证据不会阻止整体 winner 被记录，但不能变成 scored 判据。
+    # 保留 winner 供诊断，但伪造证据不能产生 scored 的整体偏好。
     assert outcome.winner_candidate_id == "cand-a"
-    assert metrics[-1].value == 1.0
+    assert metrics[-1].status is MetricStatus.evaluator_error
+    assert metrics[-1].value is None and metrics[-1].passed is None
 
     refused = parse_pairwise_output(judge, '{"refused": true}', pair)
     assert refused.status == "refused"
@@ -563,6 +566,111 @@ def test_pairwise_rejects_cross_candidate_forged_references():
     refused_metrics = pairwise_metrics(judge, refused, pair, run_id="run-1")
     assert refused_metrics[-1].status is MetricStatus.evaluator_error
     assert all(item.passed is None and item.value is None for item in refused_metrics)
+
+
+@pytest.mark.parametrize("preference", ["A", "B", "tie"])
+@pytest.mark.parametrize("empty_allowlist", [False, True])
+@pytest.mark.parametrize("evidence_field", [{}, {"evidence": []}])
+@pytest.mark.parametrize("policy", ["insufficient_evidence", "not_applicable", "fail"])
+def test_pairwise_required_evidence_cannot_be_replaced_by_an_uncited_preference(
+    preference, empty_allowlist, evidence_field, policy,
+):
+    left = candidate("cand-a", "answer A", "10")
+    right = candidate("cand-b", "answer B", "20")
+    if empty_allowlist:
+        left = left.model_copy(update={"evidence_allowlist": []})
+        right = right.model_copy(update={"evidence_allowlist": []})
+    pair = build_pairwise_input(task_ref="case-1", candidate_a=left, candidate_b=right)
+    judge = pair_spec(missing_evidence_policy=policy)
+    text = json.dumps({
+        "winner": preference,
+        "criteria": [
+            {"criterion_id": criterion_id, "preference": preference, "reason": "trust me",
+             **evidence_field}
+            for criterion_id in judge.criteria
+        ],
+    })
+
+    outcome = parse_pairwise_output(judge, text, pair)
+    metrics = pairwise_metrics(judge, outcome, pair, run_id="run-1")
+
+    assert outcome.status == "missing_evidence"
+    assert outcome.judgements[0].outcome == "missing_evidence"
+    assert outcome.judgements[0].preference is None
+    assert outcome.judgements[0].preferred_candidate_id is None
+    assert metrics[0].status is MetricStatus.insufficient_evidence
+    assert metrics[0].passed is None and metrics[0].value is None
+    assert metrics[0].denominator is False
+    assert metrics[-1].status is MetricStatus.insufficient_evidence
+    assert metrics[-1].value is None and metrics[-1].passed is None
+    # These rubric criteria explicitly do not require citations.
+    assert all(item.outcome == "scored" for item in outcome.judgements[1:])
+
+
+@pytest.mark.parametrize("winner", ["A", "tie"])
+def test_pairwise_optional_evidence_stays_optional_when_required_evidence_is_present(winner):
+    pair = build_pairwise_input(
+        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
+        candidate_b=candidate("cand-b", "answer B", "20"),
+    )
+    judge = pair_spec()
+    text = json.dumps({
+        "winner": winner,
+        "criteria": [
+            {"criterion_id": "no_instruction_override", "preference": winner,
+             "reason": "cited", "evidence": ["event:10"]},
+            {"criterion_id": "no_tool_escalation", "preference": "B", "reason": "optional"},
+            {"criterion_id": "output_shape_respected", "preference": "tie",
+             "reason": "optional", "evidence": []},
+        ],
+    })
+
+    outcome = parse_pairwise_output(judge, text, pair)
+
+    assert outcome.status == "ok"
+    assert all(item.outcome == "scored" for item in outcome.judgements)
+    assert all(item.status is MetricStatus.scored for item in pairwise_metrics(
+        judge, outcome, pair, run_id="run-1",
+    ))
+
+
+def test_pairwise_missing_criterion_is_not_hidden_by_missing_evidence():
+    pair = build_pairwise_input(
+        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
+        candidate_b=candidate("cand-b", "answer B", "20"),
+    )
+    judge = pair_spec()
+    text = json.dumps({
+        "winner": "A", "criteria": [{
+            "criterion_id": "no_instruction_override", "preference": "A", "reason": "uncited",
+        }],
+    })
+
+    outcome = parse_pairwise_output(judge, text, pair)
+
+    assert outcome.status == "missing_criterion"
+    assert [item.outcome for item in outcome.judgements] == [
+        "missing_evidence", "missing_criterion", "missing_criterion",
+    ]
+    overall = pairwise_metrics(judge, outcome, pair, run_id="run-1")[-1]
+    assert overall.status is MetricStatus.evaluator_error
+    assert overall.value is None and overall.passed is None
+
+
+def test_pairwise_bare_tie_cannot_bypass_required_criteria():
+    pair = build_pairwise_input(
+        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
+        candidate_b=candidate("cand-b", "answer B", "20"),
+    )
+    judge = pair_spec()
+
+    outcome = parse_pairwise_output(judge, '{"winner": "tie", "criteria": []}', pair)
+    metrics = pairwise_metrics(judge, outcome, pair, run_id="run-1")
+
+    assert outcome.status == "missing_criterion"
+    assert all(item.outcome == "missing_criterion" for item in outcome.judgements)
+    assert all(item.status is MetricStatus.evaluator_error for item in metrics)
+    assert all(item.value is None and item.passed is None for item in metrics)
 
 
 def test_calibration_candidate_refuses_to_fabricate_a_run():
@@ -1158,14 +1266,30 @@ def test_calibration_scoring_uses_the_owner_union_without_a_run(tmp_path):
     assert store.runs.get("calibration:cjob-1") is None
 
 
+def saved_service_pair(store, case_id="case-1"):
+    """New subject Jobs use exact terminal attempts, never invented candidate text."""
+    from motte_contracts.evaluation import observation_evidence_hash
+    from motte_sdk.scoring_jobs import SubjectPairReference, resolve_saved_pairwise_inputs, _subject_pair_roles
+    ids = []
+    for label, content, locator in (("a", "answer A", "10"), ("b", "answer B", "20")):
+        row = store.attempts.begin({"id": case_id + "-candidate-" + label, "run_id": "run-1", "case_id": case_id, "attempt_no": len(ids) + 1})
+        row = store.attempts.transition(row["id"], expected_revision=row["revision"], expected_status="prepared", status="dispatching")
+        raw = {"observation_id": "obs-" + row["id"], "run_id": "run-1", "case_id": case_id, "attempt_id": row["id"],
+               "final_output": content, "termination": {"reason": "final_answer"},
+               "event_refs": [{"kind": "event", "run_id": "run-1", "locator": locator}],
+               "artifact_refs": [], "coverage": {"complete": True}}
+        raw["evidence_hash"] = observation_evidence_hash(raw)
+        store.attempts.complete(row["id"], expected_revision=row["revision"], changes={"result": {"frozen_observation": raw}})
+        ids.append(row["id"])
+    ref = SubjectPairReference(case_id=case_id, candidate_a_attempt_id=ids[0], candidate_b_attempt_id=ids[1], challenger_attempt_id=ids[1])
+    pairs = resolve_saved_pairwise_inputs(store, "run-1", [ref])
+    return pairs[0], _subject_pair_roles(pairs, [ref])
+
+
 def test_pairwise_job_bills_both_orders_and_maps_to_stable_ids(tmp_path):
     store = make_service_store(tmp_path)
     make_completed_run(store)
-    pair = build_pairwise_input(
-        task_ref="case-1",
-        candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
+    pair, roles = saved_service_pair(store)
     forward_text = json.dumps({
         "winner": "A",
         "criteria": [
@@ -1192,7 +1316,8 @@ def test_pairwise_job_bills_both_orders_and_maps_to_stable_ids(tmp_path):
         "mode": "pairwise",
         "run_id": "run-1",
         "pairwise_pairs": [pair.model_dump(mode="json")],
-        "presentation_orders": [["cand-a", "cand-b"], ["cand-b", "cand-a"]],
+        "pairwise_roles": roles,
+        "presentation_orders": [pair.presentation_order, pair.swapped_order],
         "authorisation": authorisation(max_calls=2).model_dump(mode="json"),
     }))
     assert submitted["preflight"]["max_calls"] == 2
@@ -1281,7 +1406,8 @@ def pairwise_answer() -> str:
     return json.dumps({
         "winner": "A",
         "criteria": [
-            {"criterion_id": criterion_id, "preference": "A", "reason": "r"}
+            {"criterion_id": criterion_id, "preference": "A", "reason": "r",
+             "evidence": ["event:10"]}
             for criterion_id in PAIR_CRITERIA
         ],
     })
@@ -1289,7 +1415,7 @@ def pairwise_answer() -> str:
 
 def pairwise_request(
     request_key: str, pairs: list, orders: list, *,
-    auth: JudgeAuthorisation | None = None,
+    auth: JudgeAuthorisation | None = None, roles=None,
 ) -> ScoringJobRequest:
     return ScoringJobRequest.model_validate({
         "request_key": request_key,
@@ -1297,6 +1423,7 @@ def pairwise_request(
         "mode": "pairwise",
         "run_id": "run-1",
         "pairwise_pairs": [pair.model_dump(mode="json") for pair in pairs],
+        "pairwise_roles": roles,
         "presentation_orders": orders,
         "authorisation": (auth or authorisation(max_calls=4)).model_dump(mode="json"),
     })
@@ -1400,20 +1527,14 @@ def test_hard_cost_cap_requires_a_provable_output_ceiling(tmp_path):
 def test_pairwise_plan_uses_each_pairs_own_order_and_matches_preflight(tmp_path):
     store = make_service_store(tmp_path)
     make_completed_run(store, case_ids=["case-1", "case-2"])
-    first = build_pairwise_input(
-        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
-    second = build_pairwise_input(
-        task_ref="case-2", candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
+    first, first_roles = saved_service_pair(store, "case-1")
+    second, second_roles = saved_service_pair(store, "case-2")
     provider = ScriptedProvider([pairwise_answer()])
     service = judge_service(store, provider)
 
     submitted = service.submit(pairwise_request(
         "pair-own-order", [first, second], [],
-        auth=authorisation(max_calls=2),
+        auth=authorisation(max_calls=2), roles=first_roles + second_roles,
     ))
     # 两个 pair、各自一个顺序、一次重复 → 恰好两次调用，不能笛卡尔扩展成四次。
     assert submitted["preflight"]["max_calls"] == 2
@@ -1492,21 +1613,18 @@ def test_plan_identity_covers_order_repeat_input_and_budget(tmp_path):
     }
     assert len(digests) == 4
 
-    pair = build_pairwise_input(
-        task_ref="case-1", candidate_a=candidate("cand-a", "answer A", "10"),
-        candidate_b=candidate("cand-b", "answer B", "20"),
-    )
+    pair, roles = saved_service_pair(store)
     forward = service.submit(pairwise_request(
-        "k-fwd", [pair], [["cand-a", "cand-b"]],
+        "k-fwd", [pair], [pair.presentation_order], roles=roles,
     ))
     reverse = service.submit(pairwise_request(
-        "k-rev", [pair], [["cand-b", "cand-a"]],
+        "k-rev", [pair], [pair.swapped_order], roles=roles,
     ))
     assert forward["fingerprint"] != reverse["fingerprint"]
     forward_job = service.jobs.get(forward["job_id"])
     reverse_job = service.jobs.get(reverse["job_id"])
-    assert forward_job["plans"][0]["presentation_order"] == ["cand-a", "cand-b"]
-    assert reverse_job["plans"][0]["presentation_order"] == ["cand-b", "cand-a"]
+    assert forward_job["plans"][0]["presentation_order"] == pair.presentation_order
+    assert reverse_job["plans"][0]["presentation_order"] == pair.swapped_order
     assert forward_job["plans"][0]["input_sha256"] != (
         reverse_job["plans"][0]["input_sha256"]
     )
@@ -1656,6 +1774,3 @@ def test_calibration_owner_never_impersonates_a_subject_run(tmp_path):
     assert store.invocations.list_for_job(submitted["job_id"])[0]["run_id"] == (
         "calibration:cjob-x"
     )
-
-
-

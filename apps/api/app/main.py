@@ -5,15 +5,18 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from motte_contracts.compat import adapt_legacy_run, adapt_legacy_trace_event
 from motte_contracts.events import TraceEvent
 from motte_contracts.identity import canonical_sha256
 from motte_contracts.report import RunReport
 from motte_contracts.run import Run, RunCommand
+from motte_contracts.statistical_reports import StatisticalReport, StatisticalReportPublishRequest
 from motte_sdk.execution_backends import legacy_execution
 from motte_sdk.reporting import build_public_run_report, build_run_report as _build_report
 from motte_sdk.resolve import (
@@ -44,6 +47,7 @@ from apps.api.app.schemas import (
     DirectLlmOverviewResponse,
     DirectLlmRunRequest,
     EventsSnapshotResponse,
+    ExperimentRequest,
     JudgeCancelView,
     JudgeJobListResponse,
     JudgeJobView,
@@ -208,6 +212,18 @@ def _contract_field_errors(error) -> list[dict[str, str]]:
 def _error_json(status_code: int, code: str, message: str, **extra: Any) -> JSONResponse:
     payload = {"error": {"code": code, "message": message, **extra}}
     return JSONResponse(status_code=status_code, content=payload)
+
+
+def judge_request_validation_response(path: str, error) -> JSONResponse | None:
+    """Composable dispatch: return None for unrelated validation handlers."""
+    if path == "/api/v1/judge-calibrations" or path.startswith("/api/v1/judge-calibrations/"):
+        # Do not echo user-controlled dictionary keys, values, or validation context.
+        return _error_json(422, "CALIBRATION_CONTRACT_INVALID",
+                           "calibration request does not satisfy its contract")
+    if path in {"/api/v1/judges", "/api/v1/judges/preflight"}:
+        return _error_json(422, "JUDGE_CONTRACT_INVALID", "judge request does not satisfy its contract",
+                           fields=_contract_field_errors(error))
+    return None
 
 
 def _workflow_publication_record(
@@ -439,6 +455,12 @@ def create_app(
         return JSONResponse(
             status_code=409, content={"error": {"code": "RESOURCE_CONFLICT", "message": str(error)}}
         )
+
+    async def judge_request_validation(request, error):
+        response = judge_request_validation_response(request.url.path, error)
+        if response is not None:
+            return response
+        return await request_validation_exception_handler(request, error)
 
     @application.exception_handler(RunConflictError)
     async def run_conflict(request, error):
@@ -964,7 +986,7 @@ def create_app(
         last_event_id = request.headers.get("last-event-id")
         if last_event_id is not None:
             try:
-                cursor = max(after, int(last_event_id))
+                cursor = max(0, after, int(last_event_id))
             except ValueError:
                 raise HTTPException(
                     status_code=400,
@@ -973,7 +995,7 @@ def create_app(
                     )},
                 ) from None
         else:
-            cursor = after
+            cursor = max(0, after)
 
         def _envelope(event: dict[str, Any]) -> str:
             # R3 #4：SSE 公共流按值形状脱敏；持久 trace 原文不动
@@ -985,20 +1007,26 @@ def create_app(
         async def stream():
             nonlocal cursor
             while True:
-                pending = service.events_after(run_id, cursor)
-                if pending:
-                    # 协议 §2 gap：请求的游标之后第一帧之前存在被清理的段时，
-                    # 先发命名事件 motte-gap，客户端负责 partial 标记与持久补齐。
-                    first_seq = pending[0]["seq"]
-                    if first_seq > cursor + 1:
-                        gap = {
-                            "type": "gap", "after": cursor,
-                            "next_seq": first_seq, "partial": True,
-                        }
-                        yield (
-                            "event: motte-gap\ndata: "
-                            + json.dumps(gap, ensure_ascii=False) + "\n\n"
-                        )
+                window = service.events_window(run_id, cursor)
+                pending = window.events
+                # Receipt evidence is authoritative even when no live rows remain.
+                # Move the cursor after signaling so an empty active stream does
+                # not repeat the same gap on every poll.
+                if cursor < window.trimmed_through:
+                    gap = {
+                        "type": "gap", "after": cursor,
+                        "next_seq": window.trimmed_through + 1, "partial": True,
+                    }
+                    yield "event: motte-gap\ndata: " + json.dumps(gap) + "\n\n"
+                    cursor = window.trimmed_through
+                if pending and pending[0]["seq"] > cursor + 1:
+                    # Legacy unexplained gaps remain conservatively visible.
+                    gap = {
+                        "type": "gap", "after": cursor,
+                        "next_seq": pending[0]["seq"], "partial": True,
+                    }
+                    yield "event: motte-gap\ndata: " + json.dumps(gap) + "\n\n"
+                    cursor = pending[0]["seq"] - 1
                 batch = pending[:SSE_EVENTS_PER_POLL]
                 for event in batch:
                     cursor = event["seq"]
@@ -1024,7 +1052,9 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="run not found") from error
         bounded = max(1, min(limit, EVENTS_SNAPSHOT_LIMIT))
-        available = service.events_after(run_id, max(0, after))
+        cursor = max(0, after)
+        window = service.events_window(run_id, cursor)
+        available = window.events
         pending = available[:bounded]
         has_more = len(available) > len(pending)
         return {
@@ -1038,7 +1068,10 @@ def create_app(
             "next_after": pending[-1]["seq"] if has_more and pending else None,
             "has_more": has_more,
             "run_status": run.get("status"),
-            "partial": False,
+            "trimmed_through": window.trimmed_through,
+            "partial": cursor < window.trimmed_through or bool(
+                available and available[0]["seq"] > cursor + 1
+            ),
         }
 
     @application.get(
@@ -1094,6 +1127,14 @@ def create_app(
                 service.store, provider_factory=factory,
             )
         return judge_state["service"]
+
+    from apps.api.app.judge_calibrations import register_calibration_routes
+    from motte_sdk.calibration_transport import CalibrationLifecycle
+    from motte_sdk.judge_calibrations import JudgeCalibrationService
+
+    register_calibration_routes(application, lambda: CalibrationLifecycle(
+        JudgeCalibrationService(service.store, resources, scoring_jobs=_judge_service()),
+    ))
 
     def _judge_error(error: Exception) -> JSONResponse:
         """把 Judge 契约错误映射成结构化响应；未知异常继续向上抛。"""
@@ -1223,7 +1264,7 @@ def create_app(
             return _error_json(404, "JUDGE_SPEC_NOT_FOUND", f"judge spec not found: {judge_id}")
         return item["calibration"]
 
-    def _judge_request(body: JudgeSubmissionBase, *, request_key: str):
+    def _judge_request(body: JudgeSubmissionBase, *, request_key: str, preflight: bool = False):
         """服务端解析资源与证据，编译唯一冻结请求（与 CLI 共用同一编译器）。"""
         from motte_sdk.scoring_jobs import build_judge_submission
 
@@ -1244,10 +1285,13 @@ def create_app(
             repeats=body.repeats,
             presentation_orders=body.presentation_orders,
             price_table_version=body.price_table_version,
+            pairwise_refs=body.pairwise_refs,
+            qualification_id=body.qualification_id,
+            _lookup_existing=not preflight,
         )
 
     def _judge_mode_supported(mode: str) -> JSONResponse | None:
-        if mode == "single":
+        if mode in {"single", "pairwise"}:
             return None
         return _error_json(
             422,
@@ -1256,20 +1300,25 @@ def create_app(
             "pairwise judge jobs stay on the library path",
         )
 
-    @application.post("/api/v1/judges/preflight", response_model=JudgePreflightView)
+    from apps.api.app.schemas import JudgeErrorResponse
+    judge_error_responses = {status: {"model": JudgeErrorResponse} for status in (409, 422, 503)}
+
+    @application.post("/api/v1/judges/preflight", response_model=JudgePreflightView,
+                      responses=judge_error_responses)
     def judge_preflight(body: JudgePreflightRequest):
         unsupported = _judge_mode_supported(body.mode)
         if unsupported is not None:
             return unsupported
         try:
             judge = _judge_service()
-            return judge.preflight(_judge_request(body, request_key="judge-preflight"))
+            return judge.preflight(_judge_request(body, request_key="judge-preflight", preflight=True))
         except Exception as error:  # noqa: BLE001 - 统一映射，未知异常继续抛
             return _judge_error(error)
 
     @application.post(
         "/api/v1/judges", status_code=202, response_model=JudgeJobView,
         response_model_exclude_unset=True,
+        responses=judge_error_responses,
     )
     def judge_submit(body: JudgeSubmitRequest):
         unsupported = _judge_mode_supported(body.mode)
@@ -1792,6 +1841,8 @@ def create_app(
             config["max_output_tokens"] = bound
             provider = build_case_provider(config).provider
             model = provider.model
+            from uuid import uuid4
+
             request = ModelRequest(
                 model=model,
                 messages=[
@@ -1801,6 +1852,7 @@ def create_app(
                     )
                 ],
                 max_output_tokens=bound,
+                metadata={"session_id": uuid4().hex},
             )
             envelope = provider.complete(request)
         except ProviderCallError as error:
@@ -3798,6 +3850,129 @@ def create_app(
         baselines=getattr(service.store, "baselines", None),
     )
 
+    from motte_sdk.statistical_reports import StatisticalReportService
+    from motte_storage.operation_locks import MaintenanceConflict
+    from motte_storage.statistical_reports import StatisticalReportConflict, StatisticalReportCorrupt
+
+    application.state.statistical_reports = statistical_reports_service = StatisticalReportService(
+        service.store,
+    )
+
+    @application.exception_handler(RequestValidationError)
+    async def statistical_report_request_validation(request: Request, error: RequestValidationError):
+        if request.method == "POST" and getattr(request.scope.get("route"), "path", None) in {
+            "/api/v1/experiments", "/api/v1/experiments/preview",
+        }:
+            # Do not serialize arbitrary invalid input or exception ctx (NaN,
+            # non-JSON values, or user-supplied secrets) into the error response.
+            return _error_json(422, "EXPERIMENT_INVALID", "; ".join(
+                str(item["msg"]) for item in error.errors()
+            ))
+        if (request.method != "POST" or getattr(request.scope.get("route"), "path", None)
+                != "/api/v1/statistical-reports"):
+            # Compose both endpoint-scoped renderers through one registration.
+            return await judge_request_validation(request, error)
+        # Rejected JSON numbers may overflow to infinity. Do not echo arbitrary
+        # input/ctx into a strict JSON error response; retain the usual detail
+        # shape; non-Stats requests retain the Judge/default dispatch above.
+        return JSONResponse(status_code=422, content={"detail": [
+            {key: item[key] for key in ("loc", "msg", "type")} for item in error.errors()
+        ]})
+
+    statistical_error_schema = {
+        "type": "object", "required": ["error"], "additionalProperties": False,
+        "properties": {"error": {
+            "type": "object", "required": ["code", "message"], "additionalProperties": False,
+            "properties": {"code": {"type": "string"}, "message": {"type": "string"}},
+        }},
+    }
+    statistical_error_content = {"application/json": {"schema": statistical_error_schema}}
+
+    @application.post(
+        "/api/v1/statistical-reports", response_model=StatisticalReport,
+        responses={
+            404: {"description": "Run or scoring Pass not found", "content": statistical_error_content},
+            409: {"description": "Immutable conflict or corrupt report", "content": statistical_error_content},
+            422: {
+                "description": "Invalid request, comparison policy, or Pass ownership",
+                "content": {"application/json": {"schema": {"anyOf": [
+                    {"$ref": "#/components/schemas/HTTPValidationError"}, statistical_error_schema,
+                ]}}},
+            },
+            503: {"description": "Publication blocked by maintenance", "content": statistical_error_content},
+        },
+    )
+    def publish_statistical_report(body: StatisticalReportPublishRequest):
+        """Explicitly capture and publish a content-addressed, immutable statistical report."""
+        try:
+            return statistical_reports_service.publish(**body.model_dump())
+        except StatisticalReportCorrupt as error:
+            return JSONResponse(status_code=409, content={"error": {
+                "code": "STATISTICAL_REPORT_CORRUPT", "message": str(error),
+            }})
+        except StatisticalReportConflict as error:
+            return JSONResponse(status_code=409, content={"error": {
+                "code": "STATISTICAL_REPORT_CONFLICT", "message": str(error),
+            }})
+        except MaintenanceConflict as error:
+            return JSONResponse(status_code=503, content={"error": {
+                "code": "MAINTENANCE_MODE", "message": str(error),
+            }})
+        except KeyError as error:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "RUN_NOT_FOUND", "message": str(error),
+            }})
+        except ComparisonError as error:
+            # Comparison's legacy resolver uses the same code for an absent
+            # Pass and a Pass belonging to another Run. Keep that API unchanged,
+            # while this publication boundary distinguishes 404 from bad ownership.
+            status = 422
+            if error.code == "NO_SCORING_EVIDENCE":
+                status = 404
+            elif error.code == "SCORING_PASS_NOT_FOUND":
+                foreign = any(
+                    record is not None and record.get("run_id") != run_id
+                    for run_id, pass_id in (
+                        (body.baseline_run_id, body.baseline_pass_id),
+                        (body.candidate_run_id, body.candidate_pass_id),
+                    ) if pass_id is not None
+                    for record in (service.store.scoring_passes.get(pass_id),)
+                )
+                status = 422 if foreign else 404
+            return JSONResponse(status_code=status, content={"error": {
+                "code": error.code, "message": str(error),
+            }})
+        except ValueError as error:
+            return JSONResponse(status_code=422, content={"error": {
+                "code": "POLICY_INVALID", "message": str(error),
+            }})
+
+    @application.get(
+        "/api/v1/statistical-reports/{report_id}", response_model=StatisticalReport,
+        responses={
+            200: {"content": {"application/xml": {"schema": {"type": "string"}}}},
+            404: {"description": "Statistical report not found", "content": statistical_error_content},
+            409: {"description": "Corrupt statistical report", "content": statistical_error_content},
+        },
+    )
+    def get_statistical_report(report_id: str, format: Literal["json", "junit"] = "json"):
+        """Read/export the stored envelope; no calculation or live evidence lookup."""
+        from motte_sdk.export import statistical_report_to_json, statistical_report_to_junit
+
+        try:
+            report = statistical_reports_service.get(report_id)
+            if format == "junit":
+                return Response(statistical_report_to_junit(report), media_type="application/xml")
+            return statistical_report_to_json(report)
+        except KeyError as error:
+            return JSONResponse(status_code=404, content={"error": {
+                "code": "STATISTICAL_REPORT_NOT_FOUND", "message": str(error),
+            }})
+        except StatisticalReportCorrupt as error:
+            return JSONResponse(status_code=409, content={"error": {
+                "code": "STATISTICAL_REPORT_CORRUPT", "message": str(error),
+            }})
+
     @application.get("/api/v1/comparisons/statistics")
     def comparison_statistics(
         baseline: str,
@@ -3806,14 +3981,22 @@ def create_app(
         baseline_pass: str | None = None,
         candidate_pass: str | None = None,
         k: int = 1,
+        format: str = "json",
     ):
         """Fixed-pass paired Case/Task statistics; no Provider, Judge or writes."""
         try:
-            return comparisons_service.paired_statistics(
+            if format not in {"json", "junit"}:
+                raise ValueError("format must be json or junit")
+            from motte_sdk.export import statistics_to_json, statistics_to_junit
+
+            result = comparisons_service.paired_statistics(
                 baseline, candidate, allowed_factors=factors.split(","),
                 baseline_pass_id=baseline_pass, candidate_pass_id=candidate_pass,
                 k=k,
             )
+            if format == "junit":
+                return Response(statistics_to_junit(result), media_type="application/xml")
+            return statistics_to_json(result)
         except KeyError as error:
             return JSONResponse(
                 status_code=404,
@@ -3861,6 +4044,8 @@ def create_app(
             "metric_eligibility": result.metric_eligibility,
             "case_diff": result.case_diff,
             "allowed_differences": list(result.allowed_differences),
+            **({"pairwise_comparison": result.pairwise_comparison}
+               if result.pairwise_comparison is not None else {}),
         }
 
     @application.post("/api/v1/gates")
@@ -3920,7 +4105,7 @@ def create_app(
             conclusion["coverage_summary"] = comparisons_service.candidate_summary(
                 run_id,
                 scoring_pass_id=(
-                    scoring_pass_id if isinstance(scoring_pass_id, str) else None
+                    conclusion["report_refs"]["candidate"]["scoring_pass_id"]
                 ),
             )
         except ComparisonError:
@@ -4144,20 +4329,23 @@ def create_app(
     application.state.experiments = experiments_service
 
     @application.post("/api/v1/experiments/preview")
-    def preview_experiment(body: dict):
+    def preview_experiment(body: ExperimentRequest):
         try:
-            return experiments_service.preview(body)
+            return experiments_service.preview(body.model_dump(mode="json"))
         except Exception as error:
             code = getattr(error, "code", "EXPERIMENT_INVALID")
             return _error_json(422, str(code), str(error))
 
     @application.post("/api/v1/experiments")
-    def create_experiment(body: dict):
-        request_key = body.pop("_request_key", None) or body.pop("request_key", None)
+    def create_experiment(body: ExperimentRequest):
+        request_key = body.request_key
+        preview_hash = body.preview_hash
         try:
-            outcome = experiments_service.create(body, request_key=request_key)
+            outcome = experiments_service.create(
+                body.model_dump(mode="json"), request_key=request_key, expected_preview_hash=preview_hash,
+            )
         except ExperimentError as error:
-            status = 409 if error.code == "REQUEST_KEY_CONFLICT" else 422
+            status = 409 if error.code in {"REQUEST_KEY_CONFLICT", "PREVIEW_STALE"} else 422
             return _error_json(status, error.code, str(error))
         except Exception as error:
             code = getattr(error, "code", None)
@@ -4203,6 +4391,11 @@ def create_app(
             )
         except KeyError:
             return _error_json(404, "CELL_NOT_FOUND", f"cell {cell_id} not found")
+        except ExperimentError as error:
+            status = 404 if error.code in {
+                "CELL_NOT_FOUND", "EXPERIMENT_NOT_FOUND", "RUN_NOT_FOUND",
+            } else 422
+            return _error_json(status, error.code, str(error))
 
     # ------------------------------------------- Direct LLM 评测（通用直连 + 数据集管理）
 

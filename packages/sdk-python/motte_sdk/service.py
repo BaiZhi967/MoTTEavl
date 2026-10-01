@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from motte_storage.integrity import RunConflictError, validate_scores
+from motte_storage.trace_retention_models import TraceEventWindow
 
 RUN_STATES = (
     "queued",
@@ -1030,6 +1031,9 @@ class RunService:
             return stored
         except Exception:  # noqa: BLE001 - 证据通道故障不阻断执行
             return None
+
+    def events_window(self, run_id: str, after: int) -> TraceEventWindow:
+        return self.store.events.read_window(run_id, after)
 
     def events_after(self, run_id: str, seq: int) -> list[dict[str, Any]]:
         return self.store.events.list_after(run_id, seq)

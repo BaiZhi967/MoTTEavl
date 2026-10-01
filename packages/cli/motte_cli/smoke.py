@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+from uuid import uuid4
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,8 @@ def run_live_smoke(
             **adapter_for(kind).transport_kwargs,
         )
     provider = provider_cls(transport, model, price_table=price_table)
-    request = ModelRequest(model=model, messages=[Message(role="user", content=prompt)])
+    request = ModelRequest(model=model, messages=[Message(role="user", content=prompt)],
+                           metadata={"session_id": uuid4().hex})
     envelope = provider.complete(request)
     return {"smoke": _smoke_meta(provider_kind, model, base_url, price_table), "result": envelope}
 

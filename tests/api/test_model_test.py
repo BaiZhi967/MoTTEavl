@@ -114,3 +114,28 @@ def test_model_draft_update_uses_explicit_put():
     stored = client.get("/api/v1/models/fake-model").json()
     assert stored["parameters"]["temperature"] == 0.2
     assert stored["context_window"] == 131072
+
+
+def test_opencode_go_model_test_uses_independent_session_ids(monkeypatch):
+    from motte_provider import config, transport
+    from tests.provider.test_openai_compatible import FakeResponse, chat_body
+    seen = []
+    monkeypatch.setattr(config, "resolve_api_key", lambda *a, **k: "mock-key")
+    monkeypatch.setattr(transport, "_safe_urlopen", lambda req, **kw:
+                        seen.append(req) or FakeResponse(chat_body()))
+    client = client_with_store()
+    assert client.post("/api/v1/providers", json={
+        "name": "go", "kind": "openai_compatible",
+        "base_url": "https://opencode.ai/zen/go/v1",
+    }).status_code < 300
+    assert client.post("/api/v1/models", json={
+        "id": "bunny", "provider": "go", "model": "space-bunny-free",
+        "capabilities": {"text": True},
+    }).status_code < 300
+    for _ in range(2):
+        response = client.post("/api/v1/models/bunny/test", json={"prompt": "Explain a Python bug"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+    sessions = [req.get_header("X-opencode-session") for req in seen]
+    assert len(set(sessions)) == 2 and all(sessions)
+    assert all(req.get_header("User-agent") == "MoTTEavl/0.1.0" for req in seen)

@@ -52,6 +52,15 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
         )
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # urllib raises HTTPError without another network send
+
+
+def _bounded_urlopen(request, *, timeout):
+    return build_opener(_NoRedirectHandler()).open(request, timeout=timeout)
+
+
 def _safe_urlopen(request, *, timeout):
     return build_opener(_SafeRedirectHandler()).open(request, timeout=timeout)
 
@@ -85,6 +94,7 @@ class HTTPTransport:
         auth: str = "bearer",
         default_headers: dict[str, str] | None = None,
         opener: Callable | None = None,
+        follow_redirects: bool = True,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -99,7 +109,9 @@ class HTTPTransport:
         self.backoff_max = max(self.backoff_initial, float(backoff_max))
         self._auth = auth
         self._default_headers = dict(default_headers or {})
-        self._opener = opener or _safe_urlopen
+        if type(follow_redirects) is not bool:
+            raise ValueError("follow_redirects must be a boolean")
+        self._opener = opener or (_safe_urlopen if follow_redirects else _bounded_urlopen)
         self._sleep = sleep
         self._clock = clock
         self._wall_clock = wall_clock
@@ -114,13 +126,16 @@ class HTTPTransport:
         """兼容入口：返回响应 JSON，失败抛 ProviderError。"""
         return self.post_json_detailed(path, payload).response_body
 
-    def post_json_detailed(self, path: str, payload: dict) -> TransportOutcome:
+    def post_json_detailed(
+        self, path: str, payload: dict, *, headers_extra: dict[str, str] | None = None,
+    ) -> TransportOutcome:
         """POST JSON 并返回计量结果（attempts/latency_ms/错误分类）。"""
         url = self.base_url + path.lstrip("/")
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             **self._default_headers,
+            **(headers_extra or {}),
         }
         if self._api_key:
             if self._auth == "x-api-key":

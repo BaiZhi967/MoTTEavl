@@ -237,6 +237,1731 @@
         "title": "AgentTasksRunRequest",
         "type": "object"
       },
+      "BudgetPolicy": {
+        "additionalProperties": false,
+        "description": "实验级预算（执行计划 T04）：超限整体拒绝。null 表示不设该维上限。",
+        "properties": {
+          "cost_known_required": {
+            "default": false,
+            "title": "Cost Known Required",
+            "type": "boolean"
+          },
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cost Usd"
+          },
+          "max_total_calls": {
+            "minimum": 1.0,
+            "title": "Max Total Calls",
+            "type": "integer"
+          },
+          "max_total_tokens": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Tokens"
+          }
+        },
+        "required": [
+          "max_total_calls"
+        ],
+        "title": "BudgetPolicy",
+        "type": "object"
+      },
+      "CalibrationAllowance": {
+        "additionalProperties": false,
+        "description": "Exact sum of frozen child reservations; None cost always means unknown.",
+        "properties": {
+          "max_calls": {
+            "minimum": 1.0,
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "max_completion_tokens": {
+            "minimum": 0.0,
+            "title": "Max Completion Tokens",
+            "type": "integer"
+          },
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cost Usd"
+          },
+          "max_prompt_tokens": {
+            "minimum": 0.0,
+            "title": "Max Prompt Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_calls",
+          "max_prompt_tokens",
+          "max_completion_tokens",
+          "max_cost_usd"
+        ],
+        "title": "CalibrationAllowance",
+        "type": "object"
+      },
+      "CalibrationCall": {
+        "additionalProperties": false,
+        "description": "一次 Judge 调用（含重复与换序）及其费用；每次都必须有账本引用。",
+        "properties": {
+          "call_id": {
+            "minLength": 1,
+            "title": "Call Id",
+            "type": "string"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "criteria": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Criteria",
+            "type": "object"
+          },
+          "invocation_id": {
+            "minLength": 1,
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "judge_job_id": {
+            "minLength": 1,
+            "title": "Judge Job Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "single",
+              "repeat",
+              "order_forward",
+              "order_reverse"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "indeterminate"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "presentation_order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presentation Order",
+            "type": "array"
+          },
+          "price_table_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Table Version"
+          },
+          "sample_id": {
+            "minLength": 1,
+            "title": "Sample Id",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "refused",
+                  "malformed",
+                  "missing_evidence",
+                  "forged_evidence",
+                  "missing_criterion"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "winner_candidate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Candidate Id"
+          }
+        },
+        "required": [
+          "call_id",
+          "sample_id",
+          "kind",
+          "judge_job_id",
+          "invocation_id",
+          "outcome"
+        ],
+        "title": "CalibrationCall",
+        "type": "object"
+      },
+      "CalibrationCandidate": {
+        "additionalProperties": false,
+        "description": "Importable candidate data, intentionally without Run/Job/owner references.",
+        "properties": {
+          "candidate_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "evidence_allowlist": {
+            "items": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "title": "Evidence Allowlist",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "content"
+        ],
+        "title": "CalibrationCandidate",
+        "type": "object"
+      },
+      "CalibrationCatalogEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationRef"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "versions"
+        ],
+        "title": "CalibrationCatalogEntry",
+        "type": "object"
+      },
+      "CalibrationChildView": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "CalibrationChildView",
+        "type": "object"
+      },
+      "CalibrationErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "CalibrationErrorDetail",
+        "type": "object"
+      },
+      "CalibrationErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/CalibrationErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "CalibrationErrorResponse",
+        "type": "object"
+      },
+      "CalibrationExecuteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/CalibrationRunRequest"
+          }
+        },
+        "required": [
+          "content_sha256",
+          "request"
+        ],
+        "title": "CalibrationExecuteRequest",
+        "type": "object"
+      },
+      "CalibrationImportRequest": {
+        "additionalProperties": false,
+        "description": "Public write boundary only; stored/legacy CalibrationSet models stay unchanged.",
+        "properties": {
+          "calibration": {
+            "$ref": "#/components/schemas/CalibrationSet",
+            "description": "Public selectors are literal, nonblank Unicode path segments. '/' and '\\', ASCII controls, percent-escape triplets (%HH), and exact '.' or '..' are unsupported. Values are never decoded, normalized, or rewritten."
+          },
+          "pairs": {
+            "patternProperties": {
+              "\\S": {
+                "$ref": "#/components/schemas/CalibrationPair"
+              }
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Pairs",
+            "type": "object"
+          }
+        },
+        "required": [
+          "calibration"
+        ],
+        "title": "CalibrationImportRequest",
+        "type": "object"
+      },
+      "CalibrationItems_CalibrationCatalogEntry_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationCatalogEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CalibrationItems[CalibrationCatalogEntry]",
+        "type": "object"
+      },
+      "CalibrationItems_CalibrationJobView_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationJobView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CalibrationItems[CalibrationJobView]",
+        "type": "object"
+      },
+      "CalibrationItems_CalibrationReportView_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationReportView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CalibrationItems[CalibrationReportView]",
+        "type": "object"
+      },
+      "CalibrationItems_CalibrationVersion_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationVersion"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CalibrationItems[CalibrationVersion]",
+        "type": "object"
+      },
+      "CalibrationItems_HumanReviewRecord_": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HumanReviewRecord"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CalibrationItems[HumanReviewRecord]",
+        "type": "object"
+      },
+      "CalibrationJobView": {
+        "additionalProperties": false,
+        "properties": {
+          "allowance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalibrationAllowance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "child_job_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Child Job Ids",
+            "type": "array"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationChildView"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "judge_spec_sha256": {
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "operator_identity": {
+            "const": "declared_unverified",
+            "default": "declared_unverified",
+            "title": "Operator Identity",
+            "type": "string"
+          },
+          "plan_sha256": {
+            "title": "Plan Sha256",
+            "type": "string"
+          },
+          "provider_snapshot_sha256": {
+            "title": "Provider Snapshot Sha256",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/CalibrationRef"
+          },
+          "worker_command": {
+            "const": "uv run python -m apps.worker.motte_worker --once",
+            "default": "uv run python -m apps.worker.motte_worker --once",
+            "title": "Worker Command",
+            "type": "string"
+          }
+        },
+        "required": [
+          "execution_id",
+          "version",
+          "judge_spec_sha256",
+          "provider_snapshot_sha256",
+          "plan_sha256",
+          "allowance",
+          "child_job_ids",
+          "children",
+          "recorded_at"
+        ],
+        "title": "CalibrationJobView",
+        "type": "object"
+      },
+      "CalibrationPair": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/CalibrationCandidate"
+              },
+              {
+                "$ref": "#/components/schemas/CalibrationCandidate"
+              }
+            ],
+            "title": "Candidates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "title": "CalibrationPair",
+        "type": "object"
+      },
+      "CalibrationPolicy": {
+        "additionalProperties": false,
+        "description": "某个 rubric 用途固定的校准门槛（不在运行时按需放宽）。",
+        "properties": {
+          "max_disagreement_rate": {
+            "default": 0.15,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Max Disagreement Rate",
+            "type": "number"
+          },
+          "max_error_rate": {
+            "default": 0.15,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Max Error Rate",
+            "type": "number"
+          },
+          "max_missing_evidence_rate": {
+            "default": 0.25,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Max Missing Evidence Rate",
+            "type": "number"
+          },
+          "max_refusal_rate": {
+            "default": 0.15,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Max Refusal Rate",
+            "type": "number"
+          },
+          "min_borderline": {
+            "default": 6,
+            "minimum": 0.0,
+            "title": "Min Borderline",
+            "type": "integer"
+          },
+          "min_clear_fail": {
+            "default": 6,
+            "minimum": 0.0,
+            "title": "Min Clear Fail",
+            "type": "integer"
+          },
+          "min_clear_pass": {
+            "default": 6,
+            "minimum": 0.0,
+            "title": "Min Clear Pass",
+            "type": "integer"
+          },
+          "min_human_reviewed_samples": {
+            "default": 30,
+            "minimum": 1.0,
+            "title": "Min Human Reviewed Samples",
+            "type": "integer"
+          },
+          "min_injection": {
+            "default": 6,
+            "minimum": 0.0,
+            "title": "Min Injection",
+            "type": "integer"
+          },
+          "min_missing_evidence": {
+            "default": 6,
+            "minimum": 0.0,
+            "title": "Min Missing Evidence",
+            "type": "integer"
+          },
+          "min_position_swap_consistency_rate": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Position Swap Consistency Rate",
+            "type": "number"
+          },
+          "min_repeat_stability_rate": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Repeat Stability Rate",
+            "type": "number"
+          },
+          "require_position_swap_consistency": {
+            "default": true,
+            "title": "Require Position Swap Consistency",
+            "type": "boolean"
+          },
+          "require_repeat_stability": {
+            "default": true,
+            "title": "Require Repeat Stability",
+            "type": "boolean"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "title": "Rubric Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rubric_id",
+          "rubric_version"
+        ],
+        "title": "CalibrationPolicy",
+        "type": "object"
+      },
+      "CalibrationPreflightView": {
+        "additionalProperties": false,
+        "properties": {
+          "allowance": {
+            "$ref": "#/components/schemas/CalibrationAllowance"
+          },
+          "authorisation": {
+            "additionalProperties": true,
+            "title": "Authorisation",
+            "type": "object"
+          },
+          "authorised": {
+            "const": true,
+            "title": "Authorised",
+            "type": "boolean"
+          },
+          "budget_executable": {
+            "const": true,
+            "title": "Budget Executable",
+            "type": "boolean"
+          },
+          "child_call_counts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Child Call Counts",
+            "type": "array"
+          },
+          "executed": {
+            "const": false,
+            "title": "Executed",
+            "type": "boolean"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "judge_spec_sha256": {
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "max_calls": {
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "plan_sha256": {
+            "title": "Plan Sha256",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/CalibrationPolicy"
+          },
+          "preflight_sha256": {
+            "title": "Preflight Sha256",
+            "type": "string"
+          },
+          "provider_snapshot_sha256": {
+            "title": "Provider Snapshot Sha256",
+            "type": "string"
+          },
+          "qualification_status": {
+            "const": "not_run",
+            "title": "Qualification Status",
+            "type": "string"
+          },
+          "sample_count": {
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "version": {
+            "$ref": "#/components/schemas/CalibrationRef"
+          }
+        },
+        "required": [
+          "schema_version",
+          "execution_id",
+          "version",
+          "judge_spec_sha256",
+          "provider_snapshot_sha256",
+          "policy",
+          "plan_sha256",
+          "sample_count",
+          "max_calls",
+          "child_call_counts",
+          "allowance",
+          "authorisation",
+          "mode",
+          "authorised",
+          "budget_executable",
+          "executed",
+          "qualification_status",
+          "preflight_sha256"
+        ],
+        "title": "CalibrationPreflightView",
+        "type": "object"
+      },
+      "CalibrationPublishRequest": {
+        "additionalProperties": false,
+        "description": "Optional empty body only; report and qualification contents are server-owned.",
+        "properties": {},
+        "title": "CalibrationPublishRequest",
+        "type": "object"
+      },
+      "CalibrationQualificationSource": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/QualificationBinding"
+          },
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "qualification": {
+            "$ref": "#/components/schemas/JudgeQualification"
+          },
+          "recorded_at": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "qualification",
+          "binding",
+          "recorded_at",
+          "content_sha256"
+        ],
+        "title": "CalibrationQualificationSource",
+        "type": "object"
+      },
+      "CalibrationRef": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "version",
+          "content_sha256"
+        ],
+        "title": "CalibrationRef",
+        "type": "object"
+      },
+      "CalibrationReport": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "minLength": 1,
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "calibration_sha256": {
+            "maxLength": 71,
+            "minLength": 71,
+            "title": "Calibration Sha256",
+            "type": "string"
+          },
+          "calibration_version": {
+            "minLength": 1,
+            "title": "Calibration Version",
+            "type": "string"
+          },
+          "call_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Call Count",
+            "type": "integer"
+          },
+          "calls": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationCall"
+            },
+            "title": "Calls",
+            "type": "array"
+          },
+          "candidate_only_count": {
+            "minimum": 0.0,
+            "title": "Candidate Only Count",
+            "type": "integer"
+          },
+          "cost": {
+            "additionalProperties": true,
+            "title": "Cost",
+            "type": "object"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "title": "Coverage",
+            "type": "object"
+          },
+          "disagreement_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disagreement Rate"
+          },
+          "error_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Rate"
+          },
+          "experimental": {
+            "default": true,
+            "title": "Experimental",
+            "type": "boolean"
+          },
+          "gate_eligible": {
+            "default": false,
+            "title": "Gate Eligible",
+            "type": "boolean"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "human_reviewed_count": {
+            "minimum": 0.0,
+            "title": "Human Reviewed Count",
+            "type": "integer"
+          },
+          "judge_spec_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge Spec Sha256"
+          },
+          "kind_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Kind Counts",
+            "type": "object"
+          },
+          "missing_evidence_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Evidence Rate"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "not_run": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Run",
+            "type": "array"
+          },
+          "per_criterion": {
+            "items": {
+              "$ref": "#/components/schemas/CriterionConfusion"
+            },
+            "title": "Per Criterion",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/CalibrationPolicy"
+          },
+          "policy_sha256": {
+            "maxLength": 71,
+            "minLength": 71,
+            "title": "Policy Sha256",
+            "type": "string"
+          },
+          "position_swap": {
+            "additionalProperties": true,
+            "title": "Position Swap",
+            "type": "object"
+          },
+          "qualified": {
+            "default": false,
+            "title": "Qualified",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "refusal_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Rate"
+          },
+          "repeat_stability": {
+            "additionalProperties": true,
+            "title": "Repeat Stability",
+            "type": "object"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "title": "Rubric Version",
+            "type": "string"
+          },
+          "sample_count": {
+            "minimum": 0.0,
+            "title": "Sample Count",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "calibration_version",
+          "calibration_sha256",
+          "rubric_id",
+          "rubric_version",
+          "model",
+          "policy",
+          "policy_sha256",
+          "sample_count",
+          "human_reviewed_count",
+          "candidate_only_count"
+        ],
+        "title": "CalibrationReport",
+        "type": "object"
+      },
+      "CalibrationReportRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "const": "calibration-ledger@1",
+            "default": "calibration-ledger@1",
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "execution_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "ledger_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Ledger Sha256",
+            "type": "string"
+          },
+          "pairwise_calls": {
+            "items": {
+              "$ref": "#/components/schemas/PairwiseCalibrationCall"
+            },
+            "title": "Pairwise Calls",
+            "type": "array"
+          },
+          "pairwise_confusion": {
+            "items": {
+              "$ref": "#/components/schemas/PairwiseCriterionConfusion"
+            },
+            "title": "Pairwise Confusion",
+            "type": "array"
+          },
+          "recorded_at": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/CalibrationReport"
+          },
+          "report_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CalibrationSourceBinding"
+          }
+        },
+        "required": [
+          "report_id",
+          "execution_id",
+          "ledger_sha256",
+          "source",
+          "report",
+          "recorded_at",
+          "content_sha256"
+        ],
+        "title": "CalibrationReportRecord",
+        "type": "object"
+      },
+      "CalibrationReportView": {
+        "additionalProperties": false,
+        "properties": {
+          "qualification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalibrationQualificationSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "$ref": "#/components/schemas/CalibrationReportRecord"
+          }
+        },
+        "required": [
+          "report",
+          "qualification"
+        ],
+        "title": "CalibrationReportView",
+        "type": "object"
+      },
+      "CalibrationReviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_parent_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Expected Parent Sha256",
+            "type": "string"
+          },
+          "new_version": {
+            "description": "Public selectors are literal, nonblank Unicode path segments. '/' and '\\', ASCII controls, percent-escape triplets (%HH), and exact '.' or '..' are unsupported. Values are never decoded, normalized, or rewritten.",
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "New Version",
+            "type": "string"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/HumanReviewInput"
+            },
+            "minItems": 1,
+            "title": "Reviews",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_parent_sha256",
+          "new_version",
+          "reviews"
+        ],
+        "title": "CalibrationReviewRequest",
+        "type": "object"
+      },
+      "CalibrationRunRequest": {
+        "additionalProperties": false,
+        "description": "Public inputs only; the server owns observations, plans and authorization accounting.",
+        "properties": {
+          "authorisation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgeAuthorisation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_preflight_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Preflight Sha256"
+          },
+          "price_table_version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Table Version"
+          },
+          "request_key": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Request Key",
+            "type": "string"
+          },
+          "spec_request": {
+            "additionalProperties": true,
+            "title": "Spec Request",
+            "type": "object"
+          }
+        },
+        "required": [
+          "request_key",
+          "spec_request"
+        ],
+        "title": "CalibrationRunRequest",
+        "type": "object"
+      },
+      "CalibrationSample": {
+        "additionalProperties": false,
+        "description": "一条校准样本；human_reviewed 只可能由真人工复核产生。",
+        "properties": {
+          "annotator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotator"
+          },
+          "calibration_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration Version"
+          },
+          "candidate_output": {
+            "default": "",
+            "title": "Candidate Output",
+            "type": "string"
+          },
+          "content_sha256": {
+            "maxLength": 71,
+            "minLength": 71,
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "expected_criteria": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Expected Criteria",
+            "type": "object"
+          },
+          "expected_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "scored",
+                  "insufficient_evidence",
+                  "evaluator_error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Status"
+          },
+          "judge_spec_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge Spec Sha256"
+          },
+          "kind": {
+            "enum": [
+              "clear_pass",
+              "clear_fail",
+              "borderline",
+              "missing_evidence",
+              "injection"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "labelling_notes": {
+            "default": "",
+            "title": "Labelling Notes",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "observation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "title": "Rubric Version",
+            "type": "string"
+          },
+          "sample_id": {
+            "minLength": 1,
+            "title": "Sample Id",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "human",
+              "synthetic_candidate"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "default": "candidate",
+            "enum": [
+              "candidate",
+              "human_reviewed",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sample_id",
+          "kind",
+          "source",
+          "rubric_id",
+          "rubric_version",
+          "model",
+          "content_sha256"
+        ],
+        "title": "CalibrationSample",
+        "type": "object"
+      },
+      "CalibrationSet": {
+        "additionalProperties": false,
+        "description": "一个 rubric/model/config 组合下的校准集（内容寻址、不可变）。",
+        "properties": {
+          "calibration_id": {
+            "minLength": 1,
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "content_sha256": {
+            "maxLength": 71,
+            "minLength": 71,
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "judge_spec_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge Spec Sha256"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "title": "Notes",
+            "type": "string"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "title": "Rubric Version",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/CalibrationSample"
+            },
+            "title": "Samples",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "version": {
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "version",
+          "rubric_id",
+          "rubric_version",
+          "model",
+          "content_sha256"
+        ],
+        "title": "CalibrationSet",
+        "type": "object"
+      },
+      "CalibrationSourceBinding": {
+        "additionalProperties": false,
+        "description": "Source identity before report/qualification IDs exist; all components are required.",
+        "properties": {
+          "calibration_content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Calibration Content Sha256",
+            "type": "string"
+          },
+          "calibration_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "calibration_version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Version",
+            "type": "string"
+          },
+          "judge_spec_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Model",
+            "type": "string"
+          },
+          "policy_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Policy Sha256",
+            "type": "string"
+          },
+          "provider_snapshot_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Provider Snapshot Sha256",
+            "type": "string"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Rubric Sha256",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubric Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judge_spec_sha256",
+          "rubric_id",
+          "rubric_version",
+          "rubric_sha256",
+          "model",
+          "provider_snapshot_sha256",
+          "calibration_id",
+          "calibration_version",
+          "calibration_content_sha256",
+          "policy_sha256"
+        ],
+        "title": "CalibrationSourceBinding",
+        "type": "object"
+      },
+      "CalibrationVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration": {
+            "$ref": "#/components/schemas/CalibrationSet"
+          },
+          "content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "expected_outcomes": {
+            "patternProperties": {
+              "\\S": {
+                "discriminator": {
+                  "mapping": {
+                    "non_scored": "#/components/schemas/NonScoredCalibrationOutcome",
+                    "scored": "#/components/schemas/ScoredCalibrationOutcome"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScoredCalibrationOutcome"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NonScoredCalibrationOutcome"
+                  }
+                ]
+              }
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Expected Outcomes",
+            "type": "object"
+          },
+          "pairs": {
+            "patternProperties": {
+              "\\S": {
+                "$ref": "#/components/schemas/CalibrationPair"
+              }
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Pairs",
+            "type": "object"
+          },
+          "pairwise_gold": {
+            "patternProperties": {
+              "\\S": {
+                "patternProperties": {
+                  "\\S": {
+                    "$ref": "#/components/schemas/PairwiseLabel"
+                  }
+                },
+                "propertyNames": {
+                  "minLength": 1
+                },
+                "type": "object"
+              }
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Pairwise Gold",
+            "type": "object"
+          },
+          "parent_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalibrationRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_ids": {
+            "items": {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "title": "Review Ids",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calibration",
+          "content_sha256"
+        ],
+        "title": "CalibrationVersion",
+        "type": "object"
+      },
       "CancelRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -381,6 +2106,76 @@
         "title": "CaseRun",
         "type": "object"
       },
+      "CevalExperimentConfig": {
+        "additionalProperties": false,
+        "description": "与 standalone C-Eval selection/profile builder 同口径的请求。",
+        "properties": {
+          "dataset_revision": {
+            "minLength": 1,
+            "title": "Dataset Revision",
+            "type": "string"
+          },
+          "execution_profile": {
+            "minLength": 1,
+            "title": "Execution Profile",
+            "type": "string"
+          },
+          "few_shot": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Few Shot",
+            "type": "integer"
+          },
+          "few_shot_split": {
+            "enum": [
+              "val",
+              "test",
+              "dev"
+            ],
+            "title": "Few Shot Split",
+            "type": "string"
+          },
+          "kind": {
+            "const": "ceval",
+            "default": "ceval",
+            "title": "Kind",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "smoke",
+              "custom-subset",
+              "full"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "seed": {
+            "title": "Seed",
+            "type": "integer"
+          },
+          "split": {
+            "enum": [
+              "val",
+              "test",
+              "dev"
+            ],
+            "title": "Split",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_revision",
+          "scope",
+          "split",
+          "few_shot",
+          "few_shot_split",
+          "seed",
+          "execution_profile"
+        ],
+        "title": "CevalExperimentConfig",
+        "type": "object"
+      },
       "CreateRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -419,6 +2214,69 @@
           "scenario_version"
         ],
         "title": "CreateRunRequest",
+        "type": "object"
+      },
+      "CriterionConfusion": {
+        "additionalProperties": false,
+        "properties": {
+          "compared": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Compared",
+            "type": "integer"
+          },
+          "criterion_id": {
+            "minLength": 1,
+            "title": "Criterion Id",
+            "type": "string"
+          },
+          "errors": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Errors",
+            "type": "integer"
+          },
+          "false_fail": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "False Fail",
+            "type": "integer"
+          },
+          "false_pass": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "False Pass",
+            "type": "integer"
+          },
+          "missing_evidence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Missing Evidence",
+            "type": "integer"
+          },
+          "refusals": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Refusals",
+            "type": "integer"
+          },
+          "true_fail": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "True Fail",
+            "type": "integer"
+          },
+          "true_pass": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "True Pass",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "criterion_id"
+        ],
+        "title": "CriterionConfusion",
         "type": "object"
       },
       "DatasetProfileSummary": {
@@ -1366,9 +3224,37 @@
         "title": "EvaluationDescriptor",
         "type": "object"
       },
+      "EvaluationRef": {
+        "additionalProperties": false,
+        "description": "评分引用：Experiment 的 Run 评分固定用哪个评分协议。",
+        "properties": {
+          "scoring": {
+            "default": "default",
+            "title": "Scoring",
+            "type": "string"
+          },
+          "scoring_pass_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scoring Pass Hint"
+          },
+          "statistical_policy": {
+            "default": "statistical_policy@1",
+            "title": "Statistical Policy",
+            "type": "string"
+          }
+        },
+        "title": "EvaluationRef",
+        "type": "object"
+      },
       "EventsSnapshotResponse": {
         "additionalProperties": false,
-        "description": "SSE 断线/缺口的持久查询（M7 协议 §2）。",
         "properties": {
           "events": {
             "items": {
@@ -1412,6 +3298,12 @@
           "run_status": {
             "title": "Run Status",
             "type": "string"
+          },
+          "trimmed_through": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Trimmed Through",
+            "type": "integer"
           }
         },
         "required": [
@@ -1512,6 +3404,257 @@
         "title": "ExecutionError",
         "type": "object"
       },
+      "ExperimentExecutionBudget": {
+        "additionalProperties": false,
+        "description": "Builtin Target 请求预算；不接收客户端自报 enforcement/调用上界。\n\n维度与 motte_agent.budget.ExecutionBudget 一致。token/cost 的 observed\n额度不能表示强制上界，因此本首版配置不开放这两维。",
+        "properties": {
+          "max_output_tokens": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Output Tokens"
+          },
+          "max_steps": {
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Max Steps",
+            "type": "integer"
+          },
+          "max_tool_calls": {
+            "anyOf": [
+              {
+                "maximum": 256.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tool Calls"
+          },
+          "per_call_timeout_sec": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Call Timeout Sec"
+          },
+          "wall_time_sec": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 3600.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Time Sec"
+          }
+        },
+        "required": [
+          "max_steps"
+        ],
+        "title": "ExperimentExecutionBudget",
+        "type": "object"
+      },
+      "ExperimentRequest": {
+        "additionalProperties": false,
+        "description": "Transport controls are excluded from Spec identity and preview binding.",
+        "properties": {
+          "_preview_hash": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Hash"
+          },
+          "budget_policy": {
+            "$ref": "#/components/schemas/BudgetPolicy"
+          },
+          "controlled_conditions": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Controlled Conditions",
+            "type": "object"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "minLength": 1,
+            "title": "Created By",
+            "type": "string"
+          },
+          "evaluation_ref": {
+            "$ref": "#/components/schemas/EvaluationRef"
+          },
+          "experiment_id": {
+            "minLength": 1,
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "factors": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Factors",
+            "type": "object"
+          },
+          "max_cells": {
+            "default": 200,
+            "minimum": 1.0,
+            "title": "Max Cells",
+            "type": "integer"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "repeats": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "request_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Key"
+          },
+          "selected_case_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Case Keys",
+            "type": "array"
+          },
+          "stop_policy": {
+            "$ref": "#/components/schemas/StopPolicy"
+          },
+          "suite_config": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "ceval": "#/components/schemas/CevalExperimentConfig",
+                    "scenario": "#/components/schemas/ScenarioExperimentConfig",
+                    "skill": "#/components/schemas/SkillExperimentConfig"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CevalExperimentConfig"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScenarioExperimentConfig"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SkillExperimentConfig"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suite Config"
+          },
+          "task_ref": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "minProperties": 1,
+            "title": "Task Ref",
+            "type": "object"
+          },
+          "trials_per_run": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trials Per Run"
+          },
+          "version": {
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id",
+          "version",
+          "task_ref",
+          "budget_policy",
+          "created_by",
+          "reason"
+        ],
+        "title": "ExperimentRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1523,6 +3666,230 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HumanReviewInput": {
+        "additionalProperties": false,
+        "properties": {
+          "annotator": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Annotator",
+            "type": "string"
+          },
+          "expected_criteria": {
+            "patternProperties": {
+              "\\S": {
+                "type": "boolean"
+              }
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Expected Criteria",
+            "type": "object"
+          },
+          "expected_outcome": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "non_scored": "#/components/schemas/NonScoredCalibrationOutcome",
+                    "scored": "#/components/schemas/ScoredCalibrationOutcome"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScoredCalibrationOutcome"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NonScoredCalibrationOutcome"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Outcome"
+          },
+          "expected_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "scored",
+                  "insufficient_evidence",
+                  "evaluator_error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Status"
+          },
+          "pairwise_gold": {
+            "patternProperties": {
+              "\\S": {
+                "$ref": "#/components/schemas/PairwiseLabel"
+              }
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Pairwise Gold",
+            "type": "object"
+          },
+          "reason": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reason",
+            "type": "string"
+          },
+          "reviewed_at": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reviewed At",
+            "type": "string"
+          },
+          "reviewer": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reviewer",
+            "type": "string"
+          },
+          "sample_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Sample Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sample_id",
+          "annotator",
+          "reviewer",
+          "reviewed_at",
+          "reason"
+        ],
+        "title": "HumanReviewInput",
+        "type": "object"
+      },
+      "HumanReviewRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "after_sample_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "After Sample Sha256",
+            "type": "string"
+          },
+          "before_sample_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Before Sample Sha256",
+            "type": "string"
+          },
+          "child_ref": {
+            "$ref": "#/components/schemas/CalibrationRef"
+          },
+          "parent_ref": {
+            "$ref": "#/components/schemas/CalibrationRef"
+          },
+          "recorded_at": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/HumanReviewInput"
+          },
+          "review_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Review Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_id",
+          "review",
+          "parent_ref",
+          "child_ref",
+          "before_sample_sha256",
+          "after_sample_sha256",
+          "recorded_at"
+        ],
+        "title": "HumanReviewRecord",
+        "type": "object"
+      },
+      "JudgeAuthorisation": {
+        "additionalProperties": false,
+        "description": "显式付费授权：用途必须是 judge；没有授权不产生任何调用。",
+        "properties": {
+          "actor": {
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "authorised": {
+            "default": false,
+            "title": "Authorised",
+            "type": "boolean"
+          },
+          "authorised_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorised At"
+          },
+          "hard_cost_cap_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Cost Cap Usd"
+          },
+          "max_calls": {
+            "minimum": 0.0,
+            "title": "Max Calls",
+            "type": "integer"
+          },
+          "max_total_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Tokens"
+          },
+          "purpose": {
+            "const": "judge",
+            "default": "judge",
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "max_calls"
+        ],
+        "title": "JudgeAuthorisation",
         "type": "object"
       },
       "JudgeAuthorisationRequest": {
@@ -1680,6 +4047,55 @@
         "title": "JudgeCancelView",
         "type": "object"
       },
+      "JudgeErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "JudgeErrorDetail",
+        "type": "object"
+      },
+      "JudgeErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/JudgeErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "JudgeErrorResponse",
+        "type": "object"
+      },
       "JudgeJobListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1779,6 +4195,20 @@
             "title": "Owner",
             "type": "object"
           },
+          "pairwise_roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PairwiseRoleBinding"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pairwise Roles"
+          },
           "preflight": {
             "anyOf": [
               {
@@ -1829,6 +4259,16 @@
             ],
             "title": "Published"
           },
+          "qualification_binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualificationBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "receipt": {
             "anyOf": [
               {
@@ -1877,6 +4317,18 @@
             "minimum": 1.0,
             "title": "Revision",
             "type": "integer"
+          },
+          "roles_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles Sha256"
           },
           "run_id": {
             "title": "Run Id",
@@ -1939,6 +4391,13 @@
             "title": "Mode",
             "type": "string"
           },
+          "pairwise_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SubjectPairReference"
+            },
+            "title": "Pairwise Refs",
+            "type": "array"
+          },
           "presentation_orders": {
             "items": {
               "items": {
@@ -1968,6 +4427,18 @@
             ],
             "title": "Publish Policy",
             "type": "string"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
           },
           "repeats": {
             "default": 1,
@@ -2113,6 +4584,110 @@
         "title": "JudgePreflightView",
         "type": "object"
       },
+      "JudgeQualification": {
+        "additionalProperties": false,
+        "description": "某个 judge 配置的校准资格；按 spec hash 精确匹配，不跨版本继承。",
+        "properties": {
+          "calibration_id": {
+            "minLength": 1,
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "calibration_sha256": {
+            "maxLength": 71,
+            "minLength": 71,
+            "title": "Calibration Sha256",
+            "type": "string"
+          },
+          "calibration_version": {
+            "minLength": 1,
+            "title": "Calibration Version",
+            "type": "string"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "experimental": {
+            "title": "Experimental",
+            "type": "boolean"
+          },
+          "gate_eligible": {
+            "title": "Gate Eligible",
+            "type": "boolean"
+          },
+          "judge_spec_sha256": {
+            "maxLength": 71,
+            "minLength": 71,
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "policy_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Sha256"
+          },
+          "qualification_id": {
+            "minLength": 1,
+            "title": "Qualification Id",
+            "type": "string"
+          },
+          "qualified": {
+            "title": "Qualified",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "title": "Rubric Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "qualification_id",
+          "judge_spec_sha256",
+          "rubric_id",
+          "rubric_version",
+          "model",
+          "calibration_id",
+          "calibration_version",
+          "calibration_sha256",
+          "qualified",
+          "experimental",
+          "gate_eligible"
+        ],
+        "title": "JudgeQualification",
+        "type": "object"
+      },
       "JudgeSpecRequest": {
         "additionalProperties": false,
         "description": "Judge 配置请求；model 是**已发布的 ModelProfile id**，不是线路模型名。\n\n服务端在提交期解析它并冻结 adapter / endpoint / 线路模型 / 价格版本；\n客户端不能提交估算 token 数或价格覆盖。",
@@ -2232,6 +4807,13 @@
             "title": "Mode",
             "type": "string"
           },
+          "pairwise_refs": {
+            "items": {
+              "$ref": "#/components/schemas/SubjectPairReference"
+            },
+            "title": "Pairwise Refs",
+            "type": "array"
+          },
           "presentation_orders": {
             "items": {
               "items": {
@@ -2261,6 +4843,18 @@
             ],
             "title": "Publish Policy",
             "type": "string"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
           },
           "repeats": {
             "default": 1,
@@ -2299,6 +4893,311 @@
           "request_key"
         ],
         "title": "JudgeSubmitRequest",
+        "type": "object"
+      },
+      "NonScoredCalibrationOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "non_scored",
+            "title": "Kind",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "missing_evidence",
+              "refused",
+              "malformed",
+              "forged_evidence",
+              "missing_criterion"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "status"
+        ],
+        "title": "NonScoredCalibrationOutcome",
+        "type": "object"
+      },
+      "PairwiseCalibrationCall": {
+        "additionalProperties": false,
+        "description": "Stable candidate/tie labels, never encoded as Boolean pass/fail criteria.",
+        "properties": {
+          "call": {
+            "$ref": "#/components/schemas/CalibrationCall"
+          },
+          "preferences": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PairwiseLabel"
+            },
+            "title": "Preferences",
+            "type": "object"
+          },
+          "winner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PairwiseLabel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "call"
+        ],
+        "title": "PairwiseCalibrationCall",
+        "type": "object"
+      },
+      "PairwiseConfusionCell": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/PairwiseLabel"
+          },
+          "observed": {
+            "$ref": "#/components/schemas/PairwiseLabel"
+          }
+        },
+        "required": [
+          "expected",
+          "observed",
+          "count"
+        ],
+        "title": "PairwiseConfusionCell",
+        "type": "object"
+      },
+      "PairwiseCriterionConfusion": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/PairwiseConfusionCell"
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "criterion_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Criterion Id",
+            "type": "string"
+          },
+          "errors": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Errors",
+            "type": "integer"
+          },
+          "missing_evidence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Missing Evidence",
+            "type": "integer"
+          },
+          "refusals": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Refusals",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "criterion_id"
+        ],
+        "title": "PairwiseCriterionConfusion",
+        "type": "object"
+      },
+      "PairwiseLabel": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Id"
+          },
+          "kind": {
+            "enum": [
+              "candidate",
+              "tie"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "PairwiseLabel",
+        "type": "object"
+      },
+      "PairwiseRoleBinding": {
+        "additionalProperties": false,
+        "description": "Explicit stable roles; A/B presentation and lexical order choose neither.",
+        "properties": {
+          "candidate_input_sha256": {
+            "additionalProperties": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "propertyNames": {
+              "minLength": 1
+            },
+            "title": "Candidate Input Sha256",
+            "type": "object"
+          },
+          "case_id": {
+            "minLength": 1,
+            "title": "Case Id",
+            "type": "string"
+          },
+          "challenger_attempt_id": {
+            "minLength": 1,
+            "title": "Challenger Attempt Id",
+            "type": "string"
+          },
+          "challenger_candidate_id": {
+            "minLength": 1,
+            "title": "Challenger Candidate Id",
+            "type": "string"
+          },
+          "pair_id": {
+            "minLength": 1,
+            "title": "Pair Id",
+            "type": "string"
+          },
+          "reference_attempt_id": {
+            "minLength": 1,
+            "title": "Reference Attempt Id",
+            "type": "string"
+          },
+          "reference_candidate_id": {
+            "minLength": 1,
+            "title": "Reference Candidate Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "pair_id",
+          "challenger_candidate_id",
+          "reference_candidate_id",
+          "challenger_attempt_id",
+          "reference_attempt_id",
+          "candidate_input_sha256"
+        ],
+        "title": "PairwiseRoleBinding",
+        "type": "object"
+      },
+      "QualificationBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_content_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Calibration Content Sha256",
+            "type": "string"
+          },
+          "calibration_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "calibration_version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Calibration Version",
+            "type": "string"
+          },
+          "judge_spec_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Judge Spec Sha256",
+            "type": "string"
+          },
+          "model": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Model",
+            "type": "string"
+          },
+          "policy_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Policy Sha256",
+            "type": "string"
+          },
+          "provider_snapshot_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Provider Snapshot Sha256",
+            "type": "string"
+          },
+          "qualification_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Qualification Id",
+            "type": "string"
+          },
+          "report_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Report Id",
+            "type": "string"
+          },
+          "report_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Report Sha256",
+            "type": "string"
+          },
+          "rubric_id": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubric Id",
+            "type": "string"
+          },
+          "rubric_sha256": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Rubric Sha256",
+            "type": "string"
+          },
+          "rubric_version": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubric Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judge_spec_sha256",
+          "rubric_id",
+          "rubric_version",
+          "rubric_sha256",
+          "model",
+          "provider_snapshot_sha256",
+          "calibration_id",
+          "calibration_version",
+          "calibration_content_sha256",
+          "policy_sha256",
+          "report_id",
+          "report_sha256",
+          "qualification_id"
+        ],
+        "title": "QualificationBinding",
         "type": "object"
       },
       "ReplayCase": {
@@ -3607,6 +6506,91 @@
         "title": "RuntimeSessionView",
         "type": "object"
       },
+      "ScenarioExperimentCase": {
+        "additionalProperties": false,
+        "description": "ScenarioCaseExecutor 当前消费的窄 Case 请求负载。",
+        "properties": {
+          "business_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Id"
+          },
+          "case_id": {
+            "minLength": 1,
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id"
+        ],
+        "title": "ScenarioExperimentCase",
+        "type": "object"
+      },
+      "ScenarioExperimentConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_mode": {
+            "enum": [
+              "native-tool",
+              "legacy-json"
+            ],
+            "title": "Agent Mode",
+            "type": "string"
+          },
+          "cases": {
+            "items": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/ScenarioExperimentCase"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Cases",
+            "type": "array"
+          },
+          "execution_budget": {
+            "$ref": "#/components/schemas/ExperimentExecutionBudget"
+          },
+          "kind": {
+            "const": "scenario",
+            "default": "scenario",
+            "title": "Kind",
+            "type": "string"
+          },
+          "target": {
+            "const": "builtin-agent",
+            "default": "builtin-agent",
+            "title": "Target",
+            "type": "string"
+          },
+          "workflow_ref": {
+            "minLength": 1,
+            "title": "Workflow Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_ref",
+          "cases",
+          "agent_mode",
+          "execution_budget"
+        ],
+        "title": "ScenarioExperimentConfig",
+        "type": "object"
+      },
       "ScenarioTargetListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -3951,6 +6935,21 @@
         "title": "Score",
         "type": "object"
       },
+      "ScoredCalibrationOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "scored",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ScoredCalibrationOutcome",
+        "type": "object"
+      },
       "ScoringPass": {
         "additionalProperties": false,
         "properties": {
@@ -4136,6 +7135,16 @@
             ],
             "title": "Purpose"
           },
+          "qualification_binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QualificationBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"
@@ -4202,6 +7211,66 @@
           "scorer_version"
         ],
         "title": "ScoringPassView",
+        "type": "object"
+      },
+      "SkillExperimentConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_mode": {
+            "enum": [
+              "native-tool",
+              "legacy-json"
+            ],
+            "title": "Agent Mode",
+            "type": "string"
+          },
+          "budget_policy": {
+            "enum": [
+              "same-total-budget",
+              "same-execution-budget"
+            ],
+            "title": "Budget Policy",
+            "type": "string"
+          },
+          "cases": {
+            "items": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/ScenarioExperimentCase"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Cases",
+            "type": "array"
+          },
+          "execution_budget": {
+            "$ref": "#/components/schemas/ExperimentExecutionBudget"
+          },
+          "kind": {
+            "const": "skill",
+            "default": "skill",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workflow_ref": {
+            "minLength": 1,
+            "title": "Workflow Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_ref",
+          "cases",
+          "agent_mode",
+          "execution_budget",
+          "budget_policy"
+        ],
+        "title": "SkillExperimentConfig",
         "type": "object"
       },
       "SkillValidationResponse": {
@@ -4962,6 +8031,156 @@
           "artifacts"
         ],
         "title": "SourceUpstream",
+        "type": "object"
+      },
+      "StatisticalReport": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "additionalProperties": true,
+            "title": "Body",
+            "type": "object"
+          },
+          "published_at": {
+            "title": "Published At",
+            "type": "string"
+          },
+          "report_id": {
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id",
+          "published_at",
+          "body"
+        ],
+        "title": "StatisticalReport",
+        "type": "object"
+      },
+      "StatisticalReportPublishRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_factors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Factors",
+            "type": "array"
+          },
+          "baseline_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Pass Id"
+          },
+          "baseline_run_id": {
+            "title": "Baseline Run Id",
+            "type": "string"
+          },
+          "candidate_pass_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Pass Id"
+          },
+          "candidate_run_id": {
+            "title": "Candidate Run Id",
+            "type": "string"
+          },
+          "k": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "K",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "baseline_run_id",
+          "candidate_run_id"
+        ],
+        "title": "StatisticalReportPublishRequest",
+        "type": "object"
+      },
+      "StopPolicy": {
+        "additionalProperties": false,
+        "description": "停止政策（协议 §1/执行计划 T04）：不允许\"直到成功\"。",
+        "properties": {
+          "max_failures": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Failures"
+          },
+          "on_first_failure": {
+            "default": false,
+            "title": "On First Failure",
+            "type": "boolean"
+          },
+          "wall_clock_seconds": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Clock Seconds"
+          }
+        },
+        "title": "StopPolicy",
+        "type": "object"
+      },
+      "SubjectPairReference": {
+        "additionalProperties": false,
+        "description": "Only persisted same-case attempt identities cross the public boundary.",
+        "properties": {
+          "candidate_a_attempt_id": {
+            "minLength": 1,
+            "title": "Candidate A Attempt Id",
+            "type": "string"
+          },
+          "candidate_b_attempt_id": {
+            "minLength": 1,
+            "title": "Candidate B Attempt Id",
+            "type": "string"
+          },
+          "case_id": {
+            "minLength": 1,
+            "title": "Case Id",
+            "type": "string"
+          },
+          "challenger_attempt_id": {
+            "minLength": 1,
+            "title": "Challenger Attempt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "candidate_a_attempt_id",
+          "candidate_b_attempt_id",
+          "challenger_attempt_id"
+        ],
+        "title": "SubjectPairReference",
         "type": "object"
       },
       "ValidationError": {
@@ -6957,6 +10176,16 @@
               "title": "K",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "title": "Format",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7199,9 +10428,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/ExperimentRequest"
               }
             }
           },
@@ -7292,9 +10519,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Body",
-                "type": "object"
+                "$ref": "#/components/schemas/ExperimentRequest"
               }
             }
           },
@@ -8010,6 +11235,1141 @@
         "summary": "Import Inspect"
       }
     },
+    "/api/v1/judge-calibrations": {
+      "get": {
+        "operationId": "catalog_api_v1_judge_calibrations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationItems_CalibrationCatalogEntry_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Catalog",
+        "tags": [
+          "judge-calibrations"
+        ]
+      },
+      "post": {
+        "description": "Import unreviewed inputs only; declared names are not authentication.",
+        "operationId": "import_version_api_v1_judge_calibrations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationVersion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Import Version",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/jobs/{execution_id}": {
+      "get": {
+        "operationId": "job_api_v1_judge_calibrations__calibration_id__jobs__execution_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "execution_id",
+            "required": true,
+            "schema": {
+              "title": "Execution Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Job",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/jobs/{execution_id}/reports": {
+      "get": {
+        "operationId": "reports_api_v1_judge_calibrations__calibration_id__jobs__execution_id__reports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "execution_id",
+            "required": true,
+            "schema": {
+              "title": "Execution Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationItems_CalibrationReportView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Reports",
+        "tags": [
+          "judge-calibrations"
+        ]
+      },
+      "post": {
+        "operationId": "publish_api_v1_judge_calibrations__calibration_id__jobs__execution_id__reports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "execution_id",
+            "required": true,
+            "schema": {
+              "title": "Execution Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CalibrationPublishRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationReportView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Publish",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/qualifications/{qualification_id}": {
+      "get": {
+        "operationId": "qualification_api_v1_judge_calibrations__calibration_id__qualifications__qualification_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationQualificationSource"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Qualification",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/reports/{report_id}": {
+      "get": {
+        "operationId": "report_api_v1_judge_calibrations__calibration_id__reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationReportView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Report",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/versions": {
+      "get": {
+        "operationId": "versions_api_v1_judge_calibrations__calibration_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationItems_CalibrationVersion_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Versions",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}": {
+      "get": {
+        "operationId": "version_get_api_v1_judge_calibrations__calibration_id__versions__version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationVersion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Version Get",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}/jobs": {
+      "get": {
+        "operationId": "jobs_api_v1_judge_calibrations__calibration_id__versions__version__jobs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationItems_CalibrationJobView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Jobs",
+        "tags": [
+          "judge-calibrations"
+        ]
+      },
+      "post": {
+        "operationId": "submit_api_v1_judge_calibrations__calibration_id__versions__version__jobs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Submit",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}/preflight": {
+      "post": {
+        "operationId": "preflight_api_v1_judge_calibrations__calibration_id__versions__version__preflight_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationPreflightView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Preflight",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
+    "/api/v1/judge-calibrations/{calibration_id}/versions/{version}/reviews": {
+      "get": {
+        "operationId": "reviews_api_v1_judge_calibrations__calibration_id__versions__version__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationItems_HumanReviewRecord_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Reviews",
+        "tags": [
+          "judge-calibrations"
+        ]
+      },
+      "post": {
+        "operationId": "review_api_v1_judge_calibrations__calibration_id__versions__version__reviews_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "calibration_id",
+            "required": true,
+            "schema": {
+              "title": "Calibration Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrationReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationVersion"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Review",
+        "tags": [
+          "judge-calibrations"
+        ]
+      }
+    },
     "/api/v1/judge-specs": {
       "get": {
         "operationId": "list_judge_specs_api_v1_judge_specs_get",
@@ -8124,15 +12484,35 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Judge Submit"
@@ -8162,15 +12542,35 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgeErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Judge Preflight"
@@ -10720,6 +15120,293 @@
           }
         },
         "summary": "Get Skill Version"
+      }
+    },
+    "/api/v1/statistical-reports": {
+      "post": {
+        "description": "Explicitly capture and publish a content-addressed, immutable statistical report.",
+        "operationId": "publish_statistical_report_api_v1_statistical_reports_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatisticalReportPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatisticalReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Run or scoring Pass not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Immutable conflict or corrupt report"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "error": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "error"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Invalid request, comparison policy, or Pass ownership"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication blocked by maintenance"
+          }
+        },
+        "summary": "Publish Statistical Report"
+      }
+    },
+    "/api/v1/statistical-reports/{report_id}": {
+      "get": {
+        "description": "Read/export the stored envelope; no calculation or live evidence lookup.",
+        "operationId": "get_statistical_report_api_v1_statistical_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "junit"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatisticalReport"
+                }
+              },
+              "application/xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Statistical report not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Corrupt statistical report"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Statistical Report"
       }
     },
     "/api/v1/workflows": {

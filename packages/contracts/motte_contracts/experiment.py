@@ -7,7 +7,12 @@ repeat_index 的稳定 hash。experiment repeat 产生独立 Cell/Run；Harbor T
 """
 from __future__ import annotations
 
-from pydantic import Field, field_validator, model_validator
+import re
+from typing import Annotated, Any, Literal
+
+from pydantic import (
+    Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator,
+)
 
 from .hashing import canonical_hash
 from .messages import Contract
@@ -123,6 +128,133 @@ class EvaluationRef(Contract):
     statistical_policy: str = "statistical_policy@1"
 
 
+_UNPINNED = frozenset({"latest", "main", "master", "tbd", "todo", "placeholder",
+                       "unpinned", "unknown"})
+_RESOURCE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,127}$")
+_FIXED_SKILL_VERSION = re.compile(
+    r"^(?:\d+(?:\.\d+)*(?:[-+][A-Za-z0-9._-]+)?|sha256:[0-9a-f]{64}|[0-9a-f]{40})$"
+)
+
+
+def _pinned_value(value: str) -> str:
+    if not value or value != value.strip() or value.lower() in _UNPINNED:
+        raise ValueError("value must be fixed, nonempty and not a floating placeholder")
+    return value
+
+
+def _pinned_reference(value: str) -> str:
+    name, separator, version = value.rpartition("@")
+    if not separator or not _RESOURCE_NAME.fullmatch(name):
+        raise ValueError("reference must be a fixed name@version")
+    _pinned_value(version)
+    if any(char in version for char in "*^~<>= /\\"):
+        raise ValueError("reference must be a fixed name@version")
+    return value
+
+
+class ExperimentExecutionBudget(Contract):
+    """Builtin Target 请求预算；不接收客户端自报 enforcement/调用上界。
+
+    维度与 motte_agent.budget.ExecutionBudget 一致。token/cost 的 observed
+    额度不能表示强制上界，因此本首版配置不开放这两维。
+    """
+
+    max_steps: int = Field(ge=1, le=64, strict=True)
+    max_tool_calls: int | None = Field(default=None, ge=1, le=256, strict=True)
+    wall_time_sec: float | None = Field(default=None, gt=0, le=3600, allow_inf_nan=False)
+    per_call_timeout_sec: float | None = Field(default=None, gt=0, le=600, allow_inf_nan=False)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000, strict=True)
+
+    @field_validator("wall_time_sec", "per_call_timeout_sec", mode="before")
+    @classmethod
+    def _finite_number_not_bool(cls, value: Any) -> Any:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise ValueError("budget must be a finite positive number")
+        return value
+
+
+class ScenarioExperimentCase(Contract):
+    """ScenarioCaseExecutor 当前消费的窄 Case 请求负载。"""
+
+    case_id: str = Field(min_length=1)
+    business_id: str | None = Field(default=None, min_length=1)
+
+
+ExperimentCase = Annotated[str, Field(min_length=1)] | ScenarioExperimentCase
+
+
+class CevalExperimentConfig(Contract):
+    """与 standalone C-Eval selection/profile builder 同口径的请求。"""
+
+    kind: Literal["ceval"] = "ceval"
+    dataset_revision: str = Field(min_length=1)
+    scope: Literal["smoke", "custom-subset", "full"]
+    split: Literal["val", "test", "dev"]
+    few_shot: int = Field(ge=0, le=32, strict=True)
+    few_shot_split: Literal["val", "test", "dev"]
+    seed: int = Field(strict=True)
+    execution_profile: str = Field(min_length=1)
+
+    @field_validator("dataset_revision")
+    @classmethod
+    def _revision_is_fixed(cls, value: str) -> str:
+        return _pinned_value(value)
+
+    @field_validator("execution_profile")
+    @classmethod
+    def _profile_is_fixed(cls, value: str) -> str:
+        return _pinned_reference(value)
+
+    @model_validator(mode="after")
+    def _different_few_shot_partition(self) -> CevalExperimentConfig:
+        if self.few_shot_split == self.split:
+            raise ValueError("few_shot_split must differ from the evaluated split")
+        return self
+
+
+class _WorkflowExperimentConfig(Contract):
+    workflow_ref: str = Field(min_length=1)
+    cases: tuple[ExperimentCase, ...] = Field(min_length=1)
+    agent_mode: Literal["native-tool", "legacy-json"]
+    execution_budget: ExperimentExecutionBudget
+
+    @field_validator("workflow_ref")
+    @classmethod
+    def _workflow_is_fixed(cls, value: str) -> str:
+        return _pinned_reference(value)
+
+    @field_validator("cases", mode="before")
+    @classmethod
+    def _ordered_request_container(cls, value: Any) -> Any:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("cases must be an ordered list or tuple")
+        return value
+
+    @field_validator("cases")
+    @classmethod
+    def _unique_ordered_cases(cls, value: tuple[ExperimentCase, ...]) -> tuple[ExperimentCase, ...]:
+        ids = [case if isinstance(case, str) else case.case_id for case in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("cases must have distinct case IDs")
+        return value
+
+
+class ScenarioExperimentConfig(_WorkflowExperimentConfig):
+    kind: Literal["scenario"] = "scenario"
+    target: Literal["builtin-agent"] = "builtin-agent"
+
+
+class SkillExperimentConfig(_WorkflowExperimentConfig):
+    kind: Literal["skill"] = "skill"
+    budget_policy: Literal["same-total-budget", "same-execution-budget"]
+
+
+ExperimentSuiteConfig = Annotated[
+    CevalExperimentConfig | ScenarioExperimentConfig | SkillExperimentConfig,
+    Field(discriminator="kind"),
+]
+
+
 class ExperimentSpec(Contract):
     """实验规格（发布后不可变；新内容 = 新 version）。"""
 
@@ -137,6 +269,7 @@ class ExperimentSpec(Contract):
     controlled_conditions: dict[str, str | int | float | bool | None] = Field(
         default_factory=dict,
     )
+    suite_config: ExperimentSuiteConfig | None = None
     #: 事前声明的 experiment repeat 数（≠ Harbor trial repeat）。
     repeats: int = Field(default=1, ge=1, strict=True)
     #: 每 Run 的 Trial 计划（Harbor 类）；非 Trial 套件必须为 None。
@@ -172,6 +305,42 @@ class ExperimentSpec(Contract):
             if len(set(values)) != len(values):
                 raise ValueError(f"factor {factor!r} declares duplicate values")
         return value
+
+    @model_validator(mode="after")
+    def _typed_suite_configuration(self) -> ExperimentSpec:
+        config = self.suite_config
+        if config is None:
+            return self
+        suite = {"ceval": "ceval-external", "scenario": "scenario", "skill": "skill"}[config.kind]
+        if self.task_ref["suite"] != suite:
+            raise ValueError(f"suite_config kind {config.kind!r} requires task_ref.suite {suite!r}")
+        if self.controlled_conditions:
+            raise ValueError("suite_config cannot be mixed with scalar controlled_conditions")
+        if isinstance(config, SkillExperimentConfig):
+            required = {"model_profile", "skill_version"}
+            missing = sorted(required - set(self.factors))
+            if missing:
+                raise ValueError("skill requires explicit factors: " + ",".join(missing))
+            unknown = sorted(set(self.factors) - required)
+            if unknown:
+                raise ValueError("skill cannot consume factors: " + ",".join(unknown))
+            axis = self.factors["skill_version"]
+            if len(axis) != 3 or axis.count("no-skill") != 1:
+                raise ValueError("skill_version requires one no-skill and two distinct fixed refs")
+            for reference in axis:
+                if reference == "no-skill":
+                    continue
+                _pinned_reference(reference)
+                if not _FIXED_SKILL_VERSION.fullmatch(reference.rpartition("@")[2]):
+                    raise ValueError("skill_version references must be exact fixed versions")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _preserve_legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if self.suite_config is None:
+            payload.pop("suite_config", None)
+        return payload
 
     def cell_count(self) -> int:
         """矩阵展开的 cell 数 = 各因素取值数乘积 × repeats。"""
@@ -213,6 +382,10 @@ class ExperimentCell(Contract):
     #: 显式 retry 产生的 superseding 子 Run 记录（原 initial Run 不消失）。
     superseding_run_ids: tuple[str, ...] = ()
     failure_reason: str | None = None
+    #: 创建预检冻结的可执行输入；旧 Cell 为 None，恢复时显式重预检。
+    prepared_run: dict[str, Any] | None = None
+    preview_hash: str | None = None
+    preflight_mode: str | None = None
 
     @field_validator("allocation_status")
     @classmethod

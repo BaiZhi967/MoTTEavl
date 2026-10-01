@@ -6,7 +6,9 @@ GateResult 的结论等价性：同 evaluation_input_hash + 同 result_semantics
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
+from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
@@ -14,7 +16,7 @@ from .comparison import RunReportRef
 from .hashing import canonical_hash
 from .messages import Contract
 
-GATE_ENGINE_VERSION = "gate-engine@1"
+GATE_ENGINE_VERSION = "gate-engine@2"
 GATE_RULE_REGISTRY_VERSION = "gate-rules@1"
 
 #: 规则 kind 集合（协议 §6 首批；新增 kind 必须同步协议文档并升 registry 版本）。
@@ -108,6 +110,23 @@ class GateRule(Contract):
     experimental_evidence: bool = False
     #: model_identity 规则的期望实际模型身份（报告侧回报值，不是请求值）。
     expected: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _pairwise_numbers_are_not_coerced(cls, value: Any) -> Any:
+        # Protect normal typed construction before float parsing loses whether
+        # the caller supplied a bool/string/Decimal. Legacy rule coercion stays
+        # unchanged; complete pairwise policy validation is an evaluator boundary.
+        if isinstance(value, Mapping):
+            metric = value.get("metric_id")
+            if isinstance(metric, str) and (
+                metric == "pairwise_challenger_score" or metric.startswith("pairwise_challenger_score@")
+            ):
+                for field in ("threshold", "min_coverage"):
+                    number = value.get(field)
+                    if number is not None and type(number) not in (int, float):
+                        raise ValueError(f"pairwise {field} must be an uncoerced JSON number")
+        return value
 
     @field_validator("kind")
     @classmethod
@@ -257,6 +276,7 @@ class GateResult(Contract):
     #: 审计字段：不进入任何 hash（协议 §8）。
     evaluated_at: str | None = None
     suggested_actions: tuple[str, ...] = ()
+    judge_qualification: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
     def compute_gate_result_id(self) -> str:
         """gate_result_id = sha256(evaluation_input_hash + semantics_hash)。"""

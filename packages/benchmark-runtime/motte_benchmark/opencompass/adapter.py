@@ -16,7 +16,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +86,7 @@ class OpenCompassJobAdapter:
     # ------------------------------------------------------------------ 委托
 
     def prepare(self, spec: ExternalJobSpec) -> ExternalJobHandle:
+        self._verify_bounded_runner(spec)
         handle = self._process.prepare(spec)
         # 冻结 profile 与 Runner 可消费配置落入受控目录（review R01）。
         config_path = Path(handle.work_dir) / RUNNER_CONFIG_NAME
@@ -98,7 +102,53 @@ class OpenCompassJobAdapter:
         return handle
 
     def start(self, spec: ExternalJobSpec, handle: ExternalJobHandle) -> ExternalJobHandle:
+        self._verify_bounded_runner(spec)
         return self._process.start(spec, handle)
+
+    def _verify_bounded_runner(self, spec: ExternalJobSpec) -> None:
+        """An old/custom entry cannot opt into a bound by ignoring the profile.
+
+        Attest from the platform before invoking any installed bridge code. The
+        private probe only loads stdlib and the byte-verified profile verifier;
+        it does not import OpenCompass, Torch, a model or any credential value.
+        """
+        config = spec.runner_config or {}
+        if config.get("execution_profile") is None:
+            return
+        from .execution import validate_execution_config
+
+        profile = validate_execution_config(config)
+        if spec.retry_policy.model_dump() != profile["retry"]:
+            raise ValueError("EXECUTION_PROFILE_INVALID: Job retry identity differs")
+        argv = self._process._base_argv()
+        if len(argv) != 1 or not Path(argv[0]).is_absolute():
+            raise ValueError("EXECUTION_PROFILE_INVALID: canonical runner wrapper required")
+        wrapper = Path(argv[0])
+        env = {**os.environ, **self._process._extra_env}
+        if any(env.get(key) for key in ("MOTTE_RUNNER_PYTHON", "MOTTE_RUNNER_ROOT",
+                                       "PYTHONHOME", "PYTHONPATH")):
+            raise ValueError("EXECUTION_PROFILE_INVALID: runner interpreter/path override forbidden")
+        try:
+            if hashlib.sha256(wrapper.read_bytes()).hexdigest() != profile["pinned_identity"]["wrapper_sha256"]:
+                raise ValueError("EXECUTION_PROFILE_INVALID: runner wrapper bytes differ")
+            python = wrapper.parent / "python"
+            probe = """
+import hashlib, json, pathlib, sys, sysconfig
+profile = json.load(sys.stdin)
+root = pathlib.Path(sysconfig.get_path('purelib')) / 'motte_benchmark' / 'opencompass'
+for name, expected in profile['bridge_sha256'].items():
+    if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
+        raise ValueError('EXECUTION_PROFILE_INVALID: installed bridge bytes differ: ' + name)
+from motte_benchmark.opencompass.execution import verify_installed_profile
+verify_installed_profile(profile)
+"""
+            checked = subprocess.run([str(python), "-I", "-c", probe],
+                                     input=json.dumps(profile), capture_output=True,
+                                     text=True, timeout=30)
+            if checked.returncode != 0:
+                raise ValueError("EXECUTION_PROFILE_INVALID: runner attestation failed: " + checked.stderr[-2000:])
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ValueError("EXECUTION_PROFILE_INVALID: runner attestation unavailable") from error
 
     def poll(self, handle: ExternalJobHandle) -> ExternalJobHandle:
         return self._process.poll(handle)

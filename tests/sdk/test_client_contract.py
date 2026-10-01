@@ -486,3 +486,85 @@ def test_import_motte_sdk_is_zero_side_effect(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"ok": True}
     assert not (tmp_path / "var").exists()
+
+
+# ------------------------------------------------ immutable statistical reports
+
+def test_statistical_publication_response_loss_and_stored_exports(monkeypatch):
+    import xml.etree.ElementTree as ET
+    from motte_sdk.comparisons import ComparisonService
+    from tests.sdk.test_statistical_reports import _seed
+    from tests.sdk.test_m6_comparison_service import append_pass
+
+    store = _seed(InMemoryRunStore())
+    app = create_app(store=store)
+    asgi = SyncASGITransport(app)
+    path = "/api/v1/statistical-reports"
+    flaky = FlakyTransport(asgi, method="POST", path_prefix=path)
+    counting = CountingTransport(flaky)
+    client = _client(counting, retries=3, backoff_base=0)
+    options = {"baseline_pass_id": "old-base", "candidate_pass_id": "old-candidate"}
+    try:
+        with pytest.raises(ReadTimeout):
+            client.publish_statistical_report("base", "candidate", **options)
+        assert counting.count("POST", path) == 1
+        first = store.statistical_reports.list()[0]
+        assert client.publish_statistical_report("base", "candidate", **options) == first
+        assert counting.count("POST", path) == 2
+        assert len(store.statistical_reports.list()) == 1
+        append_pass(store, "base", "new-base", [])
+        store.case_runs._rows[("base", "a")][1]["result"]["cost"]["total"] = 900
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("SDK get/export must never calculate")
+
+        monkeypatch.setattr(ComparisonService, "paired_statistics", forbidden)
+        assert client.get_statistical_report(first["report_id"]) == first
+        assert client.export_statistical_report(first["report_id"]) == first
+        assert json.loads(ET.fromstring(client.export_statistical_report(first["report_id"], "junit")).findtext("system-out")) == first
+        before = len(counting.calls)
+        with pytest.raises(ValueError, match="format"):
+            client.export_statistical_report(first["report_id"], "csv")
+        assert len(counting.calls) == before
+        with pytest.raises(NotFoundError):
+            client.get_statistical_report("missing")
+    finally:
+        client.close()
+        asgi.close()
+
+
+def test_sdk_preserves_partial_after_reconciliation(tmp_path, monkeypatch):
+    """A trim after the last delivered frame must be reflected by the final probe."""
+    from tests.api.test_trace_retention import RUN, seed, trim
+    from tests.sdk.test_wait_and_events import CannedSSETransport
+
+    store = SQLiteRunStore(tmp_path / 'history.db')
+    seed(store, monkeypatch)
+    app = create_app(store=store)
+    root = tmp_path / 'artifacts'
+    root.mkdir()
+    payload = {'seq': 1, 'run_id': RUN, 'type': 'note', 'payload': {}}
+    body = ('id: 1\ndata: ' + json.dumps(payload) + '\n\n').encode()
+    client = _client(CannedSSETransport(SyncASGITransport(app), body))
+    observed = []
+    def on_event(event, state):
+        observed.append(state)
+        trim(store, root)
+    assert [event['seq'] for event, state in client.stream_events(RUN, on_event=on_event)] == [1]
+    assert observed[0].finished and observed[0].partial
+    assert observed[0].reconciliation_mismatch
+
+
+def test_sdk_retention_gap_stays_partial_after_complete_snapshot(tmp_path, monkeypatch):
+    from tests.api.test_trace_retention import RUN, seed, trim
+    store = SQLiteRunStore(tmp_path / 'history.db')
+    seed(store, monkeypatch)
+    root = tmp_path / 'artifacts'
+    root.mkdir()
+    trim(store, root)
+    client = _client(SyncASGITransport(create_app(store=store)))
+    delivered = list(client.stream_events(RUN))
+    assert [event['seq'] for event, state in delivered] == [4]
+    state = delivered[-1][1]
+    assert state.finished and state.partial and not state.reconciliation_mismatch
+    assert state.gaps == [{'type': 'gap', 'after': 0, 'next_seq': 4, 'partial': True}]

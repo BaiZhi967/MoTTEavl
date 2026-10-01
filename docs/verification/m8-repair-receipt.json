@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "source_commit": "15f99bfc0729a83fb4d5a9e500bf72e472eca52a",
+  "baseline_commit": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+  "source_branch": "fix/m8-closure-20260930",
+  "environment": {
+    "os": "Linux-6.18.44-x86_64-with-glibc2.41",
+    "python": "3.12.14",
+    "node": "v24.19.0",
+    "pnpm": "9.15.0",
+    "postgres": "not available",
+    "docker": "not available"
+  },
+  "scope": "offline and synthetic repairs; draft PR #8 published, this successor code verified locally; no paid calls/private exports/production/merge",
+  "started_at_utc": "2026-09-30T02:50:28.812808+00:00",
+  "python": {
+    "tests": 3376,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 88,
+    "passed": 3288,
+    "live_deselected": 1,
+    "junit_sha256": "b9c5473cc3a86c40a3bf9cf774b754b62ea7860a416999e3696bedbc46ab2735",
+    "skip_reasons": {
+      "Windows drive-letter compose syntax": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL manual-revision CAS test": 1,
+      "Windows Job ownership": 2,
+      "set MOTTE_PG_DSN to run PostgreSQL integration tests": 40,
+      "real Harbor runner required (MOTTE_HARBOR_RUNNER_PYTHON)": 7,
+      "real Docker CLI required": 2,
+      "real Docker daemon required": 3,
+      "pg_dump and pg_restore required for PostgreSQL recovery exercise": 1,
+      "set MOTTE_OC042_PYTHON to the isolated fixed runner": 3,
+      "set MOTTE_SANDBOX_LIVE=1 and provide a reachable Docker daemon": 4,
+      "Windows junction coverage": 1,
+      "set MOTTE_R4_PG_DSN for isolated PostgreSQL concurrency coverage": 9,
+      "PostgreSQL integration DSN unavailable; no PG concurrency claim": 5,
+      "real PostgreSQL required": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL scoring-job transaction test": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL scoring-job race test": 1,
+      "set MOTTE_PG_DSN to run the PostgreSQL recovery race test": 1,
+      "real PostgreSQL required (MOTTE_PG_DSN)": 5
+    }
+  },
+  "make_check": {
+    "exit_code": 2,
+    "blocked_at": "docker compose config: executable unavailable",
+    "log_sha256": "5c5522213f796cbd4f895a8fcefd244e5a0c0655cc810aea8665dd4dceecdf34"
+  },
+  "wheels": {
+    "exit_code": 0,
+    "clean_venv_smoke_exit_code": 0,
+    "files": [
+      {
+        "name": "motte_cli-0.1.0-py3-none-any.whl",
+        "sha256": "35b92942f35711fe57fc427a3d0170d30768776ea32bc14f5b61849297cbbc62"
+      },
+      {
+        "name": "motte_contracts-0.1.0-py3-none-any.whl",
+        "sha256": "a7704f8b02b1ff62320649232ce20200f93bdf62f6eb2385e9d5278ce1664c75"
+      },
+      {
+        "name": "motte_eval-0.1.0-py3-none-any.whl",
+        "sha256": "26f5ffbff8b52a9a83b2b56ad663329f3c2b66110f8cc6c66d2daaf3f31c8d42"
+      },
+      {
+        "name": "motte_sdk-0.1.0-py3-none-any.whl",
+        "sha256": "9369ba72d9f117448177361a57e69cd3619e65cfa4df29bc6a17b01bdb518e42"
+      },
+      {
+        "name": "motte_storage-0.1.0-py3-none-any.whl",
+        "sha256": "75b9ae4deb091540c7162a902b86c90ee71dadf13664e653dcb35a1a9a1c6cb6"
+      },
+      {
+        "name": "motte_trace-0.1.0-py3-none-any.whl",
+        "sha256": "cb15eb9dc83493ae8b708675c2767bef6f49101557e3394026ade46df3b34f66"
+      }
+    ]
+  },
+  "additional_tsc": {
+    "baseline_sha": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+    "baseline_errors": 49,
+    "candidate_errors": 49,
+    "diagnostic_messages_equal": true,
+    "scope": "tsc --noEmit additional check, not in Makefile CI; same dependency install",
+    "status": "historical comparison from initial receipt; not rerun in resumed batch; Web source unchanged"
+  },
+  "stable_supported": false,
+  "cutover_ready": false,
+  "remaining_code": [
+    "C-Eval/Harbor/Scenario-Skill external suite assemblers",
+    "public persistent Judge calibration and exact policy-bound qualification",
+    "append-only independent StatisticalReport publication",
+    "Trace DB retention with archive/seq/snapshot contracts",
+    "additional strict TypeScript check: 49 identical baseline/current diagnostics; not part of existing make check"
+  ],
+  "remaining_environment": [
+    "PostgreSQL candidate concurrency/backup snapshot/restore integration",
+    "Docker Compose build/up and image hash",
+    "Windows lock/symlink capability and full regression",
+    "current build browser/visual receipts"
+  ],
+  "remaining_authorization": [
+    "new bounded paid L1-L5/Judge call card",
+    "real human-reviewed calibration sources",
+    "private legacy export source/scope",
+    "original replacement scenarios with true backends",
+    "merge, release and production cutover"
+  ],
+  "review": {
+    "comparison_preview": "no remaining P1/P2",
+    "judge_native": "no remaining high-priority issue",
+    "statistics_exports": "no P1/P2",
+    "storage_safety": "no remaining P1/P2; real PG/Windows not exercised",
+    "resumed_repairs": "no remaining P1/P2 at50b806d; independent113passed/1PGskip, finalAPI17passed",
+    "pairwise_evidence": "no blockers in independent parser/overall metric review at15f99bf; scoped147passed/1PGskip, full3288passed/88skip"
+  },
+  "checks": {
+    "ruff": {
+      "result": "passed",
+      "command": "uv run ruff check ."
+    },
+    "contracts_mypy": {
+      "result": "passed",
+      "source_files": 33,
+      "command": "uv run mypy packages/contracts"
+    },
+    "compileall": {
+      "result": "passed",
+      "command": "uv run python -m compileall -q packages apps"
+    },
+    "web_build": {
+      "result": "passed",
+      "command": "pnpm --dir apps/web build"
+    },
+    "web_tests": {
+      "result": "passed",
+      "files": 22,
+      "tests": 304,
+      "command": "pnpm -r test"
+    },
+    "pi_bridge_selftest": {
+      "result": "passed",
+      "scope": "real SDK, scripted model, file written; zero paid calls"
+    },
+    "compose_config": {
+      "result": "blocked",
+      "reason": "docker executable absent",
+      "command": "docker compose -f infra/docker-compose.yml config -q"
+    },
+    "openapi_check": {
+      "result": "passed",
+      "command": "uv run python scripts/check_openapi.py",
+      "log_sha256": "7cc24325a9407b3dddb991cc95e5361b56579ece47c6e3ca6f1f39bbf93dc700"
+    },
+    "python_dependency_audit": {
+      "result": "passed",
+      "command": "uv run pip-audit --skip-editable",
+      "scope": "no known vulnerabilities in audited noneditable dependencies",
+      "log_sha256": "ff0bc4a073f1ae336cb4dbb61ac31f360c1a5ae57b9b35563ab53b579f7efba7",
+      "verified_dependency_state": "unchanged dependency manifests/lock versus audited50b806d"
+    },
+    "web_dependency_audit": {
+      "result": "passed",
+      "command": "pnpm --dir apps/web audit --audit-level high",
+      "log_sha256": "15950a68a7ed99c59779717acefdceb3f69cfd31bde67d2c954f2a3cea4d7955",
+      "verified_dependency_state": "unchanged dependency manifests/lock versus audited50b806d"
+    },
+    "wheel_clean_install": {
+      "result": "passed",
+      "scope": "new external venv, no PYTHONPATH; install six wheels; SDK import and CLI help",
+      "log_sha256": "671ad45af2899dd61a514da066440283f3a8c68ea37b95a6d41fc23252966d1f"
+    }
+  },
+  "verified_source_trees": {
+    "packages": "fa20d19e2f56c7aba749a166cc0df732dc6f5f1b",
+    "apps": "e901e683500157e15b5b733ef1dbffdb8232c9ee",
+    "tests": "3967e01bef8343b833c954841e565413fb5c65eb",
+    "scripts": "9ca5d1629abeb8d7a8b20e9f78710893f737ff33",
+    "bridges": "aab9b82c42ee10355f80c0ba5d5cb07e904a0897",
+    "api": "d05bdb2806fdcb52ba91f6cd1e458a0195afb18f"
+  },
+  "web_assets": [
+    {
+      "path": "apps/web/dist/assets/DirectLlmOperate-CpjPJxrx.js",
+      "sha256": "c21384d519636072eab5b8e72675fb57ae3f2f5510f84ba90bd407c1f13df5c2"
+    },
+    {
+      "path": "apps/web/dist/assets/JudgesPage--AGWT1Ie.js",
+      "sha256": "e7c498bda83fbaed5de4a709f99cce068688b523b68464dc286c52cf38977778"
+    },
+    {
+      "path": "apps/web/dist/assets/ResourcesPage-BsT4Y8j3.js",
+      "sha256": "aaf7779ea39fa79c274765bb62adffcec3010a49917fb817da51f34cbc94e751"
+    },
+    {
+      "path": "apps/web/dist/assets/ScenarioPages-CNVZ4Hqk.js",
+      "sha256": "504c92f4b301ffb900a5082d5bb8d76a99ad3449c3669cfc4a458dfb05d4bd15"
+    },
+    {
+      "path": "apps/web/dist/assets/SkillPages-DYa_fSKz.js",
+      "sha256": "11d078eca03cc2bc011fa9fedd00f703f08ebdd681d4629b1e10cb67b8bbde04"
+    },
+    {
+      "path": "apps/web/dist/assets/TerminalBenchPages-mL_UJd9Y.js",
+      "sha256": "dc8d95780b2bbdea0602c7609badaa7d0ae279a37f0ec6fd581cd2c8f4e77515"
+    },
+    {
+      "path": "apps/web/dist/assets/barlow-semi-condensed-500-latin-G0uxJNrM.woff2",
+      "sha256": "0d7513795eaf8fdab7f340144841bd2d9fac7d9303c03aa6b525a2c908e9b371"
+    },
+    {
+      "path": "apps/web/dist/assets/barlow-semi-condensed-600-latin-BkLiAYu4.woff2",
+      "sha256": "f158417e9207b5362f9b71a2fe779ce5bb836ad972f38445c3163af39d2c998d"
+    },
+    {
+      "path": "apps/web/dist/assets/barlow-semi-condensed-700-latin-BpqDG8I9.woff2",
+      "sha256": "fb958c8c20a05552ac8a85d925d96028d52565792650e941a5fe96b6997aa5cb"
+    },
+    {
+      "path": "apps/web/dist/assets/index-BzqyGsQW.css",
+      "sha256": "2f12514b4a7c9a418c1e827e3045c5841d82ed86908cd3cddb84f858b07d22be"
+    },
+    {
+      "path": "apps/web/dist/assets/index-e2WefI9A.js",
+      "sha256": "85a06844f22936a6978e1cb12eb4aa2bb01a85231513d9fcf2a1f99d4fcc6527"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2",
+      "sha256": "14425ba9c695763c1547f48a206b7aa60350a33ae23de09f0407877f3fcd89eb"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-500-normal-BWZEU5yA.woff2",
+      "sha256": "cb182feeed4d798ff6961d3c79f7026279448fca0676438aaecb21f3fc39553a"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-600-normal-C8RAYTDA.woff2",
+      "sha256": "400c6bfda18d5d14acad1c15d6dcb9f8e13c015e7286317e0b9a482539bef147"
+    },
+    {
+      "path": "apps/web/dist/assets/jetbrains-mono-latin-700-normal-BYuf6tUa.woff2",
+      "sha256": "d0d4e818808f2a0ba39b2b09d1989366f63494e295f003c7ef436697378507e8"
+    },
+    {
+      "path": "apps/web/dist/assets/jsonValues-CxpwwIqg.js",
+      "sha256": "308c6cf0a0b024098a2213fccdf7f38db30b22235a6eca0bf63f1d8b2f4430ca"
+    },
+    {
+      "path": "apps/web/dist/assets/rolldown-runtime-CbXtAM7H.js",
+      "sha256": "bbf7c5086ae414dc3f33777e3eebf16ea8631325b8bb4690d25091c03567f31a"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-DgN2ufTs.js",
+      "sha256": "94c3d8ce4a95d326add774c1a7e27c2c7b45cbd2002d55e657dc253ac66adbf5"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-icons-DhaHBq-B.js",
+      "sha256": "4f68e13c9e2b26d868d7a008e712c95058890df0053c926399bb2313e60b5d73"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-radix-CO1tAGYS.js",
+      "sha256": "b1e542db85f0128d442f5992b5dcb494c94c5ac2d75b52863be3dc395f097f03"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-react-PU5TT05C.js",
+      "sha256": "b65efc5316d6de277d01c6bf61b6af57a2fb61318e38ea317346f39cde5b329a"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-router-Dr301lO5.js",
+      "sha256": "dada2c15f89335a10ab4eb95079857e93c73eb61c0d1e33f79b05de91f7bd155"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-semi-C37W-MdM.js",
+      "sha256": "4632ed4f20464a8d16e83a31d7f8034ccc7693a572699a1cd6d90ad8b0d0eeae"
+    },
+    {
+      "path": "apps/web/dist/assets/vendor-semi-DCkYSUZS.css",
+      "sha256": "8c6efca9b86b52f2cbcf9b2a3484f2581d675aa98b09b780d872fef878564c68"
+    }
+  ],
+  "main_verified_at_finish": "a38b6e2ab1ef7407173ff770e037416d4cbbe2ef",
+  "previous_receipt": "docs/verification/m8-repair-resume-receipt.json",
+  "design_status": "written persistent-capability design approved; detailed implementation plans awaiting review; no new subsystem code in this receipt",
+  "resumed_checks": {
+    "openapi": "passed standalone",
+    "ruff": "passed",
+    "contracts_mypy": "33 sources passed",
+    "compileall": "passed",
+    "web": "22files304tests and build passed",
+    "pi_bridge": "real SDK scripted model selftest passed",
+    "pip_audit": "no known vulnerabilities; official network approval retry passed",
+    "pnpm_audit": "no known vulnerabilities; official network approval retry passed",
+    "wheel_smoke": "six local wheels installed in fresh isolated venv, import/CLI outside checkout with PYTHONPATH unset passed",
+    "interrupted_tests": "superseded pre-review and worker runs, no full-suite claims"
+  },
+  "publication": {
+    "draft_pr": "https://github.com/BaiZhi967/MoTTEavl/pull/8",
+    "initial_remote_head": "0e5415714945a067385b8f721a1f0586613eaf0e",
+    "status": "successor source publication and exact-head CI pending at this receipt; do not substitute initial-head checks"
+  }
+}
